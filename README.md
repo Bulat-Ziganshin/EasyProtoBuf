@@ -6,7 +6,7 @@ A minimal C++ ProtoBuf library that is
 Also:
 - easy to grok and hack, the entire library is only 400 LOC
 - fast enough, but not super-optimized for speed
-- generator of corresponding C++ structures and encoders/decoders from .pbs (compiled .proto) files
+- includes generator of C++ structures with encoders/decoders from .proto files
 - the closest competitor is [protozero](https://github.com/mapbox/protozero)
 
 This library is sincerely yours if you need to quickly implement encoding/decoding of
@@ -14,33 +14,32 @@ simple ProtoBuf messages without inflating your program.
 There is no any build infrastructure - if you need this code, just grab it and go!
 
 Files:
-- [ProtoBufEncoder.cpp](ProtoBufEncoder.cpp) - the encoding library
-- [ProtoBufDecoder.cpp](ProtoBufDecoder.cpp) - the decoding library
-- [generator.cpp](src/generator/generator.cpp) - generator of encoders/decoders from .pbs files
-- [decoder.cpp](decoder.cpp) - schema-less decoder of arbitrary ProtoBuf messages
-- Example:
-    - [main.cpp](main.cpp) - brief usage example
-    - [Example.proto](Example.proto) - ProtoBuf definition of the serialized structure
-    - [Example.pb.cpp](Example.pb.cpp) - auto-generated corresponding C++ structure and ProtoBuf encoder/decoder for it
+- [encoder.hpp](include/pbeasy/encoder.hpp) - the entire encoding library, 200 LOC
+- [decoder.hpp](include/pbeasy/decoder.hpp) - the entire decoding library, 230 LOC
+- [Codegen](codegen) - generates (de)coders from .pbs (compiled .proto) files
+- [Tutorial](examples/tutorial) - learn how to use the library
+- [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
 
-Features currently implemented and planned:
+Library features currently implemented and planned:
 - [x] encoding & decoding (requires C++17, may be lowered to C++11 by replacing uses of std::string_view with std::string)
 - [x] any scalar/message fields, including repeated and packed ones
 - [x] string/bytes fields can be stored in any type convertible from std::string_view
 - [x] repeated fields can be stored in any container implementing push_back() and begin()/end()
+- [ ] big-endian architectures
+- [ ] [efficient upb read_varint](https://github.com/protocolbuffers/protobuf/blob/a2f92689dac8a7dbea584919c7de52d6a28d66d1/upb/wire/decode.c#L122)
+- [ ] group wire format
+
+[Codegen](codegen) features currently implemented and planned:
 - [x] the generated code checks presence of required fields in the decoded message
 - [ ] support of enum/oneof/map fields and nested message type definitions by the code generator
 (and thus dogfooding it)
 - [ ] validation of enum, integer and bool values by the generated code
-- [ ] big-endian architectures
-- [ ] [efficient upb read_varint](https://github.com/protocolbuffers/protobuf/blob/a2f92689dac8a7dbea584919c7de52d6a28d66d1/upb/wire/decode.c#L122)
-- [ ] group wire format
 
 
 
 ## Motivating example
 
-Let's say that you wrote this message definition:
+Let's say that we have this message definition:
 ```proto
 message Person
 {
@@ -50,7 +49,7 @@ message Person
 }
 ```
 
-Codegen translates this definition to plain C++ structure:
+[Codegen](codegen) translates this definition to plain C++ structure:
 ```cpp
 struct Person
 {
@@ -61,8 +60,8 @@ struct Person
 };
 ```
 
-But on top of that, Codegen generates all the code necessary
-to serialize Person to the ProtoBuf format and
+But on top of that, [Codegen](codegen) generates two functions
+that serialize Person to the ProtoBuf format and
 deserialize Person from the ProtoBuf format:
 ```cpp
 // Encode Person into a string buffer
@@ -73,11 +72,11 @@ Person person2 = ProtoBufDecode<Person>(protobuf_msg);
 ```
 
 And that's all you need to know to start using the library.
-Check technical details in Tutorial.
+Check technical details in [Tutorial](examples/tutorial).
 
 
 
-## Going deeper
+## Using the API
 
 But even if you want to write (de)serializers manually, it's also easy:
 
