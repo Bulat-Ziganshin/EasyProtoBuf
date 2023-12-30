@@ -24,6 +24,8 @@ struct
     bool no_has_fields;
     bool no_required;
     bool no_default_values;
+    bool packed;
+    bool no_packed;
     std::string cpp_string_type;
     std::string cpp_repeated_type;
 } option;
@@ -45,6 +47,9 @@ std::vector<std::string> parse_cmdline(int argc, char** argv)
     op.add<Switch>("f", "no-has-fields", "don't generate has_* fields", &option.no_has_fields);
     op.add<Switch>("", "no-required", "ignore 'required' attribute", &option.no_required);
     op.add<Switch>("", "no-default-values", "ignore default values", &option.no_default_values);
+
+    op.add<Switch>("p", "packed", "make all repeated fields packed when allowed", &option.packed);
+    op.add<Switch>("", "no-packed", "make all repeated fields non-packed", &option.no_packed);
 
     op.add<Value<std::string>>("s", "string-type", "C++ type for string/bytes fields", "std::string", &option.cpp_string_type);
     op.add<Value<std::string>>("r", "repeated-type", "C++ container type for repeated fields", "std::vector", &option.cpp_repeated_type);
@@ -217,6 +222,16 @@ std::string cpp_type_as_str(FieldDescriptorProto &field)
     }
 }
 
+// Field can be serialized in more compact "packed" fromat
+bool can_be_packed(FieldDescriptorProto &field)
+{
+    return (field.label == FieldDescriptorProto::LABEL_REPEATED) &&
+           (field.type != FieldDescriptorProto::TYPE_STRING) &&
+           (field.type != FieldDescriptorProto::TYPE_BYTES) &&
+           (field.type != FieldDescriptorProto::TYPE_MESSAGE) &&
+           (field.type != FieldDescriptorProto::TYPE_GROUP);
+}
+
 
 void generator(FileDescriptorSet &proto)
 {
@@ -247,8 +262,14 @@ void generator(FileDescriptorSet &proto)
 
 
             // Generate message encoding function
-            auto repeated = (field.label == FieldDescriptorProto::LABEL_REPEATED? "repeated_":"");
-            encoder += std::format("    pb.put_{0}{1}({2}, {3});\n", repeated, pbtype_str, field.number, field.name);
+            bool packed_field = (field.has_options && field.options.has_packed && field.options.packed);
+            bool write_as_packed = option.packed ?    true :
+                                   option.no_packed ? false :
+                                                      packed_field;
+            auto type_prefix = (field.label == FieldDescriptorProto::LABEL_REPEATED
+                                    ? (write_as_packed && can_be_packed(field)? "packed_":"repeated_")
+                                    : "");
+            encoder += std::format("    pb.put_{0}{1}({2}, {3});\n", type_prefix, pbtype_str, field.number, field.name);
 
 
             // Generate message decoding function

@@ -3,6 +3,16 @@
 #include <string>
 #include <vector>
 
+struct FieldOptions
+{
+    bool packed;
+
+    bool has_packed = false;
+
+    void ProtoBufDecode(std::string_view buffer);
+};
+
+
 // Field
 struct FieldDescriptorProto
 {
@@ -39,6 +49,7 @@ struct FieldDescriptorProto
     int32_t type;
     std::string_view type_name;
     std::string_view default_value;
+    FieldOptions options;
 
     bool has_name = false;
     bool has_number = false;
@@ -46,6 +57,7 @@ struct FieldDescriptorProto
     bool has_type = false;
     bool has_type_name = false;
     bool has_default_value = false;
+    bool has_options = false;
 
     void ProtoBufDecode(std::string_view buffer);
 };
@@ -84,6 +96,22 @@ struct FileDescriptorSet
 };
 
 
+void FieldOptions::ProtoBufDecode(std::string_view buffer)
+{
+    ProtoBufDecoder pb(buffer);
+
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 2: pb.get_bool(&packed, &has_packed); break;
+            default: pb.skip_field();
+        }
+    }
+
+}
+
+
 void FieldDescriptorProto::ProtoBufDecode(std::string_view buffer)
 {
     ProtoBufDecoder pb(buffer);
@@ -98,6 +126,7 @@ void FieldDescriptorProto::ProtoBufDecode(std::string_view buffer)
             case 5: pb.get_enum  (&type,          &has_type); break;
             case 6: pb.get_string(&type_name,     &has_type_name); break;
             case 7: pb.get_string(&default_value, &has_default_value); break;
+            case 8: pb.get_message(&options,      &has_options); break;
             default: pb.skip_field();
         }
     }
