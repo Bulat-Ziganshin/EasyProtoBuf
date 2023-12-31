@@ -179,6 +179,8 @@ struct ProtoBufEncoder
     define_writers(string, std::string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
     define_writers(bytes, std::string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
 
+#undef define_writers
+
     template <typename FieldType>
     void put_message(uint32_t field_num, FieldType&& value)
     {

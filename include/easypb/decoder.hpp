@@ -2,7 +2,7 @@
 Decoder library consists of 3 levels:
 - 1st level defines read_varint() and read_fixed_width(), allowing to grab basic values from input buffer
 - 2nd level defines parse_*_value(), allowing to read a field knowing field's type and wiretype
-- 3rd level defines parse_*_field() helpers, although they aren't strictly necessary
+- 3rd level defines get_*(), providing easy-to-use API for users of this class
 */
 
 #include <string>
@@ -222,6 +222,8 @@ struct ProtoBufDecoder
 
     define_readers(string, std::string_view, parse_bytearray_value, parse_bytearray_value)
     define_readers(bytes, std::string_view, parse_bytearray_value, parse_bytearray_value)
+
+#undef define_readers
 
     template <typename MessageType>
     void get_message(MessageType *field, bool *has_field = nullptr)

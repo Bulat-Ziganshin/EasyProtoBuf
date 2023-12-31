@@ -1,45 +1,43 @@
 A minimal C++ ProtoBuf library that is
 - easy to learn
 - easy to use
+- easy to grok and hack, the entire [library](include/easypb) is only 400 LOC
 - adds minimal overhead to your executable
+- includes [generator](codegen) (from .proto files) of C++ structures with encoders/decoders
 
-Also:
-- easy to grok and hack, the entire library is only 400 LOC
-- fast enough, but not super-optimized for speed
-- includes generator of C++ structures with encoders/decoders from .proto files
-- the closest competitor is [protozero](https://github.com/mapbox/protozero)
 
-This library is sincerely yours if you need to quickly implement encoding/decoding of
-simple ProtoBuf messages without inflating your program.
-There is no any build infrastructure - if you need this code, just grab it and go!
+## Overview
+
+Library features currently implemented and planned:
+- [x] encoding & decoding, i.e. get/put methods for all ProtoBuf field types, except for maps
+- [x] requires C++17, which may be lowered to C++11 by replacing uses of std::string_view with std::string
+- [x] string/bytes fields can be stored in any C++ type convertible from/to std::string_view
+- [x] repeated fields can be stored in any C++ container implementing push_back() and begin()/end()
+- [ ] big-endian architectures support
+- [ ] [efficient upb read_varint](https://github.com/protocolbuffers/protobuf/blob/a2f92689dac8a7dbea584919c7de52d6a28d66d1/upb/wire/decode.c#L122)
+- [ ] group wire format
+- [protozero](https://github.com/mapbox/protozero) is a production-grade library with a very similar API
+
+[Codegen](codegen) features currently implemented and planned:
+- [x] generates C++ structure, encoder and decoder for each message type
+- [x] the generated decoder checks presence of required fields in the decoded message
+- [x] cmdline options to tailor the generated code
+- [ ] per-field C++ type specification via field option
+- [ ] support of enum/oneof/map fields and nested message type definitions (and thus dogfooding Codegen)
+- [ ] validation of enum, integer and bool values by the generated code
 
 Files:
-- [encoder.hpp](include/pbeasy/encoder.hpp) - the entire encoding library, 200 LOC
-- [decoder.hpp](include/pbeasy/decoder.hpp) - the entire decoding library, 230 LOC
+- [encoder.hpp](include/easypb/encoder.hpp) - the entire encoding library, 200 LOC
+- [decoder.hpp](include/easypb/decoder.hpp) - the entire decoding library, 240 LOC
 - [Codegen](codegen) - generates (de)coders from .pbs (compiled .proto) files
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
-
-Library features currently implemented and planned:
-- [x] encoding & decoding (requires C++17, may be lowered to C++11 by replacing uses of std::string_view with std::string)
-- [x] any scalar/message fields, including repeated and packed ones
-- [x] string/bytes fields can be stored in any type convertible from std::string_view
-- [x] repeated fields can be stored in any container implementing push_back() and begin()/end()
-- [ ] big-endian architectures
-- [ ] [efficient upb read_varint](https://github.com/protocolbuffers/protobuf/blob/a2f92689dac8a7dbea584919c7de52d6a28d66d1/upb/wire/decode.c#L122)
-- [ ] group wire format
-
-[Codegen](codegen) features currently implemented and planned:
-- [x] the generated code checks presence of required fields in the decoded message
-- [ ] support of enum/oneof/map fields and nested message type definitions by the code generator
-(and thus dogfooding it)
-- [ ] validation of enum, integer and bool values by the generated code
 
 
 
 ## Motivating example
 
-Let's say that we have this message definition:
+From this ProtoBuf message definition...
 ```proto
 message Person
 {
@@ -49,7 +47,7 @@ message Person
 }
 ```
 
-[Codegen](codegen) translates this definition to plain C++ structure:
+... [Codegen](codegen) generates the following C++ structure...
 ```cpp
 struct Person
 {
@@ -60,9 +58,13 @@ struct Person
 };
 ```
 
-But on top of that, [Codegen](codegen) generates two functions
-that serialize Person to the ProtoBuf format and
-deserialize Person from the ProtoBuf format:
+... that follows the official ProtoBuf
+[guidelines](https://protobuf.dev/programming-guides/proto3/#scalar)
+on the ProtoBuf->C++ type mapping,
+while enclosing repeated types into `std::vector`.
+
+On top of that, [Codegen](codegen) generates two functions
+that encode/decode Person to the ProtoBuf format:
 ```cpp
 // Encode Person into a string buffer
 std::string protobuf_msg = ProtoBufEncode(person);
@@ -78,17 +80,18 @@ Check technical details in [Tutorial](examples/tutorial).
 
 ## Using the API
 
-But even if you want to write (de)serializers manually, it's also easy:
-
+Even if you are going to implement your own encoder or decoder,
+we recommend to use Codegen to get a blueprint for your code.
+For Person, the generated code is:
 ```cpp
-void MainMessage::ProtoBufEncode(ProtoBufEncoder &pb)
+void Person::ProtoBufEncode(ProtoBufEncoder &pb)
 {
     pb.put_string(1, name);
     pb.put_double(2, weight);
     pb.put_repeated_int32(3, ids);
 }
 
-void MainMessage::ProtoBufDecode(std::string_view buffer)
+void Person::ProtoBufDecode(std::string_view buffer)
 {
     ProtoBufDecoder pb(buffer);
 
@@ -105,17 +108,41 @@ void MainMessage::ProtoBufDecode(std::string_view buffer)
 }
 ```
 
-I.e. you just use put_<FIELD_TYPE> or put_repeated_<FIELD_TYPE> to write a [repeated] field,
-and get_<FIELD_TYPE> or get_repeated_<FIELD_TYPE> to read one.
-Field number should be the first parameter in put_* calls,
+So, the API consists of the following class methods
+(where FTYPE should be replaced by Protobuf type of the field, e.g. 'fixed32' or 'message'):
+- get_FTYPE reads value of non-repeated field
+- get_repeated_FTYPE reads value of repeated field
+- put_FTYPE writes value of non-repeated field
+- put_repeated_FTYPE writes value of unpacked repeated field
+- put_packed_FTYPE writes value of packed repeated field
+
+Field number is the first parameter in put_* calls,
 and placed in the case label before get_* calls.
+
+You can use the returned value of get_FTYPE method instead of passing the variable address,
+e.g. `weight = pb.get_double()`.
+
+`get_FTYPE(&var)` accepts the second parameter - a pointer to bool variable,
+e.g. `pb.get_string(&name, &has_name)`.
+This extra variable is set to `true` after the modification of `var`,
+allowing the program to check which fields were actually present in the decoded message.
+This form of `get_FTYPE` is employed in the code generated by Codegen.
 
 
 
 ## Boring details
 
-Compared to the official ProtoBuf library, it allows more flexibility
-in modifying the field type without losing the decoding compatibility.
+Despite its simplicity, the library is quite fast,
+thanks to use of std::string_view (e.g. avoiding large buffer copies)
+and efficient read_varint/write_varint implementation.
+
+Sub-messages and packed repeated fields always use 5-byte length prefix
+(it can make encoded messages a bit longer than with other Protobuf libraries).
+
+All parsing errors (both in the library and generated code) are signalled using plain std::runtime_error.
+
+Compared to the [official](https://protobuf.dev/programming-guides/proto3/#updating)
+ProtoBuf library, it allows more flexibility in modifying the field type without losing the decoding compatibility.
 You can make any changes to field type as far as it stays inside the same "type domain":
 - FP domain - only float and double
 - zigzag domain - includes sint32 and sint64

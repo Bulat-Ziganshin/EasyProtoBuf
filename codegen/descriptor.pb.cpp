@@ -1,4 +1,5 @@
-// This file will be auto-generated from descriptor.proto when I grow up
+// This file will be auto-generated when I grow up.
+// Source: https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto
 #include <cstdint>
 #include <string>
 #include <vector>
