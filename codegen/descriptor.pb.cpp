@@ -4,6 +4,40 @@
 #include <string>
 #include <vector>
 
+
+struct OneofDescriptorProto
+{
+    std::string_view name;
+
+    bool has_name = false;
+
+    void ProtoBufDecode(std::string_view buffer);
+};
+
+
+struct EnumValueDescriptorProto
+{
+    std::string_view name;
+    int32_t number;
+
+    bool has_name = false;
+    bool has_number = false;
+
+    void ProtoBufDecode(std::string_view buffer);
+};
+
+
+struct EnumDescriptorProto
+{
+    std::string_view name;
+    std::vector<EnumValueDescriptorProto> value;
+
+    bool has_name = false;
+
+    void ProtoBufDecode(std::string_view buffer);
+};
+
+
 struct FieldOptions
 {
     bool packed;
@@ -64,13 +98,28 @@ struct FieldDescriptorProto
 };
 
 
+struct MessageOptions
+{
+    bool map_entry;
+
+    bool has_map_entry = false;
+
+    void ProtoBufDecode(std::string_view buffer);
+};
+
+
 // Message
 struct DescriptorProto
 {
     std::string_view name;
     std::vector<FieldDescriptorProto> field;
+    std::vector<DescriptorProto> nested_type;
+    std::vector<EnumDescriptorProto> enum_type;
+    std::vector<OneofDescriptorProto> oneof_decl;
+    MessageOptions options;
 
     bool has_name = false;
+    bool has_options = false;
 
     void ProtoBufDecode(std::string_view buffer);
 };
@@ -80,9 +129,12 @@ struct DescriptorProto
 struct FileDescriptorProto
 {
     std::string_view name;
+    std::string_view package;
     std::vector<DescriptorProto> message_type;
+    std::vector<EnumDescriptorProto> enum_type;
 
     bool has_name = false;
+    bool has_package = false;
 
     void ProtoBufDecode(std::string_view buffer);
 };
@@ -97,6 +149,53 @@ struct FileDescriptorSet
 };
 
 
+void OneofDescriptorProto::ProtoBufDecode(std::string_view buffer)
+{
+    ProtoBufDecoder pb(buffer);
+
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 1: pb.get_string(&name, &has_name); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
+void EnumValueDescriptorProto::ProtoBufDecode(std::string_view buffer)
+{
+    ProtoBufDecoder pb(buffer);
+
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 1: pb.get_string(&name, &has_name); break;
+            case 2: pb.get_int32(&number, &has_number); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
+void EnumDescriptorProto::ProtoBufDecode(std::string_view buffer)
+{
+    ProtoBufDecoder pb(buffer);
+
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 1: pb.get_string(&name, &has_name); break;
+            case 2: pb.get_repeated_message(&value); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
 void FieldOptions::ProtoBufDecode(std::string_view buffer)
 {
     ProtoBufDecoder pb(buffer);
@@ -109,7 +208,6 @@ void FieldOptions::ProtoBufDecode(std::string_view buffer)
             default: pb.skip_field();
         }
     }
-
 }
 
 
@@ -138,6 +236,21 @@ void FieldDescriptorProto::ProtoBufDecode(std::string_view buffer)
 }
 
 
+void MessageOptions::ProtoBufDecode(std::string_view buffer)
+{
+    ProtoBufDecoder pb(buffer);
+
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 7: pb.get_bool(&map_entry, &has_map_entry); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
 void DescriptorProto::ProtoBufDecode(std::string_view buffer)
 {
     ProtoBufDecoder pb(buffer);
@@ -148,6 +261,10 @@ void DescriptorProto::ProtoBufDecode(std::string_view buffer)
         {
             case 1: pb.get_string(&name, &has_name); break;
             case 2: pb.get_repeated_message(&field); break;
+            case 3: pb.get_repeated_message(&nested_type); break;
+            case 4: pb.get_repeated_message(&enum_type); break;
+            case 8: pb.get_repeated_message(&oneof_decl); break;
+            case 7: pb.get_message(&options, &has_options); break;
             default: pb.skip_field();
         }
     }
@@ -167,13 +284,11 @@ void FileDescriptorProto::ProtoBufDecode(std::string_view buffer)
         switch(pb.field_num)
         {
             case 1: pb.get_string(&name, &has_name); break;
+            case 2: pb.get_string(&package, &has_package); break;
             case 4: pb.get_repeated_message(&message_type); break;
+            case 5: pb.get_repeated_message(&enum_type); break;
             default: pb.skip_field();
         }
-    }
-
-    if(! has_name) {
-        throw std::runtime_error("Decoded protobuf has no required field FileDescriptorProto.name");
     }
 }
 
