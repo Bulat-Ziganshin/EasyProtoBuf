@@ -1,7 +1,11 @@
+#pragma once
+
 #include <string>
 #include <cstring>
 #include <cstdint>
 #include <stdexcept>
+
+#include "common.hpp"
 
 
 struct ProtoBufEncoder
@@ -66,7 +70,7 @@ struct ProtoBufEncoder
     void write_fixed_width(FixedType value)
     {
         auto old_ptr = advance_ptr(sizeof(value));
-        memcpy(old_ptr, &value, sizeof(value));  // TODO: reverse byte order on big-endian cpus
+        easypb_write_to_little_endian(old_ptr, value);
     }
 
     void write_varint(uint64_t value)

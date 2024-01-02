@@ -1,4 +1,4 @@
-A minimal C++ ProtoBuf library that is
+A minimal C++ [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
 - easy to learn
 - easy to use
 - easy to grok and hack, the entire [library](include/easypb) is only 400 LOC
@@ -13,7 +13,7 @@ Library features currently implemented and planned:
 - [x] requires C++17, which may be lowered to C++11 by replacing uses of std::string_view with std::string
 - [x] string/bytes fields can be stored in any C++ type convertible from/to std::string_view
 - [x] repeated fields can be stored in any C++ container implementing push_back() and begin()/end()
-- [ ] big-endian architectures support
+- [x] support for big-endian CPUs
 - [ ] [efficient upb read_varint](https://github.com/protocolbuffers/protobuf/blob/a2f92689dac8a7dbea584919c7de52d6a28d66d1/upb/wire/decode.c#L122)
 - [ ] group wire format
 - [protozero](https://github.com/mapbox/protozero) is a production-grade library with a very similar API
@@ -25,6 +25,7 @@ Library features currently implemented and planned:
 - [ ] per-field C++ type specification via field option
 - [ ] support of enum/oneof/map fields and nested message type definitions (and thus dogfooding Codegen)
 - [ ] validation of enum, integer and bool values by the generated code
+- [ ] protoc plugin
 
 Files:
 - [encoder.hpp](include/easypb/encoder.hpp) - the entire encoding library, 200 LOC
@@ -63,7 +64,7 @@ struct Person
 on the ProtoBuf->C++ type mapping,
 while enclosing repeated types into `std::vector`.
 
-On top of that, [Codegen](codegen) generates two functions
+And on top of that, [Codegen](codegen) generates two functions
 that encode/decode Person to the ProtoBuf format:
 ```cpp
 // Encode Person into a string buffer
@@ -109,7 +110,7 @@ void Person::ProtoBufDecode(std::string_view buffer)
 ```
 
 So, the API consists of the following class methods
-(where FTYPE should be replaced by Protobuf type of the field, e.g. 'fixed32' or 'message'):
+(where FTYPE is the Protobuf type of the field, e.g. 'fixed32' or 'message'):
 - get_FTYPE reads value of non-repeated field
 - get_repeated_FTYPE reads value of repeated field
 - put_FTYPE writes value of non-repeated field
@@ -122,7 +123,7 @@ and placed in the case label before get_* calls.
 You can use the returned value of get_FTYPE method instead of passing the variable address,
 e.g. `weight = pb.get_double()`.
 
-`get_FTYPE(&var)` accepts the second parameter - a pointer to bool variable,
+`get_FTYPE(&var)` accepts an optional second parameter - a pointer to a bool variable,
 e.g. `pb.get_string(&name, &has_name)`.
 This extra variable is set to `true` after the modification of `var`,
 allowing the program to check which fields were actually present in the decoded message.

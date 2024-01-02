@@ -4,11 +4,14 @@ Decoder library consists of 3 levels:
 - 2nd level defines parse_*_value(), allowing to read a field knowing field's type and wiretype
 - 3rd level defines get_*(), providing easy-to-use API for users of this class
 */
+#pragma once
 
 #include <string>
 #include <cstring>
 #include <cstdint>
 #include <stdexcept>
+
+#include "common.hpp"
 
 
 template <typename MessageType>
@@ -60,13 +63,9 @@ struct ProtoBufDecoder
     template <typename FixedType>
     FixedType read_fixed_width()
     {
-        FixedType value;
-
         auto old_ptr = ptr;
-        advance_ptr(sizeof(value));
-
-        memcpy(&value, old_ptr, sizeof(value));
-        return value;  // TODO: reverse byte order on big-endian cpus
+        advance_ptr(sizeof(FixedType));
+        return easypb_read_from_little_endian<FixedType>(old_ptr);
     }
 
     uint64_t read_varint()
