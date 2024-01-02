@@ -13,9 +13,15 @@ const char* USAGE =
 
 #include "easypb/decoder.hpp"
 #include "descriptor.pb.cpp"
+#include "utils.cpp"
 
 
-// Command-line options modifying the program behaviour
+// Protobuf and C++ delimiters within qualified typenames
+const std::string PB_TYPE_DELIMITER = ".";
+const std::string CPP_TYPE_DELIMITER = "::";
+
+
+// Command-line options affecting the generated code
 struct
 {
     bool no_class;
@@ -74,7 +80,7 @@ std::vector<std::string> parse_cmdline(int argc, char** argv)
     }
 
     if(option.no_has_fields) {
-        option.no_required = true;  // we can't check presence of required field without using extra has_* field
+        option.no_required = true;  // we can't check presence of a required field without employing the corresponding has_* field
     }
     return op.non_option_args();
 }
@@ -173,7 +179,34 @@ std::string_view protobuf_type_as_str(FieldDescriptorProto &field)
     return "?type";
 }
 
-std::string_view base_cpp_type_as_str(FieldDescriptorProto &field)
+
+// Return the shortest [qualified] C++ type corresponding to the fully qualified Protobuf message/enum type
+std::string cpp_qualified_type_str(std::string_view package_name_prefix, std::string_view msgtype_name_prefix, std::string_view message_type)
+{
+    // Strip the package_name_prefix from the fully qualified message_type,
+    // e.g. (".google.protobuf.", ".google.protobuf.DescriptorProto.ExtensionRange") -> "DescriptorProto.ExtensionRange",
+    // then drop the prefix of the current msgtype (e.g. "DescriptorProto."),
+    // and finally replace "." typename separator with "::"
+
+    // If message type starts with ".PACKAGE_NAME.", drop this prefix
+    auto prefix_len = package_name_prefix.length();
+    if (message_type.substr(0, prefix_len) == package_name_prefix) {
+        message_type = message_type.substr(prefix_len);
+
+        // If message type starts with "CURRENT_MSGTYPE_NAME.", drop this prefix
+        auto prefix_len = msgtype_name_prefix.length();
+        if (message_type.substr(0, prefix_len) == msgtype_name_prefix) {
+            message_type = message_type.substr(prefix_len);
+        }
+    }
+
+    // Finally, replace "." between name components with C++-specific "::"
+    return string_replace_all(std::string(message_type), PB_TYPE_DELIMITER, CPP_TYPE_DELIMITER );
+}
+
+
+// Return C++ type corresponding to the base type (without "repeated") of the Protobuf field
+std::string base_cpp_type_as_str(std::string_view package_name_prefix, std::string_view msgtype_name_prefix, FieldDescriptorProto &field)
 {
     // According to https://github.com/protocolbuffers/protobuf/blob/c05b320d9c18173bfce36c4bef22f9953d340ff9/src/google/protobuf/descriptor.h#L780
     switch(field.type)
@@ -203,7 +236,7 @@ std::string_view base_cpp_type_as_str(FieldDescriptorProto &field)
         case FieldDescriptorProto::TYPE_STRING:
         case FieldDescriptorProto::TYPE_BYTES:    return option.cpp_string_type;
 
-        case FieldDescriptorProto::TYPE_MESSAGE:  return field.type_name.substr(1);
+        case FieldDescriptorProto::TYPE_MESSAGE:  return cpp_qualified_type_str(package_name_prefix, msgtype_name_prefix, field.type_name);
 
         case FieldDescriptorProto::TYPE_GROUP:    return "?group";
     }
@@ -211,18 +244,21 @@ std::string_view base_cpp_type_as_str(FieldDescriptorProto &field)
     return "?type";
 }
 
-std::string cpp_type_as_str(FieldDescriptorProto &field)
+
+// Return C++ type for the Protobuf field
+std::string cpp_type_as_str(std::string_view package_name_prefix, std::string_view msgtype_name_prefix, FieldDescriptorProto &field)
 {
-    auto result = base_cpp_type_as_str(field);
+    auto result = base_cpp_type_as_str(package_name_prefix, msgtype_name_prefix, field);
 
     if (field.label == FieldDescriptorProto::LABEL_REPEATED) {
         return option.cpp_repeated_type + std::format("<{}>", result);
     } else {
-        return std::string(result);
+        return result;
     }
 }
 
-// Field can be serialized in more compact "packed" fromat
+
+// Does this field type supports serialisation to the more compact "packed" Protobuf wire format?
 bool can_be_packed(FieldDescriptorProto &field)
 {
     return (field.label == FieldDescriptorProto::LABEL_REPEATED) &&
@@ -236,15 +272,17 @@ bool can_be_packed(FieldDescriptorProto &field)
 void generator(FileDescriptorSet &proto)
 {
     auto file = proto.file[0];
+    auto package_name_prefix = PB_TYPE_DELIMITER + std::string(file.package) + PB_TYPE_DELIMITER;
 
     for (auto message_type: file.message_type)
     {
         std::string fields_defs, has_fields_defs, encoder, decode_cases, check_required_fields;
+        auto msgtype_name_prefix = std::string(message_type.name) + PB_TYPE_DELIMITER;
 
         for (auto field: message_type.field)
         {
             auto pbtype_str = protobuf_type_as_str(field);  // PB type as used in .proto file (e.g. "fixed32")
-            auto cpptype_str = cpp_type_as_str(field);      // C++ type for the field (e.g. "std::vector<int32_t>")
+            auto cpptype_str = cpp_type_as_str(package_name_prefix, msgtype_name_prefix, field);  // C++ type for the field (e.g. "std::vector<int32_t>")
 
             // Generate message structure
             std::string default_str;
