@@ -10,7 +10,7 @@
 #include "utils.cpp"
 
 
-// Protobuf and C++ delimiters within qualified typenames
+// Protobuf and C++ delimiters between parts of a qualified name
 const std::string PB_TYPE_DELIMITER = ".";
 const std::string CPP_TYPE_DELIMITER = "::";
 
@@ -216,7 +216,10 @@ bool can_be_packed(FieldDescriptorProto &field)
 void generator(FileDescriptorSet &proto)
 {
     auto file = proto.file[0];
-    auto package_name_prefix = PB_TYPE_DELIMITER + std::string(file.package) + PB_TYPE_DELIMITER;
+    auto package_name_prefix =
+        file.package > ""
+            ? PB_TYPE_DELIMITER + std::string(file.package) + PB_TYPE_DELIMITER
+            : PB_TYPE_DELIMITER;
 
     for (auto message_type: file.message_type)
     {
