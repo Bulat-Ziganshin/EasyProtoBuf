@@ -68,7 +68,7 @@ struct ProtoBufDecoder
         return easypb_read_from_little_endian<FixedType>(old_ptr);
     }
 
-    uint64_t read_varint()
+    uint64_t read_varint_slow()
     {
         uint64_t value = 0;
         uint64_t byte;
@@ -85,6 +85,31 @@ struct ProtoBufDecoder
         while(byte & 128);
 
         return value;
+    }
+
+    uint64_t read_varint()
+    {
+        if(buf_end - ptr < 10)  return read_varint_slow();
+
+        auto p = (uint8_t*)ptr;
+        uint64_t value = 0;
+
+#define STEP(n) \
+    value |= (uint64_t(p[n] & 127) << (n*7)); \
+    if(p[n] < 128)  {ptr += n + 1;  return value;}
+
+        STEP(0)
+        STEP(1)
+        STEP(2)
+        STEP(3)
+        STEP(4)
+        STEP(5)
+        STEP(6)
+        STEP(7)
+        STEP(8)
+        STEP(9)
+#undef STEP
+        throw std::runtime_error("More than 10 bytes in varint");
     }
 
     int64_t read_zigzag()

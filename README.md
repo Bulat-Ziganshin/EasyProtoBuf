@@ -1,9 +1,9 @@
 A minimal C++ [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
 - easy to learn
 - easy to use
-- easy to grok and hack, the entire [library](include/easypb) is only 400 LOC
+- easy to grok and hack, the entire [library](include/easypb) is only 500 LOC
 - adds minimal overhead to your executable
-- includes [generator](codegen) (from .proto files) of C++ structures with encoders/decoders
+- includes [Codegen](codegen) that translates .proto files into plain C++ structures with ProtoBuf encoders/decoders
 
 
 ## Overview
@@ -13,8 +13,7 @@ Library features currently implemented and planned:
 - [x] requires C++17, which may be lowered to C++11 by replacing uses of std::string_view with std::string
 - [x] string/bytes fields can be stored in any C++ type convertible from/to std::string_view
 - [x] repeated fields can be stored in any C++ container implementing push_back() and begin()/end()
-- [x] support for big-endian CPUs
-- [ ] [efficient upb read_varint](https://github.com/protocolbuffers/protobuf/blob/a2f92689dac8a7dbea584919c7de52d6a28d66d1/upb/wire/decode.c#L122)
+- [x] big-endian CPUs support
 - [ ] group wire format
 - [protozero](https://github.com/mapbox/protozero) is a production-grade library with a very similar API
 
@@ -28,9 +27,9 @@ Library features currently implemented and planned:
 - [ ] protoc plugin
 
 Files:
-- [encoder.hpp](include/easypb/encoder.hpp) - the entire encoding library, 200 LOC
-- [decoder.hpp](include/easypb/decoder.hpp) - the entire decoding library, 240 LOC
-- [Codegen](codegen) - generates (de)coders from .pbs (compiled .proto) files
+- [encoder.hpp](include/easypb/encoder.hpp) - the encoding library
+- [decoder.hpp](include/easypb/decoder.hpp) - the decoding library
+- [Codegen](codegen) - generates C++ structures and (de)coders from .pbs (compiled .proto) files
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
 
@@ -43,7 +42,7 @@ From this ProtoBuf message definition...
 message Person
 {
     required string name    = 1 [default = "AnnA"];
-    optional double weight  = 2 [default = 3.14];
+    optional double weight  = 2;
     repeated int32  numbers = 3;
 }
 ```
@@ -53,7 +52,7 @@ message Person
 struct Person
 {
     std::string name = "AnnA";
-    double weight = 3.14;
+    double weight = 0;
     std::vector<int32_t> numbers;
 ...
 };
@@ -82,7 +81,7 @@ Check technical details in [Tutorial](examples/tutorial).
 ## Using the API
 
 Even if you are going to implement your own encoder or decoder,
-we recommend to use Codegen to get a blueprint for your code.
+we recommend to use [Codegen](codegen) to get a blueprint for your code.
 For Person, the generated code is:
 ```cpp
 void Person::ProtoBufEncode(ProtoBufEncoder &pb)

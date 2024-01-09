@@ -77,11 +77,30 @@ struct ProtoBufEncoder
     {
         ptr = advance_ptr(MAX_VARINT_SIZE);  // reserve enough space
 
-        while(value >= 128) {
-            *ptr++ = (value & 127) | 128;
-            value /= 128;
-        }
-        *ptr++ = value;
+#define STEP(n)                                                         \
+{                                                                       \
+    auto atom = value >> (n*7);                                         \
+    if (atom < 0x80) {                                                  \
+        ptr[n] = char(atom);                                            \
+        ptr += n + 1;                                                   \
+        return;                                                         \
+    } else {                                                            \
+        ptr[n] = char((atom & 0x7F) | 0x80);                            \
+    }                                                                   \
+}                                                                       \
+
+        STEP(0)
+        STEP(1)
+        STEP(2)
+        STEP(3)
+        STEP(4)
+        STEP(5)
+        STEP(6)
+        STEP(7)
+        STEP(8)
+        STEP(9)
+#undef STEP
+        throw std::runtime_error("Unreachable: more than 70 bits in uint64_t");
     }
 
     void write_varint_at(size_t varint_pos, size_t varint_size, uint64_t value)
