@@ -10,9 +10,6 @@ const char* USAGE =
 
 #include "easypb/decoder.hpp"
 
-using namespace easypb;
-
-
 
 bool is_printable_str(std::string_view str)
 {
@@ -32,13 +29,13 @@ bool is_printable_str(std::string_view str)
 
 bool decoder(std::string_view str, int indent = 0)
 {
-    ProtoBufDecoder pb(str);
+    easypb::Decoder pb(str);
 
     while(pb.get_next_field())
     {
         switch(pb.wire_type)
         {
-            case WIRETYPE_LENGTH_DELIMITED:
+            case easypb::WIRETYPE_LENGTH_DELIMITED:
             {
                 auto str = pb.parse_bytearray_value();
                 bool is_printable = is_printable_str(str);
@@ -61,13 +58,13 @@ bool decoder(std::string_view str, int indent = 0)
                 break;
             }
 
-            case WIRETYPE_VARINT:
-            case WIRETYPE_FIXED64:
-            case WIRETYPE_FIXED32:
+            case easypb::WIRETYPE_VARINT:
+            case easypb::WIRETYPE_FIXED64:
+            case easypb::WIRETYPE_FIXED32:
             {
                 const char* str_type =
-                    (pb.wire_type == WIRETYPE_FIXED64? "I64" :
-                     pb.wire_type == WIRETYPE_FIXED32? "I32" :
+                    (pb.wire_type == easypb::WIRETYPE_FIXED64? "I64" :
+                     pb.wire_type == easypb::WIRETYPE_FIXED32? "I32" :
                      "VARINT"
                     );
                 int64_t value = pb.parse_integer_value();

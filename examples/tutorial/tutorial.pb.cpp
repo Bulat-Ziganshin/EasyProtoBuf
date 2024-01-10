@@ -25,12 +25,12 @@ struct SubMessage
     bool has_req_float = false;
     bool has_opt_string = false;
 
-    void ProtoBufEncode(ProtoBufEncoder &pb);
-    void ProtoBufDecode(std::string_view buffer);
+    void encode(easypb::Encoder &pb);
+    void decode(std::string_view buffer);
 };
 
 
-void SubMessage::ProtoBufEncode(ProtoBufEncoder &pb)
+void SubMessage::encode(easypb::Encoder &pb)
 {
     pb.put_int64(1, req_int64);
     pb.put_sint32(2, opt_sint32);
@@ -44,9 +44,9 @@ void SubMessage::ProtoBufEncode(ProtoBufEncoder &pb)
 
 }
 
-void SubMessage::ProtoBufDecode(std::string_view buffer)
+void SubMessage::decode(std::string_view buffer)
 {
-    ProtoBufDecoder pb(buffer);
+    easypb::Decoder pb(buffer);
 
     while(pb.get_next_field())
     {
@@ -98,12 +98,12 @@ struct MainMessage
     bool has_req_bytes = false;
     bool has_req_msg = false;
 
-    void ProtoBufEncode(ProtoBufEncoder &pb);
-    void ProtoBufDecode(std::string_view buffer);
+    void encode(easypb::Encoder &pb);
+    void decode(std::string_view buffer);
 };
 
 
-void MainMessage::ProtoBufEncode(ProtoBufEncoder &pb)
+void MainMessage::encode(easypb::Encoder &pb)
 {
     pb.put_uint32(1, opt_uint32);
     pb.put_sfixed64(2, req_sfixed64);
@@ -117,9 +117,9 @@ void MainMessage::ProtoBufEncode(ProtoBufEncoder &pb)
 
 }
 
-void MainMessage::ProtoBufDecode(std::string_view buffer)
+void MainMessage::decode(std::string_view buffer)
 {
-    ProtoBufDecoder pb(buffer);
+    easypb::Decoder pb(buffer);
 
     while(pb.get_next_field())
     {

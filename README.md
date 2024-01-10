@@ -64,13 +64,13 @@ on the ProtoBuf->C++ type mapping,
 while enclosing repeated types into `std::vector`.
 
 And on top of that, [Codegen](codegen) generates two functions
-that encode/decode Person to the ProtoBuf format:
+that encode/decode Person in the ProtoBuf format:
 ```cpp
 // Encode Person into a string buffer
-std::string protobuf_msg = ProtoBufEncode(person);
+std::string protobuf_msg = easypb::encode(person);
 
 // Decode Person from a string buffer
-Person person2 = ProtoBufDecode<Person>(protobuf_msg);
+Person person2 = easypb::decode<Person>(protobuf_msg);
 ```
 
 And that's all you need to know to start using the library.
@@ -84,16 +84,16 @@ Even if you are going to implement your own encoder or decoder,
 we recommend to use [Codegen](codegen) to get a blueprint for your code.
 For Person, the generated code is:
 ```cpp
-void Person::ProtoBufEncode(ProtoBufEncoder &pb)
+void Person::encode(easypb::Encoder &pb)
 {
     pb.put_string(1, name);
     pb.put_double(2, weight);
     pb.put_repeated_int32(3, ids);
 }
 
-void Person::ProtoBufDecode(std::string_view buffer)
+void Person::decode(std::string_view buffer)
 {
-    ProtoBufDecoder pb(buffer);
+    easypb::Decoder pb(buffer);
 
     while(pb.get_next_field())
     {

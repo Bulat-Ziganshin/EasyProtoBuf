@@ -18,15 +18,15 @@ namespace easypb
 {
 
 template <typename MessageType>
-inline MessageType ProtoBufDecode(std::string_view buffer)
+inline MessageType decode(std::string_view buffer)
 {
     MessageType msg;
-    msg.ProtoBufDecode(buffer);
+    msg.decode(buffer);
     return msg;
 }
 
 
-struct ProtoBufDecoder
+struct Decoder
 {
     const char* ptr = nullptr;
     const char* buf_end = nullptr;
@@ -34,7 +34,7 @@ struct ProtoBufDecoder
     WireType wire_type = WIRETYPE_UNDEFINED;
 
 
-    explicit ProtoBufDecoder(const std::string_view& view) noexcept
+    explicit Decoder(const std::string_view& view) noexcept
         : ptr     {view.data()},
           buf_end {view.data() + view.size()}
     {
@@ -207,9 +207,9 @@ struct ProtoBufDecoder
                                                                                                                    \
         if(std::is_scalar<C_TYPE>()  &&  (wire_type == WIRETYPE_LENGTH_DELIMITED)) {                               \
             /* Parsing packed repeated field */                                                                    \
-            ProtoBufDecoder decoder(parse_bytearray_value());                                                      \
-            while(! decoder.eof()) {                                                                               \
-                field->push_back( FieldType(decoder.READER()) );                                                   \
+            easypb::Decoder sub_decoder(parse_bytearray_value());                                                  \
+            while(! sub_decoder.eof()) {                                                                           \
+                field->push_back( FieldType(sub_decoder.READER()) );                                               \
             }                                                                                                      \
         } else {                                                                                                   \
             field->push_back( FieldType(PARSER()) );                                                               \
@@ -244,7 +244,7 @@ struct ProtoBufDecoder
     template <typename MessageType>
     void get_message(MessageType *field, bool *has_field = nullptr)
     {
-        field->ProtoBufDecode(parse_bytearray_value());
+        field->decode( parse_bytearray_value() );
         if(has_field)  *has_field = true;
     }
 
@@ -252,7 +252,7 @@ struct ProtoBufDecoder
     void get_repeated_message(RepeatedMessageType *field)
     {
         using T = typename RepeatedMessageType::value_type;
-        field->push_back( ProtoBufDecode<T>(parse_bytearray_value()));
+        field->push_back( decode<T>(parse_bytearray_value()) );
     }
 };
 

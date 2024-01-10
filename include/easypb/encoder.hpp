@@ -11,14 +11,14 @@
 namespace easypb
 {
 
-struct ProtoBufEncoder
+struct Encoder
 {
     std::string buffer;
     char* ptr;
     char* buf_end;
 
 
-    ProtoBufEncoder()
+    Encoder()
     {
         ptr = buf_end = buffer.data();
     }
@@ -196,7 +196,7 @@ struct ProtoBufEncoder
     void put_message(uint32_t field_num, FieldType&& value)
     {
         write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
-        write_length_delimited([&]{ value.ProtoBufEncode(*this); });
+        write_length_delimited([&]{ value.encode(*this); });
     }
 
     template <typename FieldType>
@@ -208,10 +208,10 @@ struct ProtoBufEncoder
 
 
 template <typename MessageType>
-inline std::string ProtoBufEncode(MessageType&& msg)
+inline std::string encode(MessageType&& msg)
 {
-    ProtoBufEncoder pb;
-    msg.ProtoBufEncode(pb);
+    Encoder pb;
+    msg.encode(pb);
     return pb.result();
 }
 

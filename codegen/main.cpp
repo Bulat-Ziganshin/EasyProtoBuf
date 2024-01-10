@@ -68,7 +68,7 @@ int main(int argc, char** argv)
             std::string str(std::istreambuf_iterator<char>{ifs}, {});
 
             FileDescriptorSet proto;
-            proto.ProtoBufDecode(str);
+            proto.decode(str);
 
             std::cout << std::format(FILE_TEMPLATE, filename);
             generator(proto);

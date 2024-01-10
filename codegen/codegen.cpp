@@ -6,9 +6,6 @@
 #include <format>
 
 #include "easypb/decoder.hpp"
-
-using namespace easypb;
-
 #include "descriptor.pb.cpp"
 #include "utils.cpp"
 
@@ -56,15 +53,15 @@ struct {0}
 )---";
 
 const char* ENCODER_DECLARATION_TEMPLATE =
-"    void ProtoBufEncode(ProtoBufEncoder &pb);";
+"    void encode(easypb::Encoder &pb);";
 
 const char* DECODER_DECLARATION_TEMPLATE =
-"    void ProtoBufDecode(std::string_view buffer);";
+"    void decode(std::string_view buffer);";
 
 
 // {0}=message_type.name, {1}=encoder
 constexpr const char* ENCODER_TEMPLATE = R"---(
-void {0}::ProtoBufEncode(ProtoBufEncoder &pb)
+void {0}::encode(easypb::Encoder &pb)
 {{
 {1}
 }}
@@ -73,9 +70,9 @@ void {0}::ProtoBufEncode(ProtoBufEncoder &pb)
 
 // {0}=message_type.name, {1}=decode_cases, {2}=check_required_fields
 constexpr const char* DECODER_TEMPLATE = R"---(
-void {0}::ProtoBufDecode(std::string_view buffer)
+void {0}::decode(std::string_view buffer)
 {{
-    ProtoBufDecoder pb(buffer);
+    easypb::Decoder pb(buffer);
 
     while(pb.get_next_field())
     {{

@@ -1,8 +1,5 @@
 #include "easypb/encoder.hpp"
 #include "easypb/decoder.hpp"
-
-using namespace easypb;
-
 #include "tutorial.pb.cpp"
 
 
@@ -53,10 +50,10 @@ int main()
         MainMessage orig_msg = make_message();
 
         // Encode message into a string buffer
-        std::string buffer = ProtoBufEncode(orig_msg);
+        std::string buffer = easypb::encode(orig_msg);
 
         // Decode message from the string buffer
-        auto decoded_msg = ProtoBufDecode<MainMessage>(buffer);
+        auto decoded_msg = easypb::decode<MainMessage>(buffer);
 
         // Check whether the decoded message is the same as the original
         auto error = compare(orig_msg, decoded_msg);
