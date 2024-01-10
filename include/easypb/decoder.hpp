@@ -14,6 +14,9 @@ Decoder library consists of 3 levels:
 #include "common.hpp"
 
 
+namespace easypb
+{
+
 template <typename MessageType>
 inline MessageType ProtoBufDecode(std::string_view buffer)
 {
@@ -25,17 +28,6 @@ inline MessageType ProtoBufDecode(std::string_view buffer)
 
 struct ProtoBufDecoder
 {
-    enum WireType
-    {
-      WIRETYPE_UNDEFINED = -1,
-      WIRETYPE_VARINT = 0,
-      WIRETYPE_FIXED64 = 1,
-      WIRETYPE_LENGTH_DELIMITED = 2,
-      WIRETYPE_START_GROUP = 3,
-      WIRETYPE_END_GROUP = 4,
-      WIRETYPE_FIXED32 = 5,
-    };
-
     const char* ptr = nullptr;
     const char* buf_end = nullptr;
     uint32_t field_num = -1;
@@ -65,7 +57,7 @@ struct ProtoBufDecoder
     {
         auto old_ptr = ptr;
         advance_ptr(sizeof(FixedType));
-        return easypb_read_from_little_endian<FixedType>(old_ptr);
+        return read_from_little_endian<FixedType>(old_ptr);
     }
 
     uint64_t read_varint_slow()
@@ -263,3 +255,5 @@ struct ProtoBufDecoder
         field->push_back( ProtoBufDecode<T>(parse_bytearray_value()));
     }
 };
+
+}  // namespace easypb

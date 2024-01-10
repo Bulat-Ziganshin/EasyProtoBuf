@@ -6,6 +6,9 @@
 #include <format>
 
 #include "easypb/decoder.hpp"
+
+using namespace easypb;
+
 #include "descriptor.pb.cpp"
 #include "utils.cpp"
 

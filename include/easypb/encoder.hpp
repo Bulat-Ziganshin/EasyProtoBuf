@@ -8,23 +8,11 @@
 #include "common.hpp"
 
 
+namespace easypb
+{
+
 struct ProtoBufEncoder
 {
-    enum {
-        MAX_VARINT_SIZE = (64+6)/7,  // number of 7-bit chunks in 64-bit int
-        MAX_LENGTH_CODE_SIZE = (32+6)/7,  // number of 7-bit chunks in 32-bit int encoding message length
-    };
-
-    enum WireType
-    {
-      WIRETYPE_VARINT = 0,
-      WIRETYPE_FIXED64 = 1,
-      WIRETYPE_LENGTH_DELIMITED = 2,
-      WIRETYPE_START_GROUP = 3,
-      WIRETYPE_END_GROUP = 4,
-      WIRETYPE_FIXED32 = 5,
-    };
-
     std::string buffer;
     char* ptr;
     char* buf_end;
@@ -70,7 +58,7 @@ struct ProtoBufEncoder
     void write_fixed_width(FixedType value)
     {
         auto old_ptr = advance_ptr(sizeof(value));
-        easypb_write_to_little_endian(old_ptr, value);
+        write_to_little_endian(old_ptr, value);
     }
 
     void write_varint(uint64_t value)
@@ -226,3 +214,5 @@ inline std::string ProtoBufEncode(MessageType&& msg)
     msg.ProtoBufEncode(pb);
     return pb.result();
 }
+
+}  // namespace easypb

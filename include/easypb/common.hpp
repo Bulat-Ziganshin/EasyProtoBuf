@@ -1,8 +1,27 @@
 // Code shared by encoder.hpp and decoder.hpp
 #pragma once
 
+namespace easypb
+{
+
+enum {
+    MAX_VARINT_SIZE = (64+6)/7,  // number of 7-bit chunks in 64-bit int
+    MAX_LENGTH_CODE_SIZE = (32+6)/7,  // number of 7-bit chunks in 32-bit int encoding message length
+};
+
+enum WireType
+{
+    WIRETYPE_UNDEFINED = -1,
+    WIRETYPE_VARINT = 0,
+    WIRETYPE_FIXED64 = 1,
+    WIRETYPE_LENGTH_DELIMITED = 2,
+    WIRETYPE_START_GROUP = 3,
+    WIRETYPE_END_GROUP = 4,
+    WIRETYPE_FIXED32 = 5,
+};
+
 // memcpy, which also reverses byte order on big-endian cpus
-inline void easypb_memcpy_BYTE_ORDER(void* dest, const void* src, int size)
+inline void memcpy_BYTE_ORDER(void* dest, const void* src, int size)
 {
     // Equivalent to "#if __BYTE_ORDER == __BIG_ENDIAN", but more portable.
     // If cpu has PDP byte order, or floats and ints have different order, you are out of luck.
@@ -31,16 +50,18 @@ inline void easypb_memcpy_BYTE_ORDER(void* dest, const void* src, int size)
 
 // Convert the `value` from little-endian to the native byte order
 template <typename FixedType>
-inline FixedType easypb_read_from_little_endian(const void* ptr)
+inline FixedType read_from_little_endian(const void* ptr)
 {
     FixedType value;
-    easypb_memcpy_BYTE_ORDER(&value, ptr, sizeof(FixedType));
+    memcpy_BYTE_ORDER(&value, ptr, sizeof(FixedType));
     return value;
 }
 
 // Convert the `value` from the native to little-endian byte order
 template <typename FixedType>
-inline void easypb_write_to_little_endian(void* ptr, FixedType value)
+inline void write_to_little_endian(void* ptr, FixedType value)
 {
-    easypb_memcpy_BYTE_ORDER(ptr, &value, sizeof(FixedType));
+    memcpy_BYTE_ORDER(ptr, &value, sizeof(FixedType));
 }
+
+}  // namespace easypb

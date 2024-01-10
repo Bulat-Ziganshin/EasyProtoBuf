@@ -1,5 +1,8 @@
 #include "easypb/encoder.hpp"
 #include "easypb/decoder.hpp"
+
+using namespace easypb;
+
 #include "tutorial.pb.cpp"
 
 
