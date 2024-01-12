@@ -17,11 +17,14 @@ Decoder library consists of 3 levels:
 namespace easypb
 {
 
+struct Decoder;
+
 template <typename MessageType>
 inline MessageType decode(std::string_view buffer)
 {
+    Decoder pb(buffer);
     MessageType msg;
-    msg.decode(buffer);
+    msg.decode(pb);
     return msg;
 }
 
@@ -34,7 +37,7 @@ struct Decoder
     WireType wire_type = WIRETYPE_UNDEFINED;
 
 
-    explicit Decoder(const std::string_view& view) noexcept
+    explicit Decoder(std::string_view view) noexcept
         : ptr     {view.data()},
           buf_end {view.data() + view.size()}
     {
@@ -244,7 +247,8 @@ struct Decoder
     template <typename MessageType>
     void get_message(MessageType *field, bool *has_field = nullptr)
     {
-        field->decode( parse_bytearray_value() );
+        Decoder pb(parse_bytearray_value());
+        field->decode(pb);
         if(has_field)  *has_field = true;
     }
 

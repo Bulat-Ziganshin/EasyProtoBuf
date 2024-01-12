@@ -11,7 +11,7 @@ struct OneofDescriptorProto
 
     bool has_name = false;
 
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
 
 
@@ -23,7 +23,7 @@ struct EnumValueDescriptorProto
     bool has_name = false;
     bool has_number = false;
 
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
 
 
@@ -34,7 +34,7 @@ struct EnumDescriptorProto
 
     bool has_name = false;
 
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
 
 
@@ -44,7 +44,7 @@ struct FieldOptions
 
     bool has_packed = false;
 
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
 
 
@@ -94,7 +94,7 @@ struct FieldDescriptorProto
     bool has_default_value = false;
     bool has_options = false;
 
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
 
 
@@ -104,7 +104,7 @@ struct MessageOptions
 
     bool has_map_entry = false;
 
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
 
 
@@ -121,7 +121,7 @@ struct DescriptorProto
     bool has_name = false;
     bool has_options = false;
 
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
 
 
@@ -136,7 +136,7 @@ struct FileDescriptorProto
     bool has_name = false;
     bool has_package = false;
 
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
 
 
@@ -145,14 +145,12 @@ struct FileDescriptorSet
 {
     std::vector<FileDescriptorProto> file;
 
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
 
 
-void OneofDescriptorProto::decode(std::string_view buffer)
+void OneofDescriptorProto::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)
@@ -164,10 +162,8 @@ void OneofDescriptorProto::decode(std::string_view buffer)
 }
 
 
-void EnumValueDescriptorProto::decode(std::string_view buffer)
+void EnumValueDescriptorProto::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)
@@ -180,10 +176,8 @@ void EnumValueDescriptorProto::decode(std::string_view buffer)
 }
 
 
-void EnumDescriptorProto::decode(std::string_view buffer)
+void EnumDescriptorProto::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)
@@ -196,10 +190,8 @@ void EnumDescriptorProto::decode(std::string_view buffer)
 }
 
 
-void FieldOptions::decode(std::string_view buffer)
+void FieldOptions::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)
@@ -211,10 +203,8 @@ void FieldOptions::decode(std::string_view buffer)
 }
 
 
-void FieldDescriptorProto::decode(std::string_view buffer)
+void FieldDescriptorProto::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)
@@ -236,10 +226,8 @@ void FieldDescriptorProto::decode(std::string_view buffer)
 }
 
 
-void MessageOptions::decode(std::string_view buffer)
+void MessageOptions::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)
@@ -251,10 +239,8 @@ void MessageOptions::decode(std::string_view buffer)
 }
 
 
-void DescriptorProto::decode(std::string_view buffer)
+void DescriptorProto::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)
@@ -275,10 +261,8 @@ void DescriptorProto::decode(std::string_view buffer)
 }
 
 
-void FileDescriptorProto::decode(std::string_view buffer)
+void FileDescriptorProto::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)
@@ -293,10 +277,8 @@ void FileDescriptorProto::decode(std::string_view buffer)
 }
 
 
-void FileDescriptorSet::decode(std::string_view buffer)
+void FileDescriptorSet::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)

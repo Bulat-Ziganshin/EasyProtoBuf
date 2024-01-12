@@ -26,9 +26,8 @@ struct SubMessage
     bool has_opt_string = false;
 
     void encode(easypb::Encoder &pb);
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
-
 
 void SubMessage::encode(easypb::Encoder &pb)
 {
@@ -44,10 +43,8 @@ void SubMessage::encode(easypb::Encoder &pb)
 
 }
 
-void SubMessage::decode(std::string_view buffer)
+void SubMessage::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)
@@ -99,9 +96,8 @@ struct MainMessage
     bool has_req_msg = false;
 
     void encode(easypb::Encoder &pb);
-    void decode(std::string_view buffer);
+    void decode(easypb::Decoder pb);
 };
-
 
 void MainMessage::encode(easypb::Encoder &pb)
 {
@@ -117,10 +113,8 @@ void MainMessage::encode(easypb::Encoder &pb)
 
 }
 
-void MainMessage::decode(std::string_view buffer)
+void MainMessage::decode(easypb::Decoder pb)
 {
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {
         switch(pb.field_num)

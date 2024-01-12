@@ -56,7 +56,7 @@ const char* ENCODER_DECLARATION_TEMPLATE =
 "    void encode(easypb::Encoder &pb);";
 
 const char* DECODER_DECLARATION_TEMPLATE =
-"    void decode(std::string_view buffer);";
+"    void decode(easypb::Decoder pb);";
 
 
 // {0}=message_type.name, {1}=encoder
@@ -70,10 +70,8 @@ void {0}::encode(easypb::Encoder &pb)
 
 // {0}=message_type.name, {1}=decode_cases, {2}=check_required_fields
 constexpr const char* DECODER_TEMPLATE = R"---(
-void {0}::decode(std::string_view buffer)
+void {0}::decode(easypb::Decoder pb)
 {{
-    easypb::Decoder pb(buffer);
-
     while(pb.get_next_field())
     {{
         switch(pb.field_num)

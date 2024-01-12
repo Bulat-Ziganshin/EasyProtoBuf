@@ -67,8 +67,7 @@ int main(int argc, char** argv)
             std::ifstream ifs(filename, std::ios::binary);
             std::string str(std::istreambuf_iterator<char>{ifs}, {});
 
-            FileDescriptorSet proto;
-            proto.decode(str);
+            auto proto = easypb::decode<FileDescriptorSet>(str);
 
             std::cout << std::format(FILE_TEMPLATE, filename);
             generator(proto);
