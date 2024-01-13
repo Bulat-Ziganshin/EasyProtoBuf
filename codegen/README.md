@@ -1,6 +1,6 @@
 Generate code from .proto files in two steps:
-1. Use the official [protoc](https://github.com/protocolbuffers/protobuf/releases) compiler to generate binary file: `protoc.exe tutorial.proto -otutorial.pbs`
-2. Compile it with Codegen: `generator.exe tutorial.pbs >tutorial.pb.cpp`
+1. Use the official [protoc](https://github.com/protocolbuffers/protobuf/releases) compiler to generate binary file: `protoc tutorial.proto -otutorial.pbs`
+2. Compile it with Codegen: `codegen tutorial.pbs >tutorial.pb.cpp`
 
 Files:
 - [main.cpp](main.cpp) - main(), including cmdline option parser and file I/O

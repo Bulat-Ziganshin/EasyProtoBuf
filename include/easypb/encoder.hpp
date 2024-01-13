@@ -7,7 +7,11 @@ namespace easypb
 
 struct Encoder
 {
-    std::string buffer; // buffer storing the serialzed data
+    // Invariants:
+    //   buf_end == buffer.data() + buffer.size()
+    //   buffer.data() <= ptr <= buf_end
+
+    std::string buffer; // buffer storing the serialized data
     char* ptr;          // the current writing point
     char* buf_end;      // end of the allocated space
     char* begin() {return (char*)(buffer.data());}  // start of the allocated space

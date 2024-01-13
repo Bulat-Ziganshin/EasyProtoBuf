@@ -18,7 +18,7 @@ Library features currently implemented and planned:
 
 [Codegen](codegen) features currently implemented and planned:
 - [x] generates C++ structure, encoder and decoder for each message type
-- [x] the generated decoder checks presence of required fields in the decoded message
+- [x] the generated decoder checks the presence of required fields in the decoded message
 - [x] cmdline options to tailor the generated code
 - [ ] per-field C++ type specification via field option
 - [ ] support of enum/oneof/map fields and nested message type definitions (and thus dogfooding Codegen)
@@ -80,7 +80,7 @@ Check technical details in [Tutorial](examples/tutorial).
 ## Using the API
 
 Even if you are going to implement your own encoder or decoder,
-we recommend to use [Codegen](codegen) to get a blueprint for your code.
+we recommend using [Codegen](codegen) to get a blueprint for your code.
 For Person, the generated code is:
 ```cpp
 void Person::encode(easypb::Encoder &pb)
@@ -107,13 +107,13 @@ void Person::decode(easypb::Decoder pb)
 
 So, the API consists of the following class methods
 (where FTYPE is the Protobuf type of the field, e.g. 'fixed32' or 'message'):
-- get_FTYPE reads value of non-repeated field
-- get_repeated_FTYPE reads value of repeated field
-- put_FTYPE writes value of non-repeated field
-- put_repeated_FTYPE writes value of unpacked repeated field
-- put_packed_FTYPE writes value of packed repeated field
+- get_FTYPE reads the value of the non-repeated field
+- get_repeated_FTYPE reads the value of the repeated field
+- put_FTYPE writes the value of the non-repeated field
+- put_repeated_FTYPE writes the value of the unpacked repeated field
+- put_packed_FTYPE writes the value of the packed repeated field
 
-Field number is the first parameter in put_* calls,
+The field number is the first parameter in put_* calls,
 and placed in the case label before get_* calls.
 
 You can use the returned value of get_FTYPE method instead of passing the variable address,
@@ -128,29 +128,65 @@ both for required and optional fields.
 
 
 
+# Documentation
+
+EasyProtoBuf is headers-only library. In order to use it, include
+- `<easypb.hpp>` for the entire library
+- or `<easypb/encoder.hpp>` for Encoder only
+- or `<easypb/decoder.hpp>` for Decoder only
+
+
+## Encoding API
+
+Encoding starts with the creation of the encoder object:
+```cpp
+    easypb::Encoder pb;
+```
+
+Then you proceed with encoding all present fields of the message:
+```cpp
+    pb.put_string(1, name);
+    pb.put_double(2, weight);
+    pb.put_repeated_int32(3, ids);
+```
+
+Finally, you extract the encoded message from the encoder object:
+```cpp
+    std::string protobuf_msg = pb.result();
+```
+
+
+## Decoding API
+
+
+## Code generator
+
+The code generator is described in the separate [documentation](codegen/README.md).
+
+
 ## Boring details
 
 Despite its simplicity, the library is quite fast,
-thanks to use of std::string_view (e.g. avoiding large buffer copies)
+thanks to the use of std::string_view (e.g. avoiding large buffer copies)
 and efficient read_varint/write_varint implementation.
 
 On pre-C++17 compilers, the library uses its own
-implementation of string_view to ensure the good performance,
+implementation of string_view to ensure good performance,
 or a user can supply his own type as EASYPB_STRING_VIEW preprocessor macro,
 e.g. define it to std::string.
 
 Sub-messages and packed repeated fields always use 5-byte length prefix
 (it can make encoded messages a bit longer than with other Protobuf libraries).
 
-All parsing errors (both in the library and generated code) are signalled using plain std::runtime_error.
+All parsing errors (both in the library and generated code) are signaled using plain std::runtime_error.
 
 Compared to the [official](https://protobuf.dev/programming-guides/proto3/#updating)
-ProtoBuf library, it allows more flexibility in modifying the field type without losing the decoding compatibility.
-You can make any changes to field type as far as it stays inside the same "type domain":
+ProtoBuf library allows more flexibility in modifying the field type without losing the decoding compatibility.
+You can make any changes to the field type as long as it stays inside the same "type domain":
 - FP domain - only float and double
 - zigzag domain - includes sint32 and sint64
 - bytearray domain - strings, bytes and sub-messages
 - integrals domain - all remaining scalar types (enum, bool, `int*`, `uint*`)
-- aside of that, fixed-width integral fields are compatible with both integral and zigzag domain
-- allows to switch between I32, I64 and VARINT representations for the same field as far as field type keept inside the same domain
-- note that when changing the field type, values will be decoded correctly only if they fit into the range of both old and new field type - for integral types; while precision will be truncated to 32 bits - for FP types
+- aside from that, fixed-width integral fields are compatible with both integral and zigzag domain
+- allows to switch between I32, I64 and VARINT representations for the same field as far as field type kept inside the same domain
+- note that when changing the field type, values will be decoded correctly only if they fit into the range of both old and new field types - for integral types; while precision will be truncated to 32 bits - for FP types

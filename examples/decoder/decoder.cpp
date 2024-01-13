@@ -8,7 +8,7 @@ const char* USAGE =
 #include <fstream>
 #include <iterator>
 
-#include "easypb/decoder.hpp"
+#include <easypb/decoder.hpp>
 
 
 bool is_printable_str(easypb::string_view str)

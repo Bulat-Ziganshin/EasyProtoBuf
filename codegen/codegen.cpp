@@ -5,7 +5,7 @@
 #include <iterator>
 #include <format>
 
-#include "easypb/decoder.hpp"
+#include <easypb/decoder.hpp>
 #include "descriptor.pb.cpp"
 #include "utils.cpp"
 

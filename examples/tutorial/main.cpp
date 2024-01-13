@@ -1,5 +1,4 @@
-#include "easypb/encoder.hpp"
-#include "easypb/decoder.hpp"
+#include <easypb.hpp>
 #include "tutorial.pb.cpp"
 
 
