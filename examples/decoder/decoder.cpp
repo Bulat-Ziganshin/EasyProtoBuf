@@ -11,7 +11,7 @@ const char* USAGE =
 #include "easypb/decoder.hpp"
 
 
-bool is_printable_str(std::string_view str)
+bool is_printable_str(easypb::string_view str)
 {
     if (str.size() > 100) {
         return false;
@@ -27,7 +27,7 @@ bool is_printable_str(std::string_view str)
 }
 
 
-bool decoder(std::string_view str, int indent = 0)
+bool decoder(easypb::string_view str, int indent = 0)
 {
     easypb::Decoder pb(str);
 

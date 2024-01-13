@@ -5,12 +5,6 @@ Decoder library consists of 3 levels:
 - 3rd level defines get_*(), providing easy-to-use API for users of this class
 */
 #pragma once
-
-#include <string>
-#include <cstring>
-#include <cstdint>
-#include <stdexcept>
-
 #include "common.hpp"
 
 
@@ -20,7 +14,7 @@ namespace easypb
 struct Decoder;
 
 template <typename MessageType>
-inline MessageType decode(std::string_view buffer)
+inline MessageType decode(string_view buffer)
 {
     Decoder pb(buffer);
     MessageType msg;
@@ -37,7 +31,7 @@ struct Decoder
     WireType wire_type = WIRETYPE_UNDEFINED;
 
 
-    explicit Decoder(std::string_view view) noexcept
+    explicit Decoder(string_view view) noexcept
         : ptr     {view.data()},
           buf_end {view.data() + view.size()}
     {
@@ -147,7 +141,7 @@ struct Decoder
         throw std::runtime_error("Can't parse zigzag integral with field type " + std::to_string(wire_type));
     }
 
-    std::string_view parse_bytearray_value()
+    string_view parse_bytearray_value()
     {
         if(wire_type != WIRETYPE_LENGTH_DELIMITED) {
             throw std::runtime_error("Can't parse bytearray with field type " + std::to_string(wire_type));
@@ -239,8 +233,8 @@ struct Decoder
     define_readers(float, float, parse_fp_value<FieldType>, read_fixed_width<float>)
     define_readers(double, double, parse_fp_value<FieldType>, read_fixed_width<double>)
 
-    define_readers(string, std::string_view, parse_bytearray_value, parse_bytearray_value)
-    define_readers(bytes, std::string_view, parse_bytearray_value, parse_bytearray_value)
+    define_readers(string, string_view, parse_bytearray_value, parse_bytearray_value)
+    define_readers(bytes, string_view, parse_bytearray_value, parse_bytearray_value)
 
 #undef define_readers
 

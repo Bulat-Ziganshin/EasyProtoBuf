@@ -1,7 +1,7 @@
 A minimal C++ [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
 - easy to learn
 - easy to use
-- easy to grok and hack, the entire [library](include/easypb) is only 500 LOC
+- easy to grok and hack, the entire [library](include/easypb) is only 600 LOC
 - adds minimal overhead to your executable
 - includes [Codegen](codegen) that translates .proto files into plain C++ structures with ProtoBuf encoders/decoders
 
@@ -10,8 +10,7 @@ A minimal C++ [ProtoBuf](https://developers.google.com/protocol-buffers) library
 
 Library features currently implemented and planned:
 - [x] encoding & decoding, i.e. get/put methods for all ProtoBuf field types, except for maps
-- [x] requires C++17, which may be lowered to C++11 by replacing uses of std::string_view with std::string
-- [x] string/bytes fields can be stored in any C++ type convertible from/to std::string_view
+- [x] string/bytes fields can be stored in any C++ type convertible from/to std::string_view (or easypb::string_view)
 - [x] repeated fields can be stored in any C++ container implementing push_back() and begin()/end()
 - [x] big-endian CPUs support
 - [ ] group wire format
@@ -134,6 +133,11 @@ both for required and optional fields.
 Despite its simplicity, the library is quite fast,
 thanks to use of std::string_view (e.g. avoiding large buffer copies)
 and efficient read_varint/write_varint implementation.
+
+On pre-C++17 compilers, the library uses its own
+implementation of string_view to ensure the good performance,
+or a user can supply his own type as EASYPB_STRING_VIEW preprocessor macro,
+e.g. define it to std::string.
 
 Sub-messages and packed repeated fields always use 5-byte length prefix
 (it can make encoded messages a bit longer than with other Protobuf libraries).

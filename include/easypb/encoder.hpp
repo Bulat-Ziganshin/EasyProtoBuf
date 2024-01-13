@@ -1,10 +1,4 @@
 #pragma once
-
-#include <string>
-#include <cstring>
-#include <cstdint>
-#include <stdexcept>
-
 #include "common.hpp"
 
 
@@ -13,16 +7,19 @@ namespace easypb
 
 struct Encoder
 {
-    std::string buffer;
-    char* ptr;
-    char* buf_end;
+    std::string buffer; // buffer storing the serialzed data
+    char* ptr;          // the current writing point
+    char* buf_end;      // end of the allocated space
+    char* begin() {return (char*)(buffer.data());}  // start of the allocated space
+    size_t pos()  {return ptr - begin();}           // the current writing index
 
 
     Encoder()
     {
-        ptr = buf_end = buffer.data();
+        ptr = buf_end = begin();
     }
 
+    // Return the buffer collected by Encoder, and start from scratch
     std::string result()
     {
         buffer.resize(pos());
@@ -30,14 +27,9 @@ struct Encoder
 
         std::string temp_buffer;
         std::swap(buffer, temp_buffer);
-        ptr = buf_end = buffer.data();
+        ptr = buf_end = begin();
 
         return temp_buffer;
-    }
-
-    size_t pos()
-    {
-        return ptr - buffer.data();
     }
 
     char* advance_ptr(int bytes)
@@ -46,8 +38,8 @@ struct Encoder
         {
             auto old_pos = pos();
             buffer.resize(buffer.size()*2 + bytes);
-            ptr = buffer.data() + old_pos;
-            buf_end = buffer.data() + buffer.size();
+            ptr = begin() + old_pos;
+            buf_end = begin() + buffer.size();
         }
         ptr += bytes;
         return ptr - bytes;
@@ -93,7 +85,7 @@ struct Encoder
 
     void write_varint_at(size_t varint_pos, size_t varint_size, uint64_t value)
     {
-        auto ptr = buffer.data() + varint_pos;
+        auto ptr = begin() + varint_pos;
         for (int i = 1; i < varint_size; ++i)
         {
             *ptr++ = (value & 127) | 128;
@@ -108,7 +100,7 @@ struct Encoder
         write_varint((x << 1) ^ (- int64_t(x >> 63)));
     }
 
-    void write_bytearray(std::string_view value)
+    void write_bytearray(string_view value)
     {
         write_varint(value.size());
         auto old_ptr = advance_ptr(value.size());
@@ -187,8 +179,8 @@ struct Encoder
     define_writers(float, float, WIRETYPE_FIXED32, write_fixed_width)
     define_writers(double, double, WIRETYPE_FIXED64, write_fixed_width)
 
-    define_writers(string, std::string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
-    define_writers(bytes, std::string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
+    define_writers(string, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
+    define_writers(bytes, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
 
 #undef define_writers
 
