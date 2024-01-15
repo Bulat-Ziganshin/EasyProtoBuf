@@ -1,5 +1,5 @@
 const char* USAGE =
-"Generator of C++ code from compiled ProtoBuf schema\n"
+"Generator of C++ code from the compiled ProtoBuf schema\n"
 "  Usage: codegen [options] file.pbs...\n";
 
 #include "popl.hpp"
@@ -69,7 +69,7 @@ int main(int argc, char** argv)
 
             auto proto = easypb::decode<FileDescriptorSet>(str);
 
-            std::cout << std::format(FILE_TEMPLATE, filename);
+            std::cout << FILE_TEMPLATE.format(filename);
             generator(proto);
         }
     }
