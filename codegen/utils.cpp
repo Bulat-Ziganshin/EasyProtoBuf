@@ -19,68 +19,48 @@ std::string string_replace_all(
     return result;
 }
 
-
-// An object that formats input arguments similar to std::format
-struct Formatter
+// Use format_str to format remaining arguments similar to std::format.
+// All arguments should be convertible to std::string_view, and the only
+// formatting templates supported are {} and {\d}.
+template <typename... Args>
+std::string myformat(std::string_view format_str, Args... args)
 {
-    // The formatter holds N+1 literal strings
-    // and N numbers of arguments inserted between the literals
-    std::vector<std::string> literal;
-    std::vector<int> argument;
+    std::initializer_list<std::string_view> arg_list{args...};
+    auto arg = arg_list.begin();
 
-    // Apply formatting string to the provided arguments (which should be convertible to string_view)
-    template <typename... Args>
-    std::string format(Args... args)
+    std::string result;
+    const char* fmt = format_str.data();
+    size_t fmt_size = format_str.size();
+    size_t cur_arg = 0;    // the number of the next argument denoted by "{}"
+    size_t start = 0;      // starting position of the current literal span in format_str
+
+    for(size_t i=0; i+1 < fmt_size; i++)
     {
-        std::initializer_list<std::string_view> list{std::forward<Args>(args)...};
-        auto arg = list.begin();
-
-        std::string result;
-
-        for(int i=0; i < argument.size(); i++)
-        {
-            if(argument[i] >= list.size()) {
-                throw std::runtime_error("Not enough arguments for Formatter");
+        // add to the result the literal string between the two arguments and then the next argument
+        auto process_next_arg = [&] (size_t arg_num) {
+            if(arg_num >= arg_list.size()) {
+                throw std::runtime_error("Not enough arguments for myformat");
             }
-            result += literal[i];
-            result += arg[argument[i]];
-        }
-        result += literal[argument.size()];
+            result += std::string_view(&fmt[start], i - start);
+            result += arg[arg_num];
+        };
 
-        return result;
-    }
-};
-
-Formatter make_format(std::string_view format_str)
-{
-    Formatter result;
-    const char* s = format_str.data();
-    size_t size = format_str.size();
-    size_t arg_num = 0;    // the number of the next argument denoted by "{}"
-    size_t start = 0;      // starting position of the current literal span
-
-    for(size_t i=0; i+1 < size; i++)
-    {
         // "{}" in the format string is replaced by the next input argument
-        if(s[i]=='{' && s[i+1]=='}')
+        if(fmt[i]=='{' && fmt[i+1]=='}')
         {
-            // save the literal string between two arguments and the number of the next argument
-            result.literal.push_back({s + start, i - start});
-            result.argument.push_back(arg_num++);
+            process_next_arg(cur_arg++);
             start = i+2;
         }
         // "{\d}" in the format string is replaced by the input argument number #d
-        else if(i+2<size && s[i]=='{' && isdigit(s[i+1]) && s[i+2]=='}')
+        else if(i+2<fmt_size && fmt[i]=='{' && isdigit(fmt[i+1]) && fmt[i+2]=='}')
         {
-            arg_num = atoi(s + i + 1);
-            result.literal.push_back({s + start, i - start});
-            result.argument.push_back(arg_num++);
+            process_next_arg(atoi(&fmt[i+1]));
             start = i+3;
         }
     }
 
-    // save the remainder of format_str
-    result.literal.push_back({s + start, size - start});
+    // add to the result the remainder of format_str
+    result += std::string_view(&fmt[start], fmt_size - start);
 
     return result;
 }

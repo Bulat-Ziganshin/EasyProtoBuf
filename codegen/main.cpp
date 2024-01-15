@@ -69,7 +69,7 @@ int main(int argc, char** argv)
 
             auto proto = easypb::decode<FileDescriptorSet>(str);
 
-            std::cout << FILE_TEMPLATE.format(filename);
+            std::cout << myformat(FILE_TEMPLATE, filename);
             generator(proto);
         }
     }

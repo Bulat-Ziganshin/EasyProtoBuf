@@ -132,8 +132,8 @@ both for required and optional fields.
 
 EasyProtoBuf is headers-only library. In order to use it, include
 - `<easypb.hpp>` for the entire library
-- or `<easypb/encoder.hpp>` for Encoder only
-- or `<easypb/decoder.hpp>` for Decoder only
+- or `<easypb/encoder.hpp>` if you only need to encode messages
+- or `<easypb/decoder.hpp>` if you only need to decode messages
 
 
 ## Encoding API
