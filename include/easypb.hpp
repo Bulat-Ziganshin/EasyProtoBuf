@@ -1,4 +1,9 @@
-// The entire EasyProtoBuf library
+/*
+The entire EasyProtoBuf library. It consists of 3 big sections:
+- Utility functions shared by Encoder and Decoder
+- Encoder class
+- Decoder class
+*/
 #pragma once
 
 #include <string>
@@ -10,7 +15,9 @@
 namespace easypb
 {
 
-// Code shared by Encoder and Decoder
+// ****************************************************************************
+// Utility functions shared by Encoder and Decoder
+// ****************************************************************************
 enum
 {
     MAX_VARINT_SIZE = (64+6)/7,  // number of 7-bit chunks in 64-bit int
@@ -115,6 +122,9 @@ struct string_view
 
 
 
+// ****************************************************************************
+// Encoder class
+// ****************************************************************************
 struct Encoder
 {
     // Invariants:
@@ -171,7 +181,7 @@ struct Encoder
     {
         ptr = advance_ptr(MAX_VARINT_SIZE);  // reserve enough space
 
-#define STEP(n)                                                         \
+#define EASYPB_STEP(n)                                                  \
 {                                                                       \
     auto atom = value >> (n*7);                                         \
     if (atom < 0x80) {                                                  \
@@ -183,17 +193,17 @@ struct Encoder
     }                                                                   \
 }                                                                       \
 
-        STEP(0)
-        STEP(1)
-        STEP(2)
-        STEP(3)
-        STEP(4)
-        STEP(5)
-        STEP(6)
-        STEP(7)
-        STEP(8)
-        STEP(9)
-#undef STEP
+        EASYPB_STEP(0)
+        EASYPB_STEP(1)
+        EASYPB_STEP(2)
+        EASYPB_STEP(3)
+        EASYPB_STEP(4)
+        EASYPB_STEP(5)
+        EASYPB_STEP(6)
+        EASYPB_STEP(7)
+        EASYPB_STEP(8)
+        EASYPB_STEP(9)
+#undef EASYPB_STEP
         throw std::runtime_error("Unreachable: more than 70 bits in uint64_t");
     }
 
@@ -249,7 +259,7 @@ struct Encoder
     }
 
 // Define put_map* method for map<TYPE1,TYPE2>
-#define define_map_writer(TYPE1, TYPE2)                                                                            \
+#define EASYPB_DEFINE_MAP_WRITER(TYPE1, TYPE2)                                                                     \
     template <typename FieldType>                                                                                  \
     void put_map_##TYPE1##_##TYPE2(uint32_t field_num, FieldType&& value)                                          \
     {                                                                                                              \
@@ -262,9 +272,10 @@ struct Encoder
             });                                                                                                    \
         }                                                                                                          \
     }                                                                                                              \
+/* end of EASYPB_DEFINE_MAP_WRITER macro definition */
 
 // Define put_* methods for TYPE and put_map* methods for any map<TYPE,*>
-#define define_writers(TYPE, C_TYPE, WIRETYPE, WRITER)                                                             \
+#define EASYPB_DEFINE_WRITERS(TYPE, C_TYPE, WIRETYPE, WRITER)                                                      \
                                                                                                                    \
     void put_##TYPE(uint32_t field_num, C_TYPE value)                                                              \
     {                                                                                                              \
@@ -288,55 +299,55 @@ struct Encoder
         write_length_delimited([&]{ for(auto &x: value)  WRITER(x); });                                            \
     }                                                                                                              \
                                                                                                                    \
-    define_map_writer(TYPE, int32)                                                                                 \
-    define_map_writer(TYPE, int64)                                                                                 \
-    define_map_writer(TYPE, uint32)                                                                                \
-    define_map_writer(TYPE, uint64)                                                                                \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, int32)                                                                          \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, int64)                                                                          \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, uint32)                                                                         \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, uint64)                                                                         \
                                                                                                                    \
-    define_map_writer(TYPE, sfixed32)                                                                              \
-    define_map_writer(TYPE, sfixed64)                                                                              \
-    define_map_writer(TYPE, fixed32)                                                                               \
-    define_map_writer(TYPE, fixed64)                                                                               \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, sfixed32)                                                                       \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, sfixed64)                                                                       \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, fixed32)                                                                        \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, fixed64)                                                                        \
                                                                                                                    \
-    define_map_writer(TYPE, sint32)                                                                                \
-    define_map_writer(TYPE, sint64)                                                                                \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, sint32)                                                                         \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, sint64)                                                                         \
                                                                                                                    \
-    define_map_writer(TYPE, bool)                                                                                  \
-    define_map_writer(TYPE, enum)                                                                                  \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, bool)                                                                           \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, enum)                                                                           \
                                                                                                                    \
-    define_map_writer(TYPE, float)                                                                                 \
-    define_map_writer(TYPE, double)                                                                                \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, float)                                                                          \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, double)                                                                         \
                                                                                                                    \
-    define_map_writer(TYPE, string)                                                                                \
-    define_map_writer(TYPE, bytes)                                                                                 \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, string)                                                                         \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, bytes)                                                                          \
                                                                                                                    \
-    define_map_writer(TYPE, message)                                                                               \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, message)                                                                        \
+/* end of EASYPB_DEFINE_WRITERS macro definition*/
 
+    EASYPB_DEFINE_WRITERS(int32, int32_t, WIRETYPE_VARINT, write_varint)
+    EASYPB_DEFINE_WRITERS(int64, int64_t, WIRETYPE_VARINT, write_varint)
+    EASYPB_DEFINE_WRITERS(uint32, uint32_t, WIRETYPE_VARINT, write_varint)
+    EASYPB_DEFINE_WRITERS(uint64, uint64_t, WIRETYPE_VARINT, write_varint)
 
-    define_writers(int32, int32_t, WIRETYPE_VARINT, write_varint)
-    define_writers(int64, int64_t, WIRETYPE_VARINT, write_varint)
-    define_writers(uint32, uint32_t, WIRETYPE_VARINT, write_varint)
-    define_writers(uint64, uint64_t, WIRETYPE_VARINT, write_varint)
+    EASYPB_DEFINE_WRITERS(sfixed32, int32_t, WIRETYPE_FIXED32, write_fixed_width)
+    EASYPB_DEFINE_WRITERS(sfixed64, int64_t, WIRETYPE_FIXED64, write_fixed_width)
+    EASYPB_DEFINE_WRITERS(fixed32, uint32_t, WIRETYPE_FIXED32, write_fixed_width)
+    EASYPB_DEFINE_WRITERS(fixed64, uint64_t, WIRETYPE_FIXED64, write_fixed_width)
 
-    define_writers(sfixed32, int32_t, WIRETYPE_FIXED32, write_fixed_width)
-    define_writers(sfixed64, int64_t, WIRETYPE_FIXED64, write_fixed_width)
-    define_writers(fixed32, uint32_t, WIRETYPE_FIXED32, write_fixed_width)
-    define_writers(fixed64, uint64_t, WIRETYPE_FIXED64, write_fixed_width)
+    EASYPB_DEFINE_WRITERS(sint32, int32_t, WIRETYPE_VARINT, write_zigzag)
+    EASYPB_DEFINE_WRITERS(sint64, int64_t, WIRETYPE_VARINT, write_zigzag)
 
-    define_writers(sint32, int32_t, WIRETYPE_VARINT, write_zigzag)
-    define_writers(sint64, int64_t, WIRETYPE_VARINT, write_zigzag)
+    EASYPB_DEFINE_WRITERS(bool, bool, WIRETYPE_VARINT, write_varint)
+    EASYPB_DEFINE_WRITERS(enum, int32_t, WIRETYPE_VARINT, write_varint)
 
-    define_writers(bool, bool, WIRETYPE_VARINT, write_varint)
-    define_writers(enum, int32_t, WIRETYPE_VARINT, write_varint)
+    EASYPB_DEFINE_WRITERS(float, float, WIRETYPE_FIXED32, write_fixed_width)
+    EASYPB_DEFINE_WRITERS(double, double, WIRETYPE_FIXED64, write_fixed_width)
 
-    define_writers(float, float, WIRETYPE_FIXED32, write_fixed_width)
-    define_writers(double, double, WIRETYPE_FIXED64, write_fixed_width)
+    EASYPB_DEFINE_WRITERS(string, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
+    EASYPB_DEFINE_WRITERS(bytes, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
 
-    define_writers(string, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
-    define_writers(bytes, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
-
-#undef define_map_writer
-#undef define_writers
+#undef EASYPB_DEFINE_MAP_WRITER
+#undef EASYPB_DEFINE_WRITERS
 
     template <typename FieldType>
     void put_message(uint32_t field_num, FieldType&& value)
@@ -363,12 +374,12 @@ inline std::string encode(MessageType&& msg)
 
 
 
-/*
-Decoder library consists of 3 levels:
+/*****************************************************************************
+Decoder class consists of 3 levels:
 - 1st level defines read_varint() and read_fixed_width(), allowing to grab basic values from input buffer
 - 2nd level defines parse_*_value(), allowing to read a field knowing field's type and wiretype
 - 3rd level defines get_*(), providing easy-to-use API for users of this class
-*/
+*****************************************************************************/
 struct Decoder;
 
 template <typename MessageType>
@@ -383,6 +394,8 @@ inline MessageType decode(string_view buffer)
 
 struct Decoder
 {
+    // Invariants:
+    //   ptr <= buf_end
     const char* ptr = nullptr;
     const char* buf_end = nullptr;
     uint32_t field_num = -1;
@@ -441,21 +454,23 @@ struct Decoder
         auto p = (uint8_t*)ptr;
         uint64_t value = 0;
 
-#define STEP(n) \
-    value |= (uint64_t(p[n] & 127) << (n*7)); \
-    if(p[n] < 128)  {ptr += n + 1;  return value;}
+#define EASYPB_STEP(n)                                                        \
+{                                                                             \
+    value |= (uint64_t(p[n] & 127) << (n*7));                                 \
+    if(p[n] < 128)  {ptr += n + 1;  return value;}                            \
+}                                                                             \
 
-        STEP(0)
-        STEP(1)
-        STEP(2)
-        STEP(3)
-        STEP(4)
-        STEP(5)
-        STEP(6)
-        STEP(7)
-        STEP(8)
-        STEP(9)
-#undef STEP
+        EASYPB_STEP(0)
+        EASYPB_STEP(1)
+        EASYPB_STEP(2)
+        EASYPB_STEP(3)
+        EASYPB_STEP(4)
+        EASYPB_STEP(5)
+        EASYPB_STEP(6)
+        EASYPB_STEP(7)
+        EASYPB_STEP(8)
+        EASYPB_STEP(9)
+#undef EASYPB_STEP
         throw std::runtime_error("More than 10 bytes in varint");
     }
 
@@ -541,7 +556,7 @@ struct Decoder
 
 
 // Define get_map* method for map<TYPE1,TYPE2>
-#define define_map_reader(TYPE1, TYPE2)                                                                            \
+#define EASYPB_DEFINE_MAP_READER(TYPE1, TYPE2)                                                                     \
     template <typename FieldType>                                                                                  \
     void get_map_##TYPE1##_##TYPE2(FieldType *field)                                                               \
     {                                                                                                              \
@@ -564,8 +579,10 @@ struct Decoder
             (*field)[key] = value;                                                                                 \
         }                                                                                                          \
     }                                                                                                              \
+/* end of EASYPB_DEFINE_MAP_READER macro definition */
 
-#define define_readers(TYPE, C_TYPE, PARSER, READER)                                                               \
+// Define get_* methods for TYPE and get_map* methods for any map<TYPE,*>
+#define EASYPB_DEFINE_READERS(TYPE, C_TYPE, PARSER, READER)                                                        \
                                                                                                                    \
     C_TYPE get_##TYPE()                                                                                            \
     {                                                                                                              \
@@ -596,55 +613,55 @@ struct Decoder
         }                                                                                                          \
     }                                                                                                              \
                                                                                                                    \
-    define_map_reader(TYPE, int32)                                                                                 \
-    define_map_reader(TYPE, int64)                                                                                 \
-    define_map_reader(TYPE, uint32)                                                                                \
-    define_map_reader(TYPE, uint64)                                                                                \
+    EASYPB_DEFINE_MAP_READER(TYPE, int32)                                                                          \
+    EASYPB_DEFINE_MAP_READER(TYPE, int64)                                                                          \
+    EASYPB_DEFINE_MAP_READER(TYPE, uint32)                                                                         \
+    EASYPB_DEFINE_MAP_READER(TYPE, uint64)                                                                         \
                                                                                                                    \
-    define_map_reader(TYPE, sfixed32)                                                                              \
-    define_map_reader(TYPE, sfixed64)                                                                              \
-    define_map_reader(TYPE, fixed32)                                                                               \
-    define_map_reader(TYPE, fixed64)                                                                               \
+    EASYPB_DEFINE_MAP_READER(TYPE, sfixed32)                                                                       \
+    EASYPB_DEFINE_MAP_READER(TYPE, sfixed64)                                                                       \
+    EASYPB_DEFINE_MAP_READER(TYPE, fixed32)                                                                        \
+    EASYPB_DEFINE_MAP_READER(TYPE, fixed64)                                                                        \
                                                                                                                    \
-    define_map_reader(TYPE, sint32)                                                                                \
-    define_map_reader(TYPE, sint64)                                                                                \
+    EASYPB_DEFINE_MAP_READER(TYPE, sint32)                                                                         \
+    EASYPB_DEFINE_MAP_READER(TYPE, sint64)                                                                         \
                                                                                                                    \
-    define_map_reader(TYPE, bool)                                                                                  \
-    define_map_reader(TYPE, enum)                                                                                  \
+    EASYPB_DEFINE_MAP_READER(TYPE, bool)                                                                           \
+    EASYPB_DEFINE_MAP_READER(TYPE, enum)                                                                           \
                                                                                                                    \
-    define_map_reader(TYPE, float)                                                                                 \
-    define_map_reader(TYPE, double)                                                                                \
+    EASYPB_DEFINE_MAP_READER(TYPE, float)                                                                          \
+    EASYPB_DEFINE_MAP_READER(TYPE, double)                                                                         \
                                                                                                                    \
-    define_map_reader(TYPE, string)                                                                                \
-    define_map_reader(TYPE, bytes)                                                                                 \
+    EASYPB_DEFINE_MAP_READER(TYPE, string)                                                                         \
+    EASYPB_DEFINE_MAP_READER(TYPE, bytes)                                                                          \
                                                                                                                    \
-    define_map_reader(TYPE, message)                                                                               \
+    EASYPB_DEFINE_MAP_READER(TYPE, message)                                                                        \
+/* end of EASYPB_DEFINE_READERS macro definition */
 
+    EASYPB_DEFINE_READERS(int32, int32_t, parse_integer_value, read_varint)
+    EASYPB_DEFINE_READERS(int64, int64_t, parse_integer_value, read_varint)
+    EASYPB_DEFINE_READERS(uint32, uint32_t, parse_integer_value, read_varint)
+    EASYPB_DEFINE_READERS(uint64, uint64_t, parse_integer_value, read_varint)
 
-    define_readers(int32, int32_t, parse_integer_value, read_varint)
-    define_readers(int64, int64_t, parse_integer_value, read_varint)
-    define_readers(uint32, uint32_t, parse_integer_value, read_varint)
-    define_readers(uint64, uint64_t, parse_integer_value, read_varint)
+    EASYPB_DEFINE_READERS(sfixed32, int32_t, parse_integer_value, read_fixed_width<int32_t>)
+    EASYPB_DEFINE_READERS(sfixed64, int64_t, parse_integer_value, read_fixed_width<int64_t>)
+    EASYPB_DEFINE_READERS(fixed32, uint32_t, parse_integer_value, read_fixed_width<uint32_t>)
+    EASYPB_DEFINE_READERS(fixed64, uint64_t, parse_integer_value, read_fixed_width<uint64_t>)
 
-    define_readers(sfixed32, int32_t, parse_integer_value, read_fixed_width<int32_t>)
-    define_readers(sfixed64, int64_t, parse_integer_value, read_fixed_width<int64_t>)
-    define_readers(fixed32, uint32_t, parse_integer_value, read_fixed_width<uint32_t>)
-    define_readers(fixed64, uint64_t, parse_integer_value, read_fixed_width<uint64_t>)
+    EASYPB_DEFINE_READERS(sint32, int32_t, parse_zigzag_value, read_zigzag)
+    EASYPB_DEFINE_READERS(sint64, int64_t, parse_zigzag_value, read_zigzag)
 
-    define_readers(sint32, int32_t, parse_zigzag_value, read_zigzag)
-    define_readers(sint64, int64_t, parse_zigzag_value, read_zigzag)
+    EASYPB_DEFINE_READERS(bool, bool, parse_integer_value, read_varint)
+    EASYPB_DEFINE_READERS(enum, int32_t, parse_integer_value, read_varint)
 
-    define_readers(bool, bool, parse_integer_value, read_varint)
-    define_readers(enum, int32_t, parse_integer_value, read_varint)
+    EASYPB_DEFINE_READERS(float, float, parse_fp_value<FieldType>, read_fixed_width<float>)
+    EASYPB_DEFINE_READERS(double, double, parse_fp_value<FieldType>, read_fixed_width<double>)
 
-    define_readers(float, float, parse_fp_value<FieldType>, read_fixed_width<float>)
-    define_readers(double, double, parse_fp_value<FieldType>, read_fixed_width<double>)
+    EASYPB_DEFINE_READERS(string, string_view, parse_bytearray_value, parse_bytearray_value)
+    EASYPB_DEFINE_READERS(bytes, string_view, parse_bytearray_value, parse_bytearray_value)
 
-    define_readers(string, string_view, parse_bytearray_value, parse_bytearray_value)
-    define_readers(bytes, string_view, parse_bytearray_value, parse_bytearray_value)
-
-#undef define_map_reader
-#undef define_readers
+#undef EASYPB_DEFINE_MAP_READER
+#undef EASYPB_DEFINE_READERS
 
     template <typename MessageType>
     void get_message(MessageType *field, bool *has_field = nullptr)
