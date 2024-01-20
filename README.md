@@ -1,7 +1,7 @@
-EasyProtoBuf is a headers-only C++11 [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
+EasyProtoBuf is a single-header C++11 [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
 - easy to [learn](#motivating-example)
 - easy to [use](#documentation)
-- easy to grok and hack
+- easy to [grok](include/easypb.hpp) and hack
 - includes [Codegen](codegen) that translates .proto files into plain C++ structures with ProtoBuf encoders/decoders
 
 
@@ -24,10 +24,10 @@ Library features:
 - [ ] support of enum/oneof/map fields and nested message type definitions (and thus dogfooding Codegen)
 - [ ] validation of enum, integer and bool values by the generated code
 - [ ] protoc plugin
+- [ ] C++11 compatibility (now it requires C++17 compiler, unlike the library itself)
 
 Files:
-- [encoder.hpp](include/easypb/encoder.hpp) - the encoding library
-- [decoder.hpp](include/easypb/decoder.hpp) - the decoding library
+- [easypb.hpp](include/easypb.hpp) - the entire library
 - [Codegen](codegen) - generates C++ structures and (de)coders from .pbs (compiled .proto) files
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
@@ -130,10 +130,8 @@ both for required and optional fields.
 
 # Documentation
 
-EasyProtoBuf is headers-only library. In order to use it, include
-- `<easypb.hpp>` for the entire library
-- or `<easypb/encoder.hpp>` if you only need to encode messages
-- or `<easypb/decoder.hpp>` if you only need to decode messages
+EasyProtoBuf is a single-header library.
+In order to use it, include [easypb.hpp](include/easypb.hpp).
 
 
 ## Encoding API

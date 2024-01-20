@@ -4,7 +4,7 @@
 #include <fstream>
 #include <iterator>
 
-#include <easypb/decoder.hpp>
+#include <easypb.hpp>
 #include "descriptor.pb.cpp"
 #include "utils.cpp"
 
