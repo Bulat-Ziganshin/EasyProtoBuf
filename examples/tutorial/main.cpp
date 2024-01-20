@@ -19,6 +19,9 @@ MainMessage make_message()
     msg.req_msg.req_float    = -205.42;
     msg.req_msg.opt_string   = "206";
 
+    msg.mappa[1] = 1234;
+    msg.mappa[2] = 4321;
+
     return msg;
 }
 
@@ -38,6 +41,13 @@ const char* compare(MainMessage& msg1, MainMessage& msg2)
     if (msg1.req_msg.opt_fixed32 != msg2.req_msg.opt_fixed32)  return "req_msg.opt_fixed32";
     if (msg1.req_msg.req_float   != msg2.req_msg.req_float  )  return "req_msg.req_float";
     if (msg1.req_msg.opt_string  != msg2.req_msg.opt_string )  return "req_msg.opt_string";
+
+    for(const auto& x : msg1.mappa) {
+        if(msg1.mappa[x.first] != msg2.mappa[x.first])  return "mappa";
+    }
+    for(const auto& x : msg2.mappa) {
+        if(msg1.mappa[x.first] != msg2.mappa[x.first])  return "mappa";
+    }
 
     return nullptr;
 }

@@ -138,7 +138,22 @@ struct Encoder
         commit_length_delimited(start_pos);
     }
 
+// Define put_map* method for map<TYPE1,TYPE2>
+#define define_map_writer(TYPE1, TYPE2)                                                                            \
+    template <typename FieldType>                                                                                  \
+    void put_map_##TYPE1##_##TYPE2(uint32_t field_num, FieldType&& value)                                          \
+    {                                                                                                              \
+        for(const auto& x : value)                                                                                 \
+        {                                                                                                          \
+            write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                                                 \
+            write_length_delimited([&]{                                                                            \
+                put_##TYPE1(1, x.first);                                                                           \
+                put_##TYPE2(2, x.second);                                                                          \
+            });                                                                                                    \
+        }                                                                                                          \
+    }                                                                                                              \
 
+// Define put_* methods for TYPE and put_map* methods for any map<TYPE,*>
 #define define_writers(TYPE, C_TYPE, WIRETYPE, WRITER)                                                             \
                                                                                                                    \
     void put_##TYPE(uint32_t field_num, C_TYPE value)                                                              \
@@ -162,6 +177,30 @@ struct Encoder
         write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                                                     \
         write_length_delimited([&]{ for(auto &x: value)  WRITER(x); });                                            \
     }                                                                                                              \
+                                                                                                                   \
+    define_map_writer(TYPE, int32)                                                                                 \
+    define_map_writer(TYPE, int64)                                                                                 \
+    define_map_writer(TYPE, uint32)                                                                                \
+    define_map_writer(TYPE, uint64)                                                                                \
+                                                                                                                   \
+    define_map_writer(TYPE, sfixed32)                                                                              \
+    define_map_writer(TYPE, sfixed64)                                                                              \
+    define_map_writer(TYPE, fixed32)                                                                               \
+    define_map_writer(TYPE, fixed64)                                                                               \
+                                                                                                                   \
+    define_map_writer(TYPE, sint32)                                                                                \
+    define_map_writer(TYPE, sint64)                                                                                \
+                                                                                                                   \
+    define_map_writer(TYPE, bool)                                                                                  \
+    define_map_writer(TYPE, enum)                                                                                  \
+                                                                                                                   \
+    define_map_writer(TYPE, float)                                                                                 \
+    define_map_writer(TYPE, double)                                                                                \
+                                                                                                                   \
+    define_map_writer(TYPE, string)                                                                                \
+    define_map_writer(TYPE, bytes)                                                                                 \
+                                                                                                                   \
+    define_map_writer(TYPE, message)                                                                               \
 
 
     define_writers(int32, int32_t, WIRETYPE_VARINT, write_varint)
@@ -186,6 +225,7 @@ struct Encoder
     define_writers(string, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
     define_writers(bytes, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
 
+#undef define_map_writer
 #undef define_writers
 
     template <typename FieldType>

@@ -182,6 +182,31 @@ struct Decoder
     }
 
 
+// Define get_map* method for map<TYPE1,TYPE2>
+#define define_map_reader(TYPE1, TYPE2)                                                                            \
+    template <typename FieldType>                                                                                  \
+    void get_map_##TYPE1##_##TYPE2(FieldType *field)                                                               \
+    {                                                                                                              \
+        Decoder sub_decoder(parse_bytearray_value());                                                              \
+        bool has_key = false, has_value = false;                                                                   \
+        typename FieldType::key_type key;                                                                          \
+        typename FieldType::mapped_type value;                                                                     \
+                                                                                                                   \
+        while(sub_decoder.get_next_field())                                                                        \
+        {                                                                                                          \
+            switch(sub_decoder.field_num)                                                                          \
+            {                                                                                                      \
+                case 1: sub_decoder.get_##TYPE1(&key, &has_key); break;                                            \
+                case 2: sub_decoder.get_##TYPE2(&value, &has_value); break;                                        \
+                default: sub_decoder.skip_field();                                                                 \
+            }                                                                                                      \
+        }                                                                                                          \
+                                                                                                                   \
+        if (has_key && has_value) {                                                                                \
+            (*field)[key] = value;                                                                                 \
+        }                                                                                                          \
+    }                                                                                                              \
+
 #define define_readers(TYPE, C_TYPE, PARSER, READER)                                                               \
                                                                                                                    \
     C_TYPE get_##TYPE()                                                                                            \
@@ -204,7 +229,7 @@ struct Decoder
                                                                                                                    \
         if(std::is_scalar<C_TYPE>()  &&  (wire_type == WIRETYPE_LENGTH_DELIMITED)) {                               \
             /* Parsing packed repeated field */                                                                    \
-            easypb::Decoder sub_decoder(parse_bytearray_value());                                                  \
+            Decoder sub_decoder(parse_bytearray_value());                                                          \
             while(! sub_decoder.eof()) {                                                                           \
                 field->push_back( FieldType(sub_decoder.READER()) );                                               \
             }                                                                                                      \
@@ -212,6 +237,30 @@ struct Decoder
             field->push_back( FieldType(PARSER()) );                                                               \
         }                                                                                                          \
     }                                                                                                              \
+                                                                                                                   \
+    define_map_reader(TYPE, int32)                                                                                 \
+    define_map_reader(TYPE, int64)                                                                                 \
+    define_map_reader(TYPE, uint32)                                                                                \
+    define_map_reader(TYPE, uint64)                                                                                \
+                                                                                                                   \
+    define_map_reader(TYPE, sfixed32)                                                                              \
+    define_map_reader(TYPE, sfixed64)                                                                              \
+    define_map_reader(TYPE, fixed32)                                                                               \
+    define_map_reader(TYPE, fixed64)                                                                               \
+                                                                                                                   \
+    define_map_reader(TYPE, sint32)                                                                                \
+    define_map_reader(TYPE, sint64)                                                                                \
+                                                                                                                   \
+    define_map_reader(TYPE, bool)                                                                                  \
+    define_map_reader(TYPE, enum)                                                                                  \
+                                                                                                                   \
+    define_map_reader(TYPE, float)                                                                                 \
+    define_map_reader(TYPE, double)                                                                                \
+                                                                                                                   \
+    define_map_reader(TYPE, string)                                                                                \
+    define_map_reader(TYPE, bytes)                                                                                 \
+                                                                                                                   \
+    define_map_reader(TYPE, message)                                                                               \
 
 
     define_readers(int32, int32_t, parse_integer_value, read_varint)
@@ -236,6 +285,7 @@ struct Decoder
     define_readers(string, string_view, parse_bytearray_value, parse_bytearray_value)
     define_readers(bytes, string_view, parse_bytearray_value, parse_bytearray_value)
 
+#undef define_map_reader
 #undef define_readers
 
     template <typename MessageType>

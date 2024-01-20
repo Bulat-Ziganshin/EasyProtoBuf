@@ -1,19 +1,19 @@
-A minimal C++ [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
-- easy to learn
-- easy to use
-- easy to grok and hack, the entire [library](include/easypb) is only 600 LOC
-- adds minimal overhead to your executable
+EasyProtoBuf is a headers-only C++11 [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
+- easy to [learn](#motivating-example)
+- easy to [use](#documentation)
+- easy to grok and hack
 - includes [Codegen](codegen) that translates .proto files into plain C++ structures with ProtoBuf encoders/decoders
 
 
 ## Overview
 
-Library features currently implemented and planned:
-- [x] encoding & decoding, i.e. get/put methods for all ProtoBuf field types, except for maps
-- [x] string/bytes fields can be stored in any C++ type convertible from/to std::string_view (or easypb::string_view)
-- [x] repeated fields can be stored in any C++ container implementing push_back() and begin()/end()
-- [x] big-endian CPUs support
-- [ ] group wire format
+Library features:
+- encoding & decoding, i.e. get/put methods for all ProtoBuf field types
+- string/bytes fields can be stored in any C++ type convertible from/to std::string_view (or easypb::string_view)
+- repeated fields can be stored in any C++ container implementing push_back() and begin()/end()
+- map fields can be stored in any C++ container similar enough to std::map
+- big-endian CPUs support
+- not implemented: group wire format
 - [protozero](https://github.com/mapbox/protozero) is a production-grade library with a very similar API
 
 [Codegen](codegen) features currently implemented and planned:

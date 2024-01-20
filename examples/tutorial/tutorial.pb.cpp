@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <map>
 
 
 struct SubMessage
@@ -88,6 +89,7 @@ struct MainMessage
     std::vector<uint64_t> rep_fixed64;
     std::vector<std::string> rep_string;
     std::vector<SubMessage> rep_msg;
+    std::map<int,int> mappa;
 
     bool has_opt_uint32 = false;
     bool has_req_sfixed64 = false;
@@ -110,6 +112,7 @@ void MainMessage::encode(easypb::Encoder &pb)
     pb.put_repeated_fixed64(12, rep_fixed64);
     pb.put_repeated_string(13, rep_string);
     pb.put_repeated_message(14, rep_msg);
+    pb.put_map_int32_int32(15, mappa);
 
 }
 
@@ -128,6 +131,7 @@ void MainMessage::decode(easypb::Decoder pb)
             case 12: pb.get_repeated_fixed64(&rep_fixed64); break;
             case 13: pb.get_repeated_string(&rep_string); break;
             case 14: pb.get_repeated_message(&rep_msg); break;
+            case 15: pb.get_map_int32_int32(&mappa); break;
 
             default: pb.skip_field();
         }

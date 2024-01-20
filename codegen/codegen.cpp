@@ -143,7 +143,7 @@ std::string cpp_qualified_type_str(std::string_view package_name_prefix, std::st
     }
 
     // Finally, replace "." between name components with C++-specific "::"
-    return string_replace_all(std::string(message_type), PB_TYPE_DELIMITER, CPP_TYPE_DELIMITER );
+    return string_replace_all(message_type, PB_TYPE_DELIMITER, CPP_TYPE_DELIMITER );
 }
 
 
