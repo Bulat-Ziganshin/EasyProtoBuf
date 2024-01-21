@@ -47,6 +47,9 @@ struct {0}
 {
 {1}
 {2}
+#ifdef EASYPB_{0}_EXTRA_FIELDS
+EASYPB_{0}_EXTRA_FIELDS
+#endif
 {3}
 {4}
 };
@@ -64,6 +67,9 @@ const char* ENCODER_TEMPLATE = R"---(
 void {0}::encode(easypb::Encoder &pb)
 {
 {1}
+#ifdef EASYPB_{0}_EXTRA_ENCODING
+EASYPB_{0}_EXTRA_ENCODING
+#endif
 }
 )---";
 
@@ -77,9 +83,15 @@ void {0}::decode(easypb::Decoder pb)
         switch(pb.field_num)
         {
 {1}
+#ifdef EASYPB_{0}_EXTRA_DECODING
+EASYPB_{0}_EXTRA_DECODING
+#endif
             default: pb.skip_field();
         }
     }
+#ifdef EASYPB_{0}_EXTRA_POST_DECODING
+EASYPB_{0}_EXTRA_POST_DECODING
+#endif
 {2}
 }
 )---";

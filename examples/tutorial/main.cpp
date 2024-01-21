@@ -1,3 +1,9 @@
+// Manual definitions for Protobuf map field, since Codegen don't yet support maps
+#define EASYPB_MainMessage_EXTRA_FIELDS     std::map<int,int> mappa;
+#define EASYPB_MainMessage_EXTRA_ENCODING   pb.put_map_int32_int32(15, mappa);
+#define EASYPB_MainMessage_EXTRA_DECODING   case 15: pb.get_map_int32_int32(&mappa); break;
+
+#include <map>
 #include <easypb.hpp>
 #include "tutorial.pb.cpp"
 

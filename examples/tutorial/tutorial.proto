@@ -26,4 +26,5 @@ message MainMessage
     repeated fixed64    rep_fixed64  = 12;
     repeated string     rep_string   = 13;
     repeated SubMessage rep_msg      = 14;
+    // map<int32,int32> mappa        = 15;  // commented out, since Codegen don't yet support maps
 }

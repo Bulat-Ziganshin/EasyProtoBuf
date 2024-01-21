@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include <map>
 
 
 struct SubMessage
@@ -26,6 +25,9 @@ struct SubMessage
     bool has_req_float = false;
     bool has_opt_string = false;
 
+#ifdef EASYPB_SubMessage_EXTRA_FIELDS
+EASYPB_SubMessage_EXTRA_FIELDS
+#endif
     void encode(easypb::Encoder &pb);
     void decode(easypb::Decoder pb);
 };
@@ -42,6 +44,9 @@ void SubMessage::encode(easypb::Encoder &pb)
     pb.put_repeated_uint64(12, rep_uint64);
     pb.put_repeated_double(13, rep_double);
 
+#ifdef EASYPB_SubMessage_EXTRA_ENCODING
+EASYPB_SubMessage_EXTRA_ENCODING
+#endif
 }
 
 void SubMessage::decode(easypb::Decoder pb)
@@ -60,9 +65,15 @@ void SubMessage::decode(easypb::Decoder pb)
             case 12: pb.get_repeated_uint64(&rep_uint64); break;
             case 13: pb.get_repeated_double(&rep_double); break;
 
+#ifdef EASYPB_SubMessage_EXTRA_DECODING
+EASYPB_SubMessage_EXTRA_DECODING
+#endif
             default: pb.skip_field();
         }
     }
+#ifdef EASYPB_SubMessage_EXTRA_POST_DECODING
+EASYPB_SubMessage_EXTRA_POST_DECODING
+#endif
 
     if(! has_req_int64) {
         throw std::runtime_error("Decoded protobuf has no required field SubMessage.req_int64");
@@ -89,7 +100,6 @@ struct MainMessage
     std::vector<uint64_t> rep_fixed64;
     std::vector<std::string> rep_string;
     std::vector<SubMessage> rep_msg;
-    std::map<int,int> mappa;
 
     bool has_opt_uint32 = false;
     bool has_req_sfixed64 = false;
@@ -97,6 +107,9 @@ struct MainMessage
     bool has_req_bytes = false;
     bool has_req_msg = false;
 
+#ifdef EASYPB_MainMessage_EXTRA_FIELDS
+EASYPB_MainMessage_EXTRA_FIELDS
+#endif
     void encode(easypb::Encoder &pb);
     void decode(easypb::Decoder pb);
 };
@@ -112,8 +125,10 @@ void MainMessage::encode(easypb::Encoder &pb)
     pb.put_repeated_fixed64(12, rep_fixed64);
     pb.put_repeated_string(13, rep_string);
     pb.put_repeated_message(14, rep_msg);
-    pb.put_map_int32_int32(15, mappa);
 
+#ifdef EASYPB_MainMessage_EXTRA_ENCODING
+EASYPB_MainMessage_EXTRA_ENCODING
+#endif
 }
 
 void MainMessage::decode(easypb::Decoder pb)
@@ -131,11 +146,16 @@ void MainMessage::decode(easypb::Decoder pb)
             case 12: pb.get_repeated_fixed64(&rep_fixed64); break;
             case 13: pb.get_repeated_string(&rep_string); break;
             case 14: pb.get_repeated_message(&rep_msg); break;
-            case 15: pb.get_map_int32_int32(&mappa); break;
 
+#ifdef EASYPB_MainMessage_EXTRA_DECODING
+EASYPB_MainMessage_EXTRA_DECODING
+#endif
             default: pb.skip_field();
         }
     }
+#ifdef EASYPB_MainMessage_EXTRA_POST_DECODING
+EASYPB_MainMessage_EXTRA_POST_DECODING
+#endif
 
     if(! has_req_sfixed64) {
         throw std::runtime_error("Decoded protobuf has no required field MainMessage.req_sfixed64");
