@@ -53,6 +53,15 @@ std::vector<std::string> parse_cmdline(int argc, char** argv)
     if(option.no_has_fields) {
         option.no_required = true;  // we can't check presence of a required field without employing the corresponding has_* field
     }
+    if (option.cpp_repeated_type.find("{}") == std::string::npos
+     && option.cpp_repeated_type.find("{0}") == std::string::npos)
+    {
+        option.cpp_repeated_type += "<{}>";
+    }
+    if (option.packed && option.no_packed) {
+        throw std::runtime_error("Options --packed and --no-packed can't be used together");
+    }
+
     return op.non_option_args();
 }
 

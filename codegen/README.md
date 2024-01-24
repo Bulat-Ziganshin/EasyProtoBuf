@@ -10,6 +10,23 @@ Files:
 - [utils.cpp](utils.cpp) - common utility functions
 
 
+## Options
+
+`-s, --string-type arg (=std::string)    C++ type for string/bytes fields`
+
+C++ type used for all string and bytes fields.
+You can use e.g. std::string_view when messages are only decoded,
+and never outlive the decoded buffer.
+
+`-r, --repeated-type arg (=std::vector)  C++ container type for repeated fields`
+
+Use for all repeated fields another container (e.g. std::deque).
+"{}" in the name replaced by the C++ field type,
+e.g. "vector<{}>" for "repeated int32" type will be formatted as "vector<int32_t>".
+
+If "{}" is absent in the argument, then "<{}>" will be automatically added to it.
+
+
 ## Details
 
 There are 4 code insertion points for each message type:

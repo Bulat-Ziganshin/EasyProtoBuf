@@ -205,7 +205,7 @@ std::string cpp_type_as_str(std::string_view package_name_prefix, std::string_vi
     auto result = base_cpp_type_as_str(package_name_prefix, msgtype_name_prefix, field);
 
     if (field.label == FieldDescriptorProto::LABEL_REPEATED) {
-        return option.cpp_repeated_type + myformat("<{}>", result);
+        return myformat(option.cpp_repeated_type, result);
     } else {
         return result;
     }

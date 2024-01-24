@@ -259,69 +259,69 @@ struct Encoder
     }
 
 // Define put_map* method for map<TYPE1,TYPE2>
-#define EASYPB_DEFINE_MAP_WRITER(TYPE1, TYPE2)                                                                     \
-    template <typename FieldType>                                                                                  \
-    void put_map_##TYPE1##_##TYPE2(uint32_t field_num, FieldType&& value)                                          \
-    {                                                                                                              \
-        for(const auto& x : value)                                                                                 \
-        {                                                                                                          \
-            write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                                                 \
-            write_length_delimited([&]{                                                                            \
-                put_##TYPE1(1, x.first);                                                                           \
-                put_##TYPE2(2, x.second);                                                                          \
-            });                                                                                                    \
-        }                                                                                                          \
-    }                                                                                                              \
+#define EASYPB_DEFINE_MAP_WRITER(TYPE1, TYPE2)                                \
+    template <typename FieldType>                                             \
+    void put_map_##TYPE1##_##TYPE2(uint32_t field_num, FieldType&& value)     \
+    {                                                                         \
+        for(const auto& x : value)                                            \
+        {                                                                     \
+            write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);            \
+            write_length_delimited([&]{                                       \
+                put_##TYPE1(1, x.first);                                      \
+                put_##TYPE2(2, x.second);                                     \
+            });                                                               \
+        }                                                                     \
+    }                                                                         \
 /* end of EASYPB_DEFINE_MAP_WRITER macro definition */
 
 // Define put_* methods for TYPE and put_map* methods for any map<TYPE,*>
-#define EASYPB_DEFINE_WRITERS(TYPE, C_TYPE, WIRETYPE, WRITER)                                                      \
-                                                                                                                   \
-    void put_##TYPE(uint32_t field_num, C_TYPE value)                                                              \
-    {                                                                                                              \
-        write_field_tag(field_num, WIRETYPE);                                                                      \
-        WRITER(value);                                                                                             \
-    }                                                                                                              \
-                                                                                                                   \
-    template <typename FieldType>                                                                                  \
-    void put_repeated_##TYPE(uint32_t field_num, FieldType&& value)                                                \
-    {                                                                                                              \
-        for(auto &x: value)  put_##TYPE(field_num, x);                                                             \
-    }                                                                                                              \
-                                                                                                                   \
-    template <typename FieldType>                                                                                  \
-    void put_packed_##TYPE(uint32_t field_num, FieldType&& value)                                                  \
-    {                                                                                                              \
-        static_assert(std::is_scalar<C_TYPE>(),                                                                    \
-            "put_packed_" #TYPE " isn't defined according to ProtoBuf format specifications");                     \
-                                                                                                                   \
-        write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                                                     \
-        write_length_delimited([&]{ for(auto &x: value)  WRITER(x); });                                            \
-    }                                                                                                              \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, int32)                                                                          \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, int64)                                                                          \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, uint32)                                                                         \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, uint64)                                                                         \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, sfixed32)                                                                       \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, sfixed64)                                                                       \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, fixed32)                                                                        \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, fixed64)                                                                        \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, sint32)                                                                         \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, sint64)                                                                         \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, bool)                                                                           \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, enum)                                                                           \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, float)                                                                          \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, double)                                                                         \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, string)                                                                         \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, bytes)                                                                          \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, message)                                                                        \
+#define EASYPB_DEFINE_WRITERS(TYPE, C_TYPE, WIRETYPE, WRITER)                 \
+                                                                              \
+    void put_##TYPE(uint32_t field_num, C_TYPE value)                         \
+    {                                                                         \
+        write_field_tag(field_num, WIRETYPE);                                 \
+        WRITER(value);                                                        \
+    }                                                                         \
+                                                                              \
+    template <typename FieldType>                                             \
+    void put_repeated_##TYPE(uint32_t field_num, FieldType&& value)           \
+    {                                                                         \
+        for(auto &x: value)  put_##TYPE(field_num, x);                        \
+    }                                                                         \
+                                                                              \
+    template <typename FieldType>                                             \
+    void put_packed_##TYPE(uint32_t field_num, FieldType&& value)             \
+    {                                                                         \
+        static_assert(std::is_scalar<C_TYPE>(),                               \
+            "put_packed_" #TYPE " isn't defined according to ProtoBuf format specifications");  \
+                                                                              \
+        write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                \
+        write_length_delimited([&]{ for(auto &x: value)  WRITER(x); });       \
+    }                                                                         \
+                                                                              \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, int32)                                     \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, int64)                                     \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, uint32)                                    \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, uint64)                                    \
+                                                                              \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, sfixed32)                                  \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, sfixed64)                                  \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, fixed32)                                   \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, fixed64)                                   \
+                                                                              \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, sint32)                                    \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, sint64)                                    \
+                                                                              \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, bool)                                      \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, enum)                                      \
+                                                                              \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, float)                                     \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, double)                                    \
+                                                                              \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, string)                                    \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, bytes)                                     \
+                                                                              \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, message)                                   \
 /* end of EASYPB_DEFINE_WRITERS macro definition*/
 
     EASYPB_DEFINE_WRITERS(int32, int32_t, WIRETYPE_VARINT, write_varint)
@@ -556,86 +556,86 @@ struct Decoder
 
 
 // Define get_map* method for map<TYPE1,TYPE2>
-#define EASYPB_DEFINE_MAP_READER(TYPE1, TYPE2)                                                                     \
-    template <typename FieldType>                                                                                  \
-    void get_map_##TYPE1##_##TYPE2(FieldType *field)                                                               \
-    {                                                                                                              \
-        Decoder sub_decoder(parse_bytearray_value());                                                              \
-        bool has_key = false, has_value = false;                                                                   \
-        typename FieldType::key_type key;                                                                          \
-        typename FieldType::mapped_type value;                                                                     \
-                                                                                                                   \
-        while(sub_decoder.get_next_field())                                                                        \
-        {                                                                                                          \
-            switch(sub_decoder.field_num)                                                                          \
-            {                                                                                                      \
-                case 1: sub_decoder.get_##TYPE1(&key, &has_key); break;                                            \
-                case 2: sub_decoder.get_##TYPE2(&value, &has_value); break;                                        \
-                default: sub_decoder.skip_field();                                                                 \
-            }                                                                                                      \
-        }                                                                                                          \
-                                                                                                                   \
-        if (has_key && has_value) {                                                                                \
-            (*field)[key] = value;                                                                                 \
-        }                                                                                                          \
-    }                                                                                                              \
+#define EASYPB_DEFINE_MAP_READER(TYPE1, TYPE2)                                \
+    template <typename FieldType>                                             \
+    void get_map_##TYPE1##_##TYPE2(FieldType *field)                          \
+    {                                                                         \
+        Decoder sub_decoder(parse_bytearray_value());                         \
+        bool has_key = false, has_value = false;                              \
+        typename FieldType::key_type key;                                     \
+        typename FieldType::mapped_type value;                                \
+                                                                              \
+        while(sub_decoder.get_next_field())                                   \
+        {                                                                     \
+            switch(sub_decoder.field_num)                                     \
+            {                                                                 \
+                case 1: sub_decoder.get_##TYPE1(&key, &has_key); break;       \
+                case 2: sub_decoder.get_##TYPE2(&value, &has_value); break;   \
+                default: sub_decoder.skip_field();                            \
+            }                                                                 \
+        }                                                                     \
+                                                                              \
+        if (has_key && has_value) {                                           \
+            (*field)[key] = value;                                            \
+        }                                                                     \
+    }                                                                         \
 /* end of EASYPB_DEFINE_MAP_READER macro definition */
 
 // Define get_* methods for TYPE and get_map* methods for any map<TYPE,*>
-#define EASYPB_DEFINE_READERS(TYPE, C_TYPE, PARSER, READER)                                                        \
-                                                                                                                   \
-    C_TYPE get_##TYPE()                                                                                            \
-    {                                                                                                              \
-        using FieldType = C_TYPE;                                                                                  \
-        return FieldType(PARSER());                                                                                \
-    }                                                                                                              \
-                                                                                                                   \
-    template <typename FieldType>                                                                                  \
-    void get_##TYPE(FieldType *field, bool *has_field = nullptr)                                                   \
-    {                                                                                                              \
-        *field = FieldType(PARSER());                                                                              \
-        if(has_field)  *has_field = true;                                                                          \
-    }                                                                                                              \
-                                                                                                                   \
-    template <typename RepeatedFieldType>                                                                          \
-    void get_repeated_##TYPE(RepeatedFieldType *field)                                                             \
-    {                                                                                                              \
-        using FieldType = typename RepeatedFieldType::value_type;                                                  \
-                                                                                                                   \
-        if(std::is_scalar<C_TYPE>()  &&  (wire_type == WIRETYPE_LENGTH_DELIMITED)) {                               \
-            /* Parsing packed repeated field */                                                                    \
-            Decoder sub_decoder(parse_bytearray_value());                                                          \
-            while(! sub_decoder.eof()) {                                                                           \
-                field->push_back( FieldType(sub_decoder.READER()) );                                               \
-            }                                                                                                      \
-        } else {                                                                                                   \
-            field->push_back( FieldType(PARSER()) );                                                               \
-        }                                                                                                          \
-    }                                                                                                              \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_READER(TYPE, int32)                                                                          \
-    EASYPB_DEFINE_MAP_READER(TYPE, int64)                                                                          \
-    EASYPB_DEFINE_MAP_READER(TYPE, uint32)                                                                         \
-    EASYPB_DEFINE_MAP_READER(TYPE, uint64)                                                                         \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_READER(TYPE, sfixed32)                                                                       \
-    EASYPB_DEFINE_MAP_READER(TYPE, sfixed64)                                                                       \
-    EASYPB_DEFINE_MAP_READER(TYPE, fixed32)                                                                        \
-    EASYPB_DEFINE_MAP_READER(TYPE, fixed64)                                                                        \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_READER(TYPE, sint32)                                                                         \
-    EASYPB_DEFINE_MAP_READER(TYPE, sint64)                                                                         \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_READER(TYPE, bool)                                                                           \
-    EASYPB_DEFINE_MAP_READER(TYPE, enum)                                                                           \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_READER(TYPE, float)                                                                          \
-    EASYPB_DEFINE_MAP_READER(TYPE, double)                                                                         \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_READER(TYPE, string)                                                                         \
-    EASYPB_DEFINE_MAP_READER(TYPE, bytes)                                                                          \
-                                                                                                                   \
-    EASYPB_DEFINE_MAP_READER(TYPE, message)                                                                        \
+#define EASYPB_DEFINE_READERS(TYPE, C_TYPE, PARSER, READER)                   \
+                                                                              \
+    C_TYPE get_##TYPE()                                                       \
+    {                                                                         \
+        using FieldType = C_TYPE;                                             \
+        return FieldType(PARSER());                                           \
+    }                                                                         \
+                                                                              \
+    template <typename FieldType>                                             \
+    void get_##TYPE(FieldType *field, bool *has_field = nullptr)              \
+    {                                                                         \
+        *field = FieldType(PARSER());                                         \
+        if(has_field)  *has_field = true;                                     \
+    }                                                                         \
+                                                                              \
+    template <typename RepeatedFieldType>                                     \
+    void get_repeated_##TYPE(RepeatedFieldType *field)                        \
+    {                                                                         \
+        using FieldType = typename RepeatedFieldType::value_type;             \
+                                                                              \
+        if(std::is_scalar<C_TYPE>()  &&  (wire_type == WIRETYPE_LENGTH_DELIMITED)) {  \
+            /* Parsing packed repeated field */                               \
+            Decoder sub_decoder(parse_bytearray_value());                     \
+            while(! sub_decoder.eof()) {                                      \
+                field->push_back( FieldType(sub_decoder.READER()) );          \
+            }                                                                 \
+        } else {                                                              \
+            field->push_back( FieldType(PARSER()) );                          \
+        }                                                                     \
+    }                                                                         \
+                                                                              \
+    EASYPB_DEFINE_MAP_READER(TYPE, int32)                                     \
+    EASYPB_DEFINE_MAP_READER(TYPE, int64)                                     \
+    EASYPB_DEFINE_MAP_READER(TYPE, uint32)                                    \
+    EASYPB_DEFINE_MAP_READER(TYPE, uint64)                                    \
+                                                                              \
+    EASYPB_DEFINE_MAP_READER(TYPE, sfixed32)                                  \
+    EASYPB_DEFINE_MAP_READER(TYPE, sfixed64)                                  \
+    EASYPB_DEFINE_MAP_READER(TYPE, fixed32)                                   \
+    EASYPB_DEFINE_MAP_READER(TYPE, fixed64)                                   \
+                                                                              \
+    EASYPB_DEFINE_MAP_READER(TYPE, sint32)                                    \
+    EASYPB_DEFINE_MAP_READER(TYPE, sint64)                                    \
+                                                                              \
+    EASYPB_DEFINE_MAP_READER(TYPE, bool)                                      \
+    EASYPB_DEFINE_MAP_READER(TYPE, enum)                                      \
+                                                                              \
+    EASYPB_DEFINE_MAP_READER(TYPE, float)                                     \
+    EASYPB_DEFINE_MAP_READER(TYPE, double)                                    \
+                                                                              \
+    EASYPB_DEFINE_MAP_READER(TYPE, string)                                    \
+    EASYPB_DEFINE_MAP_READER(TYPE, bytes)                                     \
+                                                                              \
+    EASYPB_DEFINE_MAP_READER(TYPE, message)                                   \
 /* end of EASYPB_DEFINE_READERS macro definition */
 
     EASYPB_DEFINE_READERS(int32, int32_t, parse_integer_value, read_varint)
