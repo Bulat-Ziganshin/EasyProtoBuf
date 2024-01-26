@@ -15,10 +15,11 @@ struct OneofDescriptorProto
 };
 
 
+// Single enum value
 struct EnumValueDescriptorProto
 {
     std::string_view name;
-    int32_t number;
+    int32_t number = 0;
 
     bool has_name = false;
     bool has_number = false;
@@ -27,6 +28,7 @@ struct EnumValueDescriptorProto
 };
 
 
+// Enum
 struct EnumDescriptorProto
 {
     std::string_view name;
@@ -40,7 +42,7 @@ struct EnumDescriptorProto
 
 struct FieldOptions
 {
-    bool packed;
+    bool packed = false;
 
     bool has_packed = false;
 
@@ -79,9 +81,9 @@ struct FieldDescriptorProto
     };
 
     std::string_view name;
-    int32_t number;
-    int32_t label;
-    int32_t type;
+    int32_t number = 0;
+    int32_t label = 0;
+    int32_t type = 0;
     std::string_view type_name;
     std::string_view default_value;
     FieldOptions options;
@@ -100,7 +102,7 @@ struct FieldDescriptorProto
 
 struct MessageOptions
 {
-    bool map_entry;
+    bool map_entry = false;
 
     bool has_map_entry = false;
 

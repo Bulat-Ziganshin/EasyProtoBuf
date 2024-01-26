@@ -106,6 +106,13 @@ const char* CHECK_REQUIRED_FIELD_TEMPLATE = R"---(
 
 
 
+// Is it a repeated Protobuf field?
+bool is_repeated(FieldDescriptorProto &field)
+{
+    return (field.label == FieldDescriptorProto::LABEL_REPEATED);
+}
+
+
 std::string_view protobuf_type_as_str(FieldDescriptorProto &field)
 {
     switch(field.type)
@@ -202,24 +209,51 @@ std::string base_cpp_type_as_str(std::string_view package_name_prefix, std::stri
 // Return C++ type for the Protobuf field
 std::string cpp_type_as_str(std::string_view package_name_prefix, std::string_view msgtype_name_prefix, FieldDescriptorProto &field)
 {
-    auto result = base_cpp_type_as_str(package_name_prefix, msgtype_name_prefix, field);
+    auto base_type = base_cpp_type_as_str(package_name_prefix, msgtype_name_prefix, field);
 
-    if (field.label == FieldDescriptorProto::LABEL_REPEATED) {
-        return myformat(option.cpp_repeated_type, result);
+    if (is_repeated(field)) {
+        return myformat(option.cpp_repeated_type, base_type);
     } else {
-        return result;
+        return base_type;
     }
+}
+
+
+// Is it a Protobuf numeric field (including enums/bools)?
+bool is_numeric_field(FieldDescriptorProto &field)
+{
+    return (field.type != FieldDescriptorProto::TYPE_STRING) &&
+           (field.type != FieldDescriptorProto::TYPE_BYTES) &&
+           (field.type != FieldDescriptorProto::TYPE_MESSAGE) &&
+           (field.type != FieldDescriptorProto::TYPE_GROUP);
 }
 
 
 // Does this field type supports serialisation to the more compact "packed" Protobuf wire format?
 bool can_be_packed(FieldDescriptorProto &field)
 {
-    return (field.label == FieldDescriptorProto::LABEL_REPEATED) &&
-           (field.type != FieldDescriptorProto::TYPE_STRING) &&
-           (field.type != FieldDescriptorProto::TYPE_BYTES) &&
-           (field.type != FieldDescriptorProto::TYPE_MESSAGE) &&
-           (field.type != FieldDescriptorProto::TYPE_GROUP);
+    return is_repeated(field) && is_numeric_field(field);
+}
+
+
+// Either " = default_field_value" or empty string
+std::string default_value_str(FieldDescriptorProto &field)
+{
+    if (field.has_default_value  &&  ! option.no_default_values) {
+        bool is_bytearray_field = (field.type==FieldDescriptorProto::TYPE_STRING || field.type==FieldDescriptorProto::TYPE_BYTES);
+        const char* quote_str = (is_bytearray_field? "\"" : "");
+        return myformat(" = {0}{1}{0}", quote_str, field.default_value);
+    } else if (is_repeated(field)) {
+        return "";
+    } else {
+        // C++ doesn't initialize scalar fields by default, so we need to enforce the initialization
+        return field.type == FieldDescriptorProto::TYPE_BOOL
+                   ? " = false" :
+               is_numeric_field(field)
+                   ? " = 0"
+               // or another field type
+                   : "";
+    }
 }
 
 
@@ -242,16 +276,9 @@ void generator(FileDescriptorSet &proto)
             auto cpptype_str = cpp_type_as_str(package_name_prefix, msgtype_name_prefix, field);  // C++ type for the field (e.g. "std::vector<int32_t>")
 
             // Generate message structure
-            std::string default_str;
-            if (field.has_default_value  &&  ! option.no_default_values) {
-                bool is_bytearray_field = (field.type==FieldDescriptorProto::TYPE_STRING || field.type==FieldDescriptorProto::TYPE_BYTES);
-                const char* quote_str = (is_bytearray_field? "\"" : "");
-                default_str = myformat(" = {0}{1}{0}", quote_str, field.default_value);
-            }
+            fields_defs += myformat("    {} {}{};\n", cpptype_str, field.name, default_value_str(field));
 
-            fields_defs += myformat("    {} {}{};\n", cpptype_str, field.name, default_str);
-
-            if ((field.label != FieldDescriptorProto::LABEL_REPEATED)  &&  ! option.no_has_fields) {
+            if (! is_repeated(field)  &&  ! option.no_has_fields) {
                 has_fields_defs += myformat("    bool has_{} = false;\n", field.name);
             }
 
@@ -261,9 +288,9 @@ void generator(FileDescriptorSet &proto)
             bool write_as_packed = option.packed ?    true :
                                    option.no_packed ? false :
                                                       packed_field;
-            auto type_prefix = (field.label == FieldDescriptorProto::LABEL_REPEATED
-                                    ? (write_as_packed && can_be_packed(field)? "packed_":"repeated_")
-                                    : "");
+            auto type_prefix = is_repeated(field)
+                                 ? (write_as_packed && can_be_packed(field)? "packed_":"repeated_")
+                                 : "";
             encoder += myformat("    pb.put_{0}{1}({2}, {3});\n",
                                 type_prefix, pbtype_str, std::to_string(field.number), field.name);
 
@@ -271,7 +298,7 @@ void generator(FileDescriptorSet &proto)
             // Generate message decoding function
             std::string get_call;
 
-            if (field.label == FieldDescriptorProto::LABEL_REPEATED) {
+            if (is_repeated(field)) {
                 get_call = myformat("pb.get_repeated_{0}(&{1})", pbtype_str, field.name);
             } else {
                 std::string extra_parameter = "";

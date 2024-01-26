@@ -8,11 +8,11 @@
 
 struct SubMessage
 {
-    int64_t req_int64;
-    int32_t opt_sint32;
-    uint64_t req_uint64;
-    uint32_t opt_fixed32;
-    float req_float;
+    int64_t req_int64 = 0;
+    int32_t opt_sint32 = 0;
+    uint64_t req_uint64 = 0;
+    uint32_t opt_fixed32 = 0;
+    float req_float = 0;
     std::string opt_string = "DEFAULT STRING";
     std::vector<int32_t> rep_int32;
     std::vector<uint64_t> rep_uint64;
@@ -91,8 +91,8 @@ EASYPB_SubMessage_EXTRA_POST_DECODING
 
 struct MainMessage
 {
-    uint32_t opt_uint32;
-    int64_t req_sfixed64;
+    uint32_t opt_uint32 = 0;
+    int64_t req_sfixed64 = 0;
     double opt_double = 3.14;
     std::string req_bytes;
     SubMessage req_msg;
