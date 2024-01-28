@@ -227,8 +227,8 @@ struct Encoder
     void write_bytearray(string_view value)
     {
         write_varint(value.size());
-        auto old_ptr = advance_ptr(value.size());
-        memcpy(old_ptr, value.data(), value.size());
+        auto start_ptr = advance_ptr(value.size());
+        memcpy(start_ptr, value.data(), value.size());
     }
 
     void write_field_tag(uint32_t field_num, WireType wire_type)
