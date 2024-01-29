@@ -37,6 +37,27 @@ enum WireType
 
 
 // ****************************************************************************
+// Define the hierarchy of exceptions thrown by the library
+// ****************************************************************************
+
+#define EASYPB_DEFINE_EXCEPTION(NEW_TYPE,BASE_TYPE)                           \
+    struct NEW_TYPE : BASE_TYPE {                                             \
+        NEW_TYPE(const std::string& what_arg)  : BASE_TYPE(what_arg) {}       \
+        NEW_TYPE(const char* what_arg)         : BASE_TYPE(what_arg) {}       \
+    };                                                                        \
+
+EASYPB_DEFINE_EXCEPTION(exception,              std::runtime_error)
+EASYPB_DEFINE_EXCEPTION(unexpected_eof,         exception)
+EASYPB_DEFINE_EXCEPTION(varint_too_long,        exception)
+EASYPB_DEFINE_EXCEPTION(length_too_long,        exception)
+EASYPB_DEFINE_EXCEPTION(wiretype_mismatch,      exception)
+EASYPB_DEFINE_EXCEPTION(unsupported_wiretype,   exception)
+EASYPB_DEFINE_EXCEPTION(missing_required_field, exception)
+
+#undef EASYPB_DEFINE_EXCEPTION
+
+
+// ****************************************************************************
 // Deal with CPU endianness
 // ****************************************************************************
 
@@ -204,7 +225,7 @@ struct Encoder
         EASYPB_STEP(8)
         EASYPB_STEP(9)
 #undef EASYPB_STEP
-        throw std::runtime_error("Unreachable: more than 70 bits in uint64_t");
+        throw std::logic_error("Unreachable: more than 70 bits in uint64_t");
     }
 
     void write_varint_at(size_t varint_pos, size_t varint_size, uint64_t value)
@@ -216,6 +237,10 @@ struct Encoder
             value /= 128;
         }
         *ptr++ = value;
+
+        if (value > 127) {
+            throw length_too_long("Length requires to encode more than " + std::to_string(varint_size) + " bytes");
+        }
     }
 
     void write_zigzag(int64_t value)
@@ -410,7 +435,7 @@ struct Decoder
 
     void advance_ptr(int bytes)
     {
-        if(buf_end - ptr < bytes)  throw std::runtime_error("Unexpected end of buffer");
+        if(buf_end - ptr < bytes)  throw unexpected_eof("Unexpected end of buffer");
         ptr += bytes;
     }
 
@@ -435,8 +460,8 @@ struct Decoder
         int shift = 0;
 
         do {
-            if(eof())        throw std::runtime_error("Unexpected end of buffer in varint");
-            if(shift >= 64)  throw std::runtime_error("More than 10 bytes in varint");
+            if(eof())        throw unexpected_eof("Unexpected end of buffer in varint");
+            if(shift >= 64)  throw varint_too_long("More than 10 bytes in varint");
 
             byte = *(uint8_t*)ptr;
             value |= ((byte & 127) << shift);
@@ -471,7 +496,7 @@ struct Decoder
         EASYPB_STEP(8)
         EASYPB_STEP(9)
 #undef EASYPB_STEP
-        throw std::runtime_error("More than 10 bytes in varint");
+        throw varint_too_long("More than 10 bytes in varint");
     }
 
     int64_t read_zigzag()
@@ -489,7 +514,7 @@ struct Decoder
             case WIRETYPE_FIXED32: return read_fixed_width<float>();
         }
 
-        throw std::runtime_error("Can't parse floating-point value with field type " + std::to_string(wire_type));
+        throw wiretype_mismatch("Can't parse floating-point value with wiretype " + std::to_string(wire_type));
     }
 
     uint64_t parse_integer_value()
@@ -500,7 +525,7 @@ struct Decoder
             case WIRETYPE_FIXED32:  return read_fixed_width<uint32_t>();
         }
 
-        throw std::runtime_error("Can't parse integral value with field type " + std::to_string(wire_type));
+        throw wiretype_mismatch("Can't parse integral value with wiretype " + std::to_string(wire_type));
     }
 
     int64_t parse_zigzag_value()
@@ -511,13 +536,13 @@ struct Decoder
             case WIRETYPE_FIXED32:  return read_fixed_width<int32_t>();
         }
 
-        throw std::runtime_error("Can't parse zigzag integral with field type " + std::to_string(wire_type));
+        throw wiretype_mismatch("Can't parse zigzag integral with wiretype " + std::to_string(wire_type));
     }
 
     string_view parse_bytearray_value()
     {
         if(wire_type != WIRETYPE_LENGTH_DELIMITED) {
-            throw std::runtime_error("Can't parse bytearray with field type " + std::to_string(wire_type));
+            throw wiretype_mismatch("Can't parse bytearray with wiretype " + std::to_string(wire_type));
         }
 
         uint64_t len = read_varint();
@@ -550,7 +575,7 @@ struct Decoder
             uint64_t len = read_varint();
             advance_ptr(len);
         } else {
-            throw std::runtime_error("Unsupported field type " + std::to_string(wire_type));
+            throw unsupported_wiretype("Unsupported wire type " + std::to_string(wire_type));
         }
     }
 

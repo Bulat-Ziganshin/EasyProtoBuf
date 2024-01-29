@@ -133,6 +133,10 @@ both for required and optional fields.
 EasyProtoBuf is a single-header library.
 In order to use it, include [easypb.hpp](include/easypb.hpp).
 
+All exceptions explicitly thrown by the library are derived
+from easypb::exception. It may also throw std::bad_alloc
+due to buffer management.
+
 
 ## Encoding API
 
