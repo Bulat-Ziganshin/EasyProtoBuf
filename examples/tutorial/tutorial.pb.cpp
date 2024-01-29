@@ -76,15 +76,15 @@ EASYPB_SubMessage_EXTRA_POST_DECODING
 #endif
 
     if(! has_req_int64) {
-        throw std::runtime_error("Decoded protobuf has no required field SubMessage.req_int64");
+        throw easypb::missing_required_field("Decoded protobuf has no required field SubMessage.req_int64");
     }
 
     if(! has_req_uint64) {
-        throw std::runtime_error("Decoded protobuf has no required field SubMessage.req_uint64");
+        throw easypb::missing_required_field("Decoded protobuf has no required field SubMessage.req_uint64");
     }
 
     if(! has_req_float) {
-        throw std::runtime_error("Decoded protobuf has no required field SubMessage.req_float");
+        throw easypb::missing_required_field("Decoded protobuf has no required field SubMessage.req_float");
     }
 
 }
@@ -158,15 +158,15 @@ EASYPB_MainMessage_EXTRA_POST_DECODING
 #endif
 
     if(! has_req_sfixed64) {
-        throw std::runtime_error("Decoded protobuf has no required field MainMessage.req_sfixed64");
+        throw easypb::missing_required_field("Decoded protobuf has no required field MainMessage.req_sfixed64");
     }
 
     if(! has_req_bytes) {
-        throw std::runtime_error("Decoded protobuf has no required field MainMessage.req_bytes");
+        throw easypb::missing_required_field("Decoded protobuf has no required field MainMessage.req_bytes");
     }
 
     if(! has_req_msg) {
-        throw std::runtime_error("Decoded protobuf has no required field MainMessage.req_msg");
+        throw easypb::missing_required_field("Decoded protobuf has no required field MainMessage.req_msg");
     }
 
 }

@@ -79,7 +79,7 @@ int main()
         }
 
     } catch (const std::exception& e) {
-        printf("Internal error: %s\n", e.what());
+        printf("Exception: %s\n", e.what());
     }
     return 0;
 }

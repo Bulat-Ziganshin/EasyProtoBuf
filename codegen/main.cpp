@@ -83,7 +83,7 @@ int main(int argc, char** argv)
         }
     }
     catch (const std::exception& e) {
-        fprintf(stderr, "Internal error: %s\n", e.what());
+        fprintf(stderr, "Exception: %s\n", e.what());
     }
 
     return 0;

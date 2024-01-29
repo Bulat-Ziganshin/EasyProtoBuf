@@ -223,7 +223,7 @@ void FieldDescriptorProto::decode(easypb::Decoder pb)
     }
 
     if(! has_name) {
-        throw std::runtime_error("Decoded protobuf has no required field FieldDescriptorProto.name");
+        throw easypb::missing_required_field("Decoded protobuf has no required field FieldDescriptorProto.name");
     }
 }
 
@@ -258,7 +258,7 @@ void DescriptorProto::decode(easypb::Decoder pb)
     }
 
     if(! has_name) {
-        throw std::runtime_error("Decoded protobuf has no required field DescriptorProto.name");
+        throw easypb::missing_required_field("Decoded protobuf has no required field DescriptorProto.name");
     }
 }
 

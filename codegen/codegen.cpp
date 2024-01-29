@@ -100,7 +100,7 @@ EASYPB_{0}_EXTRA_POST_DECODING
 // {0}=message_type.name, {1}=field.name
 const char* CHECK_REQUIRED_FIELD_TEMPLATE = R"---(
     if(! has_{1}) {
-        throw std::runtime_error("Decoded protobuf has no required field {0}.{1}");
+        throw easypb::missing_required_field("Decoded protobuf has no required field {0}.{1}");
     }
 )---";
 
@@ -252,6 +252,7 @@ std::string cpp_type_as_str(std::string_view package_name_prefix, std::string_vi
 std::string default_value_str(FieldDescriptorProto &field)
 {
     if (field.has_default_value  &&  ! option.no_default_values) {
+        // Use default field value specified in .proto file
         bool is_bytearray_field = (field.type==FieldDescriptorProto::TYPE_STRING || field.type==FieldDescriptorProto::TYPE_BYTES);
         const char* quote_str = (is_bytearray_field? "\"" : "");
         return myformat(" = {0}{1}{0}", quote_str, field.default_value);
