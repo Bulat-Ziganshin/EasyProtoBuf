@@ -132,11 +132,11 @@ struct string_view
 
     string_view(const char* data, size_t size)  {_data = (char*)data;  _size = size;}
     string_view(std::string s)  {_data = (char*)(s.data());  _size = s.size();}
-    operator std::string()  {return {_data, _size};}
-    char*  data()  {return _data;}
-    size_t size()  {return _size;}
-    char*  begin() {return _data;}
-    char*  end()   {return _data + _size;}
+    operator std::string() const  {return {_data, _size};}
+    char*  data()  const {return _data;}
+    size_t size()  const {return _size;}
+    char*  begin() const {return _data;}
+    char*  end()   const {return _data + _size;}
 };
 
 #endif
@@ -155,8 +155,8 @@ struct Encoder
     std::string buffer; // buffer storing the serialized data
     char* ptr;          // the current writing point
     char* buf_end;      // end of the allocated space
-    char* begin() {return (char*)(buffer.data());}  // start of the allocated space
-    size_t pos()  {return ptr - begin();}           // the current writing index
+    char* begin() const {return (char*)(buffer.data());}  // start of the allocated space
+    size_t pos()  const {return ptr - begin();}           // the current writing index
 
 
     Encoder()
@@ -400,19 +400,18 @@ inline std::string encode(MessageType&& msg)
 
 
 /*****************************************************************************
-Decoder class consists of 3 levels:
-- 1st level defines read_varint() and read_fixed_width(), allowing to grab basic values from input buffer
-- 2nd level defines parse_*_value(), allowing to read a field knowing field's type and wiretype
-- 3rd level defines get_*(), providing easy-to-use API for users of this class
+The Decoder class is made of 3 layers:
+1) read_varint() and read_fixed_width(), allowing to grab basic values from input buffer
+2) parse_*_value(), allowing to read a field knowing field's type and wiretype
+3) get_*(), providing easy-to-use API for users of this class
 *****************************************************************************/
 struct Decoder;
 
 template <typename MessageType>
 inline MessageType decode(string_view buffer)
 {
-    Decoder pb(buffer);
     MessageType msg;
-    msg.decode(pb);
+    msg.decode( Decoder(buffer) );
     return msg;
 }
 
@@ -421,25 +420,32 @@ struct Decoder
 {
     // Invariants:
     //   ptr <= buf_end
+
+    // The bytes between ptr and buf_end contain the not yet decoded remainder of the message.
     const char* ptr = nullptr;
     const char* buf_end = nullptr;
+
+    // These properties are filled by get_next_field() and make sense only till the entire field is decoded
     uint32_t field_num = -1;
     WireType wire_type = WIRETYPE_UNDEFINED;
 
 
+    // The Decoder keeps pointers into the data being decoded, so don't free/move them till decoding is finished
     explicit Decoder(string_view view) noexcept
         : ptr     {view.data()},
           buf_end {view.data() + view.size()}
     {
     }
 
+    // Skip N bytes of the message
     void advance_ptr(int bytes)
     {
         if(buf_end - ptr < bytes)  throw unexpected_eof("Unexpected end of buffer");
         ptr += bytes;
     }
 
-    bool eof()
+    // Did we reach the end of the message?
+    bool eof() const
     {
         return(ptr >= buf_end);
     }
@@ -691,8 +697,7 @@ struct Decoder
     template <typename MessageType>
     void get_message(MessageType *field, bool *has_field = nullptr)
     {
-        Decoder pb(parse_bytearray_value());
-        field->decode(pb);
+        field->decode( Decoder(parse_bytearray_value()) );
         if(has_field)  *has_field = true;
     }
 

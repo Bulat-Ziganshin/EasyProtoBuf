@@ -1,7 +1,7 @@
 EasyProtoBuf is a single-header C++11 [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
 - easy to [learn](#motivating-example)
 - easy to [use](#documentation)
-- easy to [grok](include/easypb.hpp) and hack
+- easy to [grok](include/easypb.hpp) and hack: only 600 LOC
 - includes [Codegen](codegen) that translates .proto files into plain C++ structures with ProtoBuf encoders/decoders
 
 
@@ -12,7 +12,7 @@ Library features:
 - string/bytes fields can be stored in any C++ type convertible from/to std::string_view (or easypb::string_view)
 - repeated fields can be stored in any C++ container implementing push_back() and begin()/end()
 - map fields can be stored in any C++ container similar enough to std::map
-- big-endian CPUs support
+- little-endian and big-endian CPUs support
 - not implemented: group wire format
 - [protozero](https://github.com/mapbox/protozero) is a production-grade library with a very similar API
 
@@ -192,3 +192,43 @@ You can make any changes to the field type as long as it stays inside the same "
 - aside from that, fixed-width integral fields are compatible with both integral and zigzag domain
 - allows to switch between I32, I64 and VARINT representations for the same field as far as field type kept inside the same domain
 - note that when changing the field type, values will be decoded correctly only if they fit into the range of both old and new field types - for integral types; while precision will be truncated to 32 bits - for FP types
+
+
+## Motivation
+
+It starts with the story of my FreeArc archiver:
+- the first FreeArc version was implemented in Haskell, which is a very high-level language
+- the second version was reimplemented in C++, both to increase performance and to increase the potential contributors' audience
+- then, I realized that 80% of the archiver code (e.g. cmdline parsing) doesn't need C++ efficiency
+and rewrote this part in Lua to simplify the code and further increase the potential contributors' audience
+(the popularity of Haskell:C++:Lua among programmers is at the proportion of 1:10:100)
+- and, finally, I thought that the C++ part could be considered as a low-level core archiver library (AKA backend)
+while the scripting part is a client implementing concrete frontend (cmdline, UI) on the top of the core.
+The backend API provides only a few functions (e.g. compress and decompress) with LOTS of parameters.
+
+And the best way to pass lots of parameters to a C++ function is a plain C struct.
+Using a serialization library to pass such a struct between languages greatly simplifies
+adding bindings to the core API for new languages, such as Python, JavaScript, and so on.
+So I decided to provide the backend API as a few functions accepting serialized data structures
+for all their parameters.
+
+At this moment, I started to research various popular serialization libraries
+and finally chose the ProtoBuf format:
+- ProtoBuf format is the simplest one among all popular libs, although sometimes it's TOO simple
+(e.g. maps are emulated via repeated pairs)
+- FlatBuffers doesn't suppose deserialization, while I prefer to work with plain C++ structures
+- MessagePack format is more self-describing (schema-less) than ProtoBuf, making it less efficient for schema-based serialization
+- given its simplicity, it's no surprise that ProtoBuf is the most popular serialization format around,
+with bindings implemented to more languages. And even if some exotic language misses a binding,
+it would be easier to implement it for ProtoBuf than for any other serialization format.
+
+Now, I looked around, but the tiniest C++ ProtoBuf library I found was still a whopping 4 KLOC
+(while it neither supports maps nor provides a bindings generator).
+This made me crazy - the entire ProtoBuf format is just 5 field types, what do you do in those kilolines of code?
+
+You guessed it right - I decided to write my own ProtoBuf library (with maps and codegen, you know).
+The first Decoder version was about 100 LOC and today the entire library is still only 600 LOC,
+encoding and decoding all ProtoBuf types including maps.
+Nevertheless, the [library](https://github.com/mapbox/protozero) I rejected
+eventually provided many insights, from the API to internal organization,
+so I can call it a father of my own lib.
