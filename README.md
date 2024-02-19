@@ -1,8 +1,15 @@
 EasyProtoBuf is a single-header C++11 [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
-- easy to [learn](#motivating-example)
-- easy to [use](#documentation)
-- easy to [grok](include/easypb.hpp) and hack: only 600 LOC
-- includes [Codegen](codegen) that translates .proto files into plain C++ structures with ProtoBuf encoders/decoders
+- easy to [learn](#motivating-example) - all field types are (de)serialized
+with the uniform get_{FIELDTYPE} and put_{FIELDTYPE} calls
+- easy to [use](#documentation) - you need to write only one line of code to (de)serialize each field
+- easy to [grok and hack](include/easypb.hpp) - the entire library is only 600 LOC
+
+Sorry, I fooled you... It's even easier!
+
+[Codegen](codegen) translates .proto files into plain C++ structures
+and generates encode/decode functions (de)serializing these structures into ProtoBuf format.
+So, if you know how to use C++ structs, you just learned how to use EasyProtoBuf.
+Scrap the docs, and have a nice beer! The rest is written for water lovers.
 
 
 ## Overview
@@ -32,6 +39,12 @@ Files:
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
 
+Done so far:
+- 100% of the library
+- 66% of the Codegen
+- 50% of the documentation
+- 0% of CI
+- 0% of the tests
 
 
 ## Motivating example
@@ -201,12 +214,12 @@ It starts with the story of my FreeArc archiver:
 - the second version was reimplemented in C++, both to increase performance and to increase the potential contributors' audience
 - then, I realized that 80% of the archiver code (e.g. cmdline parsing) doesn't need C++ efficiency
 and rewrote this part in Lua to simplify the code and further increase the potential contributors' audience
-(the popularity of Haskell:C++:Lua among programmers is at the proportion of 1:10:100)
+(the popularity of Haskell, C++ and Lua among programmers is at the proportion of 1:10:100)
 - and, finally, I thought that the C++ part could be considered as a low-level core archiver library (AKA backend)
 while the scripting part is a client implementing concrete frontend (cmdline, UI) on the top of the core.
 The backend API provides only a few functions (e.g. compress and decompress) with LOTS of parameters.
 
-And the best way to pass lots of parameters to a C++ function is a plain C struct.
+And the best way to pass a lot of parameters to a C++ function is a plain C struct.
 Using a serialization library to pass such a struct between languages greatly simplifies
 adding bindings to the core API for new languages, such as Python, JavaScript, and so on.
 So I decided to provide the backend API as a few functions accepting serialized data structures
@@ -219,7 +232,7 @@ and finally chose the ProtoBuf format:
 - FlatBuffers doesn't suppose deserialization, while I prefer to work with plain C++ structures
 - MessagePack format is more self-describing (schema-less) than ProtoBuf, making it less efficient for schema-based serialization
 - given its simplicity, it's no surprise that ProtoBuf is the most popular serialization format around,
-with bindings implemented to more languages. And even if some exotic language misses a binding,
+with bindings implemented for more languages. And even if some exotic language misses a binding,
 it would be easier to implement it for ProtoBuf than for any other serialization format.
 
 Now, I looked around, but the tiniest C++ ProtoBuf library I found was still a whopping 4 KLOC

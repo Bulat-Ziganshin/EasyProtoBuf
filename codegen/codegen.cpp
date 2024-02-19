@@ -56,7 +56,7 @@ EASYPB_{0}_EXTRA_FIELDS
 )---";
 
 const char* ENCODER_DECLARATION_TEMPLATE =
-"    void encode(easypb::Encoder &pb);";
+"    void encode(easypb::Encoder &pb) const;";
 
 const char* DECODER_DECLARATION_TEMPLATE =
 "    void decode(easypb::Decoder pb);";
@@ -64,7 +64,7 @@ const char* DECODER_DECLARATION_TEMPLATE =
 
 // {0}=message_type.name, {1}=encoder
 const char* ENCODER_TEMPLATE = R"---(
-void {0}::encode(easypb::Encoder &pb)
+void {0}::encode(easypb::Encoder &pb) const
 {
 {1}
 #ifdef EASYPB_{0}_EXTRA_ENCODING

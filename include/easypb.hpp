@@ -65,7 +65,7 @@ EASYPB_DEFINE_EXCEPTION(missing_required_field, exception)
 inline void memcpy_LITTLE_ENDIAN(void* dest, const void* src, int size)
 {
     // Equivalent to "#if __BYTE_ORDER == __BIG_ENDIAN", but more portable.
-    // If cpu has PDP byte order, or floats and ints have different order, you are out of luck.
+    // If cpu has PDP byte order, or floats and ints have different order, you are screwed.
     if((*(uint16_t *)"\0\xff" < 0x100)) {
         auto to = (char*) dest;
         auto from = (const char*) src;
@@ -286,7 +286,7 @@ struct Encoder
 // Define put_map* method for map<TYPE1,TYPE2>
 #define EASYPB_DEFINE_MAP_WRITER(TYPE1, TYPE2)                                \
     template <typename FieldType>                                             \
-    void put_map_##TYPE1##_##TYPE2(uint32_t field_num, FieldType&& value)     \
+    void put_map_##TYPE1##_##TYPE2(uint32_t field_num, const FieldType& value)\
     {                                                                         \
         for(const auto& x : value)                                            \
         {                                                                     \
@@ -309,13 +309,13 @@ struct Encoder
     }                                                                         \
                                                                               \
     template <typename FieldType>                                             \
-    void put_repeated_##TYPE(uint32_t field_num, FieldType&& value)           \
+    void put_repeated_##TYPE(uint32_t field_num, const FieldType& value)      \
     {                                                                         \
         for(auto &x: value)  put_##TYPE(field_num, x);                        \
     }                                                                         \
                                                                               \
     template <typename FieldType>                                             \
-    void put_packed_##TYPE(uint32_t field_num, FieldType&& value)             \
+    void put_packed_##TYPE(uint32_t field_num, const FieldType& value)        \
     {                                                                         \
         static_assert(std::is_scalar<C_TYPE>(),                               \
             "put_packed_" #TYPE " isn't defined according to ProtoBuf format specifications");  \
@@ -375,14 +375,14 @@ struct Encoder
 #undef EASYPB_DEFINE_WRITERS
 
     template <typename FieldType>
-    void put_message(uint32_t field_num, FieldType&& value)
+    void put_message(uint32_t field_num, const FieldType& value)
     {
         write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
         write_length_delimited([&]{ value.encode(*this); });
     }
 
     template <typename FieldType>
-    void put_repeated_message(uint32_t field_num, FieldType&& value)
+    void put_repeated_message(uint32_t field_num, const FieldType& value)
     {
         for(auto &x: value)  put_message(field_num, x);
     }
@@ -390,7 +390,7 @@ struct Encoder
 
 
 template <typename MessageType>
-inline std::string encode(MessageType&& msg)
+inline std::string encode(const MessageType& msg)
 {
     Encoder pb;
     msg.encode(pb);

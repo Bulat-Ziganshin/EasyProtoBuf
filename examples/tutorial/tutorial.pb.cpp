@@ -28,11 +28,11 @@ struct SubMessage
 #ifdef EASYPB_SubMessage_EXTRA_FIELDS
 EASYPB_SubMessage_EXTRA_FIELDS
 #endif
-    void encode(easypb::Encoder &pb);
+    void encode(easypb::Encoder &pb) const;
     void decode(easypb::Decoder pb);
 };
 
-void SubMessage::encode(easypb::Encoder &pb)
+void SubMessage::encode(easypb::Encoder &pb) const
 {
     pb.put_int64(1, req_int64);
     pb.put_sint32(2, opt_sint32);
@@ -110,11 +110,11 @@ struct MainMessage
 #ifdef EASYPB_MainMessage_EXTRA_FIELDS
 EASYPB_MainMessage_EXTRA_FIELDS
 #endif
-    void encode(easypb::Encoder &pb);
+    void encode(easypb::Encoder &pb) const;
     void decode(easypb::Decoder pb);
 };
 
-void MainMessage::encode(easypb::Encoder &pb)
+void MainMessage::encode(easypb::Encoder &pb) const
 {
     pb.put_uint32(1, opt_uint32);
     pb.put_sfixed64(2, req_sfixed64);
