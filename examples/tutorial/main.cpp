@@ -74,12 +74,14 @@ int main()
         auto error = compare(orig_msg, decoded_msg);
         if (error) {
             printf("Incorrectly restored field: %s\n", error);
+            return 1;
         } else {
             printf("Data restored correctly!\n");
         }
 
     } catch (const std::exception& e) {
         printf("Exception: %s\n", e.what());
+        return 2;
     }
     return 0;
 }
