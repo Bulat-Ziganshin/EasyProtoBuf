@@ -3,10 +3,13 @@
 name: CMake on multiple platforms
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches-ignore: [ "noci-**" ]
+    paths-ignore: [ "**.md" ]
   pull_request:
-    branches: [ "main" ]
+    branches-ignore: [ "noci-**" ]
+    paths-ignore: [ "**.md" ]
 
 jobs:
   build:
@@ -23,29 +26,35 @@ jobs:
       #
       # To add more build types (Release, Debug, RelWithDebInfo, etc.) customize the build_type list.
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        cpp_compiler: [g++-13, g++-11, g++-9, clang++-15, clang++-13]
+        cpp_options: ["-std=c++17", "-std=c++11"]
+        os: [ubuntu-2204]
         build_type: [Release]
-        c_compiler: [gcc, clang, cl]
+        extra_cmake_options: [""]
         include:
           - os: windows-latest
-            c_compiler: cl
+            extra_cmake_options: "-A Win32"
+            cpp_options: "/std:c++17"
             cpp_compiler: cl
-          - os: ubuntu-latest
-            c_compiler: gcc
-            cpp_compiler: g++
-          - os: ubuntu-latest
-            c_compiler: clang
+            build_type: Release
+          - os: windows-latest
+            extra_cmake_options: "-A x64"
+            cpp_options: "/std:c++17"
+            cpp_compiler: cl
+            build_type: Release
+          - os: macos-14
             cpp_compiler: clang++
-        exclude:
-          - os: windows-latest
-            c_compiler: gcc
-          - os: windows-latest
-            c_compiler: clang
-          - os: ubuntu-latest
-            c_compiler: cl
+            cpp_options: "-std=c++17"
+            build_type: Release
+            extra_cmake_options: ""
+          - os: macos-14
+            cpp_compiler: g++-13
+            cpp_options: "-std=c++17"
+            build_type: Release
+            extra_cmake_options: ""
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set reusable strings
       # Turn repeated input strings (such as the build output directory) into step outputs. These step outputs can be used throughout the workflow file.
@@ -60,8 +69,9 @@ jobs:
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
-        -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+        -DCMAKE_CXX_FLAGS=${{ matrix.cpp_options }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        ${{ matrix.extra_cmake_options }}
         -S ${{ github.workspace }}
 
     - name: Build

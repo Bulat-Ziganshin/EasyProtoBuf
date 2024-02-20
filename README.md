@@ -39,11 +39,11 @@ Files:
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
 
-Done so far:
+Progress:
 - 100% of the library
 - 66% of the Codegen
 - 50% of the documentation
-- 0% of CI
+- 10% of CI
 - 0% of the tests
 
 
