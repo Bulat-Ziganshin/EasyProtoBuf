@@ -11,6 +11,7 @@ const char* USAGE =
 #include <easypb.hpp>
 
 
+// True if we believe that str contains printable text
 bool is_printable_str(easypb::string_view str)
 {
     if (str.size() > 100) {
@@ -27,6 +28,7 @@ bool is_printable_str(easypb::string_view str)
 }
 
 
+// Recursively called printer of the message, contained in str
 bool decoder(easypb::string_view str, int indent = 0)
 {
     easypb::Decoder pb(str);
@@ -40,18 +42,17 @@ bool decoder(easypb::string_view str, int indent = 0)
                 auto str = pb.parse_bytearray_value();
                 bool is_printable = is_printable_str(str);
 
-                printf("%*s#%d: STRING[%d]%s%.*s\n",
+                printf("%*s#%ju: STRING[%zu]%s%.*s\n",
                     indent, "",
-                    pb.field_num,
+                    uintmax_t(pb.field_num),
                     str.size(),
                     (is_printable? " = ": ""),
-                    (is_printable? str.size() : 0),
+                    int(is_printable? str.size() : 0),
                     str.data());
 
                 if (! is_printable) {
                     try {
                         decoder(str, indent+4);
-                        break;
                     } catch (const std::exception&) {
                     }
                 }
@@ -68,7 +69,7 @@ bool decoder(easypb::string_view str, int indent = 0)
                      "VARINT"
                     );
                 int64_t value = pb.parse_integer_value();
-                printf("%*s#%d: %s = %lld\n", indent, "", pb.field_num, str_type, value);
+                printf("%*s#%ju: %s = %jd\n", indent, "", uintmax_t(pb.field_num), str_type, intmax_t(value));
                 break;
             }
 
@@ -91,11 +92,12 @@ int main(int argc, char** argv)
     std::string str(std::istreambuf_iterator<char>{ifs}, {});
 
     try {
-        printf("=== Filesize = %d\n", str.size());
+        printf("=== Filesize = %zu\n", str.size());
         decoder(str);
         printf("=== Decoding succeed!\n");
     } catch (const std::exception& e) {
         printf("Internal error: %s\n", e.what());
+        return 2;
     }
 
     return 0;
