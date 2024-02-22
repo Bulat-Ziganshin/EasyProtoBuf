@@ -27,29 +27,49 @@ jobs:
       # To add more build types (Release, Debug, RelWithDebInfo, etc.) customize the build_type list.
       matrix:
         cpp_compiler: [g++-13, g++-11, g++-9, clang++-15, clang++-13]
-        cpp_options: ["-std=c++17", "-std=c++11"]
+        cpp_options: ["-std=c++17 -Wall -Wextra -Wpedantic", "-std=c++11 -Wall -Wextra -Wpedantic"]
         os: [ubuntu-22.04]
         build_type: [Release]
         extra_cmake_options: [""]
         include:
-          - os: windows-latest
+          - os: windows-2019
             extra_cmake_options: "-A Win32"
-            cpp_options: "/std:c++17"
+            cpp_options: "/std:c++17 /EHsc /W4"
             cpp_compiler: cl
             build_type: Release
-          - os: windows-latest
+          - os: windows-2019
             extra_cmake_options: "-A x64"
-            cpp_options: "/std:c++17"
+            cpp_options: "/std:c++17 /EHsc /W4"
             cpp_compiler: cl
             build_type: Release
+          - os: windows-2022
+            extra_cmake_options: "-A Win32"
+            cpp_options: "/std:c++17 /EHsc /W4"
+            cpp_compiler: cl
+            build_type: Release
+          - os: windows-2022
+            extra_cmake_options: "-A x64"
+            cpp_options: "/std:c++17 /EHsc /W4"
+            cpp_compiler: cl
+            build_type: Release
+          - os: macos-13
+            cpp_compiler: clang++
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            build_type: Release
+            extra_cmake_options: ""
+          - os: macos-13
+            cpp_compiler: g++-13
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            build_type: Release
+            extra_cmake_options: ""
           - os: macos-14
             cpp_compiler: clang++
-            cpp_options: "-std=c++17"
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
             build_type: Release
             extra_cmake_options: ""
           - os: macos-14
             cpp_compiler: g++-13
-            cpp_options: "-std=c++17"
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
             build_type: Release
             extra_cmake_options: ""
 
@@ -69,7 +89,7 @@ jobs:
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
-        -DCMAKE_CXX_FLAGS=${{ matrix.cpp_options }}
+        "-DCMAKE_CXX_FLAGS=${{ matrix.cpp_options }}"
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
         ${{ matrix.extra_cmake_options }}
         -S ${{ github.workspace }}
