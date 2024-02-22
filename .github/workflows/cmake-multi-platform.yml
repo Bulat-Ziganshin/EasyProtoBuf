@@ -28,7 +28,7 @@ jobs:
       matrix:
         cpp_compiler: [g++-13, g++-11, g++-9, clang++-15, clang++-13]
         cpp_options: ["-std=c++17", "-std=c++11"]
-        os: [ubuntu-2204]
+        os: [ubuntu-22.04]
         build_type: [Release]
         extra_cmake_options: [""]
         include:
