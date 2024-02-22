@@ -516,11 +516,11 @@ struct Decoder
     FloatingPointType parse_fp_value()
     {
         switch(wire_type) {
-            case WIRETYPE_FIXED64: return read_fixed_width<double>();
-            case WIRETYPE_FIXED32: return read_fixed_width<float>();
+            case WIRETYPE_FIXED64:  return read_fixed_width<double>();
+            case WIRETYPE_FIXED32:  return read_fixed_width<float>();
+            default:                throw wiretype_mismatch("Can't parse floating-point value with wiretype "
+                                            + std::to_string(wire_type));
         }
-
-        throw wiretype_mismatch("Can't parse floating-point value with wiretype " + std::to_string(wire_type));
     }
 
     uint64_t parse_integer_value()
@@ -529,9 +529,9 @@ struct Decoder
             case WIRETYPE_VARINT:   return read_varint();
             case WIRETYPE_FIXED64:  return read_fixed_width<uint64_t>();
             case WIRETYPE_FIXED32:  return read_fixed_width<uint32_t>();
+            default:                throw wiretype_mismatch("Can't parse integral value with wiretype "
+                                            + std::to_string(wire_type));
         }
-
-        throw wiretype_mismatch("Can't parse integral value with wiretype " + std::to_string(wire_type));
     }
 
     int64_t parse_zigzag_value()
@@ -540,9 +540,9 @@ struct Decoder
             case WIRETYPE_VARINT:   return read_zigzag();
             case WIRETYPE_FIXED64:  return read_fixed_width<int64_t>();
             case WIRETYPE_FIXED32:  return read_fixed_width<int32_t>();
+            default:                throw wiretype_mismatch("Can't parse zigzag integral value with wiretype "
+                                            + std::to_string(wire_type));
         }
-
-        throw wiretype_mismatch("Can't parse zigzag integral with wiretype " + std::to_string(wire_type));
     }
 
     string_view parse_bytearray_value()

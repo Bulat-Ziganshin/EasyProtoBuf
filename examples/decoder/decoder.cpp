@@ -84,7 +84,7 @@ bool decoder(easypb::string_view str, int indent = 0)
 int main(int argc, char** argv)
 {
     if (argc != 2) {
-        printf(USAGE);
+        printf("%s", USAGE);
         return 1;
     }
 
