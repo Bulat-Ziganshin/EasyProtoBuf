@@ -22,7 +22,7 @@ MainMessage make_message()
     msg.req_msg.opt_sint32   = -202;
     msg.req_msg.req_uint64   = 203;
     msg.req_msg.opt_fixed32  = 204;
-    msg.req_msg.req_float    = -205.42;
+    msg.req_msg.req_float    = -205.42f;
     msg.req_msg.opt_string   = "206";
 
     msg.mappa[1] = 1234;

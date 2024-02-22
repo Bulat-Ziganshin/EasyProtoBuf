@@ -52,7 +52,7 @@ bool decoder(easypb::string_view str, int indent = 0)
                     try {
                         decoder(str, indent+4);
                         break;
-                    } catch (const std::exception& e) {
+                    } catch (const std::exception&) {
                     }
                 }
                 break;

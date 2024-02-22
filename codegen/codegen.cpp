@@ -17,14 +17,14 @@ const std::string CPP_TYPE_DELIMITER = "::";
 // Command-line options affecting the generated code
 struct
 {
-    bool no_class;
-    bool no_decoder;
-    bool no_encoder;
-    bool no_has_fields;
-    bool no_required;
-    bool no_default_values;
-    bool packed;
-    bool no_packed;
+    bool no_class = false;
+    bool no_decoder = false;
+    bool no_encoder = false;
+    bool no_has_fields = false;
+    bool no_required = false;
+    bool no_default_values = false;
+    bool packed = false;
+    bool no_packed = false;
     std::string cpp_string_type;
     std::string cpp_repeated_type;
 } option;

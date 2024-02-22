@@ -231,12 +231,12 @@ struct Encoder
     void write_varint_at(size_t varint_pos, size_t varint_size, uint64_t value)
     {
         auto ptr = begin() + varint_pos;
-        for (int i = 1; i < varint_size; ++i)
+        for (size_t i = 1; i < varint_size; ++i)
         {
-            *ptr++ = (value & 127) | 128;
+            *ptr++ = char( (value & 127) | 128 );
             value /= 128;
         }
-        *ptr++ = value;
+        *ptr++ = char(value);
 
         if (value > 127) {
             throw length_too_long("Length requires to encode more than " + std::to_string(varint_size) + " bytes");
@@ -278,7 +278,7 @@ struct Encoder
     template <typename Lambda>
     void write_length_delimited(Lambda code)
     {
-        auto start_pos = start_length_delimited();
+        size_t start_pos = start_length_delimited();
         code();
         commit_length_delimited(start_pos);
     }
@@ -438,7 +438,7 @@ struct Decoder
     }
 
     // Skip N bytes of the message
-    void advance_ptr(int bytes)
+    void advance_ptr(size_t bytes)
     {
         if(buf_end - ptr < bytes)  throw unexpected_eof("Unexpected end of buffer");
         ptr += bytes;
@@ -551,7 +551,7 @@ struct Decoder
             throw wiretype_mismatch("Can't parse bytearray with wiretype " + std::to_string(wire_type));
         }
 
-        uint64_t len = read_varint();
+        size_t len = read_varint();
         advance_ptr(len);
 
         return {ptr-len, len};
@@ -562,7 +562,7 @@ struct Decoder
     {
         if(eof())  return false;
 
-        uint64_t number = read_varint();
+        uint32_t number = read_varint();
         field_num = (number / 8);
         wire_type = WireType(number % 8);
 
@@ -578,7 +578,7 @@ struct Decoder
         } else if (wire_type == WIRETYPE_FIXED64) {
             advance_ptr(8);
         } else if (wire_type == WIRETYPE_LENGTH_DELIMITED) {
-            uint64_t len = read_varint();
+            size_t len = read_varint();
             advance_ptr(len);
         } else {
             throw unsupported_wiretype("Unsupported wire type " + std::to_string(wire_type));
