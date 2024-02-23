@@ -316,12 +316,10 @@ struct Encoder
         for(auto &x: value)  put_##TYPE(field_num, x);                        \
     }                                                                         \
                                                                               \
-    template <typename FieldType>                                             \
+    template <typename FieldType, typename CT = C_TYPE,                       \
+              class = typename std::enable_if<std::is_scalar<CT>::value>::type>  \
     void put_packed_##TYPE(uint32_t field_num, const FieldType& value)        \
     {                                                                         \
-        static_assert(std::is_scalar<C_TYPE>(),                               \
-            "put_packed_" #TYPE " isn't defined according to ProtoBuf format specifications");  \
-                                                                              \
         write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                \
         write_length_delimited([&]{ for(auto &x: value)  WRITER(x); });       \
     }                                                                         \
