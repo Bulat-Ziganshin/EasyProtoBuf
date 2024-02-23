@@ -28,10 +28,10 @@ bool is_printable_str(easypb::string_view str)
 }
 
 
-// Recursively called printer of the message, contained in str
-bool decoder(easypb::string_view str, int indent = 0)
+// Recursively called printer of the message contained in the buffer
+bool decoder(easypb::string_view buffer, int indent = 0)
 {
-    easypb::Decoder pb(str);
+    easypb::Decoder pb(buffer);
 
     while(pb.get_next_field())
     {

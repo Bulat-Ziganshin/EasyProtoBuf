@@ -22,6 +22,7 @@ enum
 {
     MAX_VARINT_SIZE = (64+6)/7,  // number of 7-bit chunks in 64-bit int
     MAX_LENGTH_CODE_SIZE = (32+6)/7,  // number of 7-bit chunks in 32-bit int encoding message length
+    FIELDNUM_SCALE = 8,  // scales field_num to field_tag
 };
 
 enum WireType
@@ -50,6 +51,7 @@ EASYPB_DEFINE_EXCEPTION(exception,              std::runtime_error)
 EASYPB_DEFINE_EXCEPTION(unexpected_eof,         exception)
 EASYPB_DEFINE_EXCEPTION(varint_too_long,        exception)
 EASYPB_DEFINE_EXCEPTION(length_too_long,        exception)
+EASYPB_DEFINE_EXCEPTION(invalid_fieldnum,       exception)
 EASYPB_DEFINE_EXCEPTION(wiretype_mismatch,      exception)
 EASYPB_DEFINE_EXCEPTION(unsupported_wiretype,   exception)
 EASYPB_DEFINE_EXCEPTION(missing_required_field, exception)
@@ -62,7 +64,7 @@ EASYPB_DEFINE_EXCEPTION(missing_required_field, exception)
 // ****************************************************************************
 
 // memcpy, which also reverses byte order on big-endian cpus
-inline void memcpy_LITTLE_ENDIAN(void* dest, const void* src, int size)
+inline void memcpy_LITTLE_ENDIAN(void* dest, const void* src, size_t size)
 {
     // Equivalent to "#if __BYTE_ORDER == __BIG_ENDIAN", but more portable.
     // If cpu has PDP byte order, or floats and ints have different order, you are screwed.
@@ -177,11 +179,11 @@ struct Encoder
         return temp_buffer;
     }
 
-    char* advance_ptr(int bytes)
+    char* advance_ptr(size_t bytes)
     {
-        if(buf_end - ptr < bytes)
+        if (size_t(buf_end - ptr) < bytes)
         {
-            auto old_pos = pos();
+            size_t old_pos = pos();
             buffer.resize(buffer.size()*2 + bytes);
             ptr = begin() + old_pos;
             buf_end = begin() + buffer.size();
@@ -230,13 +232,13 @@ struct Encoder
 
     void write_varint_at(size_t varint_pos, size_t varint_size, uint64_t value)
     {
-        auto ptr = begin() + varint_pos;
+        auto write_ptr = begin() + varint_pos;
         for (size_t i = 1; i < varint_size; ++i)
         {
-            *ptr++ = char( (value & 127) | 128 );
+            *write_ptr++ = char( (value & 127) | 128 );
             value /= 128;
         }
-        *ptr++ = char(value);
+        *write_ptr++ = char(value);
 
         if (value > 127) {
             throw length_too_long("Length requires to encode more than " + std::to_string(varint_size) + " bytes");
@@ -258,7 +260,7 @@ struct Encoder
 
     void write_field_tag(uint32_t field_num, WireType wire_type)
     {
-        write_varint(field_num*8 + wire_type);
+        write_varint(field_num*FIELDNUM_SCALE + wire_type);
     }
 
     // Start a length-delimited field with yet unknown size and return its start_pos
@@ -426,7 +428,7 @@ struct Decoder
     const char* buf_end = nullptr;
 
     // These properties are filled by get_next_field() and make sense only till the entire field is decoded
-    uint32_t field_num = -1;
+    uint32_t field_num = UINT32_MAX;
     WireType wire_type = WIRETYPE_UNDEFINED;
 
 
@@ -440,7 +442,7 @@ struct Decoder
     // Skip N bytes of the message
     void advance_ptr(size_t bytes)
     {
-        if(buf_end - ptr < bytes)  throw unexpected_eof("Unexpected end of buffer");
+        if (size_t(buf_end - ptr) < bytes)  throw unexpected_eof("Unexpected end of buffer");
         ptr += bytes;
     }
 
@@ -516,8 +518,8 @@ struct Decoder
     FloatingPointType parse_fp_value()
     {
         switch(wire_type) {
-            case WIRETYPE_FIXED64:  return read_fixed_width<double>();
-            case WIRETYPE_FIXED32:  return read_fixed_width<float>();
+            case WIRETYPE_FIXED64:  return FloatingPointType( read_fixed_width<double>() );  // Here we can lose FP precision/range
+            case WIRETYPE_FIXED32:  return FloatingPointType( read_fixed_width<float>() );
             default:                throw wiretype_mismatch("Can't parse floating-point value with wiretype "
                                             + std::to_string(wire_type));
         }
@@ -551,7 +553,12 @@ struct Decoder
             throw wiretype_mismatch("Can't parse bytearray with wiretype " + std::to_string(wire_type));
         }
 
-        size_t len = read_varint();
+        uint64_t len64 = read_varint();
+        if (len64 > UINT32_MAX) {
+            throw length_too_long("Byte array field is too long with " + std::to_string(len64) + " bytes");
+        }
+
+        size_t len = size_t(len64);
         advance_ptr(len);
 
         return {ptr-len, len};
@@ -562,9 +569,13 @@ struct Decoder
     {
         if(eof())  return false;
 
-        uint32_t number = read_varint();
-        field_num = (number / 8);
-        wire_type = WireType(number % 8);
+        uint64_t tag = read_varint();
+        if(tag > UINT32_MAX) {
+            throw invalid_fieldnum("Field tag is too large: " + std::to_string(tag));
+        }
+
+        field_num = uint32_t(tag / FIELDNUM_SCALE);
+        wire_type = WireType(tag % FIELDNUM_SCALE);
 
         return true;
     }
@@ -578,8 +589,11 @@ struct Decoder
         } else if (wire_type == WIRETYPE_FIXED64) {
             advance_ptr(8);
         } else if (wire_type == WIRETYPE_LENGTH_DELIMITED) {
-            size_t len = read_varint();
-            advance_ptr(len);
+            uint64_t len64 = read_varint();
+            if (len64 > UINT32_MAX) {
+                throw length_too_long("Byte array field is too long with " + std::to_string(len64) + " bytes");
+            }
+            advance_ptr(size_t(len64));
         } else {
             throw unsupported_wiretype("Unsupported wire type " + std::to_string(wire_type));
         }
@@ -593,8 +607,8 @@ struct Decoder
     {                                                                         \
         Decoder sub_decoder(parse_bytearray_value());                         \
         bool has_key = false, has_value = false;                              \
-        typename FieldType::key_type key;                                     \
-        typename FieldType::mapped_type value;                                \
+        typename FieldType::key_type key{};                                   \
+        typename FieldType::mapped_type value{};                              \
                                                                               \
         while(sub_decoder.get_next_field())                                   \
         {                                                                     \

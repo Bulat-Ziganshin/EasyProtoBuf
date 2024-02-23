@@ -179,14 +179,14 @@ std::string cpp_qualified_type_str(std::string_view package_name_prefix, std::st
     // and finally replace "." typename separator with "::"
 
     // If message type starts with ".PACKAGE_NAME.", drop this prefix
-    auto prefix_len = package_name_prefix.length();
-    if (message_type.substr(0, prefix_len) == package_name_prefix) {
-        message_type = message_type.substr(prefix_len);
+    auto pkg_prefix_len = package_name_prefix.length();
+    if (message_type.substr(0, pkg_prefix_len) == package_name_prefix) {
+        message_type = message_type.substr(pkg_prefix_len);
 
         // If message type starts with "CURRENT_MSGTYPE_NAME.", drop this prefix
-        auto prefix_len = msgtype_name_prefix.length();
-        if (message_type.substr(0, prefix_len) == msgtype_name_prefix) {
-            message_type = message_type.substr(prefix_len);
+        auto msg_prefix_len = msgtype_name_prefix.length();
+        if (message_type.substr(0, msg_prefix_len) == msgtype_name_prefix) {
+            message_type = message_type.substr(msg_prefix_len);
         }
     }
 
