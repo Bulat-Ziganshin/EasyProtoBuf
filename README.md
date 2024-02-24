@@ -1,7 +1,7 @@
 EasyProtoBuf is a single-header C++11 [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
 - easy to [learn](#motivating-example) - all field types are (de)serialized
 with the uniform get_{FIELDTYPE} and put_{FIELDTYPE} calls
-- easy to [use](#documentation) - you need to write only one line of code to (de)serialize each field
+- easy to [use](#documentation) - you need just one line of code to (de)serialize each field
 - easy to [grok and hack](include/easypb.hpp) - the entire library is only 600 LOC
 
 Sorry, I fooled you... It's even easier!
@@ -39,11 +39,21 @@ Files:
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
 
-Progress:
+Portability. While the final goal is to support any C++11 compiler, so far we tested only:
+- Linux: tested gcc 9..13 and clang 10..15 on Ubuntu 20.04/22.04 (x64)
+- Mac: tested clang 13..15 on Mac OS 11..13 (x64) and Mac OS 14 (ARM64).
+gcc doesn't work on Mac OS platforms and I don't know why.
+- Windows: tested only CL in x64 and x86 modes (the latter is the only 32-bit build that we tested so far)
+- C++11: tested locally, but all the tests above were made only in C++17 mode (since Codegen requires C++17 ATM)
+- big-endian cpus: the support is implemented, but has not been tested so far
+- planned: copy the CI scripts from [protozero](https://github.com/mapbox/protozero)
+which tests a lot of older compilers
+
+Implemented so far:
 - 100% of the library
 - 66% of the Codegen
 - 50% of the documentation
-- 10% of CI
+- 25% of CI (testing on various platforms with various compiler versions)
 - 0% of the tests
 
 
@@ -173,6 +183,9 @@ Finally, you extract the encoded message from the encoder object:
 
 ## Decoding API
 
+The Decoder keeps only the raw pointer to the buffer passed to the constructor.
+Thus, the buffer should be neither freed nor moved till the decoding is finished.
+
 
 ## Code generator
 
@@ -192,8 +205,6 @@ e.g. define it to std::string.
 
 Sub-messages and packed repeated fields always use 5-byte length prefix
 (it can make encoded messages a bit longer than with other Protobuf libraries).
-
-All parsing errors (both in the library and generated code) are signaled using plain std::runtime_error.
 
 Compared to the [official](https://protobuf.dev/programming-guides/proto3/#updating)
 ProtoBuf library allows more flexibility in modifying the field type without losing the decoding compatibility.
