@@ -405,15 +405,11 @@ The Decoder class is made of 3 layers:
 2) parse_*_value(), allowing to read a field knowing field's type and wiretype
 3) get_*(), providing easy-to-use API for users of this class
 *****************************************************************************/
-struct Decoder;
 
+// Forward declaration of the function since it's called inside the Decoder class,
+// but its implementation uses the Decoder class
 template <typename MessageType>
-inline MessageType decode(string_view buffer)
-{
-    MessageType msg;
-    msg.decode( Decoder(buffer) );
-    return msg;
-}
+inline MessageType decode(string_view buffer);
 
 
 struct Decoder
@@ -720,5 +716,14 @@ struct Decoder
         field->push_back( decode<T>(parse_bytearray_value()) );
     }
 };
+
+
+template <typename MessageType>
+inline MessageType decode(string_view buffer)
+{
+    MessageType msg;
+    msg.decode( Decoder(buffer) );
+    return msg;
+}
 
 }  // namespace easypb
