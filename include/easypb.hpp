@@ -426,10 +426,15 @@ struct Decoder
     WireType wire_type = WIRETYPE_UNDEFINED;
 
 
-    // The Decoder keeps pointers into the data being decoded, so don't free/move them till decoding is finished
+    // The Decoder keeps pointers into the data being decoded, so don't free/move them till the decoding is finished
+    explicit Decoder(const void* buffer, size_t size) noexcept
+        : ptr     {(const char*)buffer},
+          buf_end {(const char*)buffer + size}
+    {
+    }
+
     explicit Decoder(string_view view) noexcept
-        : ptr     {view.data()},
-          buf_end {view.data() + view.size()}
+        : Decoder(view.data(), view.size())
     {
     }
 
