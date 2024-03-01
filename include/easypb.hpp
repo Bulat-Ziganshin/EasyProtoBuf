@@ -316,10 +316,12 @@ struct Encoder
         for(auto &x: value)  put_##TYPE(field_num, x);                        \
     }                                                                         \
                                                                               \
-    template <typename FieldType, typename CT = C_TYPE,                       \
-              class = typename std::enable_if<std::is_scalar<CT>::value>::type>  \
+    template <typename FieldType>                                             \
     void put_packed_##TYPE(uint32_t field_num, const FieldType& value)        \
     {                                                                         \
+        static_assert(std::is_scalar<C_TYPE>() && sizeof(FieldType*),         \
+            "put_packed_" #TYPE " isn't defined according to ProtoBuf format specifications");  \
+                                                                              \
         write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                \
         write_length_delimited([&]{ for(auto &x: value)  WRITER(x); });       \
     }                                                                         \
@@ -437,6 +439,10 @@ struct Decoder
         : Decoder(view.data(), view.size())
     {
     }
+
+    // Prohibit Decoder(std::string_view(char*)), since it provides an incorrect bufsize
+    explicit Decoder(const char*) = delete;
+
 
     // Skip N bytes of the message
     void advance_ptr(size_t bytes)
