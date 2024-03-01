@@ -34,6 +34,7 @@
 # IDEs/Editors/builds
 .vs/*
 .vscode/*
+.xmake/*
 build/*
 out/*
 CMakeSettings.json

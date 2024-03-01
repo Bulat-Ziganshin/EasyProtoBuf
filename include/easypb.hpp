@@ -440,7 +440,7 @@ struct Decoder
     {
     }
 
-    // Prohibit Decoder(std::string_view(char*)), since it provides an incorrect bufsize
+    // Prohibit Decoder(std::string_view(char*)), since it creates a Decoder with an incorrect bufsize
     explicit Decoder(const char*) = delete;
 
 

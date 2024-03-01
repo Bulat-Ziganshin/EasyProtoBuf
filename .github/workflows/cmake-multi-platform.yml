@@ -54,7 +54,7 @@ jobs:
             extra_cmake_options: ""
           - os: macos-14
             cpp_compiler: g++-13
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic -Wl,-ld_classic"
             build_type: Release
             extra_cmake_options: ""
           - os: macos-13
