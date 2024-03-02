@@ -109,7 +109,7 @@ jobs:
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
-        "-DCI_CXX_FLAGS=${{ matrix.cpp_options }}"
+        "-DEASYPB_CXX_FLAGS=${{ matrix.cpp_options }}"
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
         ${{ matrix.extra_cmake_options }}
         -S ${{ github.workspace }}

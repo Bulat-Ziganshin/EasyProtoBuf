@@ -133,7 +133,7 @@ struct string_view
     size_t _size;
 
     string_view(const char* data, size_t size)  {_data = (char*)data;  _size = size;}
-    string_view(std::string s)  {_data = (char*)(s.data());  _size = s.size();}
+    string_view(const std::string &s)  {_data = (char*)(s.data());  _size = s.size();}
     operator std::string() const  {return {_data, _size};}
     char*  data()  const {return _data;}
     size_t size()  const {return _size;}
@@ -179,9 +179,9 @@ struct Encoder
         return temp_buffer;
     }
 
-    char* advance_ptr(size_t bytes)
+    char* advance_ptr(ptrdiff_t bytes)
     {
-        if (size_t(buf_end - ptr) < bytes)
+        if (buf_end - ptr < bytes)
         {
             size_t old_pos = pos();
             buffer.resize(buffer.size()*2 + bytes);
@@ -253,9 +253,14 @@ struct Encoder
 
     void write_bytearray(string_view value)
     {
-        write_varint(value.size());
-        auto start_ptr = advance_ptr(value.size());
-        memcpy(start_ptr, value.data(), value.size());
+        size_t len = value.size();
+        if (len > INT32_MAX) {
+            throw length_too_long("Passed byte array is too long with " + std::to_string(len) + " bytes");
+        }
+
+        write_varint(len);
+        auto start_ptr = advance_ptr(len);
+        memcpy(start_ptr, value.data(), len);
     }
 
     void write_field_tag(uint32_t field_num, WireType wire_type)
@@ -445,9 +450,9 @@ struct Decoder
 
 
     // Skip N bytes of the message
-    void advance_ptr(size_t bytes)
+    void advance_ptr(ptrdiff_t bytes)
     {
-        if (size_t(buf_end - ptr) < bytes)  throw unexpected_eof("Unexpected end of buffer");
+        if (buf_end - ptr < bytes)  throw unexpected_eof("Unexpected end of buffer");
         ptr += bytes;
     }
 
@@ -558,15 +563,14 @@ struct Decoder
             throw wiretype_mismatch("Can't parse bytearray with wiretype " + std::to_string(wire_type));
         }
 
-        uint64_t len64 = read_varint();
-        if (len64 > UINT32_MAX) {
-            throw length_too_long("Byte array field is too long with " + std::to_string(len64) + " bytes");
+        uint64_t len = read_varint();
+        if (len > INT32_MAX) {
+            throw length_too_long("Byte array field is too long with " + std::to_string(len) + " bytes");
         }
 
-        size_t len = size_t(len64);
-        advance_ptr(len);
+        advance_ptr(int32_t(len));
 
-        return {ptr-len, len};
+        return {ptr-len, size_t(len)};
     }
 
 
@@ -594,11 +598,11 @@ struct Decoder
         } else if (wire_type == WIRETYPE_FIXED64) {
             advance_ptr(8);
         } else if (wire_type == WIRETYPE_LENGTH_DELIMITED) {
-            uint64_t len64 = read_varint();
-            if (len64 > UINT32_MAX) {
-                throw length_too_long("Byte array field is too long with " + std::to_string(len64) + " bytes");
+            uint64_t len = read_varint();
+            if (len > INT32_MAX) {
+                throw length_too_long("Byte array field is too long with " + std::to_string(len) + " bytes");
             }
-            advance_ptr(size_t(len64));
+            advance_ptr(int32_t(len));
         } else {
             throw unsupported_wiretype("Unsupported wire type " + std::to_string(wire_type));
         }

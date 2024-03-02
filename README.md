@@ -21,7 +21,7 @@ Library features:
 - map fields can be stored in any C++ container similar enough to std::map
 - little-endian and big-endian CPUs support
 - not implemented: group wire format
-- [protozero](https://github.com/mapbox/protozero) is a production-grade library with a very similar API
+- [protozero](https://github.com/mapbox/protozero) is a production-grade library with a similar API
 
 [Codegen](codegen) features currently implemented and planned:
 - [x] generates C++ structure, encoder and decoder for each message type
