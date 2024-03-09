@@ -1,5 +1,6 @@
 /*
-The entire EasyProtoBuf library. It consists of 3 big sections:
+This file contains the entire EasyProtoBuf library.
+It consists of 3 big sections:
 - Utility functions shared by Encoder and Decoder
 - Encoder class
 - Decoder class
@@ -64,31 +65,43 @@ EASYPB_DEFINE_EXCEPTION(missing_required_field, exception)
 // ****************************************************************************
 
 // memcpy, which also reverses byte order on big-endian cpus
-inline void memcpy_LITTLE_ENDIAN(void* dest, const void* src, size_t size)
+template <typename FixedType>
+inline void memcpy_LITTLE_ENDIAN(void* dest, const void* src)
 {
-    // Equivalent to "#if __BYTE_ORDER == __BIG_ENDIAN", but more portable.
-    // If cpu has PDP byte order, or floats and ints have different order, you are screwed.
-    if((*(uint16_t *)"\0\xff" < 0x100)) {
-        auto to = (char*) dest;
-        auto from = (const char*) src;
-        if (size == 4) {
-            to[0] = from[3];
-            to[1] = from[2];
-            to[2] = from[1];
-            to[3] = from[0];
-        } else {
-            to[0] = from[7];
-            to[1] = from[6];
-            to[2] = from[5];
-            to[3] = from[4];
-            to[4] = from[3];
-            to[5] = from[2];
-            to[6] = from[1];
-            to[7] = from[0];
-        }
-    } else {
-        memcpy(dest, src, size);
-    }
+    constexpr size_t size = sizeof(FixedType);
+
+    // We support only C++11 and sizeof(size_t)>=4, and almost all such compilers
+    // are either little-endian or emulate GCC. Please report the exceptions!
+    #if defined(__BYTE_ORDER__) && defined(__FLOAT_WORD_ORDER__)
+        #if (__BYTE_ORDER__==__ORDER_BIG_ENDIAN__) && (__FLOAT_WORD_ORDER__==__ORDER_BIG_ENDIAN__)
+            static_assert(size==4 || size==8, "Only size==4 and size==8 are supported");
+            auto to = (char*) dest;
+            auto from = (const char*) src;
+            if (size == 4) {
+                to[0] = from[3];
+                to[1] = from[2];
+                to[2] = from[1];
+                to[3] = from[0];
+            } else {
+                to[0] = from[7];
+                to[1] = from[6];
+                to[2] = from[5];
+                to[3] = from[4];
+                to[4] = from[3];
+                to[5] = from[2];
+                to[6] = from[1];
+                to[7] = from[0];
+            }
+        #elif (__BYTE_ORDER__==__ORDER_LITTLE_ENDIAN__) && (__FLOAT_WORD_ORDER__==__ORDER_LITTLE_ENDIAN__)
+            std::memcpy(dest, src, size);
+        #else
+            #error Unsupported CPU endianness!
+        #endif
+    #elif defined(_WIN32)
+        std::memcpy(dest, src, size);  // All these platforms are little-endian
+    #else
+        #error Unknown CPU endianness!
+    #endif
 }
 
 // Convert the `value` from little-endian to the native byte order
@@ -96,7 +109,7 @@ template <typename FixedType>
 inline FixedType read_from_little_endian(const void* ptr)
 {
     FixedType value;
-    memcpy_LITTLE_ENDIAN(&value, ptr, sizeof(FixedType));
+    memcpy_LITTLE_ENDIAN<FixedType>(&value, ptr);
     return value;
 }
 
@@ -104,7 +117,7 @@ inline FixedType read_from_little_endian(const void* ptr)
 template <typename FixedType>
 inline void write_to_little_endian(void* ptr, FixedType value)
 {
-    memcpy_LITTLE_ENDIAN(ptr, &value, sizeof(FixedType));
+    memcpy_LITTLE_ENDIAN<FixedType>(ptr, &value);
 }
 
 
@@ -260,7 +273,7 @@ struct Encoder
 
         write_varint(len);
         auto start_ptr = advance_ptr(len);
-        memcpy(start_ptr, value.data(), len);
+        std::memcpy(start_ptr, value.data(), len);
     }
 
     void write_field_tag(uint32_t field_num, WireType wire_type)
@@ -434,9 +447,8 @@ struct Decoder
 
 
     // The Decoder keeps pointers into the data being decoded, so don't free/move them till the decoding is finished
-    explicit Decoder(const void* buffer, size_t size) noexcept
-        : ptr     {(const char*)buffer},
-          buf_end {(const char*)buffer + size}
+    explicit Decoder(const char* buffer, size_t size) noexcept
+        : ptr{buffer}, buf_end{buffer + size}
     {
     }
 
