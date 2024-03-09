@@ -4,6 +4,12 @@ const char* USAGE =
 
 #include "popl.hpp"
 
+#if __cplusplus >= 201703L
+using str_view = std::string_view;  // Might be a little faster with C++17
+#else
+using str_view = std::string;
+#endif
+
 #include "codegen.cpp"
 
 

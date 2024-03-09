@@ -1,4 +1,4 @@
-// This file will be auto-generated when I grow up.
+// This file will be auto-generated when I grow up (with option "-s str_view").
 // Source: https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto
 #include <cstdint>
 #include <string>
@@ -7,7 +7,7 @@
 
 struct OneofDescriptorProto
 {
-    std::string_view name;
+    str_view name;
 
     bool has_name = false;
 
@@ -18,7 +18,7 @@ struct OneofDescriptorProto
 // Single enum value
 struct EnumValueDescriptorProto
 {
-    std::string_view name;
+    str_view name;
     int32_t number = 0;
 
     bool has_name = false;
@@ -31,7 +31,7 @@ struct EnumValueDescriptorProto
 // Enum
 struct EnumDescriptorProto
 {
-    std::string_view name;
+    str_view name;
     std::vector<EnumValueDescriptorProto> value;
 
     bool has_name = false;
@@ -80,12 +80,12 @@ struct FieldDescriptorProto
       LABEL_REQUIRED = 2,
     };
 
-    std::string_view name;
+    str_view name;
     int32_t number = 0;
     int32_t label = 0;
     int32_t type = 0;
-    std::string_view type_name;
-    std::string_view default_value;
+    str_view type_name;
+    str_view default_value;
     FieldOptions options;
 
     bool has_name = false;
@@ -113,7 +113,7 @@ struct MessageOptions
 // Message
 struct DescriptorProto
 {
-    std::string_view name;
+    str_view name;
     std::vector<FieldDescriptorProto> field;
     std::vector<DescriptorProto> nested_type;
     std::vector<EnumDescriptorProto> enum_type;
@@ -130,8 +130,8 @@ struct DescriptorProto
 // Single .proto file
 struct FileDescriptorProto
 {
-    std::string_view name;
-    std::string_view package;
+    str_view name;
+    str_view package;
     std::vector<DescriptorProto> message_type;
     std::vector<EnumDescriptorProto> enum_type;
 

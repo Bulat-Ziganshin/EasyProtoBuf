@@ -299,7 +299,7 @@ struct Encoder
     template <typename FieldType>                                             \
     void put_map_##TYPE1##_##TYPE2(uint32_t field_num, const FieldType& value)\
     {                                                                         \
-        for(const auto& x : value)                                            \
+        for (const auto& x : value)                                           \
         {                                                                     \
             write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);            \
             write_length_delimited([&]{                                       \
@@ -322,7 +322,7 @@ struct Encoder
     template <typename FieldType>                                             \
     void put_repeated_##TYPE(uint32_t field_num, const FieldType& value)      \
     {                                                                         \
-        for(auto &x: value)  put_##TYPE(field_num, x);                        \
+        for(const auto &x: value)  put_##TYPE(field_num, x);                  \
     }                                                                         \
                                                                               \
     template <typename FieldType>                                             \
@@ -332,7 +332,7 @@ struct Encoder
             "put_packed_" #TYPE " isn't defined according to ProtoBuf format specifications");  \
                                                                               \
         write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                \
-        write_length_delimited([&]{ for(auto &x: value)  WRITER(x); });       \
+        write_length_delimited([&]{ for(const auto &x: value)  WRITER(x); }); \
     }                                                                         \
                                                                               \
     EASYPB_DEFINE_MAP_WRITER(TYPE, int32)                                     \
@@ -395,7 +395,7 @@ struct Encoder
     template <typename FieldType>
     void put_repeated_message(uint32_t field_num, const FieldType& value)
     {
-        for(auto &x: value)  put_message(field_num, x);
+        for(const auto &x: value)  put_message(field_num, x);
     }
 };
 
@@ -488,7 +488,7 @@ struct Decoder
             value |= ((byte & 127) << shift);
             ptr++;  shift += 7;
         }
-        while(byte & 128);
+        while (byte & 128);
 
         return value;
     }
@@ -562,7 +562,7 @@ struct Decoder
 
     string_view parse_bytearray_value()
     {
-        if(wire_type != WIRETYPE_LENGTH_DELIMITED) {
+        if (wire_type != WIRETYPE_LENGTH_DELIMITED) {
             throw wiretype_mismatch("Can't parse bytearray with wiretype " + std::to_string(wire_type));
         }
 
@@ -582,7 +582,7 @@ struct Decoder
         if(eof())  return false;
 
         uint64_t tag = read_varint();
-        if(tag > UINT32_MAX) {
+        if (tag > UINT32_MAX) {
             throw invalid_fieldnum("Field tag is too large: " + std::to_string(tag));
         }
 
@@ -622,9 +622,9 @@ struct Decoder
         typename FieldType::key_type key{};                                   \
         typename FieldType::mapped_type value{};                              \
                                                                               \
-        while(sub_decoder.get_next_field())                                   \
+        while (sub_decoder.get_next_field())                                  \
         {                                                                     \
-            switch(sub_decoder.field_num)                                     \
+            switch (sub_decoder.field_num)                                    \
             {                                                                 \
                 case 1: sub_decoder.get_##TYPE1(&key, &has_key); break;       \
                 case 2: sub_decoder.get_##TYPE2(&value, &has_value); break;   \
@@ -659,10 +659,10 @@ struct Decoder
     {                                                                         \
         using FieldType = typename RepeatedFieldType::value_type;             \
                                                                               \
-        if(std::is_scalar<C_TYPE>()  &&  (wire_type == WIRETYPE_LENGTH_DELIMITED)) {  \
+        if (std::is_scalar<C_TYPE>()  &&  (wire_type == WIRETYPE_LENGTH_DELIMITED)) {  \
             /* Parsing packed repeated field */                               \
             Decoder sub_decoder(parse_bytearray_value());                     \
-            while(! sub_decoder.eof()) {                                      \
+            while (! sub_decoder.eof()) {                                     \
                 field->push_back( FieldType(sub_decoder.READER()) );          \
             }                                                                 \
         } else {                                                              \

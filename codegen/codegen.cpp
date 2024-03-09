@@ -142,7 +142,7 @@ bool write_as_packed(FieldDescriptorProto &field)
 
 
 // PB type as used in .proto file (e.g. "fixed32")
-std::string_view protobuf_type_as_str(FieldDescriptorProto &field)
+str_view protobuf_type_as_str(FieldDescriptorProto &field)
 {
     switch(field.type)
     {
@@ -171,7 +171,7 @@ std::string_view protobuf_type_as_str(FieldDescriptorProto &field)
 
 
 // Return the shortest [qualified] C++ type corresponding to the fully qualified Protobuf message/enum type
-std::string cpp_qualified_type_str(std::string_view package_name_prefix, std::string_view msgtype_name_prefix, std::string_view message_type)
+std::string cpp_qualified_type_str(str_view package_name_prefix, str_view msgtype_name_prefix, str_view message_type)
 {
     // Strip the package_name_prefix from the fully qualified message_type,
     // e.g. (".google.protobuf.", ".google.protobuf.DescriptorProto.ExtensionRange") -> "DescriptorProto.ExtensionRange",
@@ -196,7 +196,7 @@ std::string cpp_qualified_type_str(std::string_view package_name_prefix, std::st
 
 
 // Return C++ type corresponding to the base type (without "repeated") of the Protobuf field
-std::string base_cpp_type_as_str(std::string_view package_name_prefix, std::string_view msgtype_name_prefix, FieldDescriptorProto &field)
+std::string base_cpp_type_as_str(str_view package_name_prefix, str_view msgtype_name_prefix, FieldDescriptorProto &field)
 {
     // According to https://github.com/protocolbuffers/protobuf/blob/c05b320d9c18173bfce36c4bef22f9953d340ff9/src/google/protobuf/descriptor.h#L780
     switch(field.type)
@@ -236,7 +236,7 @@ std::string base_cpp_type_as_str(std::string_view package_name_prefix, std::stri
 
 
 // Return C++ type for the Protobuf field
-std::string cpp_type_as_str(std::string_view package_name_prefix, std::string_view msgtype_name_prefix, FieldDescriptorProto &field)
+std::string cpp_type_as_str(str_view package_name_prefix, str_view msgtype_name_prefix, FieldDescriptorProto &field)
 {
     auto base_type = base_cpp_type_as_str(package_name_prefix, msgtype_name_prefix, field);
 

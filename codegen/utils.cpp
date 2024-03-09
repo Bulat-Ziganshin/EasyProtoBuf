@@ -2,9 +2,9 @@
 // 'find' is substituted by 'replace'.
 // - http://stackoverflow.com/questions/20406744/
 std::string string_replace_all(
-    std::string_view str ,   // where to work
-    std::string_view find ,  // substitute 'find'
-    std::string_view replace //      by 'replace'
+    str_view str ,   // where to work
+    str_view find ,  // substitute 'find'
+    str_view replace //      by 'replace'
 ) {
     using namespace std;
     string result;
@@ -20,12 +20,12 @@ std::string string_replace_all(
 }
 
 // Use format_str to format remaining arguments similar to std::format.
-// All arguments should be convertible to std::string_view, and the only
+// All arguments should be convertible to str_view, and the only
 // formatting templates supported are {} and {\d}.
 template <typename... Args>
-std::string myformat(std::string_view format_str, Args... args)
+std::string myformat(str_view format_str, Args... args)
 {
-    std::initializer_list<std::string_view> arg_list{args...};
+    std::initializer_list<str_view> arg_list{args...};
     auto arg = arg_list.begin();
 
     std::string result;
@@ -41,7 +41,7 @@ std::string myformat(std::string_view format_str, Args... args)
             if(arg_num >= arg_list.size()) {
                 throw std::runtime_error("Not enough arguments for myformat");
             }
-            result += std::string_view(&fmt[start], i - start);
+            result += str_view(&fmt[start], i - start);
             result += arg[arg_num];
         };
 
@@ -60,7 +60,7 @@ std::string myformat(std::string_view format_str, Args... args)
     }
 
     // add to the result the remainder of format_str
-    result += std::string_view(&fmt[start], fmt_size - start);
+    result += str_view(&fmt[start], fmt_size - start);
 
     return result;
 }

@@ -1,8 +1,8 @@
-EasyProtoBuf is a single-header C++11 [ProtoBuf](https://developers.google.com/protocol-buffers) library that is
+EasyProtoBuf is a single-header C++11 [ProtoBuf][] library that is
 - easy to [learn](#motivating-example) - all field types are (de)serialized
 with the uniform get_{FIELDTYPE} and put_{FIELDTYPE} calls
-- easy to [use](#documentation) - you need just one line of code to (de)serialize each field
-- easy to [grok and hack](include/easypb.hpp) - the entire library is only 600 LOC
+- easy to [use](#documentation) - you need to write only one line of code to (de)serialize each field
+- easy to [grok and hack](include/easypb.hpp) - the entire library is only 666 LOC
 
 Sorry, I fooled you... It's even easier!
 
@@ -21,17 +21,16 @@ Library features:
 - map fields can be stored in any C++ container similar enough to std::map
 - little-endian and big-endian CPUs support
 - not implemented: group wire format
-- [protozero](https://github.com/mapbox/protozero) is a production-grade library with a similar API
+- [protozero][] is a production-grade library with a similar API
 
-[Codegen](codegen) features currently implemented and planned:
-- [x] generates C++ structure, encoder and decoder for each message type
-- [x] the generated decoder checks the presence of required fields in the decoded message
-- [x] cmdline options to tailor the generated code
-- [ ] per-field C++ type specification via field option
-- [ ] support of enum/oneof/map fields and nested message type definitions (and thus dogfooding Codegen)
-- [ ] validation of enum, integer and bool values by the generated code
-- [ ] protoc plugin
-- [ ] C++11 compatibility (now it requires C++17 compiler, unlike the library itself)
+[Codegen](codegen) features:
+- generates C++ structure, encoder and decoder for each message type
+- the generated decoder checks the presence of required fields in the decoded message
+- cmdline options to tailor the generated code
+- planned: support of enum/oneof/map fields and nested message type definitions (and thus dogfooding Codegen)
+- planned: protoc plugin
+- planned: validation of enum, integer and bool values by the generated code
+- planned: per-field C++ type specification
 
 Files:
 - [easypb.hpp](include/easypb.hpp) - the entire library
@@ -40,20 +39,20 @@ Files:
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
 
 Portability: while the final goal is to support any C++11 compiler, so far we tested only:
-- Linux: tested gcc 9..13 and clang 10..15 on Ubuntu 20.04/22.04 (x64)
-- Mac: tested clang 13..15 on Mac OS 11..13 (x64) and Mac OS 14 (ARM64), plus gcc 13 on MacOS 14
-- Windows: tested only MSVC in x64 and x86 modes (the latter is the only 32-bit build in our tests)
-- C++11: tested locally, but all the tests above were made only in C++17 mode (since Codegen requires C++17 ATM)
+- Linux: gcc 9..13 and clang 10..15 on Ubuntu 20.04/22.04 (x64)
+- Mac: clang 13..15 on Mac OS 11..13 (x64) and Mac OS 14 (ARM64), plus gcc 13 on MacOS 14
+- Windows: only MSVC in x64 and x86 modes (the latter is the only 32-bit build in our tests)
+- C++11 and C++17 modes for almost every compiler above (MSVC in C++14/17 modes)
 - big-endian cpus: the support is implemented, but has not been tested so far
-- planned: copy the CI scripts from [protozero](https://github.com/mapbox/protozero)
-which tests a lot of older compilers
+- planned: copy the CI scripts from [protozero][] and [xxHash][]
+which tests a lot of older compilers and non-x86 platforms
 
 Implemented so far:
 - 100% of the library
 - 66% of the Codegen
 - 50% of the documentation (need exhaustive docs on the API and Codegen)
-- 25% of CI (testing on various platforms with various compiler versions)
-- 0% of the tests
+- 5% of CI (ideally it should test every C++11 compiler on the Earth with every combination of compiler flags)
+- 0% of the tests (the grandplan is to copy the exhaustive [protozero][] test suite)
 
 
 ## Motivating example
@@ -79,9 +78,7 @@ struct Person
 };
 ```
 
-... that follows the official ProtoBuf
-[guidelines](https://protobuf.dev/programming-guides/proto3/#scalar)
-on the ProtoBuf->C++ type mapping,
+... that follows the official ProtoBuf [guidelines][] on the ProtoBuf->C++ type mapping,
 while enclosing repeated types into `std::vector`.
 
 And on top of that, [Codegen](codegen) generates two functions
@@ -103,9 +100,9 @@ Check technical details in [Tutorial](examples/tutorial).
 
 Even if you are going to implement your own encoder or decoder,
 we recommend using [Codegen](codegen) to get a blueprint for your code.
-For Person, the generated code is:
+For Person (see above), the generated code is:
 ```cpp
-void Person::encode(easypb::Encoder &pb)
+void Person::encode(easypb::Encoder &pb) const
 {
     pb.put_string(1, name);
     pb.put_double(2, weight);
@@ -183,7 +180,7 @@ Finally, you extract the encoded message from the encoder object:
 ## Decoding API
 
 The Decoder keeps only the raw pointer to the buffer passed to the constructor.
-Thus, the buffer should be neither freed nor moved till the decoding is finished.
+Thus, the buffer should neither be freed nor moved until decoding is complete.
 
 
 ## Code generator
@@ -205,8 +202,8 @@ e.g. define it to std::string.
 Sub-messages and packed repeated fields always use 5-byte length prefix
 (it can make encoded messages a bit longer than with other Protobuf libraries).
 
-Compared to the [official](https://protobuf.dev/programming-guides/proto3/#updating)
-ProtoBuf library allows more flexibility in modifying the field type without losing the decoding compatibility.
+Compared to the [official][updating] ProtoBuf library,
+EasyProtoBuf allows more flexibility in modifying the field type without losing the decoding compatibility.
 You can make any changes to the field type as long as it stays inside the same "type domain":
 - FP domain - only float and double
 - zigzag domain - includes sint32 and sint64
@@ -224,7 +221,7 @@ It starts with the story of my FreeArc archiver:
 - the second version was reimplemented in C++, both to increase performance and to increase the potential contributors' audience
 - then, I realized that 80% of the archiver code (e.g. cmdline parsing) doesn't need C++ efficiency
 and rewrote this part in Lua to simplify the code and further increase the potential contributors' audience
-(the popularity of Haskell, C++ and Lua among programmers is at the proportion of 1:10:100)
+(the popularity of Haskell, C++ and Lua among non-professional programmers is at the proportion of 1:10:100)
 - and, finally, I thought that the C++ part could be considered as a low-level core archiver library (AKA backend)
 while the scripting part is a client implementing concrete frontend (cmdline, UI) on the top of the core.
 The backend API provides only a few functions (e.g. compress and decompress) with LOTS of parameters.
@@ -237,21 +234,26 @@ for all their parameters.
 
 At this moment, I started to research various popular serialization libraries
 and finally chose the ProtoBuf format:
-- ProtoBuf format is the simplest one among all popular libs, although sometimes it's TOO simple
-(e.g. maps are emulated via repeated pairs)
 - FlatBuffers doesn't suppose deserialization, while I prefer to work with plain C++ structures
 - MessagePack format is more self-describing (schema-less) than ProtoBuf, making it less efficient for schema-based serialization
-- given its simplicity, it's no surprise that ProtoBuf is the most popular serialization format around,
+- ProtoBuf format is the simplest one among all popular libs, although sometimes it's TOO simple
+(e.g. maps are emulated via repeated pairs)
+- Given its simplicity, it's no surprise that ProtoBuf is the most popular serialization format around,
 with bindings implemented for more languages. And even if some exotic language misses a binding,
 it would be easier to implement it for ProtoBuf than for any other serialization format.
 
-Now, I looked around, but the tiniest C++ ProtoBuf library I found was still a whopping 4 KLOC
+So, I started to look around, but the tiniest C++ ProtoBuf library I found was still a whopping 4 KLOC
 (while it neither supports maps nor provides a bindings generator).
 This made me crazy - the entire ProtoBuf format is just 5 field types, what do you do in those kilolines of code?
 
 You guessed it right - I decided to write my own ProtoBuf library (with maps and codegen, you know).
-The first Decoder version was about 100 LOC and today the entire library is still only 600 LOC,
+The first Decoder version was about 100 LOC and today the entire library is still only 666 LOC,
 encoding and decoding all ProtoBuf types including maps.
-Nevertheless, the [library](https://github.com/mapbox/protozero) I rejected
-eventually provided many insights, from the API to internal organization,
-so I can call it a father of my own lib.
+Nevertheless, the [library][protozero] I rejected eventually provided many insights,
+from API to internal organization, so it may be called the father of EasyProtoBuf.
+
+[ProtoBuf]: https://developers.google.com/protocol-buffers
+[guidelines]: https://protobuf.dev/programming-guides/proto3/#scalar
+[updating]: https://protobuf.dev/programming-guides/proto3/#updating
+[protozero]: https://github.com/mapbox/protozero
+[xxHash]: https://github.com/Cyan4973/xxHash
