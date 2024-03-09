@@ -39,11 +39,10 @@ Files:
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
 
-Portability. While the final goal is to support any C++11 compiler, so far we tested only:
+Portability: while the final goal is to support any C++11 compiler, so far we tested only:
 - Linux: tested gcc 9..13 and clang 10..15 on Ubuntu 20.04/22.04 (x64)
-- Mac: tested clang 13..15 on Mac OS 11..13 (x64) and Mac OS 14 (ARM64).
-gcc doesn't work on Mac OS platforms and I don't know why.
-- Windows: tested only CL in x64 and x86 modes (the latter is the only 32-bit build that we tested so far)
+- Mac: tested clang 13..15 on Mac OS 11..13 (x64) and Mac OS 14 (ARM64), plus gcc 13 on MacOS 14
+- Windows: tested only MSVC in x64 and x86 modes (the latter is the only 32-bit build in our tests)
 - C++11: tested locally, but all the tests above were made only in C++17 mode (since Codegen requires C++17 ATM)
 - big-endian cpus: the support is implemented, but has not been tested so far
 - planned: copy the CI scripts from [protozero](https://github.com/mapbox/protozero)
@@ -52,7 +51,7 @@ which tests a lot of older compilers
 Implemented so far:
 - 100% of the library
 - 66% of the Codegen
-- 50% of the documentation
+- 50% of the documentation (need exhaustive docs on the API and Codegen)
 - 25% of CI (testing on various platforms with various compiler versions)
 - 0% of the tests
 
