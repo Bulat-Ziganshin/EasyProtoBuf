@@ -4,7 +4,7 @@ const char* USAGE =
 
 #include "popl.hpp"
 
-#if __cplusplus >= 201703L
+#ifdef __cpp_lib_string_view
 using str_view = std::string_view;  // Might be a little faster with C++17
 #else
 using str_view = std::string;

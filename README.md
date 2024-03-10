@@ -52,7 +52,7 @@ Implemented so far:
 - 66% of the Codegen
 - 50% of the documentation (need exhaustive docs on the API and Codegen)
 - 5% of CI (ideally it should test every C++11 compiler on the Earth with every combination of compiler flags)
-- 0% of the tests (the grandplan is to copy the exhaustive [protozero][] test suite)
+- 0% of the tests (the grand plan is to copy the exhaustive [protozero][] test suite)
 
 
 ## Motivating example

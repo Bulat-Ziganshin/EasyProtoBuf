@@ -79,32 +79,32 @@ jobs:
             extra_cmake_options: ""
           - os: windows-2022
             extra_cmake_options: "-A x64"
-            cpp_options: "/std:c++14 /W4"
+            cpp_options: "/std:c++14 /W3"
             cpp_compiler: cl
             build_type: Release
           - os: windows-2022
             extra_cmake_options: "-A Win32"
-            cpp_options: "/std:c++14 /W4"
+            cpp_options: "/std:c++14 /W3"
             cpp_compiler: cl
             build_type: Release
           - os: windows-2022
             extra_cmake_options: "-A x64"
-            cpp_options: "/std:c++17 /W4"
+            cpp_options: "/std:c++17 /W3"
             cpp_compiler: cl
             build_type: Release
           - os: windows-2022
             extra_cmake_options: "-A Win32"
-            cpp_options: "/std:c++17 /W4"
+            cpp_options: "/std:c++17 /W3"
             cpp_compiler: cl
             build_type: Release
           - os: windows-2019
             extra_cmake_options: "-A x64"
-            cpp_options: "/std:c++17 /W4"
+            cpp_options: "/std:c++17 /W3"
             cpp_compiler: cl
             build_type: Release
           - os: windows-2019
             extra_cmake_options: "-A Win32"
-            cpp_options: "/std:c++17 /W4"
+            cpp_options: "/std:c++17 /W3"
             cpp_compiler: cl
             build_type: Release
 

@@ -72,7 +72,8 @@ inline void memcpy_LITTLE_ENDIAN(void* dest, const void* src)
     static_assert(size==4 || size==8, "Only size==4 and size==8 are supported");
 
     // Check whether CPU is big-endian. If cpu has PDP byte order, or floats and ints have different order, you are screwed.
-    if((*(uint16_t *)"\0\xff" < 0x100)) {
+    const uint16_t endianness = 1;
+    if (*(uint8_t *)&endianness == 0) {
         auto to = (char*) dest;
         auto from = (const char*) src;
         if (size == 4) {
