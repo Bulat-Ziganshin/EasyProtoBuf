@@ -159,22 +159,41 @@ due to buffer management.
 
 ## Encoding API
 
-Encoding starts with the creation of the encoder object:
+Start encoding with the creation of the Encoder object:
 ```cpp
     easypb::Encoder pb;
 ```
 
-Then you proceed with encoding all present fields of the message:
+Then proceed with encoding all present fields of the message:
 ```cpp
     pb.put_string(1, name);
     pb.put_double(2, weight);
     pb.put_repeated_int32(3, ids);
 ```
 
-Finally, you extract the encoded message from the encoder object:
+Finally, retrieve the encoded message from the Encoder object:
 ```cpp
     std::string protobuf_msg = pb.result();
 ```
+
+This call clears the contents of the Encoder, so it can be reused to encode more messages.
+
+The first parameter of any `put_*` call is the [field number][],
+and the second parameter is the value to encode.
+
+There are several groups of `put_*` methods:
+- `put_FTYPE`, e.g. `put_string`, encodes a single value.
+- `put_repeated_FTYPE`, encodes multiple values in one call.
+The second parameter should be an iterable container.
+- `put_packed_FTYPE`, is similar to `put_repeated_FTYPE`,
+but encodes data in the [packed][] format.
+- `put_map_FTYPE1_FTYPE2`, e.g. `put_map_string_int32` serializes the [map type][] `map<string, int32>`.
+The second parameter should be a compatible C++ map container,
+e.g. `std::map<std::string, int32_t>`.
+
+`FTYPE` here should be replaced by the ProtoBuf field type
+of the corresponding message field, e.g. `int32`, `bytes` and so on,
+except that for any message type we use the fixed string `message`.
 
 
 ## Decoding API
@@ -214,7 +233,7 @@ You can make any changes to the field type as long as it stays inside the same "
 - note that when changing the field type, values will be decoded correctly only if they fit into the range of both old and new field types - for integral types; while precision will be truncated to 32 bits - for FP types
 
 
-## Motivation
+# Motivation
 
 It starts with the story of my FreeArc archiver:
 - the first FreeArc version was implemented in Haskell, which is a very high-level language
@@ -254,6 +273,9 @@ from API to internal organization, so it may be called the father of EasyProtoBu
 
 [ProtoBuf]: https://developers.google.com/protocol-buffers
 [guidelines]: https://protobuf.dev/programming-guides/proto3/#scalar
+[field number]: https://protobuf.dev/programming-guides/proto3/#assigning
+[packed]: https://protobuf.dev/programming-guides/encoding/#packed
+[map type]: https://protobuf.dev/programming-guides/proto3/#maps
 [updating]: https://protobuf.dev/programming-guides/proto3/#updating
 [protozero]: https://github.com/mapbox/protozero
 [xxHash]: https://github.com/Cyan4973/xxHash
