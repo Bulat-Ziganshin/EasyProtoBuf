@@ -10,6 +10,7 @@ It consists of 3 big sections:
 #include <string>
 #include <cstring>
 #include <cstdint>
+#include <cstddef>
 #include <stdexcept>
 
 

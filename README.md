@@ -19,7 +19,6 @@ Library features:
 - string/bytes fields can be stored in any C++ type convertible from/to std::string_view (or easypb::string_view)
 - repeated fields can be stored in any C++ container implementing push_back() and begin()/end()
 - map fields can be stored in any C++ container similar enough to std::map
-- little-endian and big-endian CPUs support
 - not implemented: group wire format
 - [protozero][] is a production-grade library with a similar API
 
@@ -27,10 +26,11 @@ Library features:
 - generates C++ structure, encoder and decoder for each message type
 - the generated decoder checks the presence of required fields in the decoded message
 - cmdline options to tailor the generated code
-- planned: support of enum/oneof/map fields and nested message type definitions (and thus dogfooding Codegen)
-- planned: protoc plugin
-- planned: validation of enum, integer and bool values by the generated code
-- planned: per-field C++ type specification
+- planned:
+  - support of enum/oneof/map fields and nested message type definitions (and thus dogfooding Codegen)
+  - protoc plugin
+  - validation of enum, integer and bool values by the generated code
+  - per-field C++ type specification
 
 Files:
 - [easypb.hpp](include/easypb.hpp) - the entire library
@@ -38,11 +38,19 @@ Files:
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
 
-Portability: while the final goal is to support any C++11 compiler, so far we tested only:
-- Linux: gcc 9..13 and clang 10..15 on Ubuntu 20.04/22.04 (x64)
+Portability:
+- we target compatibility with any C++11 compiler providing int32_t and int64_t types,
+in particular gcc 4.7+ and clang 3.1+
+- now we support only little-endian and big-endian CPUs with runtime detection,
+but it can be improved to support other CPUs and compile-time detection
+- in principle, the library can be ported to C++98 with 3rd-party replacement of `<cstdint>`
+
+CI: while the final goal is to support any C++11 compiler, so far we tested only:
+- Linux: gcc 4.7..14 and clang 3.5, 3.8, 7..18 on Ubuntu (x64);
+plus default gcc compilers on Ubuntu LTS 14.04..24.04, Debian 10..12 and CentOS/RockyLinux 7..9
 - Mac: clang 13..15 on Mac OS 11..13 (x64) and Mac OS 14 (ARM64), plus gcc 13 on MacOS 14
 - Windows: only MSVC in x64 and x86 modes (the latter is the only 32-bit build in our tests)
-- C++11 and C++17 modes for almost every compiler above (MSVC in C++14/17 modes)
+- C++11 and C++17 modes for modern compilers (MSVC in C++14/17 modes)
 - big-endian cpus: the support is implemented, but has not been tested so far
 - planned: copy the CI scripts from [protozero][] and [xxHash][]
 which tests a lot of older compilers and non-x86 platforms
@@ -51,7 +59,7 @@ Implemented so far:
 - 100% of the library
 - 66% of the Codegen
 - 50% of the documentation (need exhaustive docs on the API and Codegen)
-- 5% of CI (ideally it should test every C++11 compiler on the Earth with every combination of compiler flags)
+- 25% of CI (ideally it should test every C++11 compiler on the Earth with every combination of compiler flags)
 - 0% of the tests (the grand plan is to copy the exhaustive [protozero][] test suite)
 
 

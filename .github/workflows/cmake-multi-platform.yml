@@ -1,5 +1,3 @@
-# This starter workflow is for a CMake project running on multiple platforms. There is a different starter workflow if you just want a single platform.
-# See: https://github.com/actions/starter-workflows/blob/main/ci/cmake-single-platform.yml
 name: CMake on multiple platforms
 
 on:
@@ -12,19 +10,13 @@ on:
     paths-ignore: [ "**.md" ]
 
 jobs:
-  build:
+  main:
     runs-on: ${{ matrix.os }}
 
     strategy:
       # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
       fail-fast: false
 
-      # Set up a matrix to run the following 3 configurations:
-      # 1. <Windows, Release, latest MSVC compiler toolchain on the default runner image, default generator>
-      # 2. <Linux, Release, latest GCC compiler toolchain on the default runner image, default generator>
-      # 3. <Linux, Release, latest Clang compiler toolchain on the default runner image, default generator>
-      #
-      # To add more build types (Release, Debug, RelWithDebInfo, etc.) customize the build_type list.
       matrix:
         cpp_compiler: [g++-13, g++-12, g++-11, g++-10, g++-9, clang++-15, clang++-14, clang++-13]
         cpp_options: ["-std=c++17 -Wall -Wextra -Wpedantic", "-std=c++11 -Wall -Wextra -Wpedantic"]
@@ -32,20 +24,25 @@ jobs:
         build_type: [Release]
         extra_cmake_options: [""]
         include:
-          - cpp_compiler: clang++-12
-            os: ubuntu-20.04
+          - cpp_compiler: g++-13
+            build_type: Debug
             cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            build_type: Release
+            os: ubuntu-22.04
             extra_cmake_options: ""
-          - cpp_compiler: clang++-11
-            os: ubuntu-20.04
+          - cpp_compiler: g++-13
+            build_type: RelWithDebInfo
             cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            build_type: Release
+            os: ubuntu-22.04
             extra_cmake_options: ""
-          - cpp_compiler: clang++-10
-            os: ubuntu-20.04
+          - cpp_compiler: clang++-15
+            build_type: Debug
             cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            build_type: Release
+            os: ubuntu-22.04
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-15
+            build_type: RelWithDebInfo
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            os: ubuntu-22.04
             extra_cmake_options: ""
           - os: macos-14
             cpp_compiler: clang++
@@ -128,6 +125,195 @@ jobs:
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
         ${{ matrix.extra_cmake_options }}
         -S ${{ github.workspace }}
+
+    - name: Build
+      # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }}
+
+    - name: Test
+      working-directory: ${{ steps.strings.outputs.build-output-dir }}
+      # Execute tests defined by the CMake configuration. Note that --build-config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
+      # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
+      run: ctest --build-config ${{ matrix.build_type }}
+
+
+
+
+  #####################################################################################################################
+  # Build with older gcc/clang versions, starting from gcc 4.7 and clang 3.5.
+  # Also build with default gcc versions to ensure that we support default compilers on LTS Linux releases.
+  #####################################################################################################################
+  docker:
+    runs-on: [ubuntu-latest]
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      matrix:
+        cpp_compiler: [g++]
+        image: ['ubuntu:14.04', 'ubuntu:16.04', 'ubuntu:18.04', 'ubuntu:20.04', 'ubuntu:22.04', 'ubuntu:24.04',
+                'ubuntu:rolling', 'ubuntu:devel',
+                #'i386/ubuntu', 'i386/ubuntu:22.04',
+                'debian:10', 'debian:11', 'debian:12', 'debian:testing', 'debian:experimental',
+                'centos:7', 'rockylinux:8', 'rockylinux:9', 'fedora:latest', 'fedora:rawhide']
+        cpp_options: ["-std=c++11 -Wall -Wextra -Wpedantic"]
+        build_type: [Release]
+        extra_cmake_options: [""]
+        include:
+          - cpp_compiler: g++-4.7
+            build_type: Debug
+            cpp_options: "-std=c++11 -Wall -Wextra"
+            image: ubuntu:14.04
+            extra_cmake_options: ""
+          - cpp_compiler: g++-4.7
+            build_type: RelWithDebInfo
+            cpp_options: "-std=c++11 -Wall -Wextra"
+            image: ubuntu:14.04
+            extra_cmake_options: ""
+          - cpp_compiler: g++-4.7
+            build_type: Release
+            cpp_options: "-std=c++11 -Wall -Wextra"
+            image: ubuntu:14.04
+            extra_cmake_options: ""
+          - cpp_compiler: g++-4.8
+            cpp_options: "-std=c++11 -Wall -Wextra"
+            image: ubuntu:14.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: g++-4.9
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:16.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: g++-5
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:16.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: g++-7
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:18.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: g++-8
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:18.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: g++-14
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:24.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: g++-14
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            image: ubuntu:24.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-3.5
+            build_type: Debug
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:14.04
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-3.5
+            build_type: RelWithDebInfo
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:14.04
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-3.5
+            build_type: Release
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:14.04
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-3.8
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:14.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-7
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:18.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-8
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:20.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-9
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:20.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-10
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            image: ubuntu:20.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-11
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            image: ubuntu:20.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-12
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            image: ubuntu:20.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-16
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            image: ubuntu:24.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-17
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            image: ubuntu:24.04
+            build_type: Release
+            extra_cmake_options: ""
+          - cpp_compiler: clang++-18
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            image: ubuntu:24.04
+            build_type: Release
+            extra_cmake_options: ""
+      # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
+      fail-fast: false
+
+    steps:
+    - name: Install dependencies on RedHat Linux
+      if: contains(matrix.image, 'centos') || contains(matrix.image, 'rockylinux') || contains(matrix.image, 'fedora')
+      run: |
+        yum install -y make gcc-c++
+
+    - name: Install dependencies on Debian
+      if: contains(matrix.image, 'ubuntu') || contains(matrix.image, 'debian')
+      run: |
+        apt-get update -y
+        apt-get install -y curl make ${{ matrix.cpp_compiler }}
+
+    - name: Install CMake
+      run: |
+        curl -L -O https://github.com/Kitware/CMake/releases/download/v3.16.4/cmake-3.16.4-Linux-x86_64.sh
+        chmod +x cmake-3.16.4-Linux-x86_64.sh
+        ./cmake-3.16.4-Linux-x86_64.sh --skip-license --prefix=/usr/local
+
+    # Newer checkout action is incompatble with old linuxes
+    - uses: actions/checkout@v3
+
+    - name: Set reusable strings
+      # Turn repeated input strings (such as the build output directory) into step outputs. These step outputs can be used throughout the workflow file.
+      id: strings
+      shell: bash
+      run: |
+        echo "build-output-dir=build" >> "$GITHUB_OUTPUT"
+
+    - name: Configure CMake
+      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+      run: >
+        cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
+        "-DEASYPB_CXX_FLAGS=${{ matrix.cpp_options }}"
+        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        ${{ matrix.extra_cmake_options }}
 
     - name: Build
       # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
