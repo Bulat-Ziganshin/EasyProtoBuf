@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: Unlicense
 /*
-This file contains the entire EasyProtoBuf library.
+This header file contains the entire EasyProtoBuf library.
 It consists of 3 big sections:
 - Utility functions shared by Encoder and Decoder
 - Encoder class
@@ -62,7 +63,8 @@ EASYPB_DEFINE_EXCEPTION(missing_required_field, exception)
 
 
 // ****************************************************************************
-// Deal with CPU endianness
+// Deal with CPU endianness. Convert between the strictly little-endian
+// Protobuf wire format and native byte order of the target CPU.
 // ****************************************************************************
 
 // memcpy, which also reverses byte order on big-endian cpus
@@ -118,20 +120,20 @@ inline void write_to_little_endian(void* ptr, FixedType value)
 // Deal with absence of std::string_view prior to C++17
 // ****************************************************************************
 
-// Choose the type to use as easypb::string_view
+// Choose the type to use as easypb::string_view: ...
 #ifdef EASYPB_STRING_VIEW
 
-// User-supplied type, e.g. std::string
+// ... either user-supplied type, e.g. std::string
 using string_view = EASYPB_STRING_VIEW;
 
 #elif defined(__cpp_lib_string_view)
 
-// C++17-supplied implementation, if available
+// ... or C++17-supplied type, if available
 using string_view = std::string_view;
 
 #else
 
-// Minimal reimplementation of std::string_view,
+// ... or minimal reimplementation of std::string_view,
 // just enough for usage in easypb::Encoder and easypb::Decoder
 struct string_view
 {
@@ -152,7 +154,7 @@ struct string_view
 
 
 // ****************************************************************************
-// Encoder class
+// Class for encoding C++ data into the Protobuf wire format
 // ****************************************************************************
 struct Encoder
 {
@@ -413,14 +415,16 @@ inline std::string encode(const MessageType& msg)
 
 
 /*****************************************************************************
-The Decoder class is made of 3 layers:
-1) read_varint() and read_fixed_width(), allowing to grab basic values from input buffer
-2) parse_*_value(), allowing to read a field knowing field's type and wiretype
+Class for decoding C++ data from the Protobuf wire format.
+
+The Decoder class contains 3 layers:
+1) read_varint() and read_fixed_width(), grabbing basic values from an input buffer
+2) parse_*_value(), reading a field with known field's type and wiretype
 3) get_*(), providing easy-to-use API for users of this class
 *****************************************************************************/
 
-// Forward declaration of the function since it's called inside the Decoder class,
-// but its implementation uses the Decoder class
+// Forward declaration of the function that's called inside the Decoder class,
+// but its implementation uses the Decoder class recursively
 template <typename MessageType>
 inline MessageType decode(string_view buffer);
 
@@ -430,7 +434,7 @@ struct Decoder
     // Invariants:
     //   ptr <= buf_end
 
-    // The bytes between ptr and buf_end contain the not yet decoded remainder of the message.
+    // The bytes between ptr and buf_end contain the not-yet-decoded remainder of the message.
     const char* ptr = nullptr;
     const char* buf_end = nullptr;
 
@@ -468,6 +472,7 @@ struct Decoder
     }
 
 
+    // Read any fixed-width field, with conversion from the little-endian Protobuf wire format
     template <typename FixedType>
     FixedType read_fixed_width()
     {
@@ -476,6 +481,7 @@ struct Decoder
         return read_from_little_endian<FixedType>(old_ptr);
     }
 
+    // Slow version of reading variable-sized integer
     uint64_t read_varint_slow()
     {
         uint64_t value = 0;
@@ -495,6 +501,7 @@ struct Decoder
         return value;
     }
 
+    // Fast version of reading variable-sized integer
     uint64_t read_varint()
     {
         if(buf_end - ptr < 10)  return read_varint_slow();
@@ -522,6 +529,7 @@ struct Decoder
         throw varint_too_long("More than 10 bytes in varint");
     }
 
+    // Read zigzag-encoded integer value
     int64_t read_zigzag()
     {
         uint64_t value = read_varint();
@@ -579,6 +587,7 @@ struct Decoder
     }
 
 
+    // Read and decode tag of the next field, and prepare to read the field value
     bool get_next_field()
     {
         if(eof())  return false;
@@ -594,6 +603,7 @@ struct Decoder
         return true;
     }
 
+    // Skip the field value, can be called only after get_next_field() if we choose to ignore the field value
     void skip_field()
     {
         if (wire_type == WIRETYPE_VARINT) {
