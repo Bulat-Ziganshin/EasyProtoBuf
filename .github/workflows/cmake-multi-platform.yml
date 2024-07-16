@@ -18,18 +18,19 @@ jobs:
       fail-fast: false
 
       matrix:
-        cpp_compiler: [g++-13, g++-12, g++-11, g++-10, g++-9, clang++-15, clang++-14, clang++-13]
-        cpp_options: ["-std=c++17 -Wall -Wextra -Wpedantic", "-std=c++11 -Wall -Wextra -Wpedantic"]
+        cpp_compiler: [g++-12, g++-11, g++-10, g++-9, clang++-15, clang++-14, clang++-13]
+        cpp_options: ["-std=c++17 -Wall -Wextra -Wpedantic",
+                      "-std=c++11 -Wall -Wextra -Wpedantic"]
         os: [ubuntu-22.04]
         extra_cmake_options: [""]
         include:
           # MacOS configs
-          - os: macos-14
-            cpp_compiler: g++-13
+          - os: macos-latest
+            cpp_compiler: g++
             cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic -Wl,-ld_classic"
 
-          - os: macos-14
-            cpp_compiler: g++-13
+          - os: macos-latest
+            cpp_compiler: g++
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic -Wl,-ld_classic"
 
           - os: macos-14
@@ -53,14 +54,6 @@ jobs:
             cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
 
           - os: macos-12
-            cpp_compiler: clang++
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-
-          - os: macos-11
-            cpp_compiler: clang++
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-
-          - os: macos-11
             cpp_compiler: clang++
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
 
@@ -157,7 +150,7 @@ jobs:
         image: ['ubuntu:14.04', 'ubuntu:16.04', 'ubuntu:18.04', 'ubuntu:20.04', 'ubuntu:22.04', 'ubuntu:24.04',
                 'ubuntu:rolling', 'ubuntu:devel',  #'i386/ubuntu', 'i386/ubuntu:22.04',
                 'debian:10', 'debian:11', 'debian:12', 'debian:testing', 'debian:experimental',
-                'centos:7', 'rockylinux:8', 'rockylinux:9', 'fedora:latest', 'fedora:rawhide']
+                'rockylinux:8', 'rockylinux:9', 'fedora:latest', 'fedora:rawhide']
         extra_cmake_options: [""]
 
         include:
@@ -185,6 +178,14 @@ jobs:
           - cpp_compiler: g++-8
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
             image: ubuntu:18.04
+
+          - cpp_compiler: g++-13
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            image: ubuntu:24.04
+
+          - cpp_compiler: g++-13
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            image: ubuntu:24.04
 
           - cpp_compiler: g++-14
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
@@ -247,6 +248,9 @@ jobs:
       fail-fast: false
 
     env:
+      # Pin node16 by allowing old version
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
       CMAKE_CONFIGURE: >-
         cmake -B build
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
@@ -257,7 +261,7 @@ jobs:
 
     steps:
     - name: Install dependencies on RedHat Linux
-      if: contains(matrix.image, 'centos') || contains(matrix.image, 'rockylinux') || contains(matrix.image, 'fedora')
+      if: contains(matrix.image, 'rockylinux') || contains(matrix.image, 'fedora')
       run: |
         yum install -y make gcc-c++
 
