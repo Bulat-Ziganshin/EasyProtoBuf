@@ -49,14 +49,6 @@ jobs:
             cpp_compiler: clang++
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
 
-          - os: macos-12
-            cpp_compiler: clang++
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-
-          - os: macos-12
-            cpp_compiler: clang++
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-
           # Windows configs
           - os: windows-2022
             extra_cmake_options: "-A x64"
@@ -136,7 +128,7 @@ jobs:
 
 
   #####################################################################################################################
-  # Build with older gcc/clang versions, starting from gcc 4.7 and clang 3.5.
+  # Build with older clang versions, starting from clang 8.
   # Also build with default gcc versions to ensure that we support default compilers on LTS Linux releases.
   #####################################################################################################################
   docker:
@@ -147,7 +139,7 @@ jobs:
       matrix:
         cpp_compiler: [g++]
         cpp_options: ["-std=c++11 -Wall -Wextra -Wpedantic"]
-        image: ['ubuntu:14.04', 'ubuntu:16.04', 'ubuntu:18.04', 'ubuntu:20.04', 'ubuntu:22.04', 'ubuntu:24.04',
+        image: ['ubuntu:20.04', 'ubuntu:22.04', 'ubuntu:24.04',
                 'ubuntu:rolling', 'ubuntu:devel',  #'i386/ubuntu', 'i386/ubuntu:22.04',
                 'debian:10', 'debian:11', 'debian:12', 'debian:testing', 'debian:experimental',
                 'rockylinux:8', 'rockylinux:9', 'fedora:latest', 'fedora:rawhide']
@@ -155,30 +147,6 @@ jobs:
 
         include:
           # gcc configs
-          - cpp_compiler: g++-4.7
-            cpp_options: "-std=c++11 -Wall -Wextra"
-            image: ubuntu:14.04
-
-          - cpp_compiler: g++-4.8
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:14.04
-
-          - cpp_compiler: g++-4.9
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:16.04
-
-          - cpp_compiler: g++-5
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:16.04
-
-          - cpp_compiler: g++-7
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:18.04
-
-          - cpp_compiler: g++-8
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:18.04
-
           - cpp_compiler: g++-13
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
             image: ubuntu:24.04
@@ -196,18 +164,6 @@ jobs:
             image: ubuntu:24.04
 
           # clang configs
-          - cpp_compiler: clang++-3.5
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:14.04
-
-          - cpp_compiler: clang++-3.8
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:14.04
-
-          - cpp_compiler: clang++-7
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:18.04
-
           - cpp_compiler: clang++-8
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
             image: ubuntu:20.04
@@ -248,9 +204,6 @@ jobs:
       fail-fast: false
 
     env:
-      # Pin node16 by allowing old version
-      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-
       CMAKE_CONFIGURE: >-
         cmake -B build
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
@@ -277,8 +230,7 @@ jobs:
         chmod +x cmake-3.25.3-linux-x86_64.sh
         ./cmake-3.25.3-linux-x86_64.sh --skip-license --prefix=/usr/local
 
-    # Use an old version of the checkout action, since the newer ones are incompatble with old linuxes
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: 'Debug: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}Debug
