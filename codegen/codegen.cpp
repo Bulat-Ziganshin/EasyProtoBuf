@@ -9,11 +9,6 @@
 #include "utils.cpp"
 
 
-// Protobuf and C++ delimiters between parts of a qualified name
-const std::string PB_TYPE_DELIMITER = ".";
-const std::string CPP_TYPE_DELIMITER = "::";
-
-
 // Command-line options affecting the generated code
 struct
 {
@@ -28,6 +23,16 @@ struct
     std::string cpp_string_type;
     std::string cpp_repeated_type;
 } option;
+
+
+// Protobuf and C++ delimiters between parts of a qualified name
+const std::string PB_TYPE_DELIMITER = ".";
+const std::string CPP_TYPE_DELIMITER = "::";
+
+
+// A few global vars instead of passing data between functions
+std::string package_name_prefix;  // package-describing prefix of message types, e.g. ".mypackage."
+std::string msgtype_name_prefix;  // extra message-type-describing prefix of message types, e.g. "Msg."
 
 
 const char* FILE_TEMPLATE =
@@ -107,21 +112,21 @@ const char* CHECK_REQUIRED_FIELD_TEMPLATE = R"---(
 
 
 // Is it a repeated Protobuf field?
-bool is_repeated(FieldDescriptorProto &field)
+bool is_repeated(const FieldDescriptorProto& field)
 {
     return (field.label == FieldDescriptorProto::LABEL_REPEATED);
 }
 
 
 // Does this field have corresponding has_* flag?
-bool hasfield_enabled(FieldDescriptorProto &field)
+bool hasfield_enabled(const FieldDescriptorProto& field)
 {
     return (! is_repeated(field)  &&  ! option.no_has_fields);
 }
 
 
 // Is it a Protobuf numeric field (including enums/bools)?
-bool is_numeric_field(FieldDescriptorProto &field)
+bool is_numeric_field(const FieldDescriptorProto& field)
 {
     return (field.type != FieldDescriptorProto::TYPE_STRING) &&
            (field.type != FieldDescriptorProto::TYPE_BYTES) &&
@@ -131,7 +136,7 @@ bool is_numeric_field(FieldDescriptorProto &field)
 
 
 // Serialize this field in the more compact "packed" Protobuf wire format?
-bool write_as_packed(FieldDescriptorProto &field)
+bool write_as_packed(const FieldDescriptorProto& field)
 {
     return is_repeated(field) &&
            is_numeric_field(field) &&
@@ -141,8 +146,30 @@ bool write_as_packed(FieldDescriptorProto &field)
 }
 
 
+// Either " = default_field_value" or empty string
+std::string default_value_str(const FieldDescriptorProto& field)
+{
+    if (field.has_default_value  &&  ! option.no_default_values) {
+        // Use default field value specified in .proto file
+        bool is_bytearray_field = (field.type==FieldDescriptorProto::TYPE_STRING || field.type==FieldDescriptorProto::TYPE_BYTES);
+        const char* quote_str = (is_bytearray_field? "\"" : "");
+        return myformat(" = {0}{1}{0}", quote_str, field.default_value);
+    } else if (is_repeated(field)) {
+        return "";
+    } else {
+        // C++ doesn't initialize scalar fields by default, so we need to enforce the initialization
+        return field.type == FieldDescriptorProto::TYPE_BOOL
+                   ? " = false" :
+               is_numeric_field(field)
+                   ? " = 0"
+               // or another field type
+                   : "";
+    }
+}
+
+
 // PB type as used in .proto file (e.g. "fixed32")
-str_view protobuf_type_as_str(FieldDescriptorProto &field)
+str_view protobuf_type_as_str(const FieldDescriptorProto& field)
 {
     switch(field.type)
     {
@@ -155,7 +182,7 @@ str_view protobuf_type_as_str(FieldDescriptorProto &field)
         case FieldDescriptorProto::TYPE_FIXED32:   return "fixed32";
         case FieldDescriptorProto::TYPE_BOOL:      return "bool";
         case FieldDescriptorProto::TYPE_STRING:    return "string";
-        case FieldDescriptorProto::TYPE_GROUP:     return "?group";
+        case FieldDescriptorProto::TYPE_GROUP:     return "???group";
         case FieldDescriptorProto::TYPE_MESSAGE:   return "message";
         case FieldDescriptorProto::TYPE_BYTES:     return "bytes";
         case FieldDescriptorProto::TYPE_UINT32:    return "uint32";
@@ -166,12 +193,12 @@ str_view protobuf_type_as_str(FieldDescriptorProto &field)
         case FieldDescriptorProto::TYPE_SINT64:    return "sint64";
     }
 
-    return "?type";
+    return "???type";
 }
 
 
 // Return the shortest [qualified] C++ type corresponding to the fully qualified Protobuf message/enum type
-std::string cpp_qualified_type_str(str_view package_name_prefix, str_view msgtype_name_prefix, str_view message_type)
+std::string cpp_qualified_type_str(str_view message_type)
 {
     // Strip the package_name_prefix from the fully qualified message_type,
     // e.g. (".google.protobuf.", ".google.protobuf.DescriptorProto.ExtensionRange") -> "DescriptorProto.ExtensionRange",
@@ -196,7 +223,7 @@ std::string cpp_qualified_type_str(str_view package_name_prefix, str_view msgtyp
 
 
 // Return C++ type corresponding to the base type (without "repeated") of the Protobuf field
-std::string base_cpp_type_as_str(str_view package_name_prefix, str_view msgtype_name_prefix, FieldDescriptorProto &field)
+std::string base_cpp_type_as_str(const FieldDescriptorProto& field)
 {
     // According to https://github.com/protocolbuffers/protobuf/blob/c05b320d9c18173bfce36c4bef22f9953d340ff9/src/google/protobuf/descriptor.h#L780
     switch(field.type)
@@ -226,52 +253,30 @@ std::string base_cpp_type_as_str(str_view package_name_prefix, str_view msgtype_
         case FieldDescriptorProto::TYPE_STRING:
         case FieldDescriptorProto::TYPE_BYTES:    return option.cpp_string_type;
 
-        case FieldDescriptorProto::TYPE_MESSAGE:  return cpp_qualified_type_str(package_name_prefix, msgtype_name_prefix, field.type_name);
+        case FieldDescriptorProto::TYPE_MESSAGE:  return cpp_qualified_type_str(field.type_name);
 
-        case FieldDescriptorProto::TYPE_GROUP:    return "?group";
+        case FieldDescriptorProto::TYPE_GROUP:    return "???group";
     }
 
-    return "?type";
+    return "???type";
 }
 
 
 // Return C++ type for the Protobuf field
-std::string cpp_type_as_str(str_view package_name_prefix, str_view msgtype_name_prefix, FieldDescriptorProto &field)
+std::string cpp_type_as_str(const FieldDescriptorProto& field)
 {
-    auto base_type = base_cpp_type_as_str(package_name_prefix, msgtype_name_prefix, field);
+    auto basetype_str = base_cpp_type_as_str(field);
 
     if (is_repeated(field)) {
-        return myformat(option.cpp_repeated_type, base_type);
+        return myformat(option.cpp_repeated_type, basetype_str);
     } else {
-        return base_type;
-    }
-}
-
-
-// Either " = default_field_value" or empty string
-std::string default_value_str(FieldDescriptorProto &field)
-{
-    if (field.has_default_value  &&  ! option.no_default_values) {
-        // Use default field value specified in .proto file
-        bool is_bytearray_field = (field.type==FieldDescriptorProto::TYPE_STRING || field.type==FieldDescriptorProto::TYPE_BYTES);
-        const char* quote_str = (is_bytearray_field? "\"" : "");
-        return myformat(" = {0}{1}{0}", quote_str, field.default_value);
-    } else if (is_repeated(field)) {
-        return "";
-    } else {
-        // C++ doesn't initialize scalar fields by default, so we need to enforce the initialization
-        return field.type == FieldDescriptorProto::TYPE_BOOL
-                   ? " = false" :
-               is_numeric_field(field)
-                   ? " = 0"
-               // or another field type
-                   : "";
+        return basetype_str;
     }
 }
 
 
 // Encoder code for a single field
-std::string generate_field_encoder(FieldDescriptorProto &field)
+std::string generate_field_encoder(const FieldDescriptorProto& field)
 {
     return myformat("    pb.put_{0}{1}({2}, {3});\n",
     /* 0 */ is_repeated(field)
@@ -284,7 +289,7 @@ std::string generate_field_encoder(FieldDescriptorProto &field)
 
 
 // Decoder code for a single field
-std::string generate_field_decoder(FieldDescriptorProto &field)
+std::string generate_field_decoder(const FieldDescriptorProto& field)
 {
     return myformat("            case {0}: pb.get_{1}{2}(&{3}{4}); break;\n",
     /* 0 */ std::to_string(field.number),
@@ -298,23 +303,23 @@ std::string generate_field_decoder(FieldDescriptorProto &field)
 
 
 // Generate C++ code for the entire .pbs file
-void generator(FileDescriptorSet &proto)
+void generator(const FileDescriptorSet& proto)
 {
     auto file = proto.file[0];
-    auto package_name_prefix =
+    package_name_prefix =
         file.package > ""
             ? PB_TYPE_DELIMITER + std::string(file.package) + PB_TYPE_DELIMITER
             : PB_TYPE_DELIMITER;
 
-    for (auto message_type: file.message_type)
+    for (const auto& message_type: file.message_type)
     {
         std::string field_defs, has_field_defs, encoder, decoder, check_required_fields;
-        auto msgtype_name_prefix = std::string(message_type.name) + PB_TYPE_DELIMITER;
+        msgtype_name_prefix = std::string(message_type.name) + PB_TYPE_DELIMITER;
 
-        for (auto field: message_type.field)
+        for (const auto& field: message_type.field)
         {
             // Generate message structure
-            auto cpptype_str = cpp_type_as_str(package_name_prefix, msgtype_name_prefix, field);  // C++ type for the field (e.g. "std::vector<int32_t>")
+            auto cpptype_str = cpp_type_as_str(field);  // C++ type for the field (e.g. "std::vector<int32_t>")
             field_defs += myformat("    {} {}{};\n", cpptype_str, field.name, default_value_str(field));
 
             if (hasfield_enabled(field)) {
@@ -332,15 +337,15 @@ void generator(FileDescriptorSet &proto)
             }
         }
 
-        if(! option.no_class) {
+        if (! option.no_class) {
             std::cout << myformat(CLASS_TEMPLATE, message_type.name, field_defs, has_field_defs,
                 option.no_encoder? "" : ENCODER_DECLARATION_TEMPLATE,
                 option.no_decoder? "" : DECODER_DECLARATION_TEMPLATE);
         }
-        if(! option.no_encoder) {
+        if (! option.no_encoder) {
             std::cout << myformat(ENCODER_TEMPLATE, message_type.name, encoder);
         }
-        if(! option.no_decoder) {
+        if (! option.no_decoder) {
             std::cout << myformat(DECODER_TEMPLATE, message_type.name, decoder, check_required_fields);
         }
     }

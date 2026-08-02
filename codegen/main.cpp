@@ -77,7 +77,7 @@ int main(int argc, char** argv)
     try {
     	auto filenames = parse_cmdline(argc, argv);
 
-        for (auto &&filename : filenames)
+        for (const auto& filename : filenames)
         {
             std::ifstream ifs(filename, std::ios::binary);
             std::string str(std::istreambuf_iterator<char>{ifs}, {});
