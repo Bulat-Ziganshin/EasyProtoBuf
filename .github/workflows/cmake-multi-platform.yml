@@ -41,11 +41,11 @@ jobs:
             cpp_compiler: clang++
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
 
-          - os: macos-13
+          - os: macos-15-intel
             cpp_compiler: clang++
             cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
 
-          - os: macos-13
+          - os: macos-15-intel
             cpp_compiler: clang++
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
 
@@ -70,23 +70,23 @@ jobs:
             cpp_options: "/std:c++14 /W3"
             cpp_compiler: cl
 
-          - os: windows-2019
-            extra_cmake_options: "-A x64"
+          - os: windows-2022
+            extra_cmake_options: "-A x64 -T v142"
             cpp_options: "/std:c++17 /W3"
             cpp_compiler: cl
 
-          - os: windows-2019
-            extra_cmake_options: "-A x64"
+          - os: windows-2022
+            extra_cmake_options: "-A x64 -T v142"
             cpp_options: "/std:c++14 /W3"
             cpp_compiler: cl
 
-          - os: windows-2019
-            extra_cmake_options: "-A Win32"
+          - os: windows-2022
+            extra_cmake_options: "-A Win32 -T v142"
             cpp_options: "/std:c++17 /W3"
             cpp_compiler: cl
 
-          - os: windows-2019
-            extra_cmake_options: "-A Win32"
+          - os: windows-2022
+            extra_cmake_options: "-A Win32 -T v142"
             cpp_options: "/std:c++14 /W3"
             cpp_compiler: cl
 
@@ -100,6 +100,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install GCC 9
+      if: matrix.os == 'ubuntu-22.04' && matrix.cpp_compiler == 'g++-9'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y g++-9
 
     - name: 'Debug: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}Debug
@@ -213,6 +219,16 @@ jobs:
 
 
     steps:
+    - name: Use archived repositories on Debian 10
+      if: matrix.image == 'debian:10'
+      run: |
+        sed -i \
+          -e 's|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|g' \
+          -e 's|http://security.debian.org/debian-security|http://archive.debian.org/debian-security|g' \
+          -e 's|http://deb.debian.org/debian|http://archive.debian.org/debian|g' \
+          /etc/apt/sources.list
+        printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99archive
+
     - name: Install dependencies on RedHat Linux
       if: contains(matrix.image, 'rockylinux') || contains(matrix.image, 'fedora')
       run: |
