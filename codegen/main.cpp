@@ -36,6 +36,7 @@ std::vector<std::string> parse_cmdline(int argc, char** argv)
 
     op.add<Value<std::string>>("s", "string-type", "C++ type for string/bytes fields", "std::string", &option.cpp_string_type);
     op.add<Value<std::string>>("r", "repeated-type", "C++ container type for repeated fields", "std::vector", &option.cpp_repeated_type);
+    op.add<Value<std::string>>("m", "map-type", "C++ container type for map fields", "std::map", &option.cpp_map_type);
 
 
     op.parse(argc, argv);
@@ -64,6 +65,12 @@ std::vector<std::string> parse_cmdline(int argc, char** argv)
     {
         option.cpp_repeated_type += "<{}>";
     }
+    if (option.cpp_map_type.find("{}") == std::string::npos
+     && option.cpp_map_type.find("{0}") == std::string::npos
+     && option.cpp_map_type.find("{1}") == std::string::npos)
+    {
+        option.cpp_map_type += "<{0},{1}>";
+    }
     if (option.packed && option.no_packed) {
         throw std::runtime_error("Options --packed and --no-packed can't be used together");
     }
@@ -90,6 +97,7 @@ int main(int argc, char** argv)
     }
     catch (const std::exception& e) {
         fprintf(stderr, "Exception: %s\n", e.what());
+        return 1;
     }
 
     return 0;
