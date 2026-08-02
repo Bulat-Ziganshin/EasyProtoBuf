@@ -26,6 +26,25 @@ e.g. "vector<{}>" for "repeated int32" type will be formatted as "vector<int32_t
 
 If "{}" is absent in the argument, then "<{}>" will be automatically added to it.
 
+Codegen automatically includes `<vector>`. When using another container,
+ensure that its header is included before the generated code.
+
+`-m, --map-type arg (=std::map)          C++ container type for map fields`
+
+Use another container for all map fields. "{0}" and "{1}" are replaced
+by the C++ key and value types respectively. For example,
+"custom_map<{0},{1}>" applied to "map<string, int32>" produces
+"custom_map<std::string,int32_t>".
+
+If no placeholders are present in the argument,
+then "<{0},{1}>" will be automatically added to it.
+
+Codegen automatically includes `<map>`. When using another container,
+ensure that its header is included before the generated code.
+
+Codegen supports scalar and enum map values. Enum values are represented
+as int32_t. Message-valued maps are not supported yet.
+
 
 ## Details
 

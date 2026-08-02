@@ -1,9 +1,7 @@
-// Manual definitions for Protobuf map field, since Codegen don't yet support maps
-#define EASYPB_MainMessage_EXTRA_FIELDS     std::map<int,int> mappa;
-#define EASYPB_MainMessage_EXTRA_ENCODING   pb.put_map_int32_int32(15, mappa);
-#define EASYPB_MainMessage_EXTRA_DECODING   case 15: pb.get_map_int32_int32(&mappa); break;
+#define EASYPB_MainMessage_EXTRA_FIELDS     bool extra_flag = false;
+#define EASYPB_MainMessage_EXTRA_ENCODING   pb.put_bool(100, extra_flag);
+#define EASYPB_MainMessage_EXTRA_DECODING   case 100: pb.get_bool(&extra_flag); break;
 
-#include <map>
 #include <easypb.hpp>
 #include "tutorial.pb.cpp"
 
@@ -27,6 +25,7 @@ MainMessage make_message()
 
     msg.mappa[1] = 1234;
     msg.mappa[2] = 4321;
+    msg.extra_flag = true;
 
     return msg;
 }
@@ -48,12 +47,8 @@ const char* compare(MainMessage& msg1, MainMessage& msg2)
     if (msg1.req_msg.req_float   != msg2.req_msg.req_float  )  return "req_msg.req_float";
     if (msg1.req_msg.opt_string  != msg2.req_msg.opt_string )  return "req_msg.opt_string";
 
-    for(const auto& x : msg1.mappa) {
-        if(msg1.mappa[x.first] != msg2.mappa[x.first])  return "mappa";
-    }
-    for(const auto& x : msg2.mappa) {
-        if(msg1.mappa[x.first] != msg2.mappa[x.first])  return "mappa";
-    }
+    if (msg1.mappa != msg2.mappa)  return "mappa";
+    if (msg1.extra_flag != msg2.extra_flag)  return "extra_flag";
 
     return nullptr;
 }

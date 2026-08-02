@@ -27,7 +27,8 @@ Library features:
 - the generated decoder checks the presence of required fields in the decoded message
 - command-line options to tailor the generated code
 - planned:
-  - support for enum/oneof/map fields and nested message type definitions (and thus dogfooding Codegen)
+  - support for C++ enum definitions, oneof fields, message-valued maps,
+  and nested message type definitions (and thus dogfooding Codegen)
   - protoc plugin
   - validation of enum, integer and bool values by the generated code
   - per-field C++ type specification
@@ -136,9 +137,12 @@ So, the API consists of the following class methods
 (where FTYPE is the Protobuf type of the field, e.g. 'fixed32' or 'message'):
 - get_FTYPE reads the value of the non-repeated field
 - get_repeated_FTYPE reads the value of the repeated field
+- get_map_FTYPE1_FTYPE2 reads one map entry
+and inserts it into the supplied C++ map container
 - put_FTYPE writes the value of the non-repeated field
 - put_repeated_FTYPE writes the value of the unpacked repeated field
 - put_packed_FTYPE writes the value of the packed repeated field
+- put_map_FTYPE1_FTYPE2 writes all entries from the supplied C++ map container
 
 The field number is the first parameter in put_* calls,
 and is placed in the case label before get_* calls.
