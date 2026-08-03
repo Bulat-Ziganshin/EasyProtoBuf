@@ -37,6 +37,7 @@ jobs:
         os: [ubuntu-24.04]
         extra_cmake_options: [""]
         experimental: [false]
+        vs_component: [""]
         include:
           # Ubuntu 26.04 public-preview configs
           - os: ubuntu-26.04
@@ -79,6 +80,38 @@ jobs:
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
             experimental: true
 
+          # Latest GCC standard modes
+          - os: ubuntu-26.04
+            cpp_compiler: g++-16
+            cpp_options: "-std=c++20 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: g++-16
+            cpp_options: "-std=c++23 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: g++-16
+            cpp_options: "-std=c++26 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          # Latest Clang standard modes
+          - os: ubuntu-26.04
+            cpp_compiler: clang++-22
+            cpp_options: "-std=c++20 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: clang++-22
+            cpp_options: "-std=c++23 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: clang++-22
+            cpp_options: "-std=c++26 -Wall -Wextra -Wpedantic"
+            experimental: true
+
           # MacOS configs
           - os: macos-latest
             cpp_compiler: g++
@@ -104,24 +137,60 @@ jobs:
             cpp_compiler: clang++
             cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
 
-          # Windows configs
+          # Visual Studio 2015 toolset (v140)
+          # v140 has no exact C++17 mode; /std:c++latest is its newest available language mode.
           - os: windows-2022
-            extra_cmake_options: "-A x64"
-            cpp_options: "/std:c++17 /W3"
-            cpp_compiler: cl
-
-          - os: windows-2022
-            extra_cmake_options: "-A x64"
+            extra_cmake_options: "-A x64 -T v140"
             cpp_options: "/std:c++14 /W3"
             cpp_compiler: cl
+            vs_component: Microsoft.VisualStudio.Component.VC.140
 
           - os: windows-2022
-            extra_cmake_options: "-A Win32"
+            extra_cmake_options: "-A x64 -T v140"
+            cpp_options: "/std:c++latest /W3"
+            cpp_compiler: cl
+            vs_component: Microsoft.VisualStudio.Component.VC.140
+
+          - os: windows-2022
+            extra_cmake_options: "-A Win32 -T v140"
+            cpp_options: "/std:c++14 /W3"
+            cpp_compiler: cl
+            vs_component: Microsoft.VisualStudio.Component.VC.140
+
+          - os: windows-2022
+            extra_cmake_options: "-A Win32 -T v140"
+            cpp_options: "/std:c++latest /W3"
+            cpp_compiler: cl
+            vs_component: Microsoft.VisualStudio.Component.VC.140
+
+          # Visual Studio 2017 toolset (v141)
+          - os: windows-2022
+            extra_cmake_options: "-A x64 -T v141"
+            cpp_options: "/std:c++14 /W3"
+            cpp_compiler: cl
+            vs_component: Microsoft.VisualStudio.Component.VC.v141.x86.x64
+
+          - os: windows-2022
+            extra_cmake_options: "-A x64 -T v141"
             cpp_options: "/std:c++17 /W3"
             cpp_compiler: cl
+            vs_component: Microsoft.VisualStudio.Component.VC.v141.x86.x64
 
           - os: windows-2022
-            extra_cmake_options: "-A Win32"
+            extra_cmake_options: "-A Win32 -T v141"
+            cpp_options: "/std:c++14 /W3"
+            cpp_compiler: cl
+            vs_component: Microsoft.VisualStudio.Component.VC.v141.x86.x64
+
+          - os: windows-2022
+            extra_cmake_options: "-A Win32 -T v141"
+            cpp_options: "/std:c++17 /W3"
+            cpp_compiler: cl
+            vs_component: Microsoft.VisualStudio.Component.VC.v141.x86.x64
+
+          # Visual Studio 2019 toolset (v142)
+          - os: windows-2022
+            extra_cmake_options: "-A x64 -T v142"
             cpp_options: "/std:c++14 /W3"
             cpp_compiler: cl
 
@@ -131,7 +200,7 @@ jobs:
             cpp_compiler: cl
 
           - os: windows-2022
-            extra_cmake_options: "-A x64 -T v142"
+            extra_cmake_options: "-A Win32 -T v142"
             cpp_options: "/std:c++14 /W3"
             cpp_compiler: cl
 
@@ -140,9 +209,63 @@ jobs:
             cpp_options: "/std:c++17 /W3"
             cpp_compiler: cl
 
+          # Visual Studio 2022 toolset (v143)
           - os: windows-2022
-            extra_cmake_options: "-A Win32 -T v142"
+            extra_cmake_options: "-A x64 -T v143"
             cpp_options: "/std:c++14 /W3"
+            cpp_compiler: cl
+
+          - os: windows-2022
+            extra_cmake_options: "-A x64 -T v143"
+            cpp_options: "/std:c++17 /W3"
+            cpp_compiler: cl
+
+          - os: windows-2022
+            extra_cmake_options: "-A Win32 -T v143"
+            cpp_options: "/std:c++14 /W3"
+            cpp_compiler: cl
+
+          - os: windows-2022
+            extra_cmake_options: "-A Win32 -T v143"
+            cpp_options: "/std:c++17 /W3"
+            cpp_compiler: cl
+
+          # Visual Studio 2026 toolset (v145)
+          - os: windows-2025-vs2026
+            extra_cmake_options: "-A x64 -T v145"
+            cpp_options: "/std:c++14 /W3"
+            cpp_compiler: cl
+
+          - os: windows-2025-vs2026
+            extra_cmake_options: "-A x64 -T v145"
+            cpp_options: "/std:c++17 /W3"
+            cpp_compiler: cl
+
+          - os: windows-2025-vs2026
+            extra_cmake_options: "-A Win32 -T v145"
+            cpp_options: "/std:c++14 /W3"
+            cpp_compiler: cl
+
+          - os: windows-2025-vs2026
+            extra_cmake_options: "-A Win32 -T v145"
+            cpp_options: "/std:c++17 /W3"
+            cpp_compiler: cl
+
+          # Latest MSVC standard modes (v145, x64)
+          - os: windows-2025-vs2026
+            extra_cmake_options: "-A x64 -T v145"
+            cpp_options: "/std:c++20 /W3"
+            cpp_compiler: cl
+
+          - os: windows-2025-vs2026
+            extra_cmake_options: "-A x64 -T v145"
+            cpp_options: "/std:c++23preview /W3"
+            cpp_compiler: cl
+
+          # MSVC has no dedicated C++26 switch; /std:c++latest is its C++26-era mode.
+          - os: windows-2025-vs2026
+            extra_cmake_options: "-A x64 -T v145"
+            cpp_options: "/std:c++latest /W3"
             cpp_compiler: cl
 
     env:
@@ -155,6 +278,30 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+
+    - name: Install requested MSVC toolset
+      if: runner.os == 'Windows' && matrix.vs_component
+      shell: pwsh
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $installationPath = & $vswhere -latest -products * -property installationPath
+        if (-not $installationPath) {
+          throw "Visual Studio installation was not found"
+        }
+
+        $setup = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+        $arguments = @(
+          'modify',
+          '--installPath', "`"$installationPath`"",
+          '--add', '${{ matrix.vs_component }}',
+          '--quiet',
+          '--norestart',
+          '--force'
+        ) -join ' '
+        $process = Start-Process -FilePath $setup -ArgumentList $arguments -Wait -PassThru
+        if ($process.ExitCode -notin 0, 3010) {
+          throw "Visual Studio Installer failed with exit code $($process.ExitCode)"
+        }
 
     - name: Install Linux compiler if needed
       if: runner.os == 'Linux'
@@ -323,7 +470,7 @@ jobs:
 
   #####################################################################################################################
   # Build legacy GCC 4.8 through GCC 8 in compatible Ubuntu containers. GCC 8 is also tested in C++17 mode.
-  # Current GCC 9 through GCC 14 are tested directly in the main matrix.
+  # Current GCC 9 through GCC 16 are tested directly in the main matrix.
   #####################################################################################################################
   legacy-gcc:
     name: GCC ${{ matrix.version }} / C++${{ matrix.standard }}
@@ -490,8 +637,8 @@ jobs:
 
 
   #####################################################################################################################
-  # Build legacy Clang 3.5 through Clang 13 in compatible Ubuntu containers.
-  # Current Clang 14 through Clang 20 are tested directly in the main matrix.
+  # Build legacy Clang 3.3 through Clang 13 in compatible Ubuntu containers.
+  # Current Clang 14 through Clang 22 are tested directly in the main matrix.
   #####################################################################################################################
   legacy-clang:
     name: Clang ${{ matrix.version }} / C++11
@@ -511,6 +658,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - version: "3.3"
+            image: ubuntu:14.04
+            source: ubuntu
+
+          - version: "3.4"
+            image: ubuntu:14.04
+            source: ubuntu
+
           - version: "3.5"
             image: ubuntu:14.04
             source: ubuntu
@@ -643,7 +798,31 @@ jobs:
             fi
 
             apt-get install -y --no-install-recommends "$LEGACY_CLANG_PACKAGE"
-            "$LEGACY_CLANG_CXX" --version
+
+            clang_cxx_path="$(command -v "$LEGACY_CLANG_CXX" || true)"
+            if [ -z "$clang_cxx_path" ]; then
+              for candidate in \
+                "/usr/lib/llvm-$LEGACY_CLANG_REPO_VERSION/bin/clang++" \
+                "/usr/lib/llvm-$LEGACY_CLANG_REPO_VERSION/bin/clang" \
+                /usr/lib/llvm-*/bin/clang++ \
+                /usr/lib/llvm-*/bin/clang \
+                /usr/bin/clang++ \
+                /usr/bin/clang; do
+                if [ -x "$candidate" ]; then
+                  clang_cxx_path="$candidate"
+                  break
+                fi
+              done
+            fi
+
+            if [ -z "$clang_cxx_path" ]; then
+              echo "Unable to locate the Clang C++ driver installed by $LEGACY_CLANG_PACKAGE" >&2
+              dpkg -L "$LEGACY_CLANG_PACKAGE" | sort >&2
+              exit 1
+            fi
+
+            ln -sfn "$clang_cxx_path" "/usr/local/bin/$LEGACY_CLANG_CXX"
+            "/usr/local/bin/$LEGACY_CLANG_CXX" --version
           '
 
     - name: Create Clang compiler wrapper
