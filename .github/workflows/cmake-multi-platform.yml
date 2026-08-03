@@ -1,4 +1,4 @@
-name: CMake on multiple platforms
+name: CMake
 
 on:
   workflow_dispatch:
@@ -17,20 +17,68 @@ env:
   CTEST_OUTPUT_ON_FAILURE: "1"
 
 jobs:
+  #####################################################################################################################
+  # Build current GCC and Clang versions directly on Ubuntu runners, plus macOS and Windows configurations.
+  # Ubuntu 26.04 public-preview rows are non-blocking until the runner image reaches GA.
+  #####################################################################################################################
   main:
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental == true }}
 
     strategy:
       # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
       fail-fast: false
 
       matrix:
-        cpp_compiler: [g++-12, g++-11, g++-10, g++-9, clang++-15, clang++-14, clang++-13]
+        cpp_compiler: [g++-9, g++-10, g++-11, g++-12, g++-13, g++-14,
+                       clang++-14, clang++-15, clang++-16, clang++-17, clang++-18, clang++-19, clang++-20]
         cpp_options: ["-std=c++17 -Wall -Wextra -Wpedantic",
                       "-std=c++11 -Wall -Wextra -Wpedantic"]
-        os: [ubuntu-22.04]
+        os: [ubuntu-24.04]
         extra_cmake_options: [""]
+        experimental: [false]
         include:
+          # Ubuntu 26.04 public-preview configs
+          - os: ubuntu-26.04
+            cpp_compiler: g++-15
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: g++-15
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: g++-16
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: g++-16
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: clang++-21
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: clang++-21
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: clang++-22
+            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
+            experimental: true
+
+          - os: ubuntu-26.04
+            cpp_compiler: clang++-22
+            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
+            experimental: true
+
           # MacOS configs
           - os: macos-latest
             cpp_compiler: g++
@@ -108,11 +156,21 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    - name: Install GCC 9
-      if: matrix.os == 'ubuntu-22.04' && matrix.cpp_compiler == 'g++-9'
+    - name: Install Linux compiler if needed
+      if: runner.os == 'Linux'
       run: |
+        compiler='${{ matrix.cpp_compiler }}'
+        if command -v "$compiler" >/dev/null 2>&1; then
+          exit 0
+        fi
+
+        package="$compiler"
+        case "$compiler" in
+          clang++-*) package="clang-${compiler#clang++-}" ;;
+        esac
+
         sudo apt-get update
-        sudo apt-get install -y g++-9
+        sudo apt-get install -y "$package"
 
     - name: Show toolchain and platform
       if: runner.os != 'Windows'
@@ -169,8 +227,8 @@ jobs:
       run: ctest --build-config MinSizeRel
 
   #####################################################################################################################
-  # Build with older clang versions, starting from clang 8.
-  # Also build with default gcc versions to ensure that we support default compilers on LTS Linux releases.
+  # Build with each distribution's default compiler and standard library. Explicit compiler versions are tested in the
+  # main and legacy compiler matrices.
   #####################################################################################################################
   docker:
     runs-on: [ubuntu-latest]
@@ -186,60 +244,6 @@ jobs:
                 'rockylinux:8', 'rockylinux:9', 'fedora:latest', 'fedora:rawhide']
         extra_cmake_options: [""]
 
-        include:
-          # gcc configs
-          - cpp_compiler: g++-13
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:24.04
-
-          - cpp_compiler: g++-13
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            image: ubuntu:24.04
-
-          - cpp_compiler: g++-14
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:24.04
-
-          - cpp_compiler: g++-14
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            image: ubuntu:24.04
-
-          # clang configs
-          - cpp_compiler: clang++-8
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:20.04
-
-          - cpp_compiler: clang++-9
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:20.04
-
-          - cpp_compiler: clang++-10
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            image: ubuntu:20.04
-
-          - cpp_compiler: clang++-11
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            image: ubuntu:20.04
-
-          - cpp_compiler: clang++-12
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            image: ubuntu:20.04
-
-          - cpp_compiler: clang++-16
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            image: ubuntu:24.04
-
-          - cpp_compiler: clang++-17
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            image: ubuntu:24.04
-
-          - cpp_compiler: clang++-18
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            image: ubuntu:24.04
-
-          - cpp_compiler: clang++-18
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            image: ubuntu:24.04
 
       # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
       fail-fast: false
@@ -318,10 +322,8 @@ jobs:
 
 
   #####################################################################################################################
-  # Build with every GCC major version currently covered by this workflow, from GCC 4.8 through GCC 14.
-  # GCC 8+ is also tested in C++17 mode, where both -std=c++17 and std::string_view are available.
-  # CMake runs on the current GitHub runner and invokes the compiler through docker exec, so checkout and CMake do not
-  # need to run inside the EOL container.
+  # Build legacy GCC 4.8 through GCC 8 in compatible Ubuntu containers. GCC 8 is also tested in C++17 mode.
+  # Current GCC 9 through GCC 14 are tested directly in the main matrix.
   #####################################################################################################################
   legacy-gcc:
     name: GCC ${{ matrix.version }} / C++${{ matrix.standard }}
@@ -365,54 +367,6 @@ jobs:
           - version: "8"
             standard: "17"
             image: ubuntu:20.04
-
-          - version: "9"
-            standard: "11"
-            image: ubuntu:20.04
-
-          - version: "9"
-            standard: "17"
-            image: ubuntu:20.04
-
-          - version: "10"
-            standard: "11"
-            image: ubuntu:22.04
-
-          - version: "10"
-            standard: "17"
-            image: ubuntu:22.04
-
-          - version: "11"
-            standard: "11"
-            image: ubuntu:22.04
-
-          - version: "11"
-            standard: "17"
-            image: ubuntu:22.04
-
-          - version: "12"
-            standard: "11"
-            image: ubuntu:22.04
-
-          - version: "12"
-            standard: "17"
-            image: ubuntu:22.04
-
-          - version: "13"
-            standard: "11"
-            image: ubuntu:24.04
-
-          - version: "13"
-            standard: "17"
-            image: ubuntu:24.04
-
-          - version: "14"
-            standard: "11"
-            image: ubuntu:24.04
-
-          - version: "14"
-            standard: "17"
-            image: ubuntu:24.04
 
     env:
       LEGACY_CONTAINER: easypb-legacy-gcc
@@ -536,8 +490,8 @@ jobs:
 
 
   #####################################################################################################################
-  # Build with every released Clang line from 3.5 onward in a compatible Ubuntu environment.
-  # CMake and checkout run on the current GitHub runner. Only compilation and linking run in the legacy container.
+  # Build legacy Clang 3.5 through Clang 13 in compatible Ubuntu containers.
+  # Current Clang 14 through Clang 20 are tested directly in the main matrix.
   #####################################################################################################################
   legacy-clang:
     name: Clang ${{ matrix.version }} / C++11
@@ -615,42 +569,6 @@ jobs:
 
           - version: "13"
             image: ubuntu:18.04
-            source: llvm
-
-          - version: "14"
-            image: ubuntu:22.04
-            source: llvm
-
-          - version: "15"
-            image: ubuntu:18.04
-            source: llvm
-
-          - version: "16"
-            image: ubuntu:18.04
-            source: llvm
-
-          - version: "17"
-            image: ubuntu:18.04
-            source: llvm
-
-          - version: "18"
-            image: ubuntu:18.04
-            source: llvm
-
-          - version: "19"
-            image: ubuntu:18.04
-            source: llvm
-
-          - version: "20"
-            image: ubuntu:20.04
-            source: llvm
-
-          - version: "21"
-            image: ubuntu:20.04
-            source: llvm
-
-          - version: "22"
-            image: ubuntu:20.04
             source: llvm
 
     steps:
