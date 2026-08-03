@@ -1,9 +1,7 @@
-#include <string>
-#include <cctype>
 #include <iostream>
-#include <fstream>
-#include <iterator>
 #include <map>
+#include <stdexcept>
+#include <string>
 
 #include <easypb.hpp>
 #include "descriptor.pb.cpp"

@@ -13,6 +13,11 @@ It consists of 3 big sections:
 #include <cstdint>
 #include <cstddef>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
+#if __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
+#include <string_view>
+#endif
 
 
 namespace easypb

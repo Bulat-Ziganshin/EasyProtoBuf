@@ -1,3 +1,10 @@
+#include <cctype>
+#include <cstddef>
+#include <cstdlib>
+#include <initializer_list>
+#include <stdexcept>
+#include <string>
+
 // Returns a version of 'str' where every occurrence of
 // 'find' is substituted by 'replace'.
 // - http://stackoverflow.com/questions/20406744/

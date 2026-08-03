@@ -2,6 +2,9 @@ const char* USAGE =
 "Schema-less decoder of arbitrary ProtoBuf messages\n"
 "  Usage: decoder file.pbs\n";
 
+#include <cstdio>
+#include <cstdint>
+#include <exception>
 #include <string>
 #include <cctype>
 #include <iostream>

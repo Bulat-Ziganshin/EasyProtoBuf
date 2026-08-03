@@ -2,7 +2,17 @@ const char* USAGE =
 "Generator of C++ code from the compiled ProtoBuf schema\n"
 "  Usage: codegen [options] file.pbs...\n";
 
-#include "popl.hpp"
+#include <cstdio>
+#include <exception>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#if __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
+#include <string_view>
+#endif
 
 #ifdef __cpp_lib_string_view
 using str_view = std::string_view;  // Might be a little faster with C++17
@@ -10,6 +20,7 @@ using str_view = std::string_view;  // Might be a little faster with C++17
 using str_view = std::string;
 #endif
 
+#include "popl.hpp"
 #include "codegen.cpp"
 
 

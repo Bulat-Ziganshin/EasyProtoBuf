@@ -25,6 +25,7 @@
 #endif // NOMINMAX
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -32,10 +33,10 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
-#ifdef WINDOWS
-#include <cctype>
-#endif
 
 
 namespace popl

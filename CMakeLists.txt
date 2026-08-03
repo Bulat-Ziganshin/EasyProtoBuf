@@ -1,35 +1,54 @@
-cmake_minimum_required(VERSION 3.7...3.28)
+cmake_minimum_required(VERSION 3.10)
 
-project(EasyProtoBuf VERSION 0.0
-                     DESCRIPTION "Single-header C++11 ProtoBuf library"
-                     LANGUAGES CXX)
+project(EasyProtoBuf
+        VERSION 0.0
+        DESCRIPTION "Single-header C++11 ProtoBuf library"
+        LANGUAGES CXX)
+
 include(CTest)
 
 
+# EASYPB_CXX_FLAGS is used by CI, and may also be supplied by users,
+# to select an exact language mode and add compiler options.
+# When it is set, CMake does not add its own C++ standard option.
+set(EASYPB_CXX_FLAGS "" CACHE STRING
+    "Extra C++ compiler flags; overrides automatic C++ standard selection")
+
+if(EASYPB_CXX_FLAGS)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EASYPB_CXX_FLAGS}")
+    message(STATUS "EasyProtoBuf: using explicit C++ flags: ${EASYPB_CXX_FLAGS}")
+else()
+    # Prefer C++17, whose std::string_view may be used by the library and
+    # code generator. Fall back to the project's required minimum, C++11.
+    if("cxx_std_17" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+        set(CMAKE_CXX_STANDARD 17)
+    elseif("cxx_std_11" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+        set(CMAKE_CXX_STANDARD 11)
+    else()
+        message(FATAL_ERROR
+                "EasyProtoBuf requires a compiler with C++11 support")
+    endif()
+
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS OFF)
+    message(STATUS "EasyProtoBuf: using C++${CMAKE_CXX_STANDARD}")
+endif()
+
+
 add_executable(decoder examples/decoder/decoder.cpp)
-include_directories(decoder PRIVATE include)
+target_include_directories(decoder PRIVATE include)
 
 add_executable(tutorial examples/tutorial/main.cpp)
 target_include_directories(tutorial PRIVATE include)
 
-add_executable(codegen codegen/main.cpp)
-target_include_directories(codegen PRIVATE include 3rd-party/popl)
+# "codegen" became a reserved target name in CMake 3.31. Keep the produced
+# executable name while using a non-reserved internal target name.
+add_executable(easypb_codegen codegen/main.cpp)
+set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
+target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl)
 
 
-add_test(NAME compare.decoded.data.with.original
-         COMMAND tutorial)
-
-
-# EASYPB_CXX_FLAGS is the special definition used by my CI script
-# to explicitly specify extra compiler options (e.g. C++17 or C++11).
-# If it's not specified, we just use the compiler settings
-# recommended for each executable.
-if(EASYPB_CXX_FLAGS)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EASYPB_CXX_FLAGS}")
-else()
-    set(CMAKE_CXX_STANDARD 11)
-    set(CMAKE_CXX_STANDARD_REQUIRED ON)
-    set(CMAKE_CXX_EXTENSIONS OFF)
-    target_compile_features(codegen PRIVATE cxx_std_17)
+if(BUILD_TESTING)
+    add_test(NAME compare.decoded.data.with.original
+             COMMAND tutorial)
 endif()
-

@@ -1,3 +1,7 @@
+#include <cstdio>
+#include <exception>
+#include <string>
+
 #define EASYPB_MainMessage_EXTRA_FIELDS     bool extra_flag = false;
 #define EASYPB_MainMessage_EXTRA_ENCODING   pb.put_bool(100, extra_flag);
 #define EASYPB_MainMessage_EXTRA_DECODING   case 100: pb.get_bool(&extra_flag); break;
