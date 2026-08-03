@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CTEST_OUTPUT_ON_FAILURE: "1"
+
 jobs:
   main:
     runs-on: ${{ matrix.os }}
@@ -315,12 +318,13 @@ jobs:
 
 
   #####################################################################################################################
-  # Build with legacy GCC versions in contemporary Debian/Ubuntu environments.
+  # Build with every GCC major version currently covered by this workflow, from GCC 4.8 through GCC 14.
+  # GCC 8+ is also tested in C++17 mode, where both -std=c++17 and std::string_view are available.
   # CMake runs on the current GitHub runner and invokes the compiler through docker exec, so checkout and CMake do not
   # need to run inside the EOL container.
   #####################################################################################################################
   legacy-gcc:
-    name: GCC ${{ matrix.version }} / C++11
+    name: GCC ${{ matrix.version }} / C++${{ matrix.standard }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -331,45 +335,98 @@ jobs:
           # GCC 4.7 is intentionally disabled: Codegen requires C++11 features
           # that are not implemented by this compiler. Keep the entry for documentation.
           # - version: "4.7"
-          #   image: debian/eol:wheezy
-          #   compiler: g++-4.7
+          #   standard: "11"
+          #   image: ubuntu:14.04
 
           - version: "4.8"
-            image: debian/eol:jessie
-            compiler: g++-4.8
+            standard: "11"
+            image: ubuntu:14.04
 
           - version: "4.9"
-            image: debian/eol:jessie
-            compiler: g++-4.9
+            standard: "11"
+            image: ubuntu:16.04
 
           - version: "5"
-            image: public.ecr.aws/docker/library/ubuntu:16.04
-            compiler: g++-5
+            standard: "11"
+            image: ubuntu:16.04
 
           - version: "6"
-            image: debian/eol:stretch
-            compiler: g++-6
+            standard: "11"
+            image: ubuntu:18.04
 
           - version: "7"
-            image: debian/eol:buster
-            compiler: g++-7
+            standard: "11"
+            image: ubuntu:18.04
 
           - version: "8"
-            image: debian/eol:buster
-            compiler: g++-8
+            standard: "11"
+            image: ubuntu:20.04
+
+          - version: "8"
+            standard: "17"
+            image: ubuntu:20.04
+
+          - version: "9"
+            standard: "11"
+            image: ubuntu:20.04
+
+          - version: "9"
+            standard: "17"
+            image: ubuntu:20.04
+
+          - version: "10"
+            standard: "11"
+            image: ubuntu:22.04
+
+          - version: "10"
+            standard: "17"
+            image: ubuntu:22.04
+
+          - version: "11"
+            standard: "11"
+            image: ubuntu:22.04
+
+          - version: "11"
+            standard: "17"
+            image: ubuntu:22.04
+
+          - version: "12"
+            standard: "11"
+            image: ubuntu:22.04
+
+          - version: "12"
+            standard: "17"
+            image: ubuntu:22.04
+
+          - version: "13"
+            standard: "11"
+            image: ubuntu:24.04
+
+          - version: "13"
+            standard: "17"
+            image: ubuntu:24.04
+
+          - version: "14"
+            standard: "11"
+            image: ubuntu:24.04
+
+          - version: "14"
+            standard: "17"
+            image: ubuntu:24.04
 
     env:
       LEGACY_CONTAINER: easypb-legacy-gcc
-      LEGACY_CXX: ${{ matrix.compiler }}
-      LEGACY_CXX_FLAGS: "-std=c++11 -Wall -Wextra -pedantic"
+      LEGACY_GCC_IMAGE: ${{ format('public.ecr.aws/docker/library/{0}', matrix.image) }}
+      LEGACY_CXX: g++-${{ matrix.version }}
+      LEGACY_CXX_FLAGS: "-std=c++${{ matrix.standard }} -Wall -Wextra -pedantic"
 
     steps:
     - uses: actions/checkout@v6
 
-    - name: Start legacy GCC container
+    - name: Start GCC container
       run: |
         for attempt in 1 2 3; do
-          if docker pull "${{ matrix.image }}"; then
+          if docker pull "$LEGACY_GCC_IMAGE"; then
             break
           fi
           if [ "$attempt" -eq 3 ]; then
@@ -382,7 +439,7 @@ jobs:
           --name "$LEGACY_CONTAINER" \
           --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
           --workdir "$GITHUB_WORKSPACE" \
-          "${{ matrix.image }}" \
+          "$LEGACY_GCC_IMAGE" \
           sh -c 'while :; do sleep 3600; done'
 
     - name: Install GCC ${{ matrix.version }}
@@ -392,16 +449,30 @@ jobs:
           --env LEGACY_CXX="$LEGACY_CXX" \
           "$LEGACY_CONTAINER" \
           sh -euxc '
-            if grep -q "^ID=ubuntu" /etc/os-release; then
-              cat > /etc/apt/sources.list <<SOURCES
+            . /etc/os-release
+
+            case "$VERSION_ID" in
+              14.04)
+                rm -f /etc/apt/sources.list.d/*.list
+                cat > /etc/apt/sources.list <<SOURCES
+        deb http://archive.ubuntu.com/ubuntu/ trusty main universe
+        deb http://archive.ubuntu.com/ubuntu/ trusty-updates main universe
+        deb http://archive.ubuntu.com/ubuntu/ trusty-security main universe
+        SOURCES
+                ;;
+              16.04)
+                cat > /etc/apt/sources.list <<SOURCES
         deb http://archive.ubuntu.com/ubuntu/ xenial main universe
         deb http://archive.ubuntu.com/ubuntu/ xenial-updates main universe
         deb http://archive.ubuntu.com/ubuntu/ xenial-security main universe
         SOURCES
-            fi
+                ;;
+            esac
 
-            printf '\''Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n'\'' \
-              > /etc/apt/apt.conf.d/99archive
+            cat > /etc/apt/apt.conf.d/99archive <<APTCONF
+        Acquire::Check-Valid-Until "false";
+        Acquire::Retries "3";
+        APTCONF
             apt-get -o Acquire::Check-Valid-Until=false update
             apt-get install -y --no-install-recommends "$LEGACY_CXX"
             "$LEGACY_CXX" --version
@@ -459,7 +530,7 @@ jobs:
       working-directory: build
       run: ctest --build-config MinSizeRel
 
-    - name: Stop legacy GCC container
+    - name: Stop GCC container
       if: always()
       run: docker rm --force "$LEGACY_CONTAINER" 2>/dev/null || true
 
@@ -672,6 +743,49 @@ jobs:
         EOF_WRAPPER
         chmod +x "$RUNNER_TEMP/legacy-clang-toolchain/clang++"
         echo "LEGACY_CLANG_CXX_WRAPPER=$RUNNER_TEMP/legacy-clang-toolchain/clang++" >> "$GITHUB_ENV"
+
+    - name: Diagnose Clang toolchain
+      run: |
+        echo "=== Clang driver, selected GCC installation, and include search paths ==="
+        "$LEGACY_CLANG_CXX_WRAPPER" -v -E -x c++ /dev/null
+
+        cat > .easypb-clang-stdlib-probe.cpp <<'EOF_STDLIB'
+        #include <cstddef>
+        EOF_STDLIB
+
+        echo "=== Standard library macros in C++11 mode ==="
+        "$LEGACY_CLANG_CXX_WRAPPER" -std=c++11 -dM -E -x c++ .easypb-clang-stdlib-probe.cpp |
+          grep -E '^#define (__GLIBCXX__|__GLIBCPP__|_GLIBCXX_RELEASE|_LIBCPP_VERSION) ' || true
+
+        cat > .easypb-clang-cxx17-probe.cpp <<'EOF_CXX17'
+        #include <string_view>
+
+        #ifndef __cpp_lib_string_view
+        #error "__cpp_lib_string_view is unavailable"
+        #endif
+
+        int main()
+        {
+            std::string_view value;
+            return static_cast<int>(value.size());
+        }
+        EOF_CXX17
+
+        echo "=== C++17 and std::string_view probe (informational) ==="
+        set +e
+        "$LEGACY_CLANG_CXX_WRAPPER" -std=c++17 -Wall -Wextra -pedantic -c .easypb-clang-cxx17-probe.cpp -o .easypb-clang-cxx17-probe.o
+        probe_status=$?
+        set -e
+
+        if [ "$probe_status" -eq 0 ]; then
+          echo "C++17 with std::string_view: available"
+          "$LEGACY_CLANG_CXX_WRAPPER" -std=c++17 -dM -E -x c++ .easypb-clang-cxx17-probe.cpp |
+            grep -E '^#define (__cplusplus|__cpp_lib_string_view) ' || true
+        else
+          echo "C++17 with std::string_view: unavailable (compiler exit code $probe_status)"
+        fi
+
+        rm -f .easypb-clang-stdlib-probe.cpp .easypb-clang-cxx17-probe.cpp .easypb-clang-cxx17-probe.o
 
     - name: 'Debug: Configure CMake'
       run: >-
