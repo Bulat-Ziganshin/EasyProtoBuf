@@ -3,11 +3,15 @@ name: CMake on multiple platforms
 on:
   workflow_dispatch:
   push:
-    branches-ignore: [ "noci-**" ]
+    branches: [ main ]
     paths-ignore: [ "**.md" ]
   pull_request:
     branches-ignore: [ "noci-**" ]
     paths-ignore: [ "**.md" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   main:
@@ -99,13 +103,43 @@ jobs:
         -DCMAKE_BUILD_TYPE=
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Install GCC 9
       if: matrix.os == 'ubuntu-22.04' && matrix.cpp_compiler == 'g++-9'
       run: |
         sudo apt-get update
         sudo apt-get install -y g++-9
+
+    - name: Show toolchain and platform
+      if: runner.os != 'Windows'
+      run: |
+        echo "Requested compiler: ${{ matrix.cpp_compiler }}"
+        "${{ matrix.cpp_compiler }}" --version
+        cmake --version
+        uname -a
+        uname -m
+        if [ -f /etc/os-release ]; then
+          cat /etc/os-release
+        elif command -v sw_vers >/dev/null 2>&1; then
+          sw_vers
+        fi
+
+    - name: Show toolchain and platform
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Write-Host "Requested compiler: ${{ matrix.cpp_compiler }}"
+        Write-Host "Requested CMake options: ${{ matrix.extra_cmake_options }}"
+        cmake --version
+        Get-CimInstance Win32_OperatingSystem |
+          Select-Object Caption, Version, OSArchitecture
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $installationPath = & $vswhere -latest -products * `
+          -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+          -property installationPath
+        Write-Host "Visual Studio: $installationPath"
+        Get-Content "$installationPath\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
 
     - name: 'Debug: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}Debug
@@ -131,8 +165,6 @@ jobs:
       working-directory: build
       run: ctest --build-config MinSizeRel
 
-
-
   #####################################################################################################################
   # Build with older clang versions, starting from clang 8.
   # Also build with default gcc versions to ensure that we support default compilers on LTS Linux releases.
@@ -140,7 +172,7 @@ jobs:
   docker:
     runs-on: [ubuntu-latest]
     container:
-      image: ${{ matrix.image }}
+      image: ${{ format('public.ecr.aws/docker/library/{0}', matrix.image) }}
     strategy:
       matrix:
         cpp_compiler: [g++]
@@ -246,7 +278,16 @@ jobs:
         chmod +x cmake-3.25.3-linux-x86_64.sh
         ./cmake-3.25.3-linux-x86_64.sh --skip-license --prefix=/usr/local
 
-    - uses: actions/checkout@v4
+    - name: Show toolchain and platform
+      run: |
+        echo "Requested compiler: ${{ matrix.cpp_compiler }}"
+        "${{ matrix.cpp_compiler }}" --version
+        cmake --version
+        uname -a
+        uname -m
+        cat /etc/os-release
+
+    - uses: actions/checkout@v6
 
     - name: 'Debug: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}Debug
@@ -271,3 +312,403 @@ jobs:
     - name: 'MinSizeRel: Test'
       working-directory: build
       run: ctest --build-config MinSizeRel
+
+
+  #####################################################################################################################
+  # Build with legacy GCC versions in contemporary Debian/Ubuntu environments.
+  # CMake runs on the current GitHub runner and invokes the compiler through docker exec, so checkout and CMake do not
+  # need to run inside the EOL container.
+  #####################################################################################################################
+  legacy-gcc:
+    name: GCC ${{ matrix.version }} / C++11
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # GCC 4.7 is intentionally disabled: Codegen requires C++11 features
+          # that are not implemented by this compiler. Keep the entry for documentation.
+          # - version: "4.7"
+          #   image: debian/eol:wheezy
+          #   compiler: g++-4.7
+
+          - version: "4.8"
+            image: debian/eol:jessie
+            compiler: g++-4.8
+
+          - version: "4.9"
+            image: debian/eol:jessie
+            compiler: g++-4.9
+
+          - version: "5"
+            image: public.ecr.aws/docker/library/ubuntu:16.04
+            compiler: g++-5
+
+          - version: "6"
+            image: debian/eol:stretch
+            compiler: g++-6
+
+          - version: "7"
+            image: debian/eol:buster
+            compiler: g++-7
+
+          - version: "8"
+            image: debian/eol:buster
+            compiler: g++-8
+
+    env:
+      LEGACY_CONTAINER: easypb-legacy-gcc
+      LEGACY_CXX: ${{ matrix.compiler }}
+      LEGACY_CXX_FLAGS: "-std=c++11 -Wall -Wextra -pedantic"
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Start legacy GCC container
+      run: |
+        for attempt in 1 2 3; do
+          if docker pull "${{ matrix.image }}"; then
+            break
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            exit 1
+          fi
+          sleep $((attempt * 10))
+        done
+
+        docker run --detach --rm \
+          --name "$LEGACY_CONTAINER" \
+          --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+          --workdir "$GITHUB_WORKSPACE" \
+          "${{ matrix.image }}" \
+          sh -c 'while :; do sleep 3600; done'
+
+    - name: Install GCC ${{ matrix.version }}
+      run: |
+        docker exec \
+          --env DEBIAN_FRONTEND=noninteractive \
+          --env LEGACY_CXX="$LEGACY_CXX" \
+          "$LEGACY_CONTAINER" \
+          sh -euxc '
+            if grep -q "^ID=ubuntu" /etc/os-release; then
+              cat > /etc/apt/sources.list <<SOURCES
+        deb http://archive.ubuntu.com/ubuntu/ xenial main universe
+        deb http://archive.ubuntu.com/ubuntu/ xenial-updates main universe
+        deb http://archive.ubuntu.com/ubuntu/ xenial-security main universe
+        SOURCES
+            fi
+
+            printf '\''Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n'\'' \
+              > /etc/apt/apt.conf.d/99archive
+            apt-get -o Acquire::Check-Valid-Until=false update
+            apt-get install -y --no-install-recommends "$LEGACY_CXX"
+            "$LEGACY_CXX" --version
+          '
+
+    - name: Create compiler wrapper
+      run: |
+        mkdir -p "$RUNNER_TEMP/legacy-toolchain"
+        cat > "$RUNNER_TEMP/legacy-toolchain/g++" <<'EOF'
+        #!/usr/bin/env bash
+        set -euo pipefail
+        exec docker exec \
+          --user "$(id -u):$(id -g)" \
+          --workdir "$PWD" \
+          "$LEGACY_CONTAINER" \
+          "$LEGACY_CXX" \
+          "$@"
+        EOF
+        chmod +x "$RUNNER_TEMP/legacy-toolchain/g++"
+        echo "LEGACY_CXX_WRAPPER=$RUNNER_TEMP/legacy-toolchain/g++" >> "$GITHUB_ENV"
+
+    - name: 'Debug: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$LEGACY_CXX_WRAPPER"
+        "-DEASYPB_CXX_FLAGS=$LEGACY_CXX_FLAGS"
+        -DCMAKE_BUILD_TYPE=Debug
+    - name: 'Debug: Build'
+      run: cmake --build build --config Debug
+    - name: 'Debug: Test'
+      working-directory: build
+      run: ctest --build-config Debug
+
+    - name: 'Release: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$LEGACY_CXX_WRAPPER"
+        "-DEASYPB_CXX_FLAGS=$LEGACY_CXX_FLAGS"
+        -DCMAKE_BUILD_TYPE=Release
+    - name: 'Release: Build'
+      run: cmake --build build --config Release
+    - name: 'Release: Test'
+      working-directory: build
+      run: ctest --build-config Release
+
+    - name: 'MinSizeRel: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$LEGACY_CXX_WRAPPER"
+        "-DEASYPB_CXX_FLAGS=$LEGACY_CXX_FLAGS"
+        -DCMAKE_BUILD_TYPE=MinSizeRel
+    - name: 'MinSizeRel: Build'
+      run: cmake --build build --config MinSizeRel
+    - name: 'MinSizeRel: Test'
+      working-directory: build
+      run: ctest --build-config MinSizeRel
+
+    - name: Stop legacy GCC container
+      if: always()
+      run: docker rm --force "$LEGACY_CONTAINER" 2>/dev/null || true
+
+
+  #####################################################################################################################
+  # Build with every released Clang line from 3.5 onward in a compatible Ubuntu environment.
+  # CMake and checkout run on the current GitHub runner. Only compilation and linking run in the legacy container.
+  #####################################################################################################################
+  legacy-clang:
+    name: Clang ${{ matrix.version }} / C++11
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      LEGACY_CLANG_IMAGE: ${{ format('public.ecr.aws/docker/library/{0}', matrix.image) }}
+      LEGACY_CLANG_CONTAINER: easypb-legacy-clang
+      LEGACY_CLANG_SOURCE: ${{ matrix.source }}
+      LEGACY_CLANG_REPO_VERSION: ${{ matrix.version }}
+      LEGACY_CLANG_CXX: clang++-${{ matrix.version }}
+      LEGACY_CLANG_PACKAGE: clang-${{ matrix.version }}
+      LEGACY_CLANG_FLAGS: "-std=c++11 -Wall -Wextra -pedantic"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: "3.5"
+            image: ubuntu:14.04
+            source: ubuntu
+
+          - version: "3.6"
+            image: ubuntu:16.04
+            source: ubuntu
+
+          - version: "3.7"
+            image: ubuntu:16.04
+            source: ubuntu
+
+          - version: "3.8"
+            image: ubuntu:16.04
+            source: ubuntu
+
+          - version: "3.9"
+            image: ubuntu:16.04
+            source: ubuntu
+
+          - version: "4.0"
+            image: ubuntu:16.04
+            source: ubuntu
+
+          - version: "5.0"
+            image: ubuntu:16.04
+            source: ubuntu
+
+          - version: "6.0"
+            image: ubuntu:16.04
+            source: ubuntu
+
+          - version: "7"
+            image: ubuntu:16.04
+            source: llvm
+
+          - version: "8"
+            image: ubuntu:16.04
+            source: ubuntu
+
+          - version: "9"
+            image: ubuntu:16.04
+            source: llvm
+
+          - version: "10"
+            image: ubuntu:16.04
+            source: llvm
+
+          - version: "11"
+            image: ubuntu:16.04
+            source: llvm
+
+          - version: "12"
+            image: ubuntu:16.04
+            source: llvm
+
+          - version: "13"
+            image: ubuntu:18.04
+            source: llvm
+
+          - version: "14"
+            image: ubuntu:22.04
+            source: llvm
+
+          - version: "15"
+            image: ubuntu:18.04
+            source: llvm
+
+          - version: "16"
+            image: ubuntu:18.04
+            source: llvm
+
+          - version: "17"
+            image: ubuntu:18.04
+            source: llvm
+
+          - version: "18"
+            image: ubuntu:18.04
+            source: llvm
+
+          - version: "19"
+            image: ubuntu:18.04
+            source: llvm
+
+          - version: "20"
+            image: ubuntu:20.04
+            source: llvm
+
+          - version: "21"
+            image: ubuntu:20.04
+            source: llvm
+
+          - version: "22"
+            image: ubuntu:20.04
+            source: llvm
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Start legacy Ubuntu container
+      run: |
+        run_image="$LEGACY_CLANG_IMAGE"
+
+        for attempt in 1 2 3; do
+          if docker pull "$run_image"; then
+            break
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            exit 1
+          fi
+          sleep $((attempt * 10))
+        done
+
+        docker run --detach --rm \
+          --name "$LEGACY_CLANG_CONTAINER" \
+          --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+          --workdir "$GITHUB_WORKSPACE" \
+          "$run_image" \
+          sh -c 'while :; do sleep 3600; done'
+
+    - name: Install Clang ${{ matrix.version }}
+      run: |
+        case "${{ matrix.image }}" in
+          ubuntu:14.04) legacy_clang_codename=trusty ;;
+          ubuntu:16.04) legacy_clang_codename=xenial ;;
+          ubuntu:18.04) legacy_clang_codename=bionic ;;
+          ubuntu:20.04) legacy_clang_codename=focal ;;
+          ubuntu:22.04) legacy_clang_codename=jammy ;;
+          *) echo "Unsupported legacy Clang image: ${{ matrix.image }}" >&2; exit 1 ;;
+        esac
+
+        docker exec \
+          --env DEBIAN_FRONTEND=noninteractive \
+          --env LEGACY_CLANG_CODENAME="$legacy_clang_codename" \
+          --env LEGACY_CLANG_SOURCE="$LEGACY_CLANG_SOURCE" \
+          --env LEGACY_CLANG_REPO_VERSION="$LEGACY_CLANG_REPO_VERSION" \
+          --env LEGACY_CLANG_PACKAGE="$LEGACY_CLANG_PACKAGE" \
+          --env LEGACY_CLANG_CXX="$LEGACY_CLANG_CXX" \
+          "$LEGACY_CLANG_CONTAINER" \
+          bash -euxo pipefail -c '
+            case "$LEGACY_CLANG_CODENAME" in
+              trusty|xenial|bionic)
+                cat > /etc/apt/sources.list <<SOURCES
+        deb http://archive.ubuntu.com/ubuntu/ $LEGACY_CLANG_CODENAME main universe
+        deb http://archive.ubuntu.com/ubuntu/ $LEGACY_CLANG_CODENAME-updates main universe
+        deb http://archive.ubuntu.com/ubuntu/ $LEGACY_CLANG_CODENAME-security main universe
+        SOURCES
+                ;;
+            esac
+
+            printf '\''Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n'\'' \
+              > /etc/apt/apt.conf.d/99archive
+
+            apt-get -o Acquire::Check-Valid-Until=false update
+
+            if [ "$LEGACY_CLANG_SOURCE" = llvm ]; then
+              apt-get install -y --no-install-recommends \
+                apt-transport-https ca-certificates gnupg wget
+              wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
+              printf "deb https://apt.llvm.org/%s/ llvm-toolchain-%s-%s main\n" \
+                "$LEGACY_CLANG_CODENAME" \
+                "$LEGACY_CLANG_CODENAME" \
+                "$LEGACY_CLANG_REPO_VERSION" \
+                > /etc/apt/sources.list.d/apt.llvm.org.list
+              apt-get -o Acquire::Check-Valid-Until=false update
+            fi
+
+            apt-get install -y --no-install-recommends "$LEGACY_CLANG_PACKAGE"
+            "$LEGACY_CLANG_CXX" --version
+          '
+
+    - name: Create Clang compiler wrapper
+      run: |
+        mkdir -p "$RUNNER_TEMP/legacy-clang-toolchain"
+        cat > "$RUNNER_TEMP/legacy-clang-toolchain/clang++" <<'EOF_WRAPPER'
+        #!/usr/bin/env bash
+        set -euo pipefail
+        exec docker exec \
+          --user "$(id -u):$(id -g)" \
+          --workdir "$PWD" \
+          "$LEGACY_CLANG_CONTAINER" \
+          "$LEGACY_CLANG_CXX" \
+          "$@"
+        EOF_WRAPPER
+        chmod +x "$RUNNER_TEMP/legacy-clang-toolchain/clang++"
+        echo "LEGACY_CLANG_CXX_WRAPPER=$RUNNER_TEMP/legacy-clang-toolchain/clang++" >> "$GITHUB_ENV"
+
+    - name: 'Debug: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$LEGACY_CLANG_CXX_WRAPPER"
+        "-DEASYPB_CXX_FLAGS=$LEGACY_CLANG_FLAGS"
+        -DCMAKE_BUILD_TYPE=Debug
+    - name: 'Debug: Build'
+      run: cmake --build build --config Debug
+    - name: 'Debug: Test'
+      working-directory: build
+      run: ctest --build-config Debug
+
+    - name: 'Release: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$LEGACY_CLANG_CXX_WRAPPER"
+        "-DEASYPB_CXX_FLAGS=$LEGACY_CLANG_FLAGS"
+        -DCMAKE_BUILD_TYPE=Release
+    - name: 'Release: Build'
+      run: cmake --build build --config Release
+    - name: 'Release: Test'
+      working-directory: build
+      run: ctest --build-config Release
+
+    - name: 'MinSizeRel: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$LEGACY_CLANG_CXX_WRAPPER"
+        "-DEASYPB_CXX_FLAGS=$LEGACY_CLANG_FLAGS"
+        -DCMAKE_BUILD_TYPE=MinSizeRel
+    - name: 'MinSizeRel: Build'
+      run: cmake --build build --config MinSizeRel
+    - name: 'MinSizeRel: Test'
+      working-directory: build
+      run: ctest --build-config MinSizeRel
+
+    - name: Stop legacy Ubuntu container
+      if: always()
+      run: docker rm --force "$LEGACY_CLANG_CONTAINER" 2>/dev/null || true
