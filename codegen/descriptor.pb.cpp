@@ -10,8 +10,6 @@ struct OneofDescriptorProto
     str_view name;
 
     bool has_name = false;
-
-    void decode(easypb::Decoder pb);
 };
 
 
@@ -23,8 +21,6 @@ struct EnumValueDescriptorProto
 
     bool has_name = false;
     bool has_number = false;
-
-    void decode(easypb::Decoder pb);
 };
 
 
@@ -35,8 +31,6 @@ struct EnumDescriptorProto
     std::vector<EnumValueDescriptorProto> value;
 
     bool has_name = false;
-
-    void decode(easypb::Decoder pb);
 };
 
 
@@ -45,8 +39,6 @@ struct FieldOptions
     bool packed = false;
 
     bool has_packed = false;
-
-    void decode(easypb::Decoder pb);
 };
 
 
@@ -95,8 +87,6 @@ struct FieldDescriptorProto
     bool has_type_name = false;
     bool has_default_value = false;
     bool has_options = false;
-
-    void decode(easypb::Decoder pb);
 };
 
 
@@ -105,8 +95,6 @@ struct MessageOptions
     bool map_entry = false;
 
     bool has_map_entry = false;
-
-    void decode(easypb::Decoder pb);
 };
 
 
@@ -122,8 +110,6 @@ struct DescriptorProto
 
     bool has_name = false;
     bool has_options = false;
-
-    void decode(easypb::Decoder pb);
 };
 
 
@@ -137,8 +123,6 @@ struct FileDescriptorProto
 
     bool has_name = false;
     bool has_package = false;
-
-    void decode(easypb::Decoder pb);
 };
 
 
@@ -146,146 +130,144 @@ struct FileDescriptorProto
 struct FileDescriptorSet
 {
     std::vector<FileDescriptorProto> file;
-
-    void decode(easypb::Decoder pb);
 };
 
 
-void OneofDescriptorProto::decode(easypb::Decoder pb)
+inline void decode(easypb::Decoder pb, OneofDescriptorProto &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 1: pb.get_string(&name, &has_name); break;
+            case 1: pb.get_string(&x.name, &x.has_name); break;
             default: pb.skip_field();
         }
     }
 }
 
 
-void EnumValueDescriptorProto::decode(easypb::Decoder pb)
+inline void decode(easypb::Decoder pb, EnumValueDescriptorProto &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 1: pb.get_string(&name, &has_name); break;
-            case 2: pb.get_int32(&number, &has_number); break;
+            case 1: pb.get_string(&x.name, &x.has_name); break;
+            case 2: pb.get_int32(&x.number, &x.has_number); break;
             default: pb.skip_field();
         }
     }
 }
 
 
-void EnumDescriptorProto::decode(easypb::Decoder pb)
+inline void decode(easypb::Decoder pb, EnumDescriptorProto &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 1: pb.get_string(&name, &has_name); break;
-            case 2: pb.get_repeated_message(&value); break;
+            case 1: pb.get_string(&x.name, &x.has_name); break;
+            case 2: pb.get_repeated_message(&x.value); break;
             default: pb.skip_field();
         }
     }
 }
 
 
-void FieldOptions::decode(easypb::Decoder pb)
+inline void decode(easypb::Decoder pb, FieldOptions &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 2: pb.get_bool(&packed, &has_packed); break;
+            case 2: pb.get_bool(&x.packed, &x.has_packed); break;
             default: pb.skip_field();
         }
     }
 }
 
 
-void FieldDescriptorProto::decode(easypb::Decoder pb)
+inline void decode(easypb::Decoder pb, FieldDescriptorProto &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 1: pb.get_string(&name,          &has_name); break;
-            case 3: pb.get_int32 (&number,        &has_number); break;
-            case 4: pb.get_enum  (&label,         &has_label); break;
-            case 5: pb.get_enum  (&type,          &has_type); break;
-            case 6: pb.get_string(&type_name,     &has_type_name); break;
-            case 7: pb.get_string(&default_value, &has_default_value); break;
-            case 8: pb.get_message(&options,      &has_options); break;
+            case 1: pb.get_string(&x.name,          &x.has_name); break;
+            case 3: pb.get_int32 (&x.number,        &x.has_number); break;
+            case 4: pb.get_enum  (&x.label,         &x.has_label); break;
+            case 5: pb.get_enum  (&x.type,          &x.has_type); break;
+            case 6: pb.get_string(&x.type_name,     &x.has_type_name); break;
+            case 7: pb.get_string(&x.default_value, &x.has_default_value); break;
+            case 8: pb.get_message(&x.options,      &x.has_options); break;
             default: pb.skip_field();
         }
     }
 
-    if(! has_name) {
+    if(! x.has_name) {
         throw easypb::missing_required_field("Decoded protobuf has no required field FieldDescriptorProto.name");
     }
 }
 
 
-void MessageOptions::decode(easypb::Decoder pb)
+inline void decode(easypb::Decoder pb, MessageOptions &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 7: pb.get_bool(&map_entry, &has_map_entry); break;
+            case 7: pb.get_bool(&x.map_entry, &x.has_map_entry); break;
             default: pb.skip_field();
         }
     }
 }
 
 
-void DescriptorProto::decode(easypb::Decoder pb)
+inline void decode(easypb::Decoder pb, DescriptorProto &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 1: pb.get_string(&name, &has_name); break;
-            case 2: pb.get_repeated_message(&field); break;
-            case 3: pb.get_repeated_message(&nested_type); break;
-            case 4: pb.get_repeated_message(&enum_type); break;
-            case 8: pb.get_repeated_message(&oneof_decl); break;
-            case 7: pb.get_message(&options, &has_options); break;
+            case 1: pb.get_string(&x.name, &x.has_name); break;
+            case 2: pb.get_repeated_message(&x.field); break;
+            case 3: pb.get_repeated_message(&x.nested_type); break;
+            case 4: pb.get_repeated_message(&x.enum_type); break;
+            case 8: pb.get_repeated_message(&x.oneof_decl); break;
+            case 7: pb.get_message(&x.options, &x.has_options); break;
             default: pb.skip_field();
         }
     }
 
-    if(! has_name) {
+    if(! x.has_name) {
         throw easypb::missing_required_field("Decoded protobuf has no required field DescriptorProto.name");
     }
 }
 
 
-void FileDescriptorProto::decode(easypb::Decoder pb)
+inline void decode(easypb::Decoder pb, FileDescriptorProto &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 1: pb.get_string(&name, &has_name); break;
-            case 2: pb.get_string(&package, &has_package); break;
-            case 4: pb.get_repeated_message(&message_type); break;
-            case 5: pb.get_repeated_message(&enum_type); break;
+            case 1: pb.get_string(&x.name, &x.has_name); break;
+            case 2: pb.get_string(&x.package, &x.has_package); break;
+            case 4: pb.get_repeated_message(&x.message_type); break;
+            case 5: pb.get_repeated_message(&x.enum_type); break;
             default: pb.skip_field();
         }
     }
 }
 
 
-void FileDescriptorSet::decode(easypb::Decoder pb)
+inline void decode(easypb::Decoder pb, FileDescriptorSet &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 1: pb.get_repeated_message(&file); break;
+            case 1: pb.get_repeated_message(&x.file); break;
             default: pb.skip_field();
         }
     }

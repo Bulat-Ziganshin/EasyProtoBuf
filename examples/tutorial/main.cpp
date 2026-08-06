@@ -3,10 +3,9 @@
 #include <string>
 
 #define EASYPB_MainMessage_EXTRA_FIELDS     bool extra_flag = false;
-#define EASYPB_MainMessage_EXTRA_ENCODING   pb.put_bool(100, extra_flag);
-#define EASYPB_MainMessage_EXTRA_DECODING   case 100: pb.get_bool(&extra_flag); break;
+#define EASYPB_MainMessage_EXTRA_ENCODING(pb, x)   (pb).put_bool(100, (x).extra_flag);
+#define EASYPB_MainMessage_EXTRA_DECODING(pb, x)   case 100: (pb).get_bool(&(x).extra_flag); break;
 
-#include <easypb.hpp>
 #include "tutorial.pb.cpp"
 
 

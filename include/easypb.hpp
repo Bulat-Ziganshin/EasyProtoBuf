@@ -398,7 +398,7 @@ struct Encoder
     void put_message(uint32_t field_num, const FieldType& value)
     {
         write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
-        write_length_delimited([&]{ value.encode(*this); });
+        write_length_delimited([&]{ encode(*this, value); });
     }
 
     template <typename FieldType>
@@ -409,11 +409,15 @@ struct Encoder
 };
 
 
+// Message customization protocol:
+//   void encode(Encoder&, const T&);
+// The call below is intentionally unqualified, so argument-dependent lookup
+// finds an overload beside T or in namespace easypb.
 template <typename MessageType>
 inline std::string encode(const MessageType& msg)
 {
     Encoder pb;
-    msg.encode(pb);
+    encode(pb, msg);
     return pb.result();
 }
 
@@ -740,7 +744,7 @@ struct Decoder
     template <typename MessageType>
     void get_message(MessageType *field, bool *has_field = nullptr)
     {
-        field->decode( Decoder(parse_bytearray_value()) );
+        decode(Decoder(parse_bytearray_value()), *field);
         if(has_field)  *has_field = true;
     }
 
@@ -748,16 +752,21 @@ struct Decoder
     void get_repeated_message(RepeatedMessageType *field)
     {
         using T = typename RepeatedMessageType::value_type;
-        field->push_back( decode<T>(parse_bytearray_value()) );
+        T value{};
+        decode(Decoder(parse_bytearray_value()), value);
+        field->push_back(std::move(value));
     }
 };
 
 
+// Matching decoding customization protocol:
+//   void decode(Decoder, T&);
+// Decoder is a cheap non-owning cursor and is deliberately passed by value.
 template <typename MessageType>
 inline MessageType decode(string_view buffer)
 {
-    MessageType msg;
-    msg.decode( Decoder(buffer) );
+    MessageType msg{};
+    decode(Decoder(buffer), msg);
     return msg;
 }
 
