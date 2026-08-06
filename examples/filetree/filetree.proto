@@ -1,0 +1,20 @@
+syntax = "proto2";
+
+package filetree;
+
+// Numeric fields deliberately use only fixed-width Protobuf wire types.
+message Node
+{
+    required string   name                    = 1;
+    required fixed32  kind                    = 2;
+    optional fixed64  size                    = 3;
+    optional sfixed64 last_write_time_unix_ns = 4;
+    optional fixed32  permissions             = 5;
+    optional string   symlink_target          = 6;
+    repeated Node     children                = 7;
+}
+
+message FileTree
+{
+    required Node root = 1;
+}

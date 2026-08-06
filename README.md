@@ -38,6 +38,7 @@ Files:
 - [Codegen](codegen) - generates C++ structures and (de)coders from .pbs (compiled .proto) files
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
+- [File-tree benchmark](examples/filetree) - demonstrates around 600 MB/s serialization and deserialization throughput
 
 Portability:
 - we target compatibility with any C++11 compiler providing int32_t and int64_t types,
