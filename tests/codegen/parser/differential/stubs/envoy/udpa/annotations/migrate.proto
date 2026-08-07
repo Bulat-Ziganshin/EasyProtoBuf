@@ -1,0 +1,8 @@
+syntax = "proto2";
+package udpa.annotations;
+import "google/protobuf/descriptor.proto";
+message FieldMigrateAnnotation {
+  optional string oneof_promotion = 1;
+  optional string rename = 2;
+}
+extend google.protobuf.FieldOptions { optional FieldMigrateAnnotation field_migrate = 50002; }

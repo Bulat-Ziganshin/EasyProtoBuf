@@ -1,0 +1,22 @@
+syntax = "proto2";
+package integration.proto2;
+
+message Proto2Message {
+  message Nested {
+    optional int32 value = 1;
+  }
+  enum LocalState {
+    LOCAL_ZERO = 0;
+    LOCAL_ONE = 1;
+  }
+
+  required int32 id = 1 [default = 7];
+  optional string name = 2 [default = "default-name"];
+  repeated sint32 packed_values = 3 [packed = true];
+  repeated fixed32 plain_values = 4 [packed = false];
+  map<string, int32> counts = 5;
+  oneof choice {
+    string text = 6;
+    int64 number = 7;
+  }
+}

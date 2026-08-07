@@ -1,11 +1,27 @@
 # EasyProtoBuf Codegen
 
-Generate C++ code from a `.proto` schema in two steps:
+EasyProtoBuf Codegen accepts either a `.proto` source file or a binary descriptor set (`.pbs`).
 
-1. Use the official [`protoc`](https://github.com/protocolbuffers/protobuf/releases) compiler to create a binary descriptor set:
-   `protoc tutorial.proto -otutorial.pbs`
-2. Run EasyProtoBuf Codegen:
-   `codegen tutorial.pbs >tutorial.pb.cpp`
+For direct source input:
+
+```sh
+codegen tutorial.proto >tutorial.pb.cpp
+```
+
+For descriptor-set input, first use the official [`protoc`](https://github.com/protocolbuffers/protobuf/releases) compiler to create the descriptor set:
+
+```sh
+protoc tutorial.proto -otutorial.pbs
+```
+
+Then run EasyProtoBuf Codegen using either form:
+
+```sh
+codegen tutorial.pbs >tutorial.pb.cpp
+codegen --descriptor-set tutorial.pbs >tutorial.pb.cpp
+```
+
+Descriptor-set input can be useful, for example, when descriptor files are already available, when that workflow is preferred, or when a schema uses imports that the built-in parser cannot link yet. A descriptor set must currently contain exactly one `FileDescriptorProto`; avoid `protoc --include_imports` until target-file selection is implemented.
 
 The generated file contains plain C++ structures followed by free codec overloads:
 
@@ -42,7 +58,65 @@ Files:
 - [codegen.cpp](codegen.cpp) — translates `FileDescriptorProto` into C++ code
 - [descriptor.pb.cpp](descriptor.pb.cpp) — C++ structures and ProtoBuf decoders for
   [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto)
+- [parser/](parser/) — `.proto` lexer/parser, descriptor pretty-printer and parser benchmark helper
+- [parser/README.md](parser/README.md) — parser API, lifetime and unresolved-import behavior
+- [parser/grammar/](parser/grammar/) — formal grammar and semantic notes
 - [utils.cpp](utils.cpp) — common utility functions
+
+## Parser utility modes
+
+When parser support is included, Codegen can also print the descriptor tree or benchmark `.proto` parsing:
+
+```sh
+codegen --print-descriptor tutorial.proto
+codegen --descriptor-set --print-descriptor tutorial.pbs
+codegen --benchmark-parser a.proto b.proto
+codegen --benchmark-parser --benchmark-ms 500 a.proto b.proto
+```
+
+`--benchmark-parser` reads all input files before timing, runs one unmeasured warm-up round, and then parses complete corpus rounds for at least 100 ms by default. Tests on a varied real-world corpus showed roughly **100–200 MB/s** parsing throughput, depending on schema structure and compiler.
+
+The parser recognizes and records imports but does not load them yet. Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation from `.proto` source stops rather than guessing whether an unresolved external type is a message or enum; descriptor-set input can be used for such schemas.
+
+The parser implementation and its documentation live in [`parser/`](parser/). Parser tests are kept separately under [`../tests/codegen/parser/`](../tests/codegen/parser/).
+
+## Optional descriptor-set-only build
+
+If only descriptor-set input is needed, parser support can be omitted at build time:
+
+```sh
+cmake -S . -B build-lite -DEASYPB_CODEGEN_WITH_PROTO_PARSER=OFF
+cmake --build build-lite
+```
+
+With xmake:
+
+```sh
+xmake f --codegen_parser=n
+xmake
+```
+
+In this configuration nothing from [`parser/`](parser/) is compiled. Codegen accepts descriptor sets through either `--descriptor-set file.pbs` or the implicit `.pbs` form.
+
+## Quick verification
+
+From the repository root, the normal CMake test suite exercises both input formats and the parser utilities:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+The [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) test checks explicit and implicit descriptor-set input, `.proto` versus `.pbs` generated-code equivalence, proto2/proto3 packed behavior, descriptor printing, parser benchmarking, unresolved-type handling, and invalid empty/multi-file descriptor sets. The parser unit tests are in [`../tests/codegen/parser/test_parser.cpp`](../tests/codegen/parser/test_parser.cpp).
+
+To verify the descriptor-set-only build separately:
+
+```sh
+cmake -S . -B build-lite -DEASYPB_CODEGEN_WITH_PROTO_PARSER=OFF
+cmake --build build-lite
+ctest --test-dir build-lite --output-on-failure
+```
 
 ## Structural options
 

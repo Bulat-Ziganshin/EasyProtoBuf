@@ -6,7 +6,7 @@ with the uniform get_{FIELDTYPE} and put_{FIELDTYPE} calls
 
 Sorry, I fooled you... It's even easier!
 
-[Codegen](codegen) translates .proto files into plain C++ structures
+[Codegen](codegen) parses .proto files and translates them into plain C++ structures
 and generates encode/decode functions that (de)serialize these structures into the ProtoBuf format.
 So, if you know how to use C++ structs, you have just learned how to use EasyProtoBuf.
 Scrap the docs, and have a nice beer! The rest is written for water lovers.
@@ -35,7 +35,7 @@ Library features:
 
 Files:
 - [easypb.hpp](include/easypb.hpp) - the entire library
-- [Codegen](codegen) - generates C++ structures and (de)coders from .pbs (compiled .proto) files
+- [Codegen](codegen) - generates C++ structures and (de)coders from `.proto` source files or `.pbs` descriptor sets
 - [Tutorial](examples/tutorial) - learn how to use the library
 - [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
 - [File-tree benchmark](examples/filetree) - demonstrates around 600 MB/s serialization and deserialization throughput

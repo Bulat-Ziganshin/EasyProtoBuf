@@ -1,0 +1,10 @@
+syntax = "proto2";
+package k8s.io.apimachinery.pkg.apis.meta.v1;
+
+message Condition {}
+message LabelSelector {}
+message ListMeta {}
+message MicroTime {}
+message ObjectMeta {}
+message OwnerReference {}
+message Time {}

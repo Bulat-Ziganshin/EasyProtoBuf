@@ -1,0 +1,5 @@
+syntax = "proto3";
+message BenchmarkSecond {
+  repeated uint64 values = 1;
+  map<string, sint32> counts = 2;
+}

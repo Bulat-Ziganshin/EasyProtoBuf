@@ -1,0 +1,23 @@
+syntax = "proto3";
+package integration.proto3;
+
+enum State {
+  STATE_ZERO = 0;
+  STATE_ONE = 1;
+}
+
+message Child {
+  string value = 1;
+}
+
+message Proto3Message {
+  repeated int32 implicit_packed = 1;
+  repeated int32 explicit_unpacked = 2 [packed = false];
+  map<string, int32> counts = 3;
+  oneof choice {
+    string text = 4;
+    int64 number = 5;
+  }
+  Child child = 6;
+  State state = 7;
+}

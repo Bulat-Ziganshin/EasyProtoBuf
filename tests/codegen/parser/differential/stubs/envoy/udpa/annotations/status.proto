@@ -1,0 +1,8 @@
+syntax = "proto2";
+package udpa.annotations;
+import "google/protobuf/descriptor.proto";
+message FileStatusAnnotation {
+  enum PackageVersionStatus { UNKNOWN = 0; ACTIVE = 1; }
+  optional PackageVersionStatus package_version_status = 1;
+}
+extend google.protobuf.FileOptions { optional FileStatusAnnotation file_status = 50000; }

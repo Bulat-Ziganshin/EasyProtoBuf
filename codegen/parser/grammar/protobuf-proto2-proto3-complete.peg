@@ -1,0 +1,189 @@
+# Complete implementation-oriented grammar for proto2/proto3 schema files.
+#
+# It includes services/RPC, deprecated groups, extension ranges and range
+# options, extend declarations, custom option names, adjacent string literals,
+# and structured message-valued options. Protobuf Editions are intentionally a
+# separate language revision and are not folded into this file.
+
+ProtoFile             <- Proto3File / Proto2File
+Proto3File            <- Proto3Syntax Proto3TopLevel* !.
+Proto2File            <- Proto2Syntax? Proto2TopLevel* !.
+
+Proto2Syntax          <- K_SYNTAX "=" Proto2String ";"
+Proto3Syntax          <- K_SYNTAX "=" Proto3String ";"
+Proto2String          <- "'proto2'" / '"proto2"'
+Proto3String          <- "'proto3'" / '"proto3"'
+
+Proto2TopLevel        <- EmptyStatement / Import / Package / OptionStatement /
+                         Message2 / Enum / Extend / Service
+Proto3TopLevel        <- EmptyStatement / Import / Package / OptionStatement /
+                         Message3 / Enum / Service
+
+Import                <- K_IMPORT (K_WEAK / K_PUBLIC)? StringLiteral ";"
+Package               <- K_PACKAGE FullIdentifier ";"
+OptionStatement       <- K_OPTION OptionName "=" Constant ";"
+
+Message2              <- K_MESSAGE Identifier "{" Message2Element* "}"
+Message3              <- K_MESSAGE Identifier "{" Message3Element* "}"
+Message2Element       <- EmptyStatement / OptionStatement / Message2 / Enum /
+                         Oneof / MapField / Group / Field2 / Extensions /
+                         ReservedMessage / Extend
+Message3Element       <- EmptyStatement / OptionStatement / Message3 / Enum /
+                         Oneof / MapField / Field3 / ReservedMessage
+
+Field2                <- Label FieldType Identifier "=" FieldNumber
+                         FieldOptions? ";"
+Field3                <- (K_OPTIONAL / K_REPEATED)? FieldType Identifier "="
+                         FieldNumber FieldOptions? ";"
+Oneof                 <- K_ONEOF Identifier "{" (EmptyStatement /
+                         OptionStatement / OneofField)* "}"
+OneofField            <- FieldType Identifier "=" FieldNumber
+                         FieldOptions? ";"
+MapField              <- K_MAP &"<" "<" MapKeyType "," FieldType ">"
+                         Identifier "=" FieldNumber FieldOptions? ";"
+Group                 <- Label K_GROUP GroupName "=" FieldNumber
+                         "{" Message2Element* "}"
+
+Enum                  <- K_ENUM Identifier "{" EnumElement* "}"
+EnumElement           <- EmptyStatement / OptionStatement / ReservedEnum /
+                         EnumValue
+EnumValue             <- Identifier "=" SignedInteger EnumValueOptions? ";"
+EnumValueOptions      <- "[" OptionAssignment
+                         ("," OptionAssignment)* "]"
+
+Extensions            <- K_EXTENSIONS FieldRanges ExtensionRangeOptions? ";"
+ExtensionRangeOptions <- "[" OptionAssignment
+                         ("," OptionAssignment)* "]"
+Extend                <- K_EXTEND TypeName "{" (EmptyStatement / Group /
+                         Field2)* "}"
+ReservedMessage       <- K_RESERVED (FieldRanges / ReservedNames) ";"
+ReservedEnum          <- K_RESERVED (EnumRanges / ReservedNames) ";"
+FieldRanges           <- FieldRange ("," FieldRange)*
+FieldRange            <- IntegerLiteral (K_TO (IntegerLiteral / K_MAX))?
+EnumRanges            <- EnumRange ("," EnumRange)*
+EnumRange             <- SignedInteger (K_TO (SignedInteger / K_MAX))?
+ReservedNames         <- StringLiteral ("," StringLiteral)*
+
+Service               <- K_SERVICE Identifier "{" ServiceElement* "}"
+ServiceElement        <- EmptyStatement / OptionStatement / Rpc
+Rpc                   <- K_RPC Identifier "(" K_STREAM? TypeName ")"
+                         K_RETURNS "(" K_STREAM? TypeName ")"
+                         (RpcBody / ";")
+RpcBody               <- "{" (EmptyStatement / OptionStatement)* "}"
+
+FieldOptions          <- "[" OptionAssignment
+                         ("," OptionAssignment)* "]"
+OptionAssignment      <- OptionName "=" Constant
+OptionName            <- OptionNamePart ("." OptionNamePart)*
+OptionNamePart        <- Identifier / "(" "."? FullIdentifier ")"
+
+Constant              <- StringLiteral / BoolLiteral / SignedFloat /
+                         SignedInteger / FullIdentifier / MessageValue
+SignedInteger         <- Sign? IntegerLiteral
+SignedFloat           <- Sign? (FloatLiteral / K_INF / K_NAN)
+BoolLiteral           <- K_TRUE / K_FALSE
+
+# Message-valued custom options share the protobuf Text Format surface syntax.
+MessageValue          <- "{" MessageValueElement* "}" /
+                         "<" MessageValueElement* ">"
+MessageValueElement   <- MessageField ("," / ";")?
+MessageField          <- FieldReference
+                         (":" MessageFieldValue / MessageValue)
+FieldReference        <- Identifier / ExtensionReference
+ExtensionReference    <- "[" ("."? FullIdentifier / TypeUrl) "]"
+TypeUrl               <- FullIdentifier "/" FullIdentifier
+MessageFieldValue     <- ScalarConstant / MessageValue / ListValue
+ScalarConstant        <- StringLiteral / BoolLiteral / SignedFloat /
+                         SignedInteger / FullIdentifier
+ListValue             <- "[" (MessageFieldValue
+                         ("," MessageFieldValue)*)? "]"
+
+Label                 <- K_REQUIRED / K_OPTIONAL / K_REPEATED
+FieldType             <- ScalarType / (!K_GROUP TypeName)
+ScalarType            <- K_DOUBLE / K_FLOAT / K_INT32 / K_INT64 / K_UINT32 /
+                         K_UINT64 / K_SINT32 / K_SINT64 / K_FIXED32 /
+                         K_FIXED64 / K_SFIXED32 / K_SFIXED64 / K_BOOL /
+                         K_STRING / K_BYTES
+MapKeyType            <- K_INT32 / K_INT64 / K_UINT32 / K_UINT64 / K_SINT32 /
+                         K_SINT64 / K_FIXED32 / K_FIXED64 / K_SFIXED32 /
+                         K_SFIXED64 / K_BOOL / K_STRING
+TypeName              <- "."? FullIdentifier
+FullIdentifier        <- Identifier ("." Identifier)*
+Identifier            <- < [A-Za-z_] [A-Za-z0-9_]* >
+GroupName             <- < [A-Z] [A-Za-z0-9_]* >
+FieldNumber           <- IntegerLiteral
+
+IntegerLiteral        <- HexInteger / OctalInteger / DecimalInteger
+DecimalInteger        <- < "0" ![0-9xX] / [1-9] [0-9]* >
+OctalInteger          <- < "0" [0-7]+ >
+HexInteger            <- < "0" [xX] HexDigit+ >
+FloatLiteral          <- < (([0-9]+ "." [0-9]*) / ("." [0-9]+)) Exponent? /
+                           [0-9]+ Exponent >
+Exponent              <- [eE] Sign? [0-9]+
+Sign                  <- [+-]
+HexDigit              <- [0-9A-Fa-f]
+
+StringLiteral         <- StringAtom+
+StringAtom            <- SingleQuoted / DoubleQuoted
+SingleQuoted          <- < "'" SingleChar* "'" >
+DoubleQuoted          <- < '"' DoubleChar* '"' >
+SingleChar            <- Escape / [^'\\\r\n\x00]
+DoubleChar            <- Escape / [^"\\\r\n\x00]
+Escape                <- CharEscape / HexEscape / OctalEscape /
+                         UnicodeEscape / UnicodeLongEscape
+CharEscape            <- "\\" [abfnrtv\\'"?]
+HexEscape             <- "\\" [xX] HexDigit HexDigit?
+OctalEscape           <- "\\" [0-7] [0-7]? [0-7]?
+UnicodeEscape         <- "\\u" HexDigit HexDigit HexDigit HexDigit
+UnicodeLongEscape     <- "\\U" HexDigit HexDigit HexDigit HexDigit
+                               HexDigit HexDigit HexDigit HexDigit
+
+EmptyStatement        <- ";"
+
+K_SYNTAX              <- < "syntax" ![A-Za-z0-9_] >
+K_IMPORT              <- < "import" ![A-Za-z0-9_] >
+K_WEAK                <- < "weak" ![A-Za-z0-9_] >
+K_PUBLIC              <- < "public" ![A-Za-z0-9_] >
+K_PACKAGE             <- < "package" ![A-Za-z0-9_] >
+K_OPTION              <- < "option" ![A-Za-z0-9_] >
+K_MESSAGE             <- < "message" ![A-Za-z0-9_] >
+K_ENUM                <- < "enum" ![A-Za-z0-9_] >
+K_EXTEND              <- < "extend" ![A-Za-z0-9_] >
+K_EXTENSIONS          <- < "extensions" ![A-Za-z0-9_] >
+K_RESERVED            <- < "reserved" ![A-Za-z0-9_] >
+K_SERVICE             <- < "service" ![A-Za-z0-9_] >
+K_RPC                 <- < "rpc" ![A-Za-z0-9_] >
+K_RETURNS             <- < "returns" ![A-Za-z0-9_] >
+K_STREAM              <- < "stream" ![A-Za-z0-9_] >
+K_ONEOF               <- < "oneof" ![A-Za-z0-9_] >
+K_MAP                 <- < "map" ![A-Za-z0-9_] >
+K_GROUP               <- < "group" ![A-Za-z0-9_] >
+K_REQUIRED            <- < "required" ![A-Za-z0-9_] >
+K_OPTIONAL            <- < "optional" ![A-Za-z0-9_] >
+K_REPEATED            <- < "repeated" ![A-Za-z0-9_] >
+K_TO                  <- < "to" ![A-Za-z0-9_] >
+K_MAX                 <- < "max" ![A-Za-z0-9_] >
+K_TRUE                <- < "true" ![A-Za-z0-9_] >
+K_FALSE               <- < "false" ![A-Za-z0-9_] >
+K_INF                 <- < "inf" ![A-Za-z0-9_] >
+K_NAN                 <- < "nan" ![A-Za-z0-9_] >
+K_DOUBLE              <- < "double" ![A-Za-z0-9_] >
+K_FLOAT               <- < "float" ![A-Za-z0-9_] >
+K_INT32               <- < "int32" ![A-Za-z0-9_] >
+K_INT64               <- < "int64" ![A-Za-z0-9_] >
+K_UINT32              <- < "uint32" ![A-Za-z0-9_] >
+K_UINT64              <- < "uint64" ![A-Za-z0-9_] >
+K_SINT32              <- < "sint32" ![A-Za-z0-9_] >
+K_SINT64              <- < "sint64" ![A-Za-z0-9_] >
+K_FIXED32             <- < "fixed32" ![A-Za-z0-9_] >
+K_FIXED64             <- < "fixed64" ![A-Za-z0-9_] >
+K_SFIXED32            <- < "sfixed32" ![A-Za-z0-9_] >
+K_SFIXED64            <- < "sfixed64" ![A-Za-z0-9_] >
+K_BOOL                <- < "bool" ![A-Za-z0-9_] >
+K_STRING              <- < "string" ![A-Za-z0-9_] >
+K_BYTES               <- < "bytes" ![A-Za-z0-9_] >
+
+%whitespace           <- (Space / LineComment / BlockComment)*
+Space                 <- [ \t\r\n\x0b\x0c]
+LineComment           <- "//" [^\r\n]*
+BlockComment          <- "/*" (!"*/" .)* "*/"

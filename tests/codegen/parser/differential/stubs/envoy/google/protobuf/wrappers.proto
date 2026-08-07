@@ -1,0 +1,5 @@
+syntax = "proto3";
+package google.protobuf;
+message BoolValue { bool value = 1; }
+message UInt32Value { uint32 value = 1; }
+message UInt64Value { uint64 value = 1; }

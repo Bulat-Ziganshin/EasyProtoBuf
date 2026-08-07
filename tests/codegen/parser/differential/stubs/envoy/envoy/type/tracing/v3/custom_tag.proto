@@ -1,0 +1,3 @@
+syntax = "proto3";
+package envoy.type.tracing.v3;
+message CustomTag {}

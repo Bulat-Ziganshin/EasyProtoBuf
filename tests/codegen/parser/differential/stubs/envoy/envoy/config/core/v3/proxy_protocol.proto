@@ -1,0 +1,3 @@
+syntax = "proto3";
+package envoy.config.core.v3;
+message ProxyProtocolConfig {}

@@ -13,6 +13,12 @@ include(CTest)
 # When it is set, CMake does not add its own C++ standard option.
 set(EASYPB_CXX_FLAGS "" CACHE STRING
     "Extra C++ compiler flags; overrides automatic C++ standard selection")
+option(EASYPB_CODEGEN_WITH_PROTO_PARSER
+       "Build .proto parser, descriptor printer and parser benchmark into codegen"
+       ON)
+option(EASYPB_BUILD_DIFFERENTIAL_TESTS
+       "Build the optional parser comparator used with an external protoc"
+       OFF)
 
 if(EASYPB_CXX_FLAGS)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EASYPB_CXX_FLAGS}")
@@ -41,14 +47,56 @@ target_include_directories(decoder PRIVATE include)
 add_executable(tutorial examples/tutorial/main.cpp)
 target_include_directories(tutorial PRIVATE include)
 
+if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
+    add_library(easypb_proto_parser STATIC codegen/parser/proto_parser.cpp)
+    target_include_directories(easypb_proto_parser
+        PUBLIC include codegen codegen/parser)
+endif()
+
 # "codegen" became a reserved target name in CMake 3.31. Keep the produced
 # executable name while using a non-reserved internal target name.
 add_executable(easypb_codegen codegen/main.cpp)
 set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
-target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl)
-
+target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl codegen)
+if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
+    target_sources(easypb_codegen PRIVATE
+        codegen/parser/pretty_printer.cpp
+        codegen/parser/parser_benchmark.cpp)
+    target_link_libraries(easypb_codegen PRIVATE easypb_proto_parser)
+    target_compile_definitions(easypb_codegen PRIVATE
+        EASYPB_CODEGEN_WITH_PROTO_PARSER=1)
+else()
+    target_compile_definitions(easypb_codegen PRIVATE
+        EASYPB_CODEGEN_WITH_PROTO_PARSER=0)
+endif()
 
 if(BUILD_TESTING)
     add_test(NAME compare.decoded.data.with.original
              COMMAND tutorial)
+
+    add_test(NAME codegen.modes
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/parser/data
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/parser/test_codegen_modes.cmake)
+
+    if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
+        add_executable(parser_tests tests/codegen/parser/test_parser.cpp)
+        target_include_directories(parser_tests PRIVATE include codegen codegen/parser)
+        target_link_libraries(parser_tests PRIVATE easypb_proto_parser)
+        add_test(NAME parser.unit COMMAND parser_tests)
+    endif()
+endif()
+
+if(EASYPB_BUILD_DIFFERENTIAL_TESTS)
+    if(NOT EASYPB_CODEGEN_WITH_PROTO_PARSER)
+        message(FATAL_ERROR
+            "EASYPB_BUILD_DIFFERENTIAL_TESTS requires EASYPB_CODEGEN_WITH_PROTO_PARSER")
+    endif()
+    add_executable(parser_differential_compare
+        tests/codegen/parser/differential/compare_with_protoc.cpp)
+    target_include_directories(parser_differential_compare PRIVATE
+        include codegen codegen/parser)
+    target_link_libraries(parser_differential_compare PRIVATE easypb_proto_parser)
 endif()

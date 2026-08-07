@@ -1,0 +1,5 @@
+syntax = "proto3";
+import "missing.proto";
+message UsesImported {
+  missing.External value = 1;
+}

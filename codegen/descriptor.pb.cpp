@@ -1,8 +1,22 @@
 // This file will be auto-generated when I grow up (with option "-s str_view").
 // Source: https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto
+#ifndef EASYPB_DESCRIPTOR_PB_CPP_INCLUDED
+#define EASYPB_DESCRIPTOR_PB_CPP_INCLUDED
+
 #include <cstdint>
 #include <string>
 #include <vector>
+#if __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
+#include <string_view>
+#endif
+
+#ifdef __cpp_lib_string_view
+using str_view = std::string_view;  // Might be a little faster with C++17
+#else
+using str_view = std::string;
+#endif
+
+#include <easypb.hpp>
 
 
 struct OneofDescriptorProto
@@ -79,6 +93,7 @@ struct FieldDescriptorProto
     str_view type_name;
     str_view default_value;
     FieldOptions options;
+    int32_t oneof_index = 0;
 
     bool has_name = false;
     bool has_number = false;
@@ -87,6 +102,7 @@ struct FieldDescriptorProto
     bool has_type_name = false;
     bool has_default_value = false;
     bool has_options = false;
+    bool has_oneof_index = false;
 };
 
 
@@ -120,9 +136,11 @@ struct FileDescriptorProto
     str_view package;
     std::vector<DescriptorProto> message_type;
     std::vector<EnumDescriptorProto> enum_type;
+    str_view syntax;
 
     bool has_name = false;
     bool has_package = false;
+    bool has_syntax = false;
 };
 
 
@@ -200,6 +218,7 @@ inline void decode(easypb::Decoder pb, FieldDescriptorProto &x)
             case 6: pb.get_string(&x.type_name,     &x.has_type_name); break;
             case 7: pb.get_string(&x.default_value, &x.has_default_value); break;
             case 8: pb.get_message(&x.options,      &x.has_options); break;
+            case 9: pb.get_int32 (&x.oneof_index,   &x.has_oneof_index); break;
             default: pb.skip_field();
         }
     }
@@ -255,6 +274,7 @@ inline void decode(easypb::Decoder pb, FileDescriptorProto &x)
             case 2: pb.get_string(&x.package, &x.has_package); break;
             case 4: pb.get_repeated_message(&x.message_type); break;
             case 5: pb.get_repeated_message(&x.enum_type); break;
+            case 12: pb.get_string(&x.syntax, &x.has_syntax); break;
             default: pb.skip_field();
         }
     }
@@ -272,3 +292,5 @@ inline void decode(easypb::Decoder pb, FileDescriptorSet &x)
         }
     }
 }
+
+#endif

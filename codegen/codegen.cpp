@@ -33,6 +33,7 @@ const std::string CPP_TYPE_DELIMITER = "::";
 // A few global vars instead of passing data between functions
 std::string package_name_prefix;  // package-describing prefix of message types, e.g. ".mypackage."
 std::string msgtype_name_prefix;  // extra message-type-describing prefix of message types, e.g. "Msg."
+bool current_file_is_proto3 = false;
 
 
 const char* FILE_TEMPLATE =
@@ -137,7 +138,8 @@ bool write_as_packed(const FieldDescriptorProto& field)
            is_numeric_field(field) &&
            (option.packed ?    true :
             option.no_packed ? false :
-                               field.options.packed);
+            field.options.has_packed ? field.options.packed :
+                                       current_file_is_proto3);
 }
 
 
@@ -392,10 +394,11 @@ const MapType* find_map_type(const FieldDescriptorProto& field, const MapTypeByN
 }
 
 
-// Generate C++ code for the entire .pbs file
-void generator(const FileDescriptorSet& proto)
+// Generate C++ code for one parsed or decoded .proto file.
+void generator(const FileDescriptorProto& file)
 {
-    auto file = proto.file[0];
+    current_file_is_proto3 =
+        file.has_syntax && std::string(file.syntax.data(), file.syntax.size()) == "proto3";
     package_name_prefix =
         file.package > ""
             ? PB_TYPE_DELIMITER + std::string(file.package) + PB_TYPE_DELIMITER

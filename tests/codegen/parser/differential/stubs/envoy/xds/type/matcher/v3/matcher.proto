@@ -1,0 +1,3 @@
+syntax = "proto3";
+package xds.type.matcher.v3;
+message Matcher {}

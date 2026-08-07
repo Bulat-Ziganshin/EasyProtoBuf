@@ -1,0 +1,153 @@
+# Executable-style PEG description of codegen/parser/proto_parser.cpp.
+#
+# The first rule describes the parser's syntactic front end. Rules depending
+# on the decoded syntax value, numeric ranges, symbol tables, or descriptor
+# types are listed in SEMANTICS.md.
+
+ProtoFile             <- EmptyStatement* SyntaxStatement? TopLevel* !.
+SyntaxStatement       <- K_SYNTAX "=" StringSequence ";"
+
+TopLevel              <- EmptyStatement / Package / Import / OptionStatement /
+                         Message / Enum / Extend
+
+Package               <- K_PACKAGE FullIdentifier ";"
+Import                <- K_IMPORT (K_PUBLIC / K_WEAK)? StringSequence ";"
+OptionStatement       <- K_OPTION OptionName "=" Constant ";"
+
+Message               <- K_MESSAGE Identifier "{" MessageElement* "}"
+MessageElement        <- EmptyStatement / Message / Enum / Oneof / MapField /
+                         OptionStatement / ReservedMessage / Extensions /
+                         Extend / Field
+
+Field                 <- Label? TypeName Identifier "=" FieldNumber
+                         FieldOptions? ";"
+Oneof                 <- K_ONEOF Identifier "{" (EmptyStatement /
+                         OptionStatement / OneofField)* "}"
+OneofField            <- TypeName Identifier "=" FieldNumber
+                         FieldOptions? ";"
+MapField              <- K_MAP &"<" "<" MapKeyType "," TypeName ">"
+                         Identifier "=" FieldNumber FieldOptions? ";"
+
+Enum                  <- K_ENUM Identifier "{" EnumElement* "}"
+EnumElement           <- EmptyStatement / EnumOption / ReservedEnum / EnumValue
+EnumOption            <- K_OPTION OptionName "=" Constant ";"
+EnumValue             <- Identifier "=" SignedInteger EnumValueOptions? ";"
+EnumValueOptions      <- "[" GenericOption ("," GenericOption)* "]"
+
+ReservedMessage       <- K_RESERVED (MessageRanges / ReservedNames) ";"
+ReservedEnum          <- K_RESERVED (EnumRanges / ReservedNames) ";"
+MessageRanges         <- MessageRange ("," MessageRange)*
+MessageRange          <- FieldRangeNumber (K_TO (FieldRangeNumber / K_MAX))?
+EnumRanges            <- EnumRange ("," EnumRange)*
+EnumRange             <- SignedInteger (K_TO (SignedInteger / K_MAX))?
+ReservedNames         <- StringSequence ("," StringSequence)*
+
+Extensions            <- K_EXTENSIONS MessageRanges FieldOptions? ";"
+Extend                <- K_EXTEND TypeName "{" (EmptyStatement / Field)* "}"
+
+FieldOptions          <- "[" FieldOption ("," FieldOption)* "]"
+FieldOption           <- OptionName "=" Constant
+GenericOption         <- OptionName "=" Constant
+OptionName            <- ("(" FullIdentifier ")" / Identifier)
+                         ("." Identifier)*
+
+Constant              <- StringSequence / SignedFloat / SignedInteger /
+                         BoolLiteral / FullIdentifier / AggregateValue
+SignedInteger         <- Sign? IntegerToken
+SignedFloat           <- Sign? (FloatToken / K_INF / K_NAN)
+BoolLiteral           <- K_TRUE / K_FALSE
+
+# The EasyPB parser balances curly braces for aggregate custom options. It does not
+# interpret their Text Format fields and stores only the fact that an aggregate
+# value was present.
+AggregateValue        <- "{" AggregateToken* "}"
+AggregateToken        <- AggregateValue / StringAtom / FloatToken /
+                         IntegerToken / Identifier / [\[\]()<>=;,.+\-:]
+
+Label                 <- K_OPTIONAL / K_REQUIRED / K_REPEATED
+MapKeyType            <- K_INT32 / K_INT64 / K_UINT32 / K_UINT64 / K_SINT32 /
+                         K_SINT64 / K_FIXED32 / K_FIXED64 / K_SFIXED32 /
+                         K_SFIXED64 / K_BOOL / K_STRING
+TypeName              <- "."? FullIdentifier
+FullIdentifier        <- Identifier ("." Identifier)*
+Identifier            <- < [A-Za-z_] [A-Za-z0-9_]* >
+
+# TOKEN_INTEGER spellings emitted by Lexer::number(). A leading zero is
+# interpreted as octal only when a numeric value is requested. Thus 09 is a
+# token but is rejected as a field number, range endpoint, enum value, or
+# typed integral default.
+IntegerToken          <- HexInteger / DigitInteger
+HexInteger            <- < "0" [xX] [0-9A-Fa-f]+ ![A-Za-z0-9_] >
+DigitInteger          <- < [0-9]+ ![A-Za-z_] >
+
+# TOKEN_FLOAT spellings emitted by Lexer::number().
+FloatToken            <- < (([0-9]+ "." [0-9]*) / ("." [0-9]+)) Exponent?
+                           ![A-Za-z_] /
+                           [0-9]+ Exponent ![A-Za-z_] >
+Exponent              <- [eE] [+-]? [0-9]+
+Sign                  <- [+-]
+FieldNumber           <- IntegerToken
+FieldRangeNumber      <- IntegerToken
+
+StringSequence        <- StringAtom+
+StringAtom            <- SingleQuoted / DoubleQuoted
+SingleQuoted          <- < "'" SingleChar* "'" >
+DoubleQuoted          <- < '"' DoubleChar* '"' >
+SingleChar            <- Escape / [^'\\\r\n\x00]
+DoubleChar            <- Escape / [^"\\\r\n\x00]
+Escape                <- CharEscape / HexEscape / OctalEscape /
+                         UnicodeEscape / UnicodeLongEscape
+CharEscape            <- "\\" [abfnrtv\\'"?]
+HexEscape             <- "\\x" [0-9A-Fa-f] [0-9A-Fa-f]?
+OctalEscape           <- "\\" [0-7] [0-7]? [0-7]?
+UnicodeEscape         <- "\\u" [0-9A-Fa-f] [0-9A-Fa-f]
+                               [0-9A-Fa-f] [0-9A-Fa-f]
+UnicodeLongEscape     <- "\\U" [0-9A-Fa-f] [0-9A-Fa-f]
+                               [0-9A-Fa-f] [0-9A-Fa-f]
+                               [0-9A-Fa-f] [0-9A-Fa-f]
+                               [0-9A-Fa-f] [0-9A-Fa-f]
+
+EmptyStatement        <- ";"
+
+# Keywords are TOKEN_IDENTIFIER values compared by the recursive-descent
+# parser. Boundaries below reproduce that behavior and allow identifiers such
+# as message_type. The word map starts a map field only when followed by '<'.
+K_SYNTAX              <- < "syntax" ![A-Za-z0-9_] >
+K_PACKAGE             <- < "package" ![A-Za-z0-9_] >
+K_IMPORT              <- < "import" ![A-Za-z0-9_] >
+K_PUBLIC              <- < "public" ![A-Za-z0-9_] >
+K_WEAK                <- < "weak" ![A-Za-z0-9_] >
+K_OPTION              <- < "option" ![A-Za-z0-9_] >
+K_MESSAGE             <- < "message" ![A-Za-z0-9_] >
+K_ENUM                <- < "enum" ![A-Za-z0-9_] >
+K_ONEOF               <- < "oneof" ![A-Za-z0-9_] >
+K_MAP                 <- < "map" ![A-Za-z0-9_] >
+K_RESERVED            <- < "reserved" ![A-Za-z0-9_] >
+K_EXTENSIONS          <- < "extensions" ![A-Za-z0-9_] >
+K_EXTEND              <- < "extend" ![A-Za-z0-9_] >
+K_OPTIONAL            <- < "optional" ![A-Za-z0-9_] >
+K_REQUIRED            <- < "required" ![A-Za-z0-9_] >
+K_REPEATED            <- < "repeated" ![A-Za-z0-9_] >
+K_TO                  <- < "to" ![A-Za-z0-9_] >
+K_MAX                 <- < "max" ![A-Za-z0-9_] >
+K_TRUE                <- < "true" ![A-Za-z0-9_] >
+K_FALSE               <- < "false" ![A-Za-z0-9_] >
+K_INF                 <- < "inf" ![A-Za-z0-9_] >
+K_NAN                 <- < "nan" ![A-Za-z0-9_] >
+K_INT32               <- < "int32" ![A-Za-z0-9_] >
+K_INT64               <- < "int64" ![A-Za-z0-9_] >
+K_UINT32              <- < "uint32" ![A-Za-z0-9_] >
+K_UINT64              <- < "uint64" ![A-Za-z0-9_] >
+K_SINT32              <- < "sint32" ![A-Za-z0-9_] >
+K_SINT64              <- < "sint64" ![A-Za-z0-9_] >
+K_FIXED32             <- < "fixed32" ![A-Za-z0-9_] >
+K_FIXED64             <- < "fixed64" ![A-Za-z0-9_] >
+K_SFIXED32            <- < "sfixed32" ![A-Za-z0-9_] >
+K_SFIXED64            <- < "sfixed64" ![A-Za-z0-9_] >
+K_BOOL                <- < "bool" ![A-Za-z0-9_] >
+K_STRING              <- < "string" ![A-Za-z0-9_] >
+
+%whitespace           <- (Space / LineComment / BlockComment)*
+Space                 <- [ \t\r\n\x0b\x0c]
+LineComment           <- "//" [^\r\n]*
+BlockComment          <- "/*" (!"*/" .)* "*/"

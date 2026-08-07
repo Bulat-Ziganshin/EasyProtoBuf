@@ -1,0 +1,4 @@
+syntax = "proto2";
+package k8s.io.apimachinery.pkg.runtime;
+
+message RawExtension {}

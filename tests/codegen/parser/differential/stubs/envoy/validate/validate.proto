@@ -1,0 +1,37 @@
+syntax = "proto2";
+package validate;
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/duration.proto";
+message StringRules {
+  enum KnownRegex { UNKNOWN = 0; HTTP_HEADER_NAME = 1; HTTP_HEADER_VALUE = 2; }
+  optional uint64 min_len = 1;
+  optional uint64 max_bytes = 2;
+  optional string pattern = 3;
+  optional KnownRegex well_known_regex = 4;
+  optional bool strict = 5;
+  optional string prefix = 6;
+  optional string suffix = 7;
+  optional bool ignore_empty = 8;
+}
+message EnumRules { optional bool defined_only = 1; }
+message MessageRules { optional bool required = 1; }
+message DurationRules { optional bool required = 1; optional google.protobuf.Duration gt = 2; }
+message UInt32Rules { optional uint32 gte = 1; optional uint32 lte = 2; optional uint32 lt = 3; }
+message UInt64Rules { optional uint64 lte = 1; }
+message RepeatedRules {
+  optional uint64 min_items = 1;
+  optional uint64 max_items = 2;
+  optional bool unique = 3;
+  optional FieldRules items = 4;
+}
+message FieldRules {
+  optional StringRules string = 1;
+  optional RepeatedRules repeated = 2;
+  optional EnumRules enum = 3;
+  optional MessageRules message = 4;
+  optional DurationRules duration = 5;
+  optional UInt32Rules uint32 = 6;
+  optional UInt64Rules uint64 = 7;
+}
+extend google.protobuf.FieldOptions { optional FieldRules rules = 51000; }
+extend google.protobuf.OneofOptions { optional bool required = 51001; }
