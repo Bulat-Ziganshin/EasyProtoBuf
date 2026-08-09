@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package easypb.test;
+
+message ScalarMaps {
+  map<string, int32> counts = 1;
+  map<int64, bytes> payloads = 2;
+  repeated int32 samples = 3 [packed = true];
+}

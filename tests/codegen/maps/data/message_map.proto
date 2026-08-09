@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package easypb.test;
+
+message Item {
+  int32 value = 1;
+}
+
+message MessageMap {
+  map<string, Item> items = 1;
+}

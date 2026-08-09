@@ -74,6 +74,45 @@ if(BUILD_TESTING)
     add_test(NAME compare.decoded.data.with.original
              COMMAND tutorial)
 
+    set(codegen_maps_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/maps)
+    set(codegen_maps_data_dir ${codegen_maps_dir}/data)
+
+    add_test(NAME codegen.maps
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_maps_data_dir}
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_maps_dir}/test_codegen_maps.cmake)
+
+    set(codegen_maps_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-maps)
+    set(codegen_maps_generated_header
+        ${codegen_maps_generated_dir}/maps.generated.hpp)
+    add_custom_command(
+        OUTPUT ${codegen_maps_generated_header}
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DSCALAR_INPUT=${codegen_maps_data_dir}/scalar_maps.pbs
+            -DENUM_INPUT=${codegen_maps_data_dir}/enum_map.pbs
+            -DOUTPUT=${codegen_maps_generated_header}
+            -P ${codegen_maps_dir}/generate_runtime_header.cmake
+        DEPENDS
+            easypb_codegen
+            ${codegen_maps_data_dir}/scalar_maps.pbs
+            ${codegen_maps_data_dir}/enum_map.pbs
+            ${codegen_maps_dir}/generate_runtime_header.cmake
+        VERBATIM)
+    add_custom_target(codegen_maps_generated
+        DEPENDS ${codegen_maps_generated_header})
+
+    add_executable(codegen_maps_runtime_test
+        ${codegen_maps_dir}/map_runtime.cpp)
+    add_dependencies(codegen_maps_runtime_test codegen_maps_generated)
+    target_include_directories(codegen_maps_runtime_test PRIVATE
+        include ${codegen_maps_generated_dir})
+    add_test(NAME codegen.maps.runtime COMMAND codegen_maps_runtime_test)
+
     add_test(NAME codegen.modes
         COMMAND ${CMAKE_COMMAND}
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>

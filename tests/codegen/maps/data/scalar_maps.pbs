@@ -1,0 +1,14 @@
+
+Í
+scalar_maps.protoeasypb.test"¢
+
+ScalarMaps;
+counts (2#.easypb.test.ScalarMaps.CountsEntryRcountsA
+payloads (2%.easypb.test.ScalarMaps.PayloadsEntryRpayloads
+samples (BRsamples9
+CountsEntry
+key (	Rkey
+value (Rvalue:8;
+PayloadsEntry
+key (Rkey
+value (Rvalue:8bproto3

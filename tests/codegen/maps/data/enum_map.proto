@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package easypb.test;
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_READY = 1;
+}
+
+message EnumMap {
+  map<string, Status> statuses = 1;
+}

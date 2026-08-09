@@ -108,7 +108,11 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) test checks explicit and implicit descriptor-set input, `.proto` versus `.pbs` generated-code equivalence, proto2/proto3 packed behavior, descriptor printing, parser benchmarking, unresolved-type handling, and invalid empty/multi-file descriptor sets. The parser unit tests are in [`../tests/codegen/parser/test_parser.cpp`](../tests/codegen/parser/test_parser.cpp).
+The [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) test checks explicit and implicit descriptor-set input, `.proto` versus `.pbs` generated-code equivalence, proto2/proto3 packed behavior, descriptor printing, parser benchmarking, unresolved-type handling, and invalid empty/multi-file descriptor sets.
+
+The [`codegen.maps`](../tests/codegen/maps/test_codegen_maps.cmake) test covers scalar and enum-valued map generation, custom map containers, unsupported message-valued maps, malformed map descriptors, and `.proto`/`.pbs` equivalence. `codegen.maps.runtime` compiles the current generated ADL codecs and verifies scalar and enum map round trips in both full and descriptor-set-only builds.
+
+The parser unit tests are in [`../tests/codegen/parser/test_parser.cpp`](../tests/codegen/parser/test_parser.cpp).
 
 To verify the descriptor-set-only build separately:
 
