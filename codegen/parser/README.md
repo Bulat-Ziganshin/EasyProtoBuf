@@ -13,6 +13,8 @@ The parser accepts a borrowed input buffer and returns a `ParsedProto` object th
 
 Imports are parsed and recorded but are not loaded yet. Unresolved imported types carry the machine-readable diagnostic code `DIAGNOSTIC_UNRESOLVED_TYPE`. Code generation refuses such schemas; descriptor printing and benchmarking continue with warnings.
 
+Top-level `service` and `rpc` declarations are syntactically validated and consumed, including unary and streaming request/response forms and service/method options. They are intentionally not retained in the trimmed descriptor model because EasyProtoBuf Codegen generates message codecs rather than RPC client/server APIs.
+
 `FileDescriptorProto.syntax` follows [`protoc`](https://github.com/protocolbuffers/protobuf) representation: proto3 is stored explicitly, while proto2 is represented by an absent field 12.
 
 Parser tests, the real-world differential corpus, and the comparison harness against `protoc` live under [`../../tests/codegen/parser/`](../../tests/codegen/parser/).

@@ -1,0 +1,24 @@
+syntax = "proto3";
+package rpc.test;
+
+message Request {
+  string text = 1;
+}
+
+message Reply {
+  string text = 1;
+}
+
+service Greeter {
+  option deprecated = true;
+  rpc Unary(Request) returns (Reply);
+  rpc ClientStream(stream .rpc.test.Request) returns (Reply) {
+    option deprecated = true;
+  }
+  rpc ServerStream(Request) returns (stream Reply);
+  rpc Bidi(stream Request) returns (stream Reply) {}
+}
+
+message AfterService {
+  int32 value = 1;
+}

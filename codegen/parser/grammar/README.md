@@ -27,11 +27,11 @@ The `map` production uses lookahead (`K_MAP &"<"`) deliberately. This mirrors bo
 
 [`easypb-parser.peg`](easypb-parser.peg) describes token spellings and the recursive-descent syntax implemented by [`../proto_parser.cpp`](../proto_parser.cpp). It deliberately separates grammar from checks that use numeric values, the selected proto syntax, descriptor types, or symbol tables. Those checks are documented in [`SEMANTICS.md`](SEMANTICS.md).
 
-The grammar describes what the frontend can parse structurally, not every source construct retained by the trimmed descriptor model. For example, the parser can consume proto2 `extend` declarations and report that they are not represented by the trimmed `FileDescriptorProto`.
+The grammar describes what the frontend can parse structurally, not every source construct retained by the trimmed descriptor model. For example, the parser validates and consumes `service`/`rpc` declarations and proto2 `extend` declarations without retaining service or extension descriptors.
 
 ## Complete proto2/proto3 grammar
 
-[`protobuf-proto2-proto3-complete.peg`](protobuf-proto2-proto3-complete.peg) is the broader engineering reference. It includes services and RPCs, deprecated groups, full extend syntax, extension-range options, parenthesized custom option-name parts, and structured message-valued options.
+[`protobuf-proto2-proto3-complete.peg`](protobuf-proto2-proto3-complete.peg) is the broader engineering reference. It includes deprecated groups, full extend syntax, extension-range options, parenthesized custom option-name parts, and structured message-valued options beyond the subset consumed by the EasyPB parser.
 
 “Complete” here means the proto2 and proto3 schema languages. Protobuf Editions are a separate language revision and are outside the current parser scope.
 

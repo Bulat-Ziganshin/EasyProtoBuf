@@ -37,6 +37,9 @@
  *   Package              -> parse_package()
  *   Import               -> parse_import()
  *   OptionStatement      -> parse_option_statement()
+ *   Service              -> parse_service()
+ *   Rpc                  -> parse_rpc()
+ *   RpcBody              -> parse_rpc_body()
  *   OptionName           -> option_name()
  *   Constant             -> constant()
  *   StringSequence       -> string_sequence()
@@ -782,14 +785,14 @@ public:
             seen_statement_ = true;
 
             // TopLevel <- Package / Import / OptionStatement / Message /
-            //             Enum / Extend
+            //             Enum / Extend / Service
             if (accept_keyword("package")) parse_package();
             else if (accept_keyword("import")) parse_import();
             else if (accept_keyword("option")) parse_option_statement();
             else if (accept_keyword("message")) out_.file.message_type.push_back(parse_message(std::vector<std::string>()));
             else if (accept_keyword("enum")) out_.file.enum_type.push_back(parse_enum(std::vector<std::string>()));
             else if (accept_keyword("extend")) parse_extend(std::vector<std::string>());
-            else if (is_keyword("service")) fail("service/RPC syntax is not supported by EasyPB parser");
+            else if (accept_keyword("service")) parse_service();
             else fail("expected a top-level .proto statement");
         }
 
@@ -1020,6 +1023,69 @@ private:
         expect_symbol('=');
         (void)constant();
         expect_symbol(';');
+    }
+
+    // RpcBody <- "{" (EmptyStatement / OptionStatement)* "}"
+    // RPC metadata is intentionally not retained by the trimmed descriptor.
+    void parse_rpc_body()
+    {
+        expect_symbol('{');
+        while (!accept_symbol('}')) {
+            if (current_.kind == TOKEN_END) fail("unterminated rpc body");
+            if (accept_symbol(';')) continue;
+            if (accept_keyword("option")) {
+                parse_option_statement();
+                continue;
+            }
+            fail("expected option or ';' in rpc body");
+        }
+    }
+
+    // Rpc <- "rpc" Identifier "(" "stream"? TypeName ")"
+    //        "returns" "(" "stream"? TypeName ")" (RpcBody / ";")
+    // The caller has consumed "rpc". Request/response names and method
+    // options are validated syntactically and then discarded.
+    void parse_rpc()
+    {
+        (void)identifier();
+        expect_symbol('(');
+        (void)accept_keyword("stream");
+        (void)full_identifier(true);
+        expect_symbol(')');
+        if (!accept_keyword("returns")) fail("expected 'returns' in rpc declaration");
+        expect_symbol('(');
+        (void)accept_keyword("stream");
+        (void)full_identifier(true);
+        expect_symbol(')');
+        if (accept_symbol(';')) return;
+        if (current_.kind == TOKEN_SYMBOL && current_.symbol == '{') {
+            parse_rpc_body();
+            return;
+        }
+        fail("expected ';' or rpc body");
+    }
+
+    // Service <- "service" Identifier "{" ServiceElement* "}"
+    // ServiceElement <- EmptyStatement / OptionStatement / Rpc
+    // Services are accepted so message schemas can be consumed by Codegen,
+    // but service descriptors are outside EasyProtoBuf's trimmed model.
+    void parse_service()
+    {
+        (void)identifier();
+        expect_symbol('{');
+        while (!accept_symbol('}')) {
+            if (current_.kind == TOKEN_END) fail("unterminated service body");
+            if (accept_symbol(';')) continue;
+            if (accept_keyword("option")) {
+                parse_option_statement();
+                continue;
+            }
+            if (accept_keyword("rpc")) {
+                parse_rpc();
+                continue;
+            }
+            fail("expected rpc, option, or ';' in service body");
+        }
     }
 
     // FieldOptions <- "[" FieldOption ("," FieldOption)* "]"

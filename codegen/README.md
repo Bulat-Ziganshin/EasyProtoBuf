@@ -82,6 +82,8 @@ codegen --benchmark-parser --benchmark-ms 500 a.proto b.proto
 
 The parser recognizes and records imports but does not load them yet. Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation from `.proto` source stops rather than guessing whether an unresolved external type is a message or enum; descriptor-set input can be used for such schemas.
 
+`.proto` files may also contain `service` and `rpc` declarations. Codegen validates and skips those declarations while generating the message codecs from the same file; it does not generate RPC client or server APIs.
+
 The parser implementation and its documentation live in [`parser/`](parser/). Parser tests are kept separately under [`../tests/codegen/parser/`](../tests/codegen/parser/).
 
 ## Optional descriptor-set-only build

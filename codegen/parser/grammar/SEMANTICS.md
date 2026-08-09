@@ -35,7 +35,9 @@ The grammar uses the intended lexical and syntactic forms directly:
 - proto2 ordinary fields require `optional`, `required`, or `repeated`;
 - proto3 rejects `required`, explicit defaults, extension ranges, and extend
   declarations;
-- groups and services/RPC are outside the EasyPB parser;
+- proto2 groups are outside the EasyPB parser;
+- service/RPC declarations are accepted at top level, including unary and streaming endpoints;
+- service and RPC options are validated and consumed but service metadata is not retained;
 - map keys must be an allowed scalar key type;
 - map and oneof fields reject invalid labels and field options;
 - field numbers are 1..536870911, excluding 19000..19999;
@@ -66,6 +68,7 @@ The trimmed descriptor subset cannot retain every source construct.
 The EasyPB parser therefore:
 
 - stores imports in `ParsedProto::imports`;
+- validates and consumes top-level service/RPC declarations without storing them in the trimmed descriptor model;
 - stores proto3 in `FileDescriptorProto.syntax`; proto2 is represented by an absent field 12, matching `protoc`;
 - consumes arbitrary options structurally but materializes only fields present
   in the trimmed descriptor model, including `default`, `packed`,
@@ -79,7 +82,6 @@ The EasyPB parser therefore:
 [`protobuf-proto2-proto3-complete.peg`](protobuf-proto2-proto3-complete.peg) additionally describes:
 
 - proto2 groups;
-- service and RPC declarations, including streaming endpoints;
 - full top-level and nested extend declarations;
 - extension-range options and message-valued declarations;
 - parenthesized custom option names at any dotted option-name position;

@@ -8,7 +8,7 @@ ProtoFile             <- EmptyStatement* SyntaxStatement? TopLevel* !.
 SyntaxStatement       <- K_SYNTAX "=" StringSequence ";"
 
 TopLevel              <- EmptyStatement / Package / Import / OptionStatement /
-                         Message / Enum / Extend
+                         Message / Enum / Extend / Service
 
 Package               <- K_PACKAGE FullIdentifier ";"
 Import                <- K_IMPORT (K_PUBLIC / K_WEAK)? StringSequence ";"
@@ -44,6 +44,13 @@ ReservedNames         <- StringSequence ("," StringSequence)*
 
 Extensions            <- K_EXTENSIONS MessageRanges FieldOptions? ";"
 Extend                <- K_EXTEND TypeName "{" (EmptyStatement / Field)* "}"
+
+Service               <- K_SERVICE Identifier "{" ServiceElement* "}"
+ServiceElement        <- EmptyStatement / OptionStatement / Rpc
+Rpc                   <- K_RPC Identifier "(" K_STREAM? TypeName ")"
+                         K_RETURNS "(" K_STREAM? TypeName ")"
+                         (RpcBody / ";")
+RpcBody               <- "{" (EmptyStatement / OptionStatement)* "}"
 
 FieldOptions          <- "[" FieldOption ("," FieldOption)* "]"
 FieldOption           <- OptionName "=" Constant
@@ -125,6 +132,10 @@ K_MAP                 <- < "map" ![A-Za-z0-9_] >
 K_RESERVED            <- < "reserved" ![A-Za-z0-9_] >
 K_EXTENSIONS          <- < "extensions" ![A-Za-z0-9_] >
 K_EXTEND              <- < "extend" ![A-Za-z0-9_] >
+K_SERVICE             <- < "service" ![A-Za-z0-9_] >
+K_RPC                 <- < "rpc" ![A-Za-z0-9_] >
+K_RETURNS             <- < "returns" ![A-Za-z0-9_] >
+K_STREAM              <- < "stream" ![A-Za-z0-9_] >
 K_OPTIONAL            <- < "optional" ![A-Za-z0-9_] >
 K_REQUIRED            <- < "required" ![A-Za-z0-9_] >
 K_REPEATED            <- < "repeated" ![A-Za-z0-9_] >

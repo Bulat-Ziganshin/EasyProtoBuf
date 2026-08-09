@@ -295,6 +295,59 @@ void test_buffer_api_owns_result_strings()
     CHECK(text(parsed.file.message_type[0].field[0].name) == "value");
 }
 
+
+void test_service_rpc_syntax_is_consumed()
+{
+    const char* source =
+        "syntax = \"proto3\";\n"
+        "package rpc.test;\n"
+        "message Request { string text = 1; }\n"
+        "message Reply { string text = 1; }\n"
+        "service Greeter {\n"
+        "  option deprecated = true;\n"
+        "  rpc Unary(Request) returns (Reply);\n"
+        "  rpc ClientStream(stream .rpc.test.Request) returns (Reply) {\n"
+        "    option deprecated = true;\n"
+        "  }\n"
+        "  rpc ServerStream(Request) returns (stream Reply);\n"
+        "  rpc Bidi(stream Request) returns (stream Reply) {}\n"
+        "}\n"
+        "message AfterService { int32 value = 1; }\n";
+
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("rpc.proto", source, parsed, error));
+    CHECK(parsed.file.message_type.size() == 3);
+    if (parsed.file.message_type.size() != 3) return;
+    CHECK(text(parsed.file.message_type[0].name) == "Request");
+    CHECK(text(parsed.file.message_type[1].name) == "Reply");
+    CHECK(text(parsed.file.message_type[2].name) == "AfterService");
+}
+
+void test_service_is_rejected_inside_message()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto(
+        "bad-rpc.proto",
+        "syntax=\"proto3\"; message M { service S {} }",
+        parsed,
+        error));
+    CHECK(error.message.find("service") != std::string::npos);
+}
+
+void test_rejects_malformed_rpc_syntax()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto(
+        "bad-rpc.proto",
+        "syntax=\"proto3\"; message A {} message B {} service S { rpc R(A) B; }",
+        parsed,
+        error));
+    CHECK(error.message.find("returns") != std::string::npos);
+}
+
 void test_decode_all_field_descriptor_members()
 {
     const unsigned char encoded[] = {
@@ -404,6 +457,9 @@ int main()
     test_rejects_reserved_enum_values();
     test_rejects_duplicate_oneof_names();
     test_buffer_api_owns_result_strings();
+    test_service_rpc_syntax_is_consumed();
+    test_service_is_rejected_inside_message();
+    test_rejects_malformed_rpc_syntax();
     test_decode_all_field_descriptor_members();
     test_decode_complete_descriptor_set();
     test_decode_oneof_index();
