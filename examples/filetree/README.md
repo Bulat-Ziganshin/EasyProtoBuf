@@ -100,7 +100,7 @@ filetree.exe C:\
 
 ## Example output
 
-The progress indicator is continuously replaced while the directory is scanned. When scanning finishes, the final indicator is erased and replaced by a report such as:
+The progress indicator is continuously replaced while the directory is scanned. When scanning finishes, the final indicator is erased and replaced by a report like the following, captured on a Zen 3 notebook:
 
 ```text
 Scanned C:/, found 929'830'619'018 bytes (886'755.580 MiB), scan errors: 11'247

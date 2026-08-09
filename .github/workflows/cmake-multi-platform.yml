@@ -469,7 +469,7 @@ jobs:
 
 
   #####################################################################################################################
-  # Build legacy GCC 4.8 through GCC 8 in compatible Ubuntu containers. GCC 8 is also tested in C++17 mode.
+  # Build legacy GCC 4.7 through GCC 8 in compatible Ubuntu containers. GCC 8 is also tested in C++17 mode.
   # Current GCC 9 through GCC 16 are tested directly in the main matrix.
   #####################################################################################################################
   legacy-gcc:
@@ -481,11 +481,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # GCC 4.7 is intentionally disabled: Codegen requires C++11 features
-          # that are not implemented by this compiler. Keep the entry for documentation.
-          # - version: "4.7"
-          #   standard: "11"
-          #   image: ubuntu:14.04
+          - version: "4.7"
+            standard: "11"
+            image: ubuntu:14.04
 
           - version: "4.8"
             standard: "11"

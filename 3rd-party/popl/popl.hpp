@@ -479,7 +479,6 @@ class ConsoleOptionPrinter : public OptionPrinter
 {
 public:
     explicit ConsoleOptionPrinter(const OptionParser* option_parser);
-    ~ConsoleOptionPrinter() override = default;
 
     std::string print(const Attribute& max_attribute = Attribute::optional) const override;
 
@@ -497,7 +496,6 @@ class GroffOptionPrinter : public OptionPrinter
 {
 public:
     explicit GroffOptionPrinter(const OptionParser* option_parser);
-    ~GroffOptionPrinter() override = default;
 
     std::string print(const Attribute& max_attribute = Attribute::optional) const override;
 
@@ -515,7 +513,6 @@ class BashCompletionOptionPrinter : public OptionPrinter
 {
 public:
     BashCompletionOptionPrinter(const OptionParser* option_parser, std::string program_name);
-    ~BashCompletionOptionPrinter() override = default;
 
     std::string print(const Attribute& max_attribute = Attribute::optional) const override;
 
