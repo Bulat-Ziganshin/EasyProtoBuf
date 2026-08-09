@@ -1,5 +1,4 @@
-#ifndef FILETREE_PB_HPP_INCLUDED
-#define FILETREE_PB_HPP_INCLUDED
+#pragma once
 
 #include <cstdint>
 #include <string_view>
@@ -126,5 +125,3 @@ inline void decode(easypb::Decoder pb, FileTree& x)
 }
 
 } // namespace filetree
-
-#endif // FILETREE_PB_HPP_INCLUDED

@@ -6,7 +6,7 @@
 #define EASYPB_MainMessage_EXTRA_ENCODING(pb, x)   (pb).put_bool(100, (x).extra_flag);
 #define EASYPB_MainMessage_EXTRA_DECODING(pb, x)   case 100: (pb).get_bool(&(x).extra_flag); break;
 
-#include "tutorial.pb.cpp"
+#include "tutorial.pb.hpp"
 
 
 // Fill msg with some data

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "descriptor.pb.cpp"
+#include "descriptor.pb.hpp"
 
 namespace easypb_proto {
 

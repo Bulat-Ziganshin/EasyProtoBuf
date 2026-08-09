@@ -2,7 +2,7 @@
 
 Files:
 - [tutorial.proto](tutorial.proto) — Protobuf definition of the serialized structures
-- [tutorial.pb.cpp](tutorial.pb.cpp) — generated C++ code for the schema
+- [tutorial.pb.hpp](tutorial.pb.hpp) — generated C++ header for the schema
 - [main.cpp](main.cpp) — sample client code that encodes a message, decodes it back, and checks the result
 
 ## Demonstrated Codegen features

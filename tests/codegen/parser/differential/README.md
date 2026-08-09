@@ -8,7 +8,7 @@ The test performs the following steps for every file under [`corpus/`](corpus/):
 
 1. run an external official `protoc` and request a binary `FileDescriptorSet`;
 2. parse the same source with the EasyPB parser;
-3. decode the official descriptor set with the trimmed [`../../../../codegen/descriptor.pb.cpp`](../../../../codegen/descriptor.pb.cpp);
+3. decode the official descriptor set with the trimmed [`../../../../codegen/descriptor.pb.hpp`](../../../../codegen/descriptor.pb.hpp);
 4. recursively compare every descriptor field represented by that trimmed
    model: messages, nested types, enums, fields, map entries, oneofs, defaults,
    explicit packed presence/value, labels, numbers and type names.

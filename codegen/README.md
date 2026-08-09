@@ -5,7 +5,7 @@ EasyProtoBuf Codegen accepts either a `.proto` source file or a binary descripto
 For direct source input:
 
 ```sh
-codegen tutorial.proto >tutorial.pb.cpp
+codegen tutorial.proto >tutorial.pb.hpp
 ```
 
 For descriptor-set input, first use the official [`protoc`](https://github.com/protocolbuffers/protobuf/releases) compiler to create the descriptor set:
@@ -17,13 +17,17 @@ protoc tutorial.proto -otutorial.pbs
 Then run EasyProtoBuf Codegen using either form:
 
 ```sh
-codegen tutorial.pbs >tutorial.pb.cpp
-codegen --descriptor-set tutorial.pbs >tutorial.pb.cpp
+codegen tutorial.pbs >tutorial.pb.hpp
+codegen --descriptor-set tutorial.pbs >tutorial.pb.hpp
 ```
+
+Codegen writes a header to stdout. The conventional output name is `<schema>.pb.hpp`, and generated output contains `#pragma once`, so it may be included from multiple translation units.
+
+The committed `descriptor.pb.hpp` is an internal trimmed descriptor header and intentionally keeps the legacy `EASYPB_DESCRIPTOR_PB_CPP_INCLUDED` include guard for portability; normal Codegen output still uses `#pragma once`.
 
 Descriptor-set input can be useful, for example, when descriptor files are already available, when that workflow is preferred, or when a schema uses imports that the built-in parser cannot link yet. A descriptor set must currently contain exactly one `FileDescriptorProto`; avoid `protoc --include_imports` until target-file selection is implemented.
 
-The generated file contains plain C++ structures followed by free codec overloads:
+The generated C++ header contains plain structures followed by free codec overloads:
 
 ```cpp
 struct Message
@@ -56,7 +60,7 @@ for details.
 Files:
 - [main.cpp](main.cpp) — command-line parser and file I/O
 - [codegen.cpp](codegen.cpp) — translates `FileDescriptorProto` into C++ code
-- [descriptor.pb.cpp](descriptor.pb.cpp) — C++ structures and ProtoBuf decoders for
+- [descriptor.pb.hpp](descriptor.pb.hpp) — C++ header with structures and EasyProtoBuf decoders for
   [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto)
 - [parser/](parser/) — `.proto` lexer/parser, descriptor pretty-printer and parser benchmark helper
 - [parser/README.md](parser/README.md) — parser API, lifetime and unresolved-import behavior
@@ -143,11 +147,11 @@ never outlives the input buffer.
 `-r, --repeated-type arg (=std::vector)` selects the container for repeated fields.
 `{}` or `{0}` is replaced by the element type. If no placeholder is present, `<{}>` is appended.
 For example, `--repeated-type 'std::deque<{}>'` produces `std::deque<int32_t>`.
-Include the corresponding container header before the generated file.
+Include the corresponding container header before the generated header.
 
 `-m, --map-type arg (=std::map)` selects the container for map fields.
 `{0}` and `{1}` are replaced by the key and value types. If no placeholders are present,
-`<{0},{1}>` is appended. Include the corresponding container header before the generated file.
+`<{0},{1}>` is appended. Include the corresponding container header before the generated header.
 
 Codegen currently supports scalar and enum map values. Enum values are represented as `int32_t`.
 Message-valued maps are not supported yet.
@@ -177,4 +181,4 @@ For example:
     case 100: (pb).get_bool(&(message).extra_flag); break;
 ```
 
-Define insertion macros before including the generated file. See the [Tutorial](../examples/tutorial).
+Define insertion macros before including the generated header. See the [Tutorial](../examples/tutorial).

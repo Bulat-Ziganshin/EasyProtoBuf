@@ -9,7 +9,7 @@ This directory contains the parser frontend used by [EasyProtoBuf Codegen](../RE
 
 Only [`proto_parser.cpp`](proto_parser.cpp) belongs to the reusable parser library. The pretty-printer and benchmark are linked into the full `codegen` executable but are not dependencies of parser consumers.
 
-The parser accepts a borrowed input buffer and returns a `ParsedProto` object that owns all strings retained by its `FileDescriptorProto` tree. The input buffer may be destroyed immediately after `parse_proto()` returns. The shared descriptor structures are defined in [`../descriptor.pb.cpp`](../descriptor.pb.cpp).
+The parser accepts a borrowed input buffer and returns a `ParsedProto` object that owns all strings retained by its `FileDescriptorProto` tree. The input buffer may be destroyed immediately after `parse_proto()` returns. The shared descriptor structures are defined in [`../descriptor.pb.hpp`](../descriptor.pb.hpp).
 
 Imports are parsed and recorded but are not loaded yet. Unresolved imported types carry the machine-readable diagnostic code `DIAGNOSTIC_UNRESOLVED_TYPE`. Code generation refuses such schemas; descriptor printing and benchmarking continue with warnings.
 
