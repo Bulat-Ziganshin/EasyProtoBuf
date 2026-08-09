@@ -27,7 +27,7 @@ Library features:
 - the generated decoder checks the presence of required fields in the decoded message
 - command-line options to tailor the generated code
 - planned:
-  - support for C++ enum definitions, oneof fields, message-valued maps,
+  - support for C++ enum definitions, oneof fields,
   and nested message type definitions (and thus dogfooding Codegen)
   - protoc plugin
   - validation of enum, integer and bool values by the generated code

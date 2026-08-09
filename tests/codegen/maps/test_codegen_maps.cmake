@@ -119,11 +119,16 @@ require_contains(custom_out
     "custom_map<int64_t,std::string> payloads;"
     "Custom bytes map container")
 
-run_fail(message_out message_err
-    ${CODEGEN} --descriptor-set ${message_pbs})
-require_contains(message_err
-    "Unsupported map value type 'message' for field MessageMap.items"
-    "Message-valued map rejection")
+run_ok(message_out message_err ${CODEGEN} --descriptor-set ${message_pbs})
+require_contains(message_out
+    "std::map<std::string,Item> items;"
+    "Message map C++ type")
+require_contains(message_out
+    "pb.put_map_string_message(1, x.items);"
+    "Message map encoder")
+require_contains(message_out
+    "pb.get_map_string_message(&x.items);"
+    "Message map decoder")
 
 run_fail(malformed_out malformed_err
     ${CODEGEN} --descriptor-set ${malformed_pbs})
@@ -148,8 +153,11 @@ if(FULL_BUILD)
             "Enum map .proto and .pbs generated outputs differ")
     endif()
 
-    run_fail(message_proto_out message_proto_err ${CODEGEN} ${message_proto})
-    require_contains(message_proto_err
-        "Unsupported map value type 'message' for field MessageMap.items"
-        "Source message-valued map rejection")
+    run_ok(message_proto_out message_proto_err ${CODEGEN} ${message_proto})
+    normalize_source_comment(message_out message_pbs_normalized)
+    normalize_source_comment(message_proto_out message_proto_normalized)
+    if(NOT message_proto_normalized STREQUAL message_pbs_normalized)
+        message(FATAL_ERROR
+            "Message map .proto and .pbs generated outputs differ")
+    endif()
 endif()

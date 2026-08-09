@@ -114,7 +114,7 @@ ctest --test-dir build --output-on-failure
 
 The [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) test checks explicit and implicit descriptor-set input, `.proto` versus `.pbs` generated-code equivalence, proto2/proto3 packed behavior, descriptor printing, parser benchmarking, unresolved-type handling, and invalid empty/multi-file descriptor sets.
 
-The [`codegen.maps`](../tests/codegen/maps/test_codegen_maps.cmake) test covers scalar and enum-valued map generation, custom map containers, unsupported message-valued maps, malformed map descriptors, and `.proto`/`.pbs` equivalence. `codegen.maps.runtime` compiles the current generated ADL codecs and verifies scalar and enum map round trips in both full and descriptor-set-only builds.
+The [`codegen.maps`](../tests/codegen/maps/test_codegen_maps.cmake) test covers scalar, enum and message-valued map generation, custom map containers, malformed map descriptors, and `.proto`/`.pbs` equivalence. `codegen.maps.runtime` compiles the generated ADL codecs and verifies scalar, enum and message-valued map round trips in both full and descriptor-set-only builds.
 
 The parser unit tests are in [`../tests/codegen/parser/test_parser.cpp`](../tests/codegen/parser/test_parser.cpp).
 
@@ -153,8 +153,8 @@ Include the corresponding container header before the generated header.
 `{0}` and `{1}` are replaced by the key and value types. If no placeholders are present,
 `<{0},{1}>` is appended. Include the corresponding container header before the generated header.
 
-Codegen currently supports scalar and enum map values. Enum values are represented as `int32_t`.
-Message-valued maps are not supported yet.
+Codegen supports scalar, enum and message map values. Enum values are represented as `int32_t`.
+Message-valued maps may use message types that Codegen can currently emit; nested message definitions are not generated yet.
 
 ## Code insertion points
 

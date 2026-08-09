@@ -95,12 +95,14 @@ if(BUILD_TESTING)
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>
             -DSCALAR_INPUT=${codegen_maps_data_dir}/scalar_maps.pbs
             -DENUM_INPUT=${codegen_maps_data_dir}/enum_map.pbs
+            -DMESSAGE_INPUT=${codegen_maps_data_dir}/message_map.pbs
             -DOUTPUT=${codegen_maps_generated_header}
             -P ${codegen_maps_dir}/generate_runtime_header.cmake
         DEPENDS
             easypb_codegen
             ${codegen_maps_data_dir}/scalar_maps.pbs
             ${codegen_maps_data_dir}/enum_map.pbs
+            ${codegen_maps_data_dir}/message_map.pbs
             ${codegen_maps_dir}/generate_runtime_header.cmake
         VERBATIM)
     add_custom_target(codegen_maps_generated

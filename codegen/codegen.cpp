@@ -381,9 +381,7 @@ const MapType* find_map_type(const FieldDescriptorProto& field, const MapTypeByN
     const FieldDescriptorProto* value_field = map_type->value_field;
     auto value_type = value_field->type;
 
-    // TODO: Support message map values, including qualified nested message names.
-    if (value_type == FieldDescriptorProto::TYPE_MESSAGE ||
-        value_type == FieldDescriptorProto::TYPE_GROUP)
+    if (value_type == FieldDescriptorProto::TYPE_GROUP)
     {
         throw std::runtime_error(
             myformat("Unsupported map value type '{0}' for field {1}{2}",

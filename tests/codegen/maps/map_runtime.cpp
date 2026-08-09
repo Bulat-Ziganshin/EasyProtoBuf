@@ -44,5 +44,25 @@ int main()
         return 1;
     }
 
+    // Message-valued maps use the normal message codec for each value.
+    MessageMap message_source;
+    Item first;
+    first.value = 10;
+    Item second;
+    second.value = 20;
+    message_source.items["first"] = first;
+    message_source.items["second"] = second;
+
+    const std::string message_data = easypb::encode(message_source);
+    const MessageMap message_copy = easypb::decode<MessageMap>(message_data);
+
+    if (message_copy.items.size() != message_source.items.size() ||
+        message_copy.items.at("first").value != 10 ||
+        message_copy.items.at("second").value != 20)
+    {
+        std::cerr << "Decoded message map differs from the source\n";
+        return 1;
+    }
+
     return 0;
 }
