@@ -1,0 +1,13 @@
+
+º
+nested-lexical-cycle.proto"I
+RootA#
+X
+value (2.RootB.YRvalue
+Z
+number (Rnumber"I
+RootB
+Y
+number (Rnumber#
+W
+value (2.RootA.ZRvaluebproto3

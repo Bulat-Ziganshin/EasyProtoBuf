@@ -27,7 +27,7 @@ The committed `descriptor.pb.hpp` is an internal trimmed descriptor header and i
 
 Descriptor-set input can be useful, for example, when descriptor files are already available, when that workflow is preferred, or when a schema uses imports that the built-in parser cannot link yet. A descriptor set must currently contain exactly one `FileDescriptorProto`; avoid `protoc --include_imports` until target-file selection is implemented.
 
-The generated C++ header contains plain structures followed by free codec overloads:
+The generated C++ header contains plain structures followed by free codec overloads. Nested Protobuf messages become nested C++ structures:
 
 ```cpp
 struct Message
@@ -52,6 +52,19 @@ inline void decode(easypb::Decoder pb, Message &x)
     }
 }
 ```
+
+For example:
+
+```proto
+message Outer {
+  message Inner {
+    int32 value = 1;
+  }
+  Inner inner = 1;
+}
+```
+
+generates `Outer::Inner` as a nested C++ type. Acyclic by-value message dependencies are ordered automatically, including forward references between top-level messages and nested siblings. Recursive message-value graphs are currently rejected because Codegen emits message fields and containers as C++ values and does not define an ownership/pointer policy. This is a Codegen restriction, not a parser restriction.
 
 The codec overloads are found through ADL (argument-dependent lookup), so they must be defined
 either in the same namespace as the message type or in `easypb`. See [Using the API](../README.md#using-the-api)
@@ -118,6 +131,8 @@ The [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) test che
 
 The [`codegen.maps`](../tests/codegen/maps/test_codegen_maps.cmake) test covers scalar, enum and message-valued map generation, custom map containers, malformed map descriptors, and `.proto`/`.pbs` equivalence. `codegen.maps.runtime` compiles the generated ADL codecs and verifies scalar, enum and message-valued map round trips in both full and descriptor-set-only builds.
 
+The nested-message checks in [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) cover lexical C++ nesting, qualified names, forward-reference ordering, `.proto`/`.pbs` equivalence, and clean rejection of recursive value dependencies. [`codegen.nested.runtime`](../tests/codegen/nested/nested_runtime.cpp) compiles the generated C++11 code and verifies nested-message and nested-message-map round trips.
+
 The parser unit tests are in [`../tests/codegen/parser/test_parser.cpp`](../tests/codegen/parser/test_parser.cpp).
 
 To verify the descriptor-set-only build separately:
@@ -155,12 +170,15 @@ Include the corresponding container header before the generated header.
 `{0}` and `{1}` are replaced by the key and value types. If no placeholders are present,
 `<{0},{1}>` is appended. Include the corresponding container header before the generated header.
 
-Codegen supports scalar, enum and message map values. Enum values are represented as `int32_t`.
-Message-valued maps may use message types that Codegen can currently emit; nested message definitions are not generated yet.
+Codegen supports scalar, enum and message map values. Enum values are represented as `int32_t`. Message-valued maps may use either top-level or nested message types.
+
+Nested enum declarations are parsed, but Codegen does not yet emit C++ enum definitions; enum fields continue to use the existing `int32_t` representation.
 
 ## Code insertion points
 
 For each generated message type `{TYPE}`, Codegen recognizes four optional insertion macros:
+For nested messages, `{TYPE}` is the qualified message name with `::` replaced by `_`; for example `Outer::Inner` uses `EASYPB_Outer_Inner_*`.
+
 
 ```cpp
 EASYPB_{TYPE}_EXTRA_FIELDS

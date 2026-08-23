@@ -115,6 +115,37 @@ if(BUILD_TESTING)
         include ${codegen_maps_generated_dir})
     add_test(NAME codegen.maps.runtime COMMAND codegen_maps_runtime_test)
 
+    set(codegen_nested_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/nested)
+    set(codegen_nested_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-nested)
+    set(codegen_nested_messages_header
+        ${codegen_nested_generated_dir}/nested-messages.generated.hpp)
+    set(codegen_nested_forward_header
+        ${codegen_nested_generated_dir}/nested-forward.generated.hpp)
+    add_custom_command(
+        OUTPUT ${codegen_nested_messages_header} ${codegen_nested_forward_header}
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/parser/data
+            -DOUTPUT_DIR=${codegen_nested_generated_dir}
+            -P ${codegen_nested_dir}/generate_headers.cmake
+        DEPENDS
+            easypb_codegen
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/parser/data/nested-messages.pbs
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/parser/data/nested-forward.pbs
+            ${codegen_nested_dir}/generate_headers.cmake
+        VERBATIM)
+    add_custom_target(codegen_nested_generated
+        DEPENDS ${codegen_nested_messages_header} ${codegen_nested_forward_header})
+
+    add_executable(codegen_nested_runtime_test
+        ${codegen_nested_dir}/nested_runtime.cpp)
+    add_dependencies(codegen_nested_runtime_test codegen_nested_generated)
+    target_include_directories(codegen_nested_runtime_test PRIVATE
+        include ${codegen_nested_generated_dir})
+    add_test(NAME codegen.nested.runtime COMMAND codegen_nested_runtime_test)
+
     add_test(NAME codegen.modes
         COMMAND ${CMAKE_COMMAND}
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>

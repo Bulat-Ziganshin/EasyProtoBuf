@@ -5,6 +5,20 @@
 #include <stdexcept>
 #include <string>
 
+// Return true if `value` starts with `prefix`.
+bool starts_with(str_view value, str_view prefix)
+{
+    return value.size() >= prefix.size() &&
+           value.compare(0, prefix.size(), prefix) == 0;
+}
+
+// Return true if `value` ends with `suffix`.
+bool ends_with(str_view value, str_view suffix)
+{
+    return value.size() >= suffix.size() &&
+           value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 // Returns a version of 'str' where every occurrence of
 // 'find' is substituted by 'replace'.
 // - http://stackoverflow.com/questions/20406744/

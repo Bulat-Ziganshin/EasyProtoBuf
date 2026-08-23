@@ -1,0 +1,15 @@
+
+½
+nested-messages.proto"ï
+Outer"
+inner (2.Outer.InnerRinner+
+by_name (2.Outer.ByNameEntryRbyNameL
+Inner%
+leaf (2.Outer.Inner.LeafRleaf
+Leaf
+value (RvalueG
+ByNameEntry
+key (	Rkey"
+value (2.Outer.InnerRvalue:8"*
+Holder 
+item (2.Outer.InnerRitembproto3

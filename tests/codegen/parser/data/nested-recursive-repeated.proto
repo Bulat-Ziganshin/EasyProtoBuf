@@ -1,0 +1,4 @@
+syntax = "proto3";
+message RepeatedNode {
+  repeated RepeatedNode children = 1;
+}

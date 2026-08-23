@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+message Outer {
+  message Inner {
+    message Leaf {
+      int32 value = 1;
+    }
+
+    Leaf leaf = 1;
+  }
+
+  Inner inner = 1;
+  map<string, Inner> by_name = 2;
+}
+
+message Holder {
+  Outer.Inner item = 1;
+}

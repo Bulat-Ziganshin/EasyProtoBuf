@@ -1,0 +1,5 @@
+syntax = "proto3";
+
+message Node {
+  Node next = 1;
+}

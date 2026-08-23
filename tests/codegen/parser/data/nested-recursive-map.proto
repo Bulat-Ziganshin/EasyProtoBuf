@@ -1,0 +1,4 @@
+syntax = "proto3";
+message MapNode {
+  map<string, MapNode> children = 1;
+}

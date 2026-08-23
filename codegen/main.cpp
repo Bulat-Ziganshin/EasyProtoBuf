@@ -64,13 +64,6 @@ const char* usage_text()
 #endif
 }
 
-bool ends_with(const std::string& value, const char* suffix)
-{
-    const std::string tail(suffix);
-    return value.size() >= tail.size() &&
-           value.compare(value.size() - tail.size(), tail.size(), tail) == 0;
-}
-
 bool read_file(const std::string& filename, std::string& contents)
 {
     std::ifstream input(filename.c_str(), std::ios::in | std::ios::binary);
@@ -348,8 +341,8 @@ int main(int argc, char** argv)
                     continue;
                 }
 #endif
-                std::cout << myformat(FILE_TEMPLATE, filename);
-                generator(file);
+                const std::string generated = generator(file);
+                std::cout << myformat(FILE_TEMPLATE, filename) << generated;
                 continue;
             }
 
@@ -369,8 +362,8 @@ int main(int argc, char** argv)
                     ": generation stopped because imported type linking is not implemented; "
                     "use protoc and codegen --descriptor-set for schemas with unresolved imports");
             }
-            std::cout << myformat(FILE_TEMPLATE, filename);
-            generator(parsed.file);
+            const std::string generated = generator(parsed.file);
+            std::cout << myformat(FILE_TEMPLATE, filename) << generated;
 #else
             (void)contents;
             throw std::runtime_error(

@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+message First {
+  Second value = 1;
+}
+
+message Second {
+  int32 number = 1;
+}
+
+message Parent {
+  message A {
+    B value = 1;
+  }
+
+  message B {
+    int32 number = 1;
+  }
+
+  A a = 1;
+}

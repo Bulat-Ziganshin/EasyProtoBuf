@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+message RootA {
+  message X {
+    RootB.Y value = 1;
+  }
+  message Z {
+    int32 number = 1;
+  }
+}
+
+message RootB {
+  message Y {
+    int32 number = 1;
+  }
+  message W {
+    RootA.Z value = 1;
+  }
+}

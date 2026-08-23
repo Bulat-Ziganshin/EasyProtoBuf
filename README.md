@@ -23,12 +23,12 @@ Library features:
 - [protozero][] is a production-grade library with a similar API
 
 [Codegen](codegen) features:
-- generates a C++ structure and free `encode`/`decode` overloads for each message type
+- generates C++ structures and free `encode`/`decode` overloads for top-level and nested message types
+- supports map fields with scalar, enum and message values, including nested message values
 - the generated decoder checks the presence of required fields in the decoded message
 - command-line options to tailor the generated code
 - planned:
-  - support for C++ enum definitions, oneof fields,
-  and nested message type definitions (and thus dogfooding Codegen)
+  - support for C++ enum definitions and oneof fields
   - protoc plugin
   - validation of enum, integer and bool values by the generated code
   - per-field C++ type specification
