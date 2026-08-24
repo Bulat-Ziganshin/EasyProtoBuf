@@ -74,6 +74,11 @@ if(BUILD_TESTING)
     add_test(NAME compare.decoded.data.with.original
              COMMAND tutorial)
 
+    add_executable(wire_type_conversion_tests
+        tests/runtime/wire_type_conversion.cpp)
+    target_include_directories(wire_type_conversion_tests PRIVATE include)
+    add_test(NAME wire.type.conversions COMMAND wire_type_conversion_tests)
+
     set(codegen_maps_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/maps)
     set(codegen_maps_data_dir ${codegen_maps_dir}/data)

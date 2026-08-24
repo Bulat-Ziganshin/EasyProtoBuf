@@ -341,7 +341,12 @@ struct Encoder
             "put_packed_" #TYPE " isn't defined according to ProtoBuf format specifications");  \
                                                                               \
         write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                \
-        write_length_delimited([&]{ for(const auto &x: value)  WRITER(x); }); \
+        write_length_delimited([&]{                                           \
+            for(const auto &x: value) {                                       \
+                const C_TYPE converted_value = C_TYPE(x);                     \
+                WRITER(converted_value);                                      \
+            }                                                                 \
+        });                                                                   \
     }                                                                         \
                                                                               \
     EASYPB_DEFINE_MAP_WRITER(TYPE, int32)                                     \
@@ -369,8 +374,8 @@ struct Encoder
     EASYPB_DEFINE_MAP_WRITER(TYPE, message)                                   \
 /* end of EASYPB_DEFINE_WRITERS macro definition*/
 
-    EASYPB_DEFINE_WRITERS(int32, int32_t, WIRETYPE_VARINT, write_varint)
-    EASYPB_DEFINE_WRITERS(int64, int64_t, WIRETYPE_VARINT, write_varint)
+    EASYPB_DEFINE_WRITERS(int32,  int32_t,  WIRETYPE_VARINT, write_varint)
+    EASYPB_DEFINE_WRITERS(int64,  int64_t,  WIRETYPE_VARINT, write_varint)
     EASYPB_DEFINE_WRITERS(uint32, uint32_t, WIRETYPE_VARINT, write_varint)
     EASYPB_DEFINE_WRITERS(uint64, uint64_t, WIRETYPE_VARINT, write_varint)
 
@@ -382,14 +387,14 @@ struct Encoder
     EASYPB_DEFINE_WRITERS(sint32, int32_t, WIRETYPE_VARINT, write_zigzag)
     EASYPB_DEFINE_WRITERS(sint64, int64_t, WIRETYPE_VARINT, write_zigzag)
 
-    EASYPB_DEFINE_WRITERS(bool, bool, WIRETYPE_VARINT, write_varint)
+    EASYPB_DEFINE_WRITERS(bool, bool,    WIRETYPE_VARINT, write_varint)
     EASYPB_DEFINE_WRITERS(enum, int32_t, WIRETYPE_VARINT, write_varint)
 
-    EASYPB_DEFINE_WRITERS(float, float, WIRETYPE_FIXED32, write_fixed_width)
+    EASYPB_DEFINE_WRITERS(float,  float,  WIRETYPE_FIXED32, write_fixed_width)
     EASYPB_DEFINE_WRITERS(double, double, WIRETYPE_FIXED64, write_fixed_width)
 
     EASYPB_DEFINE_WRITERS(string, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
-    EASYPB_DEFINE_WRITERS(bytes, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
+    EASYPB_DEFINE_WRITERS(bytes,  string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
 
 #undef EASYPB_DEFINE_MAP_WRITER
 #undef EASYPB_DEFINE_WRITERS
@@ -538,8 +543,15 @@ struct Decoder
         throw varint_too_long("More than 10 bytes in varint");
     }
 
+    // A sint32 value truncates the raw varint before applying ZigZag decoding.
+    int32_t read_zigzag32()
+    {
+        uint32_t value = uint32_t(read_varint());
+        return int32_t((value >> 1) ^ uint32_t(- int32_t(value & 1)));
+    }
+
     // Read zigzag-encoded integer value
-    int64_t read_zigzag()
+    int64_t read_zigzag64()
     {
         uint64_t value = read_varint();
         return (value >> 1) ^ (- int64_t(value & 1));
@@ -568,10 +580,21 @@ struct Decoder
         }
     }
 
-    int64_t parse_zigzag_value()
+    int32_t parse_zigzag32_value()
     {
         switch(wire_type) {
-            case WIRETYPE_VARINT:   return read_zigzag();
+            case WIRETYPE_VARINT:   return read_zigzag32();
+            case WIRETYPE_FIXED64:  return int32_t(read_fixed_width<int64_t>());
+            case WIRETYPE_FIXED32:  return read_fixed_width<int32_t>();
+            default:                throw wiretype_mismatch("Can't parse zigzag integral value with wiretype "
+                                            + std::to_string(wire_type));
+        }
+    }
+
+    int64_t parse_zigzag_value64()
+    {
+        switch(wire_type) {
+            case WIRETYPE_VARINT:   return read_zigzag64();
             case WIRETYPE_FIXED64:  return read_fixed_width<int64_t>();
             case WIRETYPE_FIXED32:  return read_fixed_width<int32_t>();
             default:                throw wiretype_mismatch("Can't parse zigzag integral value with wiretype "
@@ -664,14 +687,13 @@ struct Decoder
                                                                               \
     C_TYPE get_##TYPE()                                                       \
     {                                                                         \
-        using FieldType = C_TYPE;                                             \
-        return FieldType(PARSER());                                           \
+        return C_TYPE(PARSER());                                              \
     }                                                                         \
                                                                               \
     template <typename FieldType>                                             \
     void get_##TYPE(FieldType *field, bool *has_field = nullptr)              \
     {                                                                         \
-        *field = FieldType(PARSER());                                         \
+        *field = FieldType(get_##TYPE());                                     \
         if(has_field)  *has_field = true;                                     \
     }                                                                         \
                                                                               \
@@ -684,10 +706,11 @@ struct Decoder
             /* Parsing packed repeated field */                               \
             Decoder sub_decoder(parse_bytearray_value());                     \
             while (! sub_decoder.eof()) {                                     \
-                field->push_back( FieldType(sub_decoder.READER()) );          \
+                const C_TYPE value = C_TYPE(sub_decoder.READER());            \
+                field->push_back( FieldType(value) );                         \
             }                                                                 \
         } else {                                                              \
-            field->push_back( FieldType(PARSER()) );                          \
+            field->push_back( FieldType(get_##TYPE()) );                      \
         }                                                                     \
     }                                                                         \
                                                                               \
@@ -716,8 +739,8 @@ struct Decoder
     EASYPB_DEFINE_MAP_READER(TYPE, message)                                   \
 /* end of EASYPB_DEFINE_READERS macro definition */
 
-    EASYPB_DEFINE_READERS(int32, int32_t, parse_integer_value, read_varint)
-    EASYPB_DEFINE_READERS(int64, int64_t, parse_integer_value, read_varint)
+    EASYPB_DEFINE_READERS(int32,  int32_t,  parse_integer_value, read_varint)
+    EASYPB_DEFINE_READERS(int64,  int64_t,  parse_integer_value, read_varint)
     EASYPB_DEFINE_READERS(uint32, uint32_t, parse_integer_value, read_varint)
     EASYPB_DEFINE_READERS(uint64, uint64_t, parse_integer_value, read_varint)
 
@@ -726,17 +749,17 @@ struct Decoder
     EASYPB_DEFINE_READERS(fixed32, uint32_t, parse_integer_value, read_fixed_width<uint32_t>)
     EASYPB_DEFINE_READERS(fixed64, uint64_t, parse_integer_value, read_fixed_width<uint64_t>)
 
-    EASYPB_DEFINE_READERS(sint32, int32_t, parse_zigzag_value, read_zigzag)
-    EASYPB_DEFINE_READERS(sint64, int64_t, parse_zigzag_value, read_zigzag)
+    EASYPB_DEFINE_READERS(sint32, int32_t, parse_zigzag32_value, read_zigzag32)
+    EASYPB_DEFINE_READERS(sint64, int64_t, parse_zigzag_value64, read_zigzag64)
 
-    EASYPB_DEFINE_READERS(bool, bool, parse_integer_value, read_varint)
+    EASYPB_DEFINE_READERS(bool, bool,    parse_integer_value, read_varint)
     EASYPB_DEFINE_READERS(enum, int32_t, parse_integer_value, read_varint)
 
-    EASYPB_DEFINE_READERS(float, float, parse_fp_value<FieldType>, read_fixed_width<float>)
-    EASYPB_DEFINE_READERS(double, double, parse_fp_value<FieldType>, read_fixed_width<double>)
+    EASYPB_DEFINE_READERS(float,  float,  parse_fp_value<float>,  read_fixed_width<float>)
+    EASYPB_DEFINE_READERS(double, double, parse_fp_value<double>, read_fixed_width<double>)
 
     EASYPB_DEFINE_READERS(string, string_view, parse_bytearray_value, parse_bytearray_value)
-    EASYPB_DEFINE_READERS(bytes, string_view, parse_bytearray_value, parse_bytearray_value)
+    EASYPB_DEFINE_READERS(bytes,  string_view, parse_bytearray_value, parse_bytearray_value)
 
 #undef EASYPB_DEFINE_MAP_READER
 #undef EASYPB_DEFINE_READERS
