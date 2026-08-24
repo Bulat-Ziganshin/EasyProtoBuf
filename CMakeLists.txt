@@ -79,6 +79,11 @@ if(BUILD_TESTING)
     target_include_directories(wire_type_conversion_tests PRIVATE include)
     add_test(NAME wire.type.conversions COMMAND wire_type_conversion_tests)
 
+    add_executable(skip_unknown_groups_tests
+        tests/runtime/skip_unknown_groups.cpp)
+    target_include_directories(skip_unknown_groups_tests PRIVATE include)
+    add_test(NAME wire.skip.unknown.groups COMMAND skip_unknown_groups_tests)
+
     set(codegen_maps_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/maps)
     set(codegen_maps_data_dir ${codegen_maps_dir}/data)

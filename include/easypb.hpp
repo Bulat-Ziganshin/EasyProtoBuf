@@ -15,6 +15,7 @@ It consists of 3 big sections:
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <vector>
 #if __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
 #include <string_view>
 #endif
@@ -650,6 +651,29 @@ struct Decoder
                 throw length_too_long("Byte array field is too long with " + std::to_string(len) + " bytes");
             }
             advance_ptr(int32_t(len));
+        } else if (wire_type == WIRETYPE_START_GROUP) {
+            // Keep an explicit stack so deeply nested unknown groups do not
+            // consume the C++ call stack while they are being skipped.
+            std::vector<uint32_t> open_groups(1, field_num);
+            while (!open_groups.empty()) {
+                if (!get_next_field()) {
+                    throw unexpected_eof("Unexpected end of buffer in group field "
+                                         + std::to_string(open_groups.back()));
+                }
+
+                if (wire_type == WIRETYPE_START_GROUP) {
+                    open_groups.push_back(field_num);
+                } else if (wire_type == WIRETYPE_END_GROUP) {
+                    if (field_num != open_groups.back()) {
+                        throw wiretype_mismatch("Group field "
+                            + std::to_string(open_groups.back())
+                            + " ended by field " + std::to_string(field_num));
+                    }
+                    open_groups.pop_back();
+                } else {
+                    skip_field();
+                }
+            }
         } else {
             throw unsupported_wiretype("Unsupported wire type " + std::to_string(wire_type));
         }
