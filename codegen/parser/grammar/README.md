@@ -31,7 +31,7 @@ The grammar describes what the frontend can parse structurally, not every source
 
 ## Complete proto2/proto3 grammar
 
-[`protobuf-proto2-proto3-complete.peg`](protobuf-proto2-proto3-complete.peg) is the broader engineering reference. It includes deprecated groups, full extend syntax, extension-range options, parenthesized custom option-name parts, and structured message-valued options beyond the subset consumed by the EasyPB parser.
+[`protobuf-proto2-proto3-complete.peg`](protobuf-proto2-proto3-complete.peg) is the broader engineering reference. It includes deprecated groups, full extend syntax, extension-range options, and structured message-valued options beyond the subset consumed by the EasyPB parser.
 
 “Complete” here means the proto2 and proto3 schema languages. Protobuf Editions are a separate language revision and are outside the current parser scope.
 

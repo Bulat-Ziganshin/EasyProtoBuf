@@ -41,6 +41,7 @@
  *   Rpc                  -> parse_rpc()
  *   RpcBody              -> parse_rpc_body()
  *   OptionName           -> option_name()
+ *   OptionNamePart       -> option_name_part()
  *   Constant             -> constant()
  *   StringSequence       -> string_sequence()
  *   FullIdentifier,
@@ -932,21 +933,24 @@ private:
         out_.imports.push_back(info);
     }
 
-    // OptionName <- ("(" FullIdentifier ")" / Identifier)
-    //               ("." Identifier)*
+    // OptionNamePart <- Identifier / "(" "."? FullIdentifier ")"
+    std::string option_name_part()
+    {
+        if (!accept_symbol('(')) return identifier();
+
+        std::string part = "(" + full_identifier(true);
+        expect_symbol(')');
+        part += ")";
+        return part;
+    }
+
+    // OptionName <- OptionNamePart ("." OptionNamePart)*
     std::string option_name()
     {
-        std::string name;
-        if (accept_symbol('(')) {
-            name = "(" + full_identifier(false);
-            expect_symbol(')');
-            name += ")";
-        } else {
-            name = identifier();
-        }
+        std::string name = option_name_part();
         while (accept_symbol('.')) {
             name += ".";
-            name += identifier();
+            name += option_name_part();
         }
         return name;
     }

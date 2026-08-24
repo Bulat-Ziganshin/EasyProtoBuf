@@ -296,6 +296,98 @@ void test_buffer_api_owns_result_strings()
 }
 
 
+void test_full_custom_option_name_parts_are_consumed()
+{
+    const char* proto2_source =
+        "syntax = \"proto2\";\n"
+        "option file_scope.(vendor.file).(.absolute.path) = true;\n"
+        "option (legacy.option).leaf = true;\n"
+        "enum E {\n"
+        "  option enum_scope.(vendor.enum) = true;\n"
+        "  option allow_alias = true;\n"
+        "  ZERO = 0 [value_scope.(vendor.value) = 1];\n"
+        "  ALIAS = 0;\n"
+        "}\n"
+        "message M {\n"
+        "  option (.vendor.message).leaf = 1;\n"
+        "  extensions 100 to 199 [range_scope.(vendor.range) = true];\n"
+        "  repeated int32 values = 1 "
+        "      [field_scope.(vendor.field).(.nested.extension) = 7, packed = true];\n"
+        "  oneof choice {\n"
+        "    option oneof_scope.(vendor.oneof) = true;\n"
+        "    string text = 2 [oneof_field_scope.(vendor.field) = true];\n"
+        "  }\n"
+        "}\n"
+        "service S {\n"
+        "  option service_scope.(vendor.service) = true;\n"
+        "  rpc R(M) returns (M) {\n"
+        "    option method_scope.(vendor.method) = true;\n"
+        "  }\n"
+        "}\n";
+
+    easypb_proto::ParsedProto proto2;
+    easypb_proto::Diagnostic proto2_error;
+    const bool proto2_ok = easypb_proto::parse_proto(
+        "custom-options-proto2.proto", proto2_source, proto2, proto2_error);
+    CHECK(proto2_ok);
+    if (!proto2_ok) return;
+
+    CHECK(proto2.file.enum_type.size() == 1);
+    CHECK(proto2.file.enum_type[0].value.size() == 2);
+    CHECK(proto2.file.message_type.size() == 1);
+    if (proto2.file.message_type.empty()) return;
+    const FieldDescriptorProto* proto2_values =
+        find_field(proto2.file.message_type[0], "values");
+    CHECK(proto2_values != 0);
+    CHECK(proto2_values && proto2_values->has_options);
+    CHECK(proto2_values && proto2_values->options.has_packed);
+    CHECK(proto2_values && proto2_values->options.packed);
+
+    const char* proto3_source =
+        "syntax = \"proto3\";\n"
+        "option proto3_scope.(vendor.file).tail = true;\n"
+        "message P {\n"
+        "  repeated int32 values = 1 "
+        "      [(vendor.field).(.vendor.inner) = 1, packed = false];\n"
+        "}\n";
+
+    easypb_proto::ParsedProto proto3;
+    easypb_proto::Diagnostic proto3_error;
+    const bool proto3_ok = easypb_proto::parse_proto(
+        "custom-options-proto3.proto", proto3_source, proto3, proto3_error);
+    CHECK(proto3_ok);
+    if (!proto3_ok) return;
+
+    CHECK(proto3.file.message_type.size() == 1);
+    if (proto3.file.message_type.empty()) return;
+    const FieldDescriptorProto* proto3_values =
+        find_field(proto3.file.message_type[0], "values");
+    CHECK(proto3_values != 0);
+    CHECK(proto3_values && proto3_values->has_options);
+    CHECK(proto3_values && proto3_values->options.has_packed);
+    CHECK(proto3_values && !proto3_values->options.packed);
+}
+
+void test_malformed_custom_option_name_parts_are_rejected()
+{
+    const char* malformed[] = {
+        "option foo.() = true;",
+        "option foo..bar = true;",
+        "option foo.(.bar.) = true;",
+        "option .foo = true;",
+        "option (foo)(bar) = true;"
+    };
+
+    for (std::size_t i = 0; i < sizeof(malformed) / sizeof(malformed[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        CHECK(!easypb_proto::parse_proto("bad-custom-option.proto", malformed[i], parsed, error));
+        CHECK(!error.message.empty());
+        CHECK(error.location.line == 1);
+    }
+}
+
+
 void test_service_rpc_syntax_is_consumed()
 {
     const char* source =
@@ -457,6 +549,8 @@ int main()
     test_rejects_reserved_enum_values();
     test_rejects_duplicate_oneof_names();
     test_buffer_api_owns_result_strings();
+    test_full_custom_option_name_parts_are_consumed();
+    test_malformed_custom_option_name_parts_are_rejected();
     test_service_rpc_syntax_is_consumed();
     test_service_is_rejected_inside_message();
     test_rejects_malformed_rpc_syntax();

@@ -55,8 +55,8 @@ RpcBody               <- "{" (EmptyStatement / OptionStatement)* "}"
 FieldOptions          <- "[" FieldOption ("," FieldOption)* "]"
 FieldOption           <- OptionName "=" Constant
 GenericOption         <- OptionName "=" Constant
-OptionName            <- ("(" FullIdentifier ")" / Identifier)
-                         ("." Identifier)*
+OptionName            <- OptionNamePart ("." OptionNamePart)*
+OptionNamePart        <- Identifier / "(" "."? FullIdentifier ")"
 
 Constant              <- StringSequence / SignedFloat / SignedInteger /
                          BoolLiteral / FullIdentifier / AggregateValue

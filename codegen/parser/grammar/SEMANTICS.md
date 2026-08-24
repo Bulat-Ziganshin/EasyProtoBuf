@@ -70,9 +70,10 @@ The EasyPB parser therefore:
 - stores imports in `ParsedProto::imports`;
 - validates and consumes top-level service/RPC declarations without storing them in the trimmed descriptor model;
 - stores proto3 in `FileDescriptorProto.syntax`; proto2 is represented by an absent field 12, matching `protoc`;
-- consumes arbitrary options structurally but materializes only fields present
-  in the trimmed descriptor model, including `default`, `packed`,
-  `allow_alias`, map-entry information, and oneof indices;
+- consumes arbitrary options structurally, including parenthesized custom-name
+  parts at any dotted position and leading dots inside parentheses, but
+  materializes only fields present in the trimmed descriptor model, including
+  `default`, `packed`, `allow_alias`, map-entry information, and oneof indices;
 - parses proto2 `extend` bodies and emits a warning instead of storing extension
   declarations;
 - validates reserved and extension ranges without serializing them.
@@ -84,7 +85,6 @@ The EasyPB parser therefore:
 - proto2 groups;
 - full top-level and nested extend declarations;
 - extension-range options and message-valued declarations;
-- parenthesized custom option names at any dotted option-name position;
 - structured aggregate/message option values.
 
 These rules document the broader proto2/proto3 language; they are not claims
