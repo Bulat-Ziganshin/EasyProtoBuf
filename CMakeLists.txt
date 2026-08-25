@@ -84,6 +84,11 @@ if(BUILD_TESTING)
     target_include_directories(skip_unknown_groups_tests PRIVATE include)
     add_test(NAME wire.skip.unknown.groups COMMAND skip_unknown_groups_tests)
 
+    add_executable(map_entry_semantics_tests
+        tests/runtime/map_entry_semantics.cpp)
+    target_include_directories(map_entry_semantics_tests PRIVATE include)
+    add_test(NAME wire.map.entry.semantics COMMAND map_entry_semantics_tests)
+
     set(codegen_maps_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/maps)
     set(codegen_maps_data_dir ${codegen_maps_dir}/data)

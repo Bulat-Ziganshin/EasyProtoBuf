@@ -19,7 +19,7 @@ Library features:
 - string/bytes fields can be stored in any C++ type convertible to/from std::string_view (or easypb::string_view)
 - repeated fields can be stored in any C++ container implementing push_back() and begin()/end()
 - map fields can be stored in any C++ container similar enough to std::map
-- not implemented: group wire format
+- limited `group` support: unknown groups are skipped during decoding, but declaring and encoding groups is not supported
 - [protozero][] is a production-grade library with a similar API
 
 [Codegen](codegen) features:
@@ -267,8 +267,25 @@ e.g. define it to std::string.
 Sub-messages and packed repeated fields always use a 5-byte length prefix
 (it can make encoded messages a bit longer than with other Protobuf libraries).
 
-Compared with the [official][updating] ProtoBuf library,
-EasyProtoBuf allows more flexibility in modifying the field type without losing the decoding compatibility.
+EasyProtoBuf currently differs from the official ProtoBuf decoding semantics
+in several ways:
+
+- generated proto2 `required` checks currently run at the end of every generated
+  `decode` call instead of once after the complete message has been merged and
+  recursively validated. A singular embedded message whose required fields are
+  split across multiple wire occurrences can therefore be rejected too early.
+  The same issue affects multiple message-valued field 2 occurrences inside one
+  map entry. Presence tracking through `has_*` is not itself the problem;
+- conversely, an omitted message value in a map entry creates a default-initialized
+  mapped object without recursively checking its required fields;
+- enum values are represented as `int32_t`, so a missing proto2 enum map value
+  is zero-initialized rather than using the enum's proto2 default (its first
+  declared value), and closed-enum validation semantics are not enforced;
+- unknown fields in ordinary messages, including message values stored in maps,
+  are discarded rather than retained for later serialization.
+
+Compared with the [official][updating] ProtoBuf library, EasyProtoBuf also
+allows more flexibility in modifying the field type without losing the decoding compatibility.
 You can make any changes to the field type as long as it stays inside the same "type domain":
 - FP domain - only float and double
 - zigzag domain - includes sint32 and sint64

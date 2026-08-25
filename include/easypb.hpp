@@ -686,7 +686,6 @@ struct Decoder
     void get_map_##TYPE1##_##TYPE2(FieldType *field)                          \
     {                                                                         \
         Decoder sub_decoder(parse_bytearray_value());                         \
-        bool has_key = false, has_value = false;                              \
         typename FieldType::key_type key{};                                   \
         typename FieldType::mapped_type value{};                              \
                                                                               \
@@ -694,15 +693,13 @@ struct Decoder
         {                                                                     \
             switch (sub_decoder.field_num)                                    \
             {                                                                 \
-                case 1: sub_decoder.get_##TYPE1(&key, &has_key); break;       \
-                case 2: sub_decoder.get_##TYPE2(&value, &has_value); break;   \
+                case 1: sub_decoder.get_##TYPE1(&key); break;                 \
+                case 2: sub_decoder.get_##TYPE2(&value); break;               \
                 default: sub_decoder.skip_field();                            \
             }                                                                 \
         }                                                                     \
                                                                               \
-        if (has_key && has_value) {                                           \
-            (*field)[key] = value;                                            \
-        }                                                                     \
+        (*field)[std::move(key)] = std::move(value);                          \
     }                                                                         \
 /* end of EASYPB_DEFINE_MAP_READER macro definition */
 
