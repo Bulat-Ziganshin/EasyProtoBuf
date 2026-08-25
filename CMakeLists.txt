@@ -74,6 +74,10 @@ if(BUILD_TESTING)
     add_test(NAME compare.decoded.data.with.original
              COMMAND tutorial)
 
+    add_executable(generic_api_test tests/generic_api.cpp)
+    target_include_directories(generic_api_test PRIVATE include)
+    add_test(NAME generic.api COMMAND generic_api_test)
+
     add_executable(wire_type_conversion_tests
         tests/runtime/wire_type_conversion.cpp)
     target_include_directories(wire_type_conversion_tests PRIVATE include)

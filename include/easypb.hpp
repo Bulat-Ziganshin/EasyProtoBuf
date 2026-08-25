@@ -46,6 +46,28 @@ enum WireType
 };
 
 
+// Protobuf field type used by the generic get/put API.
+enum PBType
+{
+    PB_INT32,
+    PB_INT64,
+    PB_UINT32,
+    PB_UINT64,
+    PB_SFIXED32,
+    PB_SFIXED64,
+    PB_FIXED32,
+    PB_FIXED64,
+    PB_SINT32,
+    PB_SINT64,
+    PB_BOOL,
+    PB_ENUM,
+    PB_FLOAT,
+    PB_DOUBLE,
+    PB_STRING,
+    PB_BYTES,
+    PB_MESSAGE,
+};
+
 // ****************************************************************************
 // Define the hierarchy of exceptions thrown by the library
 // ****************************************************************************
@@ -160,9 +182,9 @@ struct string_view
 
 
 // ****************************************************************************
-// Class for encoding C++ data into the Protobuf wire format
+// Low-level writer for the Protobuf wire format
 // ****************************************************************************
-struct Encoder
+struct Writer
 {
     // Invariants:
     //   buf_end == buffer.data() + buffer.size()
@@ -175,12 +197,12 @@ struct Encoder
     size_t pos()  const {return ptr - begin();}           // the current writing index
 
 
-    Encoder()
+    Writer()
     {
         ptr = buf_end = begin();
     }
 
-    // Return the buffer collected by Encoder, and start from scratch
+    // Return the collected buffer and start from scratch
     std::string result()
     {
         buffer.resize(pos());
@@ -303,148 +325,12 @@ struct Encoder
         code();
         commit_length_delimited(start_pos);
     }
-
-// Define put_map* method for map<TYPE1,TYPE2>
-#define EASYPB_DEFINE_MAP_WRITER(TYPE1, TYPE2)                                \
-    template <typename FieldType>                                             \
-    void put_map_##TYPE1##_##TYPE2(uint32_t field_num, const FieldType& value)\
-    {                                                                         \
-        for (const auto& x : value)                                           \
-        {                                                                     \
-            write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);            \
-            write_length_delimited([&]{                                       \
-                put_##TYPE1(1, x.first);                                      \
-                put_##TYPE2(2, x.second);                                     \
-            });                                                               \
-        }                                                                     \
-    }                                                                         \
-/* end of EASYPB_DEFINE_MAP_WRITER macro definition */
-
-// Define put_* methods for TYPE and put_map* methods for any map<TYPE,*>
-#define EASYPB_DEFINE_WRITERS(TYPE, C_TYPE, WIRETYPE, WRITER)                 \
-                                                                              \
-    void put_##TYPE(uint32_t field_num, C_TYPE value)                         \
-    {                                                                         \
-        write_field_tag(field_num, WIRETYPE);                                 \
-        WRITER(value);                                                        \
-    }                                                                         \
-                                                                              \
-    template <typename FieldType>                                             \
-    void put_repeated_##TYPE(uint32_t field_num, const FieldType& value)      \
-    {                                                                         \
-        for(const auto &x: value)  put_##TYPE(field_num, x);                  \
-    }                                                                         \
-                                                                              \
-    template <typename FieldType>                                             \
-    void put_packed_##TYPE(uint32_t field_num, const FieldType& value)        \
-    {                                                                         \
-        static_assert(std::is_scalar<C_TYPE>() && sizeof(FieldType*),         \
-            "put_packed_" #TYPE " isn't defined according to ProtoBuf format specifications");  \
-                                                                              \
-        write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);                \
-        write_length_delimited([&]{                                           \
-            for(const auto &x: value) {                                       \
-                const C_TYPE converted_value = C_TYPE(x);                     \
-                WRITER(converted_value);                                      \
-            }                                                                 \
-        });                                                                   \
-    }                                                                         \
-                                                                              \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, int32)                                     \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, int64)                                     \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, uint32)                                    \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, uint64)                                    \
-                                                                              \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, sfixed32)                                  \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, sfixed64)                                  \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, fixed32)                                   \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, fixed64)                                   \
-                                                                              \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, sint32)                                    \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, sint64)                                    \
-                                                                              \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, bool)                                      \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, enum)                                      \
-                                                                              \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, float)                                     \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, double)                                    \
-                                                                              \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, string)                                    \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, bytes)                                     \
-                                                                              \
-    EASYPB_DEFINE_MAP_WRITER(TYPE, message)                                   \
-/* end of EASYPB_DEFINE_WRITERS macro definition*/
-
-    EASYPB_DEFINE_WRITERS(int32,  int32_t,  WIRETYPE_VARINT, write_varint)
-    EASYPB_DEFINE_WRITERS(int64,  int64_t,  WIRETYPE_VARINT, write_varint)
-    EASYPB_DEFINE_WRITERS(uint32, uint32_t, WIRETYPE_VARINT, write_varint)
-    EASYPB_DEFINE_WRITERS(uint64, uint64_t, WIRETYPE_VARINT, write_varint)
-
-    EASYPB_DEFINE_WRITERS(sfixed32, int32_t, WIRETYPE_FIXED32, write_fixed_width)
-    EASYPB_DEFINE_WRITERS(sfixed64, int64_t, WIRETYPE_FIXED64, write_fixed_width)
-    EASYPB_DEFINE_WRITERS(fixed32, uint32_t, WIRETYPE_FIXED32, write_fixed_width)
-    EASYPB_DEFINE_WRITERS(fixed64, uint64_t, WIRETYPE_FIXED64, write_fixed_width)
-
-    EASYPB_DEFINE_WRITERS(sint32, int32_t, WIRETYPE_VARINT, write_zigzag)
-    EASYPB_DEFINE_WRITERS(sint64, int64_t, WIRETYPE_VARINT, write_zigzag)
-
-    EASYPB_DEFINE_WRITERS(bool, bool,    WIRETYPE_VARINT, write_varint)
-    EASYPB_DEFINE_WRITERS(enum, int32_t, WIRETYPE_VARINT, write_varint)
-
-    EASYPB_DEFINE_WRITERS(float,  float,  WIRETYPE_FIXED32, write_fixed_width)
-    EASYPB_DEFINE_WRITERS(double, double, WIRETYPE_FIXED64, write_fixed_width)
-
-    EASYPB_DEFINE_WRITERS(string, string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
-    EASYPB_DEFINE_WRITERS(bytes,  string_view, WIRETYPE_LENGTH_DELIMITED, write_bytearray)
-
-#undef EASYPB_DEFINE_MAP_WRITER
-#undef EASYPB_DEFINE_WRITERS
-
-    template <typename FieldType>
-    void put_message(uint32_t field_num, const FieldType& value)
-    {
-        write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
-        write_length_delimited([&]{ encode(*this, value); });
-    }
-
-    template <typename FieldType>
-    void put_repeated_message(uint32_t field_num, const FieldType& value)
-    {
-        for(const auto &x: value)  put_message(field_num, x);
-    }
 };
 
-
-// Message customization protocol:
-//   void encode(Encoder&, const T&);
-// The call below is intentionally unqualified, so argument-dependent lookup
-// finds an overload beside T or in namespace easypb.
-template <typename MessageType>
-inline std::string encode(const MessageType& msg)
-{
-    Encoder pb;
-    encode(pb, msg);
-    return pb.result();
-}
-
-
-
 /*****************************************************************************
-Class for decoding C++ data from the Protobuf wire format.
-
-The Decoder class contains 3 layers:
-1) read_varint() and read_fixed_width(), grabbing basic values from an input buffer
-2) parse_*_value(), reading a field with known field's type and wiretype
-3) get_*(), providing easy-to-use API for users of this class
+Low-level reader for the Protobuf wire format.
 *****************************************************************************/
-
-// Forward declaration of the function that's called inside the Decoder class,
-// but its implementation uses the Decoder class recursively
-template <typename MessageType>
-inline MessageType decode(string_view buffer);
-
-
-struct Decoder
+struct Reader
 {
     // Invariants:
     //   ptr <= buf_end
@@ -458,19 +344,19 @@ struct Decoder
     WireType wire_type = WIRETYPE_UNDEFINED;
 
 
-    // The Decoder keeps pointers into the data being decoded, so don't free/move them till the decoding is finished
-    explicit Decoder(const char* buffer, size_t size) noexcept
+    // Reader keeps pointers into the data being decoded, so don't free/move them till the decoding is finished
+    explicit Reader(const char* buffer, size_t size) noexcept
         : ptr{buffer}, buf_end{buffer + size}
     {
     }
 
-    explicit Decoder(string_view view) noexcept
-        : Decoder(view.data(), view.size())
+    explicit Reader(string_view view) noexcept
+        : Reader(view.data(), view.size())
     {
     }
 
-    // Prohibit Decoder(std::string_view(char*)), since it creates a Decoder with an incorrect bufsize
-    explicit Decoder(const char*) = delete;
+    // Prohibit Reader(std::string_view(char*)), since it creates a Decoder with an incorrect bufsize
+    explicit Reader(const char*) = delete;
 
 
     // Skip N bytes of the message
@@ -678,128 +564,478 @@ struct Decoder
             throw unsupported_wiretype("Unsupported wire type " + std::to_string(wire_type));
         }
     }
+};
 
 
-// Define get_map* method for map<TYPE1,TYPE2>
-#define EASYPB_DEFINE_MAP_READER(TYPE1, TYPE2)                                \
-    template <typename FieldType>                                             \
-    void get_map_##TYPE1##_##TYPE2(FieldType *field)                          \
-    {                                                                         \
-        Decoder sub_decoder(parse_bytearray_value());                         \
-        typename FieldType::key_type key{};                                   \
-        typename FieldType::mapped_type value{};                              \
-                                                                              \
-        while (sub_decoder.get_next_field())                                  \
-        {                                                                     \
-            switch (sub_decoder.field_num)                                    \
-            {                                                                 \
-                case 1: sub_decoder.get_##TYPE1(&key); break;                 \
-                case 2: sub_decoder.get_##TYPE2(&value); break;               \
-                default: sub_decoder.skip_field();                            \
-            }                                                                 \
-        }                                                                     \
-                                                                              \
-        (*field)[std::move(key)] = std::move(value);                          \
-    }                                                                         \
-/* end of EASYPB_DEFINE_MAP_READER macro definition */
+template <typename T>
+struct dependent_false : std::false_type {};
 
-// Define get_* methods for TYPE and get_map* methods for any map<TYPE,*>
-#define EASYPB_DEFINE_READERS(TYPE, C_TYPE, PARSER, READER)                   \
-                                                                              \
-    C_TYPE get_##TYPE()                                                       \
-    {                                                                         \
-        return C_TYPE(PARSER());                                              \
-    }                                                                         \
-                                                                              \
-    template <typename FieldType>                                             \
-    void get_##TYPE(FieldType *field, bool *has_field = nullptr)              \
-    {                                                                         \
-        *field = FieldType(get_##TYPE());                                     \
-        if(has_field)  *has_field = true;                                     \
-    }                                                                         \
-                                                                              \
-    template <typename RepeatedFieldType>                                     \
-    void get_repeated_##TYPE(RepeatedFieldType *field)                        \
-    {                                                                         \
-        using FieldType = typename RepeatedFieldType::value_type;             \
-                                                                              \
-        if (std::is_scalar<C_TYPE>()  &&  (wire_type == WIRETYPE_LENGTH_DELIMITED)) {  \
-            /* Parsing packed repeated field */                               \
-            Decoder sub_decoder(parse_bytearray_value());                     \
-            while (! sub_decoder.eof()) {                                     \
-                const C_TYPE value = C_TYPE(sub_decoder.READER());            \
-                field->push_back( FieldType(value) );                         \
-            }                                                                 \
-        } else {                                                              \
-            field->push_back( FieldType(get_##TYPE()) );                      \
-        }                                                                     \
-    }                                                                         \
-                                                                              \
-    EASYPB_DEFINE_MAP_READER(TYPE, int32)                                     \
-    EASYPB_DEFINE_MAP_READER(TYPE, int64)                                     \
-    EASYPB_DEFINE_MAP_READER(TYPE, uint32)                                    \
-    EASYPB_DEFINE_MAP_READER(TYPE, uint64)                                    \
-                                                                              \
-    EASYPB_DEFINE_MAP_READER(TYPE, sfixed32)                                  \
-    EASYPB_DEFINE_MAP_READER(TYPE, sfixed64)                                  \
-    EASYPB_DEFINE_MAP_READER(TYPE, fixed32)                                   \
-    EASYPB_DEFINE_MAP_READER(TYPE, fixed64)                                   \
-                                                                              \
-    EASYPB_DEFINE_MAP_READER(TYPE, sint32)                                    \
-    EASYPB_DEFINE_MAP_READER(TYPE, sint64)                                    \
-                                                                              \
-    EASYPB_DEFINE_MAP_READER(TYPE, bool)                                      \
-    EASYPB_DEFINE_MAP_READER(TYPE, enum)                                      \
-                                                                              \
-    EASYPB_DEFINE_MAP_READER(TYPE, float)                                     \
-    EASYPB_DEFINE_MAP_READER(TYPE, double)                                    \
-                                                                              \
-    EASYPB_DEFINE_MAP_READER(TYPE, string)                                    \
-    EASYPB_DEFINE_MAP_READER(TYPE, bytes)                                     \
-                                                                              \
-    EASYPB_DEFINE_MAP_READER(TYPE, message)                                   \
-/* end of EASYPB_DEFINE_READERS macro definition */
 
-    EASYPB_DEFINE_READERS(int32,  int32_t,  parse_integer_value, read_varint)
-    EASYPB_DEFINE_READERS(int64,  int64_t,  parse_integer_value, read_varint)
-    EASYPB_DEFINE_READERS(uint32, uint32_t, parse_integer_value, read_varint)
-    EASYPB_DEFINE_READERS(uint64, uint64_t, parse_integer_value, read_varint)
+// Low-level protobuf field encodings. These classes know only how to read and
+// write a payload; scalar_pb_codec adds field tags, conversions, packed fields,
+// and repeated-field handling.
+template <typename CType>
+struct integer_pb_field
+{
+    static void write(Writer& pb, CType value) { pb.write_varint(value); }
+    static CType parse(Reader& pb) { return CType(pb.parse_integer_value()); }
+    static CType read(Reader& pb) { return CType(pb.read_varint()); }
+};
 
-    EASYPB_DEFINE_READERS(sfixed32, int32_t, parse_integer_value, read_fixed_width<int32_t>)
-    EASYPB_DEFINE_READERS(sfixed64, int64_t, parse_integer_value, read_fixed_width<int64_t>)
-    EASYPB_DEFINE_READERS(fixed32, uint32_t, parse_integer_value, read_fixed_width<uint32_t>)
-    EASYPB_DEFINE_READERS(fixed64, uint64_t, parse_integer_value, read_fixed_width<uint64_t>)
 
-    EASYPB_DEFINE_READERS(sint32, int32_t, parse_zigzag32_value, read_zigzag32)
-    EASYPB_DEFINE_READERS(sint64, int64_t, parse_zigzag_value64, read_zigzag64)
+template <typename CType>
+struct fixed_pb_field
+{
+    static void write(Writer& pb, CType value) { pb.write_fixed_width(value); }
+    static CType parse(Reader& pb) { return CType(pb.parse_integer_value()); }
+    static CType read(Reader& pb) { return pb.template read_fixed_width<CType>(); }
+};
 
-    EASYPB_DEFINE_READERS(bool, bool,    parse_integer_value, read_varint)
-    EASYPB_DEFINE_READERS(enum, int32_t, parse_integer_value, read_varint)
 
-    EASYPB_DEFINE_READERS(float,  float,  parse_fp_value<float>,  read_fixed_width<float>)
-    EASYPB_DEFINE_READERS(double, double, parse_fp_value<double>, read_fixed_width<double>)
+template <typename CType>
+struct zigzag_pb_field;
 
-    EASYPB_DEFINE_READERS(string, string_view, parse_bytearray_value, parse_bytearray_value)
-    EASYPB_DEFINE_READERS(bytes,  string_view, parse_bytearray_value, parse_bytearray_value)
 
-#undef EASYPB_DEFINE_MAP_READER
-#undef EASYPB_DEFINE_READERS
+template <>
+struct zigzag_pb_field<int32_t>
+{
+    static void write(Writer& pb, int32_t value) { pb.write_zigzag(value); }
+    static int32_t parse(Reader& pb) { return pb.parse_zigzag32_value(); }
+    static int32_t read(Reader& pb) { return pb.read_zigzag32(); }
+};
 
-    template <typename MessageType>
-    void get_message(MessageType *field, bool *has_field = nullptr)
+
+template <>
+struct zigzag_pb_field<int64_t>
+{
+    static void write(Writer& pb, int64_t value) { pb.write_zigzag(value); }
+    static int64_t parse(Reader& pb) { return pb.parse_zigzag_value64(); }
+    static int64_t read(Reader& pb) { return pb.read_zigzag64(); }
+};
+
+
+template <typename CType>
+struct floating_pb_field
+{
+    static void write(Writer& pb, CType value) { pb.write_fixed_width(value); }
+    static CType parse(Reader& pb) { return pb.template parse_fp_value<CType>(); }
+    static CType read(Reader& pb) { return pb.template read_fixed_width<CType>(); }
+};
+
+
+// Common implementation for scalar protobuf types. Field supplies the raw
+// payload read/write operations; CType and Wire describe protobuf semantics.
+template <typename Field, typename CType, WireType Wire>
+struct scalar_pb_codec
+{
+    typedef CType value_type;
+    static const bool packable = true;
+
+    template <typename FieldType>
+    static void put(Writer& pb, uint32_t field_num, const FieldType& value)
     {
-        decode(Decoder(parse_bytearray_value()), *field);
-        if(has_field)  *has_field = true;
+        pb.write_field_tag(field_num, Wire);
+        Field::write(pb, CType(value));
     }
 
-    template <typename RepeatedMessageType>
-    void get_repeated_message(RepeatedMessageType *field)
+    static CType get(Reader& pb)
     {
-        using T = typename RepeatedMessageType::value_type;
-        T value{};
-        decode(Decoder(parse_bytearray_value()), value);
+        return Field::parse(pb);
+    }
+
+    template <typename FieldType>
+    static void get(Reader& pb, FieldType* field, bool* has_field = nullptr)
+    {
+        *field = FieldType(Field::parse(pb));
+        if (has_field)  *has_field = true;
+    }
+
+    template <typename FieldType>
+    static void put_packed(Writer& pb, uint32_t field_num, const FieldType& value)
+    {
+        pb.write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
+        pb.write_length_delimited([&]{
+            for (const auto& x : value)  Field::write(pb, CType(x));
+        });
+    }
+
+    template <typename RepeatedFieldType>
+    static void get_repeated(Reader& pb, RepeatedFieldType* field)
+    {
+        typedef typename RepeatedFieldType::value_type FieldType;
+
+        if (pb.wire_type == WIRETYPE_LENGTH_DELIMITED) {
+            Reader sub_reader(pb.parse_bytearray_value());
+            while (!sub_reader.eof()) {
+                field->push_back(FieldType(Field::read(sub_reader)));
+            }
+        } else {
+            field->push_back(FieldType(Field::parse(pb)));
+        }
+    }
+};
+
+
+struct bytearray_pb_codec
+{
+    typedef string_view value_type;
+    static const bool packable = false;
+
+    static void put(Writer& pb, uint32_t field_num, string_view value)
+    {
+        pb.write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
+        pb.write_bytearray(value);
+    }
+
+    static string_view get(Reader& pb)
+    {
+        return pb.parse_bytearray_value();
+    }
+
+    template <typename FieldType>
+    static void get(Reader& pb, FieldType* field, bool* has_field = nullptr)
+    {
+        *field = FieldType(pb.parse_bytearray_value());
+        if (has_field)  *has_field = true;
+    }
+
+    template <typename FieldType>
+    static void put_packed(Writer&, uint32_t, const FieldType&)
+    {
+        static_assert(dependent_false<FieldType>::value,
+            "This protobuf type cannot be packed");
+    }
+
+    template <typename RepeatedFieldType>
+    static void get_repeated(Reader& pb, RepeatedFieldType* field)
+    {
+        typedef typename RepeatedFieldType::value_type FieldType;
+        field->push_back(FieldType(pb.parse_bytearray_value()));
+    }
+};
+
+
+// Message is the only PBType whose C++ value_type is not fixed and whose
+// codec needs the high-level Encoder/Decoder API for recursive customization.
+struct message_pb_codec
+{
+    static const bool packable = false;
+
+    template <typename EncoderType, typename FieldType>
+    static void put(EncoderType& pb, uint32_t field_num, const FieldType& value)
+    {
+        pb.write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
+        pb.write_length_delimited([&]{ encode(pb, value); });
+    }
+
+    template <typename DecoderType, typename FieldType>
+    static void get(DecoderType& pb, FieldType* field, bool* has_field = nullptr)
+    {
+        decode(DecoderType(pb.parse_bytearray_value()), *field);
+        if (has_field)  *has_field = true;
+    }
+
+    template <typename FieldType>
+    static void put_packed(Writer&, uint32_t, const FieldType&)
+    {
+        static_assert(dependent_false<FieldType>::value,
+            "PB_MESSAGE cannot be packed");
+    }
+
+    template <typename DecoderType, typename RepeatedFieldType>
+    static void get_repeated(DecoderType& pb, RepeatedFieldType* field)
+    {
+        typedef typename RepeatedFieldType::value_type FieldType;
+        FieldType value{};
+        decode(DecoderType(pb.parse_bytearray_value()), value);
         field->push_back(std::move(value));
     }
+};
+
+
+// Compile-time dispatcher from protobuf type to codec.
+template <PBType Type>
+struct pb_type_codec;
+
+
+template <> struct pb_type_codec<PB_INT32>    : scalar_pb_codec<integer_pb_field<int32_t>, int32_t, WIRETYPE_VARINT> {};
+template <> struct pb_type_codec<PB_INT64>    : scalar_pb_codec<integer_pb_field<int64_t>, int64_t, WIRETYPE_VARINT> {};
+template <> struct pb_type_codec<PB_UINT32>   : scalar_pb_codec<integer_pb_field<uint32_t>, uint32_t, WIRETYPE_VARINT> {};
+template <> struct pb_type_codec<PB_UINT64>   : scalar_pb_codec<integer_pb_field<uint64_t>, uint64_t, WIRETYPE_VARINT> {};
+template <> struct pb_type_codec<PB_SFIXED32> : scalar_pb_codec<fixed_pb_field<int32_t>, int32_t, WIRETYPE_FIXED32> {};
+template <> struct pb_type_codec<PB_SFIXED64> : scalar_pb_codec<fixed_pb_field<int64_t>, int64_t, WIRETYPE_FIXED64> {};
+template <> struct pb_type_codec<PB_FIXED32>  : scalar_pb_codec<fixed_pb_field<uint32_t>, uint32_t, WIRETYPE_FIXED32> {};
+template <> struct pb_type_codec<PB_FIXED64>  : scalar_pb_codec<fixed_pb_field<uint64_t>, uint64_t, WIRETYPE_FIXED64> {};
+template <> struct pb_type_codec<PB_SINT32>   : scalar_pb_codec<zigzag_pb_field<int32_t>, int32_t, WIRETYPE_VARINT> {};
+template <> struct pb_type_codec<PB_SINT64>   : scalar_pb_codec<zigzag_pb_field<int64_t>, int64_t, WIRETYPE_VARINT> {};
+template <> struct pb_type_codec<PB_BOOL>     : scalar_pb_codec<integer_pb_field<bool>, bool, WIRETYPE_VARINT> {};
+template <> struct pb_type_codec<PB_ENUM>     : scalar_pb_codec<integer_pb_field<int32_t>, int32_t, WIRETYPE_VARINT> {};
+template <> struct pb_type_codec<PB_FLOAT>    : scalar_pb_codec<floating_pb_field<float>, float, WIRETYPE_FIXED32> {};
+template <> struct pb_type_codec<PB_DOUBLE>   : scalar_pb_codec<floating_pb_field<double>, double, WIRETYPE_FIXED64> {};
+template <> struct pb_type_codec<PB_STRING>   : bytearray_pb_codec {};
+template <> struct pb_type_codec<PB_BYTES>    : bytearray_pb_codec {};
+template <> struct pb_type_codec<PB_MESSAGE>  : message_pb_codec {};
+
+
+/*****************************************************************************
+High-level encoder API.
+*****************************************************************************/
+struct Encoder : Writer
+{
+    Encoder() : Writer() {}
+
+    // Generic compile-time API.
+    template <PBType Type, typename FieldType>
+    void put(uint32_t field_num, const FieldType& value)
+    {
+        pb_type_codec<Type>::put(*this, field_num, value);
+    }
+
+    template <PBType Type, typename FieldType>
+    void put_repeated(uint32_t field_num, const FieldType& value)
+    {
+        for (const auto& x : value)  put<Type>(field_num, x);
+    }
+
+    template <PBType Type, typename FieldType>
+    void put_packed(uint32_t field_num, const FieldType& value)
+    {
+        pb_type_codec<Type>::put_packed(*this, field_num, value);
+    }
+
+    template <PBType KeyType, PBType ValueType, typename FieldType>
+    void put_map(uint32_t field_num, const FieldType& value)
+    {
+        for (const auto& x : value)
+        {
+            write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
+            write_length_delimited([&]{
+                put<KeyType>(1, x.first);
+                put<ValueType>(2, x.second);
+            });
+        }
+    }
+
+    template <typename FieldType>
+    void put_message(uint32_t field_num, const FieldType& value)
+    { put<PB_MESSAGE>(field_num, value); }
+
+    template <typename FieldType>
+    void put_repeated_message(uint32_t field_num, const FieldType& value)
+    { put_repeated<PB_MESSAGE>(field_num, value); }
+
+// Define put_map_* wrapper for map<TYPE1,TYPE2>.
+#define EASYPB_DEFINE_MAP_WRITER(TYPE1, PBTYPE1, TYPE2, PBTYPE2)              \
+    template <typename FieldType>                                             \
+    void put_map_##TYPE1##_##TYPE2(uint32_t field_num, const FieldType& value)\
+    { put_map<PBTYPE1, PBTYPE2>(field_num, value); }                          \
+/* end of EASYPB_DEFINE_MAP_WRITER macro definition */
+
+// Define all map wrappers whose key has TYPE/PBTYPE.
+#define EASYPB_DEFINE_MAP_WRITERS(TYPE, PBTYPE)                               \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, int32,    PB_INT32)                \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, int64,    PB_INT64)                \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, uint32,   PB_UINT32)               \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, uint64,   PB_UINT64)               \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, sfixed32, PB_SFIXED32)             \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, sfixed64, PB_SFIXED64)             \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, fixed32,  PB_FIXED32)              \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, fixed64,  PB_FIXED64)              \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, sint32,   PB_SINT32)               \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, sint64,   PB_SINT64)               \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, bool,     PB_BOOL)                 \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, enum,     PB_ENUM)                 \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, float,    PB_FLOAT)                \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, double,   PB_DOUBLE)               \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, string,   PB_STRING)               \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, bytes,    PB_BYTES)                \
+    EASYPB_DEFINE_MAP_WRITER(TYPE, PBTYPE, message,  PB_MESSAGE)              \
+/* end of EASYPB_DEFINE_MAP_WRITERS macro definition */
+
+// Define named wrappers for one protobuf type.
+#define EASYPB_DEFINE_WRITERS(TYPE, PBTYPE)                                   \
+    template <typename FieldType>                                             \
+    void put_##TYPE(uint32_t field_num, const FieldType& value)               \
+    { put<PBTYPE>(field_num, value); }                                        \
+                                                                              \
+    template <typename FieldType>                                             \
+    void put_repeated_##TYPE(uint32_t field_num, const FieldType& value)      \
+    { put_repeated<PBTYPE>(field_num, value); }                               \
+                                                                              \
+    template <typename FieldType>                                             \
+    void put_packed_##TYPE(uint32_t field_num, const FieldType& value)        \
+    { put_packed<PBTYPE>(field_num, value); }                                 \
+                                                                              \
+    EASYPB_DEFINE_MAP_WRITERS(TYPE, PBTYPE)                                   \
+/* end of EASYPB_DEFINE_WRITERS macro definition */
+
+    EASYPB_DEFINE_WRITERS(int32,    PB_INT32)
+    EASYPB_DEFINE_WRITERS(int64,    PB_INT64)
+    EASYPB_DEFINE_WRITERS(uint32,   PB_UINT32)
+    EASYPB_DEFINE_WRITERS(uint64,   PB_UINT64)
+    EASYPB_DEFINE_WRITERS(sfixed32, PB_SFIXED32)
+    EASYPB_DEFINE_WRITERS(sfixed64, PB_SFIXED64)
+    EASYPB_DEFINE_WRITERS(fixed32,  PB_FIXED32)
+    EASYPB_DEFINE_WRITERS(fixed64,  PB_FIXED64)
+    EASYPB_DEFINE_WRITERS(sint32,   PB_SINT32)
+    EASYPB_DEFINE_WRITERS(sint64,   PB_SINT64)
+    EASYPB_DEFINE_WRITERS(bool,     PB_BOOL)
+    EASYPB_DEFINE_WRITERS(enum,     PB_ENUM)
+    EASYPB_DEFINE_WRITERS(float,    PB_FLOAT)
+    EASYPB_DEFINE_WRITERS(double,   PB_DOUBLE)
+    EASYPB_DEFINE_WRITERS(string,   PB_STRING)
+    EASYPB_DEFINE_WRITERS(bytes,    PB_BYTES)
+
+#undef EASYPB_DEFINE_MAP_WRITER
+#undef EASYPB_DEFINE_MAP_WRITERS
+#undef EASYPB_DEFINE_WRITERS
+
+};
+
+
+// Message customization protocol:
+//   void encode(Encoder&, const T&);
+// The call below is intentionally unqualified, so argument-dependent lookup
+// finds an overload beside T or in namespace easypb.
+template <typename MessageType>
+inline std::string encode(const MessageType& msg)
+{
+    Encoder pb;
+    encode(pb, msg);
+    return pb.result();
+}
+
+
+/*****************************************************************************
+High-level decoder API.
+*****************************************************************************/
+struct Decoder : Reader
+{
+    explicit Decoder(const char* buffer, size_t size) noexcept
+        : Reader(buffer, size)
+    {
+    }
+
+    explicit Decoder(string_view view) noexcept
+        : Reader(view)
+    {
+    }
+
+    explicit Decoder(const char*) = delete;
+
+    // Generic compile-time API. get<Type>() is available for PBTypes with a
+    // fixed C++ value_type; PB_MESSAGE is decoded through get<PB_MESSAGE>(field).
+    template <PBType Type>
+    typename pb_type_codec<Type>::value_type get()
+    {
+        return pb_type_codec<Type>::get(*this);
+    }
+
+    template <PBType Type, typename FieldType>
+    void get(FieldType* field, bool* has_field = nullptr)
+    {
+        pb_type_codec<Type>::get(*this, field, has_field);
+    }
+
+    template <PBType Type, typename RepeatedFieldType>
+    void get_repeated(RepeatedFieldType* field)
+    {
+        pb_type_codec<Type>::get_repeated(*this, field);
+    }
+
+    template <PBType KeyType, PBType ValueType, typename FieldType>
+    void get_map(FieldType* field)
+    {
+        Decoder sub_decoder(parse_bytearray_value());
+        typename FieldType::key_type key{};
+        typename FieldType::mapped_type value{};
+
+        while (sub_decoder.get_next_field())
+        {
+            switch (sub_decoder.field_num)
+            {
+                case 1: sub_decoder.get<KeyType>(&key); break;
+                case 2: sub_decoder.get<ValueType>(&value); break;
+                default: sub_decoder.skip_field();
+            }
+        }
+
+        (*field)[std::move(key)] = std::move(value);
+    }
+
+    template <typename MessageType>
+    void get_message(MessageType* field, bool* has_field = nullptr)
+    { get<PB_MESSAGE>(field, has_field); }
+
+    template <typename RepeatedMessageType>
+    void get_repeated_message(RepeatedMessageType* field)
+    { get_repeated<PB_MESSAGE>(field); }
+
+// Define get_map_* wrapper for map<TYPE1,TYPE2>.
+#define EASYPB_DEFINE_MAP_READER(TYPE1, PBTYPE1, TYPE2, PBTYPE2)              \
+    template <typename FieldType>                                             \
+    void get_map_##TYPE1##_##TYPE2(FieldType* field)                          \
+    { get_map<PBTYPE1, PBTYPE2>(field); }                                     \
+/* end of EASYPB_DEFINE_MAP_READER macro definition */
+
+// Define all map wrappers whose key has TYPE/PBTYPE.
+#define EASYPB_DEFINE_MAP_READERS(TYPE, PBTYPE)                               \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, int32,    PB_INT32)                \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, int64,    PB_INT64)                \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, uint32,   PB_UINT32)               \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, uint64,   PB_UINT64)               \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, sfixed32, PB_SFIXED32)             \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, sfixed64, PB_SFIXED64)             \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, fixed32,  PB_FIXED32)              \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, fixed64,  PB_FIXED64)              \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, sint32,   PB_SINT32)               \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, sint64,   PB_SINT64)               \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, bool,     PB_BOOL)                 \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, enum,     PB_ENUM)                 \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, float,    PB_FLOAT)                \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, double,   PB_DOUBLE)               \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, string,   PB_STRING)               \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, bytes,    PB_BYTES)                \
+    EASYPB_DEFINE_MAP_READER(TYPE, PBTYPE, message,  PB_MESSAGE)              \
+/* end of EASYPB_DEFINE_MAP_READERS macro definition */
+
+// Define named wrappers for one protobuf type.
+#define EASYPB_DEFINE_READERS(TYPE, PBTYPE, CTYPE)                            \
+    CTYPE get_##TYPE()                                                        \
+    { return get<PBTYPE>(); }                                                 \
+                                                                              \
+    template <typename FieldType>                                             \
+    void get_##TYPE(FieldType* field, bool* has_field = nullptr)              \
+    { get<PBTYPE>(field, has_field); }                                        \
+                                                                              \
+    template <typename RepeatedFieldType>                                     \
+    void get_repeated_##TYPE(RepeatedFieldType* field)                        \
+    { get_repeated<PBTYPE>(field); }                                          \
+                                                                              \
+    EASYPB_DEFINE_MAP_READERS(TYPE, PBTYPE)                                   \
+/* end of EASYPB_DEFINE_READERS macro definition */
+
+    EASYPB_DEFINE_READERS(int32,    PB_INT32,    int32_t)
+    EASYPB_DEFINE_READERS(int64,    PB_INT64,    int64_t)
+    EASYPB_DEFINE_READERS(uint32,   PB_UINT32,   uint32_t)
+    EASYPB_DEFINE_READERS(uint64,   PB_UINT64,   uint64_t)
+    EASYPB_DEFINE_READERS(sfixed32, PB_SFIXED32, int32_t)
+    EASYPB_DEFINE_READERS(sfixed64, PB_SFIXED64, int64_t)
+    EASYPB_DEFINE_READERS(fixed32,  PB_FIXED32,  uint32_t)
+    EASYPB_DEFINE_READERS(fixed64,  PB_FIXED64,  uint64_t)
+    EASYPB_DEFINE_READERS(sint32,   PB_SINT32,   int32_t)
+    EASYPB_DEFINE_READERS(sint64,   PB_SINT64,   int64_t)
+    EASYPB_DEFINE_READERS(bool,     PB_BOOL,     bool)
+    EASYPB_DEFINE_READERS(enum,     PB_ENUM,     int32_t)
+    EASYPB_DEFINE_READERS(float,    PB_FLOAT,    float)
+    EASYPB_DEFINE_READERS(double,   PB_DOUBLE,   double)
+    EASYPB_DEFINE_READERS(string,   PB_STRING,   string_view)
+    EASYPB_DEFINE_READERS(bytes,    PB_BYTES,    string_view)
+
+#undef EASYPB_DEFINE_MAP_READER
+#undef EASYPB_DEFINE_MAP_READERS
+#undef EASYPB_DEFINE_READERS
+
 };
 
 
