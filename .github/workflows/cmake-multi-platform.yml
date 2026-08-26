@@ -146,6 +146,22 @@ jobs:
           #   v143 = Visual Studio 2022
           #   v145 = Visual Studio 2026
 
+          # Visual Studio 2013 toolset (v120)
+          # Disabled for now: v120 is not available from the modern VS Installer and must be provisioned separately.
+          # v120 has no /std switch; its compiler implements a C++11 subset. Choose/pin a compatible Windows SDK
+          # when enabling these jobs.
+          # - os: windows-2022
+          #   job_name: "MSVC VS2013 v120 x64 / C++11 subset"
+          #   extra_cmake_options: "-A x64 -T v120"
+          #   cpp_options: "/W3"
+          #   cpp_compiler: cl
+
+          # - os: windows-2022
+          #   job_name: "MSVC VS2013 v120 Win32 / C++11 subset"
+          #   extra_cmake_options: "-A Win32 -T v120"
+          #   cpp_options: "/W3"
+          #   cpp_compiler: cl
+
           # Visual Studio 2015 toolset (v140)
           # Pin Windows SDK 10.0.19041.0: SDK 10.0.26100.0 uses intrinsics unavailable in MSVC 19.0/v140.
           # v140 has no exact C++17 mode; /std:c++latest is its newest available language mode.

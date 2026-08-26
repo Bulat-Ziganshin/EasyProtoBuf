@@ -25,9 +25,9 @@ struct MapMessage
 struct MoveOnlyMessage
 {
     MoveOnlyMessage() : value(0) {}
-    MoveOnlyMessage(MoveOnlyMessage&& other) noexcept : value(other.value) {}
+    MoveOnlyMessage(MoveOnlyMessage&& other) : value(other.value) {}
 
-    MoveOnlyMessage& operator=(MoveOnlyMessage&& other) noexcept
+    MoveOnlyMessage& operator=(MoveOnlyMessage&& other)
     {
         value = other.value;
         return *this;

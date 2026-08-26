@@ -20,6 +20,13 @@ It consists of 3 big sections:
 #include <string_view>
 #endif
 
+#if defined(_MSC_VER) && _MSC_VER < 1900
+// VS2013 does not support an unconditional noexcept specifier
+#define EASYPB_NOEXCEPT
+#else
+#define EASYPB_NOEXCEPT noexcept
+#endif
+
 
 namespace easypb
 {
@@ -99,8 +106,8 @@ EASYPB_DEFINE_EXCEPTION(missing_required_field, exception)
 template <typename FixedType>
 inline void memcpy_LITTLE_ENDIAN(void* dest, const void* src)
 {
-    constexpr size_t size = sizeof(FixedType);
-    static_assert(size==4 || size==8, "Only size==4 and size==8 are supported");
+    static_assert(sizeof(FixedType)==4 || sizeof(FixedType)==8, "Only size==4 and size==8 are supported");
+    const size_t size = sizeof(FixedType);
 
     // Check whether CPU is big-endian. If cpu has PDP byte order, or floats and ints have different order, you are screwed.
     const uint16_t endianness = 1;
@@ -345,12 +352,12 @@ struct Reader
 
 
     // Reader keeps pointers into the data being decoded, so don't free/move them till the decoding is finished
-    explicit Reader(const char* buffer, size_t size) noexcept
+    explicit Reader(const char* buffer, size_t size) EASYPB_NOEXCEPT
         : ptr{buffer}, buf_end{buffer + size}
     {
     }
 
-    explicit Reader(string_view view) noexcept
+    explicit Reader(string_view view) EASYPB_NOEXCEPT
         : Reader(view.data(), view.size())
     {
     }
@@ -935,12 +942,12 @@ High-level decoder API.
 *****************************************************************************/
 struct Decoder : Reader
 {
-    explicit Decoder(const char* buffer, size_t size) noexcept
+    explicit Decoder(const char* buffer, size_t size) EASYPB_NOEXCEPT
         : Reader(buffer, size)
     {
     }
 
-    explicit Decoder(string_view view) noexcept
+    explicit Decoder(string_view view) EASYPB_NOEXCEPT
         : Reader(view)
     {
     }
@@ -1078,3 +1085,5 @@ inline MessageType decode(string_view buffer)
 }
 
 }  // namespace easypb
+
+#undef EASYPB_NOEXCEPT
