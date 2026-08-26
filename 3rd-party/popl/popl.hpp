@@ -116,14 +116,14 @@ public:
     /// default copy constructor
     Option(const Option&) = default;
 
-    /// default move constructor
-    Option(Option&&) = default;
+    /// Move constructor
+    Option(Option&& other);
 
     /// default assignement operator
     Option& operator=(const Option&) = default;
 
-    /// default move assignement operator
-    Option& operator=(Option&&) = default;
+    /// Move assignment operator
+    Option& operator=(Option&& other);
 
     /// Get the Option's short name
     /// @return character of the options's short name or 0 if no short name is defined
@@ -532,6 +532,26 @@ inline Option::Option(const std::string& short_name, const std::string& long_nam
 
     if (short_name.empty() && long_name.empty())
         throw std::invalid_argument("short and long name are empty");
+}
+
+
+// Define memberwise moves explicitly because VS2013 cannot default them.
+inline Option::Option(Option&& other)
+    : short_name_(std::move(other.short_name_)),
+      long_name_(std::move(other.long_name_)),
+      description_(std::move(other.description_)),
+      attribute_(other.attribute_)
+{
+}
+
+
+inline Option& Option::operator=(Option&& other)
+{
+    short_name_ = std::move(other.short_name_);
+    long_name_ = std::move(other.long_name_);
+    description_ = std::move(other.description_);
+    attribute_ = other.attribute_;
+    return *this;
 }
 
 
