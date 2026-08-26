@@ -78,6 +78,81 @@ if(BUILD_TESTING)
     target_include_directories(generic_api_test PRIVATE include)
     add_test(NAME generic.api COMMAND generic_api_test)
 
+    add_executable(generic_scalar_dispatch_tests
+        tests/runtime/generic_scalar_dispatch.cpp)
+    target_include_directories(generic_scalar_dispatch_tests PRIVATE include)
+    add_test(NAME generic.scalar.dispatch COMMAND generic_scalar_dispatch_tests)
+
+    add_executable(generic_map_dispatch_tests
+        tests/runtime/generic_map_dispatch.cpp)
+    target_include_directories(generic_map_dispatch_tests PRIVATE include)
+    add_test(NAME generic.map.dispatch COMMAND generic_map_dispatch_tests)
+
+    set(generic_compile_fail_source
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/compile_fail/generic_api.cpp)
+    set(generic_compile_fail_runner
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/compile_fail/run_compile_fail.cmake)
+
+    function(easypb_add_compile_fail_test case_name case_definition diagnostic)
+        set(target_name generic_compile_fail_${case_name})
+        add_executable(${target_name} EXCLUDE_FROM_ALL
+            ${generic_compile_fail_source})
+        target_include_directories(${target_name} PRIVATE include)
+        target_compile_definitions(${target_name} PRIVATE ${case_definition})
+        add_test(NAME generic.compile_fail.${case_name}
+            COMMAND ${CMAKE_COMMAND}
+                -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                -DTARGET_NAME=${target_name}
+                -DBUILD_CONFIG=$<CONFIG>
+                "-DEXPECTED_DIAGNOSTIC=${diagnostic}"
+                -P ${generic_compile_fail_runner})
+        set_tests_properties(generic.compile_fail.${case_name}
+            PROPERTIES RUN_SERIAL TRUE)
+    endfunction()
+
+    easypb_add_compile_fail_test(
+        map_float_put EASYPB_CASE_MAP_FLOAT_PUT
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        map_double_put EASYPB_CASE_MAP_DOUBLE_PUT
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        map_bytes_put EASYPB_CASE_MAP_BYTES_PUT
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        map_enum_put EASYPB_CASE_MAP_ENUM_PUT
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        map_message_put EASYPB_CASE_MAP_MESSAGE_PUT
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        map_float_get EASYPB_CASE_MAP_FLOAT_GET
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        map_double_get EASYPB_CASE_MAP_DOUBLE_GET
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        map_bytes_get EASYPB_CASE_MAP_BYTES_GET
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        map_enum_get EASYPB_CASE_MAP_ENUM_GET
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        map_message_get EASYPB_CASE_MAP_MESSAGE_GET
+        "Invalid protobuf map key type")
+    easypb_add_compile_fail_test(
+        packed_string EASYPB_CASE_PACKED_STRING
+        "This protobuf type cannot be packed")
+    easypb_add_compile_fail_test(
+        packed_bytes EASYPB_CASE_PACKED_BYTES
+        "This protobuf type cannot be packed")
+    easypb_add_compile_fail_test(
+        packed_message EASYPB_CASE_PACKED_MESSAGE
+        "PB_MESSAGE cannot be packed")
+    easypb_add_compile_fail_test(
+        get_message_value EASYPB_CASE_GET_MESSAGE_VALUE
+        "PB_MESSAGE requires an output object")
+
     add_executable(wire_type_conversion_tests
         tests/runtime/wire_type_conversion.cpp)
     target_include_directories(wire_type_conversion_tests PRIVATE include)

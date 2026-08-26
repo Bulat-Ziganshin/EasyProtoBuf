@@ -719,6 +719,9 @@ struct bytearray_pb_codec
 // codec needs the high-level Encoder/Decoder API for recursive customization.
 struct message_pb_codec
 {
+    // A message has no fixed value type. The void alias lets the value-returning
+    // Decoder::get<PB_MESSAGE>() overload produce a deliberate diagnostic.
+    typedef void value_type;
     static const bool packable = false;
 
     template <typename EncoderType, typename FieldType>
@@ -733,6 +736,13 @@ struct message_pb_codec
     {
         decode(DecoderType(pb.parse_bytearray_value()), *field);
         if (has_field)  *has_field = true;
+    }
+
+    template <typename DecoderType>
+    static void get(DecoderType&)
+    {
+        static_assert(dependent_false<DecoderType>::value,
+            "PB_MESSAGE requires an output object");
     }
 
     template <typename FieldType>
@@ -777,6 +787,17 @@ template <> struct pb_type_codec<PB_BYTES>    : bytearray_pb_codec {};
 template <> struct pb_type_codec<PB_MESSAGE>  : message_pb_codec {};
 
 
+// Protobuf permits only integral, bool, and string map keys.
+template <PBType Type>
+struct is_valid_map_key_type : std::integral_constant<bool,
+    Type == PB_INT32 || Type == PB_INT64 ||
+    Type == PB_UINT32 || Type == PB_UINT64 ||
+    Type == PB_SFIXED32 || Type == PB_SFIXED64 ||
+    Type == PB_FIXED32 || Type == PB_FIXED64 ||
+    Type == PB_SINT32 || Type == PB_SINT64 ||
+    Type == PB_BOOL || Type == PB_STRING> {};
+
+
 /*****************************************************************************
 High-level encoder API.
 *****************************************************************************/
@@ -806,6 +827,9 @@ struct Encoder : Writer
     template <PBType KeyType, PBType ValueType, typename FieldType>
     void put_map(uint32_t field_num, const FieldType& value)
     {
+        static_assert(is_valid_map_key_type<KeyType>::value,
+            "Invalid protobuf map key type");
+
         for (const auto& x : value)
         {
             write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
@@ -946,6 +970,9 @@ struct Decoder : Reader
     template <PBType KeyType, PBType ValueType, typename FieldType>
     void get_map(FieldType* field)
     {
+        static_assert(is_valid_map_key_type<KeyType>::value,
+            "Invalid protobuf map key type");
+
         Decoder sub_decoder(parse_bytearray_value());
         typename FieldType::key_type key{};
         typename FieldType::mapped_type value{};
