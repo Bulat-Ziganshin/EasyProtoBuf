@@ -16,9 +16,6 @@ It consists of 3 big sections:
 #include <type_traits>
 #include <utility>
 #include <vector>
-#if defined(__GNUC__) && __GNUC__ == 4 && __GNUC_MINOR__ == 6
-#include <sstream>
-#endif
 #if __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
 #include <string_view>
 #endif
@@ -33,24 +30,6 @@ It consists of 3 big sections:
 
 namespace easypb
 {
-
-namespace detail
-{
-
-// GCC 4.6 libstdc++ configurations may omit std::to_string in C++0x mode.
-template <typename Number>
-inline std::string number_to_string(Number value)
-{
-#if defined(__GNUC__) && __GNUC__ == 4 && __GNUC_MINOR__ == 6
-    std::ostringstream stream;
-    stream << value;
-    return stream.str();
-#else
-    return std::to_string(value);
-#endif
-}
-
-}  // namespace detail
 
 // ****************************************************************************
 // Utility functions shared by Encoder and Decoder
@@ -72,7 +51,6 @@ enum WireType
     WIRETYPE_END_GROUP = 4,
     WIRETYPE_FIXED32 = 5
 };
-
 
 // Protobuf field type used by the generic get/put API.
 enum PBType
@@ -170,6 +148,41 @@ inline void write_to_little_endian(void* ptr, FixedType value)
 {
     memcpy_LITTLE_ENDIAN<FixedType>(ptr, &value);
 }
+
+
+// ****************************************************************************
+// Convert integers to strings without relying on std::to_string.
+// Some GCC 4.6 libstdc++ configurations omit it in C++0x mode.
+// ****************************************************************************
+
+namespace detail
+{
+
+inline std::string number_to_string(uint64_t value)
+{
+    char buffer[20];  // UINT64_MAX has exactly 20 decimal digits.
+    char* end = buffer + sizeof(buffer);
+    char* begin = end;
+
+    do {
+        *--begin = char('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+
+    return std::string(begin, end);
+}
+
+inline std::string number_to_string(WireType value)
+{
+    const int64_t signed_value = value;
+    if (signed_value < 0) {
+        const uint64_t magnitude = uint64_t(-(signed_value + 1)) + 1;
+        return "-" + number_to_string(magnitude);
+    }
+    return number_to_string(uint64_t(signed_value));
+}
+
+}  // namespace detail
 
 
 // ****************************************************************************
