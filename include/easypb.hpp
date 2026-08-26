@@ -16,6 +16,9 @@ It consists of 3 big sections:
 #include <type_traits>
 #include <utility>
 #include <vector>
+#if defined(__GNUC__) && __GNUC__ == 4 && __GNUC_MINOR__ == 6
+#include <sstream>
+#endif
 #if __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
 #include <string_view>
 #endif
@@ -31,6 +34,24 @@ It consists of 3 big sections:
 namespace easypb
 {
 
+namespace detail
+{
+
+// GCC 4.6 libstdc++ configurations may omit std::to_string in C++0x mode.
+template <typename Number>
+inline std::string number_to_string(Number value)
+{
+#if defined(__GNUC__) && __GNUC__ == 4 && __GNUC_MINOR__ == 6
+    std::ostringstream stream;
+    stream << value;
+    return stream.str();
+#else
+    return std::to_string(value);
+#endif
+}
+
+}  // namespace detail
+
 // ****************************************************************************
 // Utility functions shared by Encoder and Decoder
 // ****************************************************************************
@@ -38,7 +59,7 @@ enum
 {
     MAX_VARINT_SIZE = (64+6)/7,  // number of 7-bit chunks in 64-bit int
     MAX_LENGTH_CODE_SIZE = (32+6)/7,  // number of 7-bit chunks in 32-bit int encoding message length
-    FIELDNUM_SCALE = 8,  // scales field_num to field_tag
+    FIELDNUM_SCALE = 8  // scales field_num to field_tag
 };
 
 enum WireType
@@ -49,7 +70,7 @@ enum WireType
     WIRETYPE_LENGTH_DELIMITED = 2,
     WIRETYPE_START_GROUP = 3,
     WIRETYPE_END_GROUP = 4,
-    WIRETYPE_FIXED32 = 5,
+    WIRETYPE_FIXED32 = 5
 };
 
 
@@ -72,7 +93,7 @@ enum PBType
     PB_DOUBLE,
     PB_STRING,
     PB_BYTES,
-    PB_MESSAGE,
+    PB_MESSAGE
 };
 
 // ****************************************************************************
@@ -159,12 +180,12 @@ inline void write_to_little_endian(void* ptr, FixedType value)
 #ifdef EASYPB_STRING_VIEW
 
 // ... either user-supplied type, e.g. std::string
-using string_view = EASYPB_STRING_VIEW;
+typedef EASYPB_STRING_VIEW string_view;
 
 #elif defined(__cpp_lib_string_view)
 
 // ... or C++17-supplied type, if available
-using string_view = std::string_view;
+typedef std::string_view string_view;
 
 #else
 
@@ -284,7 +305,7 @@ struct Writer
         *write_ptr++ = char(value);
 
         if (value > 127) {
-            throw length_too_long("Length requires to encode more than " + std::to_string(varint_size) + " bytes");
+            throw length_too_long("Length requires to encode more than " + detail::number_to_string(varint_size) + " bytes");
         }
     }
 
@@ -298,7 +319,7 @@ struct Writer
     {
         size_t len = value.size();
         if (len > INT32_MAX) {
-            throw length_too_long("Passed byte array is too long with " + std::to_string(len) + " bytes");
+            throw length_too_long("Passed byte array is too long with " + detail::number_to_string(len) + " bytes");
         }
 
         write_varint(len);
@@ -343,22 +364,25 @@ struct Reader
     //   ptr <= buf_end
 
     // The bytes between ptr and buf_end contain the not-yet-decoded remainder of the message.
-    const char* ptr = nullptr;
-    const char* buf_end = nullptr;
+    const char* ptr;
+    const char* buf_end;
 
     // These properties are filled by get_next_field() and make sense only till the entire field is decoded
-    uint32_t field_num = UINT32_MAX;
-    WireType wire_type = WIRETYPE_UNDEFINED;
+    uint32_t field_num;
+    WireType wire_type;
 
 
-    // Reader keeps pointers into the data being decoded, so don't free/move them till the decoding is finished
+    // Reader keeps pointers into the data being decoded, so don't free/move them till the decoding is finished.
+    // Initialize all cursor state explicitly for compilers without NSDMI or delegating constructors.
     explicit Reader(const char* buffer, size_t size) EASYPB_NOEXCEPT
-        : ptr{buffer}, buf_end{buffer + size}
+        : ptr(buffer), buf_end(buffer + size),
+          field_num(UINT32_MAX), wire_type(WIRETYPE_UNDEFINED)
     {
     }
 
     explicit Reader(string_view view) EASYPB_NOEXCEPT
-        : Reader(view.data(), view.size())
+        : ptr(view.data()), buf_end(view.data() + view.size()),
+          field_num(UINT32_MAX), wire_type(WIRETYPE_UNDEFINED)
     {
     }
 
@@ -459,7 +483,7 @@ struct Reader
             case WIRETYPE_FIXED64:  return FloatingPointType( read_fixed_width<double>() );  // Here we can lose FP precision/range
             case WIRETYPE_FIXED32:  return FloatingPointType( read_fixed_width<float>() );
             default:                throw wiretype_mismatch("Can't parse floating-point value with wiretype "
-                                            + std::to_string(wire_type));
+                                            + detail::number_to_string(wire_type));
         }
     }
 
@@ -470,7 +494,7 @@ struct Reader
             case WIRETYPE_FIXED64:  return read_fixed_width<uint64_t>();
             case WIRETYPE_FIXED32:  return read_fixed_width<uint32_t>();
             default:                throw wiretype_mismatch("Can't parse integral value with wiretype "
-                                            + std::to_string(wire_type));
+                                            + detail::number_to_string(wire_type));
         }
     }
 
@@ -481,7 +505,7 @@ struct Reader
             case WIRETYPE_FIXED64:  return int32_t(read_fixed_width<int64_t>());
             case WIRETYPE_FIXED32:  return read_fixed_width<int32_t>();
             default:                throw wiretype_mismatch("Can't parse zigzag integral value with wiretype "
-                                            + std::to_string(wire_type));
+                                            + detail::number_to_string(wire_type));
         }
     }
 
@@ -492,19 +516,19 @@ struct Reader
             case WIRETYPE_FIXED64:  return read_fixed_width<int64_t>();
             case WIRETYPE_FIXED32:  return read_fixed_width<int32_t>();
             default:                throw wiretype_mismatch("Can't parse zigzag integral value with wiretype "
-                                            + std::to_string(wire_type));
+                                            + detail::number_to_string(wire_type));
         }
     }
 
     string_view parse_bytearray_value()
     {
         if (wire_type != WIRETYPE_LENGTH_DELIMITED) {
-            throw wiretype_mismatch("Can't parse bytearray with wiretype " + std::to_string(wire_type));
+            throw wiretype_mismatch("Can't parse bytearray with wiretype " + detail::number_to_string(wire_type));
         }
 
         uint64_t len = read_varint();
         if (len > INT32_MAX) {
-            throw length_too_long("Byte array field is too long with " + std::to_string(len) + " bytes");
+            throw length_too_long("Byte array field is too long with " + detail::number_to_string(len) + " bytes");
         }
 
         advance_ptr(int32_t(len));
@@ -520,7 +544,7 @@ struct Reader
 
         uint64_t tag = read_varint();
         if (tag > UINT32_MAX) {
-            throw invalid_fieldnum("Field tag is too large: " + std::to_string(tag));
+            throw invalid_fieldnum("Field tag is too large: " + detail::number_to_string(tag));
         }
 
         field_num = uint32_t(tag / FIELDNUM_SCALE);
@@ -541,7 +565,7 @@ struct Reader
         } else if (wire_type == WIRETYPE_LENGTH_DELIMITED) {
             uint64_t len = read_varint();
             if (len > INT32_MAX) {
-                throw length_too_long("Byte array field is too long with " + std::to_string(len) + " bytes");
+                throw length_too_long("Byte array field is too long with " + detail::number_to_string(len) + " bytes");
             }
             advance_ptr(int32_t(len));
         } else if (wire_type == WIRETYPE_START_GROUP) {
@@ -551,7 +575,7 @@ struct Reader
             while (!open_groups.empty()) {
                 if (!get_next_field()) {
                     throw unexpected_eof("Unexpected end of buffer in group field "
-                                         + std::to_string(open_groups.back()));
+                                         + detail::number_to_string(open_groups.back()));
                 }
 
                 if (wire_type == WIRETYPE_START_GROUP) {
@@ -559,8 +583,8 @@ struct Reader
                 } else if (wire_type == WIRETYPE_END_GROUP) {
                     if (field_num != open_groups.back()) {
                         throw wiretype_mismatch("Group field "
-                            + std::to_string(open_groups.back())
-                            + " ended by field " + std::to_string(field_num));
+                            + detail::number_to_string(open_groups.back())
+                            + " ended by field " + detail::number_to_string(field_num));
                     }
                     open_groups.pop_back();
                 } else {
@@ -568,7 +592,7 @@ struct Reader
                 }
             }
         } else {
-            throw unsupported_wiretype("Unsupported wire type " + std::to_string(wire_type));
+            throw unsupported_wiretype("Unsupported wire type " + detail::number_to_string(wire_type));
         }
     }
 };
@@ -841,8 +865,9 @@ struct Encoder : Writer
         {
             write_field_tag(field_num, WIRETYPE_LENGTH_DELIMITED);
             write_length_delimited([&]{
-                put<KeyType>(1, x.first);
-                put<ValueType>(2, x.second);
+                // Spell out member-template lookup for GCC 4.6 lambdas.
+                this->template put<KeyType>(1, x.first);
+                this->template put<ValueType>(2, x.second);
             });
         }
     }
