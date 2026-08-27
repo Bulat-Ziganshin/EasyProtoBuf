@@ -1,0 +1,31 @@
+syntax = "proto2";
+
+package easypb.enums;
+
+enum Status {
+  option allow_alias = true;
+  UNKNOWN = 0;
+  STARTED = 1;
+  ACTIVE = 1;
+  FAILED = -1;
+}
+
+message Audit {
+  optional Job.Priority priority = 1;
+  repeated Job.Priority priorities = 2 [packed = true];
+  map<string, Job.Priority> priorities_by_name = 3;
+}
+
+message Job {
+  enum Priority {
+    LOW = 0;
+    HIGH = 1;
+  }
+
+  optional Status status = 1 [default = STARTED];
+  optional Priority priority = 2 [default = HIGH];
+  repeated Status history = 3 [packed = false];
+  repeated Status packed_history = 4 [packed = true];
+  map<string, Status> names = 5;
+  optional Status current = 6;
+}

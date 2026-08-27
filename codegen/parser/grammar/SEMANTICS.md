@@ -44,6 +44,8 @@ The grammar uses the intended lexical and syntactic forms directly:
 - enum values fit signed 32 bits;
 - the first value of a non-empty proto3 enum is zero;
 - duplicate enum numbers require `option allow_alias = true`;
+- enum value names are unique in their containing package or message scope,
+  rather than only within each enum declaration;
 - duplicate field names and numbers are rejected;
 - duplicate type and oneof names are rejected in their scopes;
 - reserved and extension ranges must be ordered, disjoint, and conflict-free;

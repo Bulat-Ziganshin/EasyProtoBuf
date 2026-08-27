@@ -92,7 +92,10 @@ require_absent(scalar_out
 
 run_ok(enum_out enum_err ${CODEGEN} --descriptor-set ${enum_pbs})
 require_contains(enum_out
-    "std::map<std::string,int32_t> statuses;"
+    "enum Status"
+    "Enum declaration")
+require_contains(enum_out
+    "std::map<std::string,Status> statuses;"
     "Enum map C++ type")
 require_contains(enum_out
     "pb.put_map_string_enum(1, x.statuses);"

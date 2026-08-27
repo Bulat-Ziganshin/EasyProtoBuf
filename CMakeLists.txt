@@ -209,6 +209,43 @@ if(BUILD_TESTING)
         include ${codegen_maps_generated_dir})
     add_test(NAME codegen.maps.runtime COMMAND codegen_maps_runtime_test)
 
+    set(codegen_enums_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/enums)
+    set(codegen_enums_data_dir ${codegen_enums_dir}/data)
+
+    add_test(NAME codegen.enums
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_enums_data_dir}
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_enums_dir}/test_codegen_enums.cmake)
+
+    set(codegen_enums_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-enums)
+    set(codegen_enums_generated_header
+        ${codegen_enums_generated_dir}/enums.generated.hpp)
+    add_custom_command(
+        OUTPUT ${codegen_enums_generated_header}
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DINPUT=${codegen_enums_data_dir}/enum_codegen.pbs
+            -DOUTPUT=${codegen_enums_generated_header}
+            -P ${codegen_enums_dir}/generate_runtime_header.cmake
+        DEPENDS
+            easypb_codegen
+            ${codegen_enums_data_dir}/enum_codegen.pbs
+            ${codegen_enums_dir}/generate_runtime_header.cmake
+        VERBATIM)
+    add_custom_target(codegen_enums_generated
+        DEPENDS ${codegen_enums_generated_header})
+
+    add_executable(codegen_enums_runtime_test
+        ${codegen_enums_dir}/enum_runtime.cpp)
+    add_dependencies(codegen_enums_runtime_test codegen_enums_generated)
+    target_include_directories(codegen_enums_runtime_test PRIVATE
+        include ${codegen_enums_generated_dir})
+    add_test(NAME codegen.enums.runtime COMMAND codegen_enums_runtime_test)
+
     set(codegen_nested_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/nested)
     set(codegen_nested_generated_dir

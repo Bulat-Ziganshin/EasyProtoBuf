@@ -257,6 +257,25 @@ void test_rejects_reserved_enum_values()
     CHECK(error.message.find("reserved") != std::string::npos);
 }
 
+void test_rejects_enum_value_name_collisions()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto("top-level-enum-collision.proto",
+        "enum A { VALUE = 0; } enum B { VALUE = 0; }", parsed, error));
+    CHECK(error.message.find("enum value name") != std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("nested-enum-collision.proto",
+        "message M { enum A { VALUE = 0; } enum B { VALUE = 0; } }",
+        parsed, error));
+    CHECK(error.message.find("enum value name") != std::string::npos);
+
+    CHECK(easypb_proto::parse_proto("separate-enum-scopes.proto",
+        "message A { enum E { VALUE = 0; } } "
+        "message B { enum E { VALUE = 0; } }",
+        parsed, error));
+}
+
 void test_rejects_duplicate_oneof_names()
 {
     easypb_proto::ParsedProto parsed;
@@ -547,6 +566,7 @@ int main()
     test_rejects_reserved_conflicts();
     test_rejects_extension_range_conflicts();
     test_rejects_reserved_enum_values();
+    test_rejects_enum_value_name_collisions();
     test_rejects_duplicate_oneof_names();
     test_buffer_api_owns_result_strings();
     test_full_custom_option_name_parts_are_consumed();

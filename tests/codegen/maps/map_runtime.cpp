@@ -31,10 +31,10 @@ int main()
         return 1;
     }
 
-    // Enum fields use int32_t, so preserve their numeric values in maps.
+    // Enum-valued maps preserve the generated enum type across a round trip.
     EnumMap enum_source;
-    enum_source.statuses["unspecified"] = 0;
-    enum_source.statuses["ready"] = 1;
+    enum_source.statuses["unspecified"] = STATUS_UNSPECIFIED;
+    enum_source.statuses["ready"] = STATUS_READY;
 
     const std::string enum_data = easypb::encode(enum_source);
     const EnumMap enum_copy = easypb::decode<EnumMap>(enum_data);

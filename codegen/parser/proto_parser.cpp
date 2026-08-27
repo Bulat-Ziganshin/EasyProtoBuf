@@ -1696,6 +1696,34 @@ private:
         }
     }
 
+    // Protobuf enum values use the containing scope, not the enum type's scope.
+    // Reject names that would collide when emitted as unscoped C++ enumerators.
+    void validate_enum_value_names(const std::vector<EnumDescriptorProto>& enum_types,
+                                   const std::string& scope)
+    {
+        std::set<std::string> names;
+        for (std::size_t i = 0; i < enum_types.size(); ++i) {
+            for (std::size_t j = 0; j < enum_types[i].value.size(); ++j) {
+                const std::string name = view_text(enum_types[i].value[j].name);
+                if (!names.insert(name).second) {
+                    fail("duplicate enum value name " + name + " in " +
+                         (scope.empty() ? "global scope" : scope));
+                }
+            }
+        }
+    }
+
+    // Validate each lexical message scope independently, including descendants.
+    void validate_message_enum_value_names(const DescriptorProto& message,
+                                           const std::string& parent)
+    {
+        const std::string scope = parent + "." + view_text(message.name);
+        validate_enum_value_names(message.enum_type, scope);
+        for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+            validate_message_enum_value_names(message.nested_type[i], scope);
+        }
+    }
+
     // Recursively collects fully-qualified message and enum names for
     // the semantic type-resolution pass.
     void collect_message_symbols(const DescriptorProto& message, const std::string& parent,
@@ -1865,6 +1893,10 @@ private:
         std::map<std::string, int> symbols;
         const std::string prefix = package_prefix();
         SourceLocation synthetic;
+        validate_enum_value_names(out_.file.enum_type, prefix);
+        for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
+            validate_message_enum_value_names(out_.file.message_type[i], prefix);
+        }
         for (std::size_t i = 0; i < out_.file.enum_type.size(); ++i) {
             add_symbol(symbols, prefix + "." + view_text(out_.file.enum_type[i].name),
                        FieldDescriptorProto::TYPE_ENUM, synthetic);

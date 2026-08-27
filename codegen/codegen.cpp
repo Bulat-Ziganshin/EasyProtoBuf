@@ -165,6 +165,9 @@ std::string default_value_str(const FieldDescriptorProto& field)
         return myformat(" = {0}{1}{0}", quote_str, field.default_value);
     } else if (is_repeated(field)) {
         return "";
+    } else if (field.type == FieldDescriptorProto::TYPE_ENUM) {
+        // An integer literal cannot initialize an enum in standard C++.
+        return "";
     } else {
         // C++ doesn't initialize scalar fields by default, so we need to enforce the initialization
         return field.type == FieldDescriptorProto::TYPE_BOOL
@@ -246,11 +249,10 @@ std::string base_cpp_type_as_str(const FieldDescriptorProto& field)
 
         case FieldDescriptorProto::TYPE_BOOL:     return "bool";
 
-        case FieldDescriptorProto::TYPE_ENUM:     return "int32_t";
-
         case FieldDescriptorProto::TYPE_STRING:
         case FieldDescriptorProto::TYPE_BYTES:    return option.cpp_string_type;
 
+        case FieldDescriptorProto::TYPE_ENUM:
         case FieldDescriptorProto::TYPE_MESSAGE:  return cpp_qualified_type_str(field.type_name);
 
         case FieldDescriptorProto::TYPE_GROUP:    return "???group";
@@ -297,6 +299,25 @@ std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* ma
     } else {
         return basetype_str;
     }
+}
+
+
+// Generate an unscoped C++ enum while preserving descriptor order and values.
+std::string generate_enum(const EnumDescriptorProto& enum_type,
+                          const std::string& indent)
+{
+    std::string result = myformat("{0}enum {1}\n{0}{\n",
+                                  indent, enum_type.name);
+
+    for (std::size_t i = 0; i < enum_type.value.size(); ++i) {
+        const auto& value = enum_type.value[i];
+        result += myformat("{0}    {1} = {2}{3}\n",
+                           indent, value.name, std::to_string(value.number),
+                           i + 1 < enum_type.value.size() ? "," : "");
+    }
+
+    result += myformat("{0}};\n\n", indent);
+    return result;
 }
 
 
@@ -495,40 +516,65 @@ void add_dependency(MessageInfo& source, MessageInfo* target)
 }
 
 
-// Resolve by-value dependencies between messages emitted from this file.
-// Ordinary message fields depend directly on field.type_name.  Maps depend on
-// their synthetic entry's value field instead, so map<string, Child> becomes a
-// dependency on Child rather than on the hidden XxxEntry descriptor.
+// Resolve the message definition required by a field's user-defined type.
+// Message fields need their target message, while nested enum fields need the
+// message that owns the enum. Top-level enums have no message dependency.
+MessageInfo* find_type_owner(const FieldDescriptorProto& field,
+                             const MessageByProtoName& index)
+{
+    if (field.type == FieldDescriptorProto::TYPE_MESSAGE) {
+        auto found = index.find(field.type_name);
+        return found == index.end() ? nullptr : found->second;
+    }
+
+    if (field.type == FieldDescriptorProto::TYPE_ENUM) {
+        const std::size_t separator = field.type_name.rfind(PB_TYPE_DELIMITER);
+        if (separator == str_view::npos) return nullptr;
+        const str_view owner_name = field.type_name.substr(0, separator);
+        auto found = index.find(owner_name);
+        return found == index.end() ? nullptr : found->second;
+    }
+
+    return nullptr;
+}
+
+
+// Resolve declaration dependencies between messages emitted from this file.
+// Message fields depend directly on field.type_name; nested enum fields depend
+// on the message that owns the enum. Maps use their synthetic entry's value
+// field, so map<string, Child> depends on Child rather than hidden XxxEntry.
 //
-// External message names are intentionally ignored here: source generation has
-// already rejected unresolved imports, while descriptor-set mode preserves the
-// existing behavior for types Codegen does not itself define.
+// External message/enum names are intentionally ignored here: source generation
+// has already rejected unresolved imports, while descriptor-set mode preserves
+// the existing behavior for types Codegen does not itself define.
 void resolve_message_dependencies(MessageInfo& info,
                                   const MessageByProtoName& index)
 {
     auto map_types = collect_map_types(*info.descriptor, info.proto_name);
 
     for (const auto& field: info.descriptor->field) {
-        str_view dependency_name;
         const MapType* map_type = find_map_type(field, map_types, info.cpp_name);
-        if (map_type && map_type->value_field->type == FieldDescriptorProto::TYPE_MESSAGE) {
-            dependency_name = map_type->value_field->type_name;
-        } else if (! map_type && field.type == FieldDescriptorProto::TYPE_MESSAGE) {
-            dependency_name = field.type_name;
+        const FieldDescriptorProto& dependency_field =
+            map_type ? *map_type->value_field : field;
+        MessageInfo* target = find_type_owner(dependency_field, index);
+        if (! target) continue;
+
+        if (dependency_field.type == FieldDescriptorProto::TYPE_MESSAGE &&
+            is_ancestor_message(*target, info))
+        {
+            throw std::runtime_error(
+                myformat("recursive message value dependency: {0} -> {1}",
+                         info.cpp_name, target->cpp_name));
         }
 
-        if (! dependency_name.empty()) {
-            auto found = index.find(dependency_name);
-            if (found != index.end()) {
-                MessageInfo* target = found->second;
-                if (is_ancestor_message(*target, info)) {
-                    throw std::runtime_error(
-                        myformat("recursive message value dependency: {0} -> {1}",
-                                 info.cpp_name, target->cpp_name));
-                }
-                add_dependency(info, target);
-            }
+        // An enum declared by this message or an ancestor is already visible
+        // before this message's fields; it must not create a graph self-cycle.
+        if (dependency_field.type == FieldDescriptorProto::TYPE_ENUM &&
+            (target == &info || is_ancestor_message(*target, info)))
+        {
+            continue;
         }
+        add_dependency(info, target);
     }
 
     for (auto& child: info.children) {
@@ -698,6 +744,10 @@ std::string generate_message(MessageInfo& info,
                              std::string& decoders)
 {
     std::string nested_defs;
+    // Enum declarations precede nested messages and fields that may use them.
+    for (const auto& enum_type: info.descriptor->enum_type) {
+        nested_defs += generate_enum(enum_type, indent + CPP_INDENT);
+    }
     for (auto* child: dependency_safe_order(info.children)) {
         nested_defs += generate_message(*child, indent + CPP_INDENT, encoders, decoders);
     }
@@ -775,11 +825,15 @@ std::string generator(const FileDescriptorProto& file)
     for (auto& root: roots) resolve_message_dependencies(root, index);
     detect_dependency_cycles(roots);
 
-    std::string class_defs, encoders, decoders;
+    std::string enum_defs, class_defs, encoders, decoders;
+    // Top-level enums must be complete before any message field uses them.
+    for (const auto& enum_type: file.enum_type) {
+        enum_defs += generate_enum(enum_type, "");
+    }
     // Top-level messages are ordered by the same dependency rule as nested siblings.
     for (auto* root: dependency_safe_order(roots)) {
         class_defs += generate_message(*root, "", encoders, decoders);
     }
 
-    return class_defs + encoders + decoders;
+    return enum_defs + class_defs + encoders + decoders;
 }
