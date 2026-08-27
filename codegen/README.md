@@ -27,7 +27,7 @@ The committed `descriptor.pb.hpp` is an internal trimmed descriptor header and i
 
 Descriptor-set input can be useful, for example, when descriptor files are already available, when that workflow is preferred, or when a schema uses imports that the built-in parser cannot link yet. A descriptor set must currently contain exactly one `FileDescriptorProto`; avoid `protoc --include_imports` until target-file selection is implemented.
 
-The generated C++ header contains plain structures followed by free codec overloads. Nested Protobuf messages become nested C++ structures:
+The generated C++ header contains unscoped enum declarations and plain structures followed by free codec overloads. Nested Protobuf messages become nested C++ structures:
 
 ```cpp
 struct Message
@@ -145,13 +145,13 @@ ctest --test-dir build-lite --output-on-failure
 
 ## Structural options
 
-- `-c, --no-class` — do not generate C++ structures. This is useful when adapting existing types:
-  declare the types first, then include output containing only the external codec overloads.
+- `-c, --no-class` — do not generate C++ structures or enum declarations. This is useful when adapting existing types:
+  declare all message and enum types first, then include output containing only the external codec overloads.
 - `-d, --no-decoder` — do not generate `decode(easypb::Decoder, T&)`.
 - `-e, --no-encoder` — do not generate `encode(easypb::Encoder&, const T&)`.
 - `-f, --no-has-fields` — do not generate `has_*` members. This also disables required-field checks.
 - `--no-required` — do not check that proto2 required fields were present.
-- `--no-default-values` — ignore defaults specified in the schema.
+- `--no-default-values` — ignore explicit defaults specified in the schema. Singular enum fields still use their implicit protobuf default: the enum's first declared value.
 - `-p, --packed` — encode every eligible repeated numeric field in packed form.
 - `--no-packed` — encode every repeated field in unpacked form.
 
@@ -170,9 +170,9 @@ Include the corresponding container header before the generated header.
 `{0}` and `{1}` are replaced by the key and value types. If no placeholders are present,
 `<{0},{1}>` is appended. Include the corresponding container header before the generated header.
 
-Codegen supports scalar, enum and message map values. Enum values are represented as `int32_t`. Message-valued maps may use either top-level or nested message types.
+Codegen supports scalar, enum and message map values. Enum fields and map values use generated unscoped C++ enum types; top-level enums are emitted before messages, while nested enums are emitted in their owning structure before fields and nested messages that use them. Aliases and negative values are preserved. Message-valued maps may use either top-level or nested message types.
 
-Nested enum declarations are parsed, but Codegen does not yet emit C++ enum definitions; enum fields continue to use the existing `int32_t` representation.
+Singular enum fields are initialized to their explicit schema default when present, or to the enum's first declared value otherwise. A default from an enum nested in another message is qualified with that owning C++ message type.
 
 ## Code insertion points
 

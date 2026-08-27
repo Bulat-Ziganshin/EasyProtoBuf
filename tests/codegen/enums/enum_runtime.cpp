@@ -26,12 +26,21 @@ static_assert(std::is_same<decltype(Audit().priorities),
 static_assert(std::is_same<decltype(Audit().priorities_by_name),
                            std::map<std::string, Job::Priority> >::value,
               "forward nested enum map values must preserve their type");
+static_assert(std::is_same<decltype(ImplicitDefaults().value), NonZero>::value,
+              "implicit enum defaults must preserve their enum type");
 
 
 int main()
 {
     Job defaults;
-    if (defaults.status != STARTED || defaults.priority != Job::HIGH) {
+    Audit audit_defaults;
+    ImplicitDefaults implicit_defaults;
+    if (defaults.status != STARTED ||
+        defaults.priority != Job::HIGH ||
+        defaults.current != UNKNOWN ||
+        audit_defaults.priority != Job::HIGH ||
+        implicit_defaults.value != FIVE)
+    {
         std::cerr << "Generated enum defaults are incorrect\n";
         return 1;
     }

@@ -23,12 +23,12 @@ Library features:
 - [protozero][] is a production-grade library with a similar API
 
 [Codegen](codegen) features:
-- generates C++ structures and free `encode`/`decode` overloads for top-level and nested message types
+- generates C++ structures/enums and `encode`/`decode` implementations for top-level and nested types
 - supports map fields with scalar, enum and message values, including nested message values
 - the generated decoder checks the presence of required fields in the decoded message
 - command-line options to tailor the generated code
 - planned:
-  - support for C++ enum definitions and oneof fields
+  - support for oneof fields
   - protoc plugin
   - validation of enum, integer and bool values by the generated code
   - per-field C++ type specification
@@ -278,9 +278,9 @@ in several ways:
   map entry. Presence tracking through `has_*` is not itself the problem;
 - conversely, an omitted message value in a map entry creates a default-initialized
   mapped object without recursively checking its required fields;
-- enum values are represented as `int32_t`, so a missing proto2 enum map value
-  is zero-initialized rather than using the enum's proto2 default (its first
-  declared value), and closed-enum validation semantics are not enforced;
+- a missing proto2 enum map value is value-initialized to zero rather than using
+  the enum's proto2 default (its first declared value), and closed-enum
+  validation semantics are not enforced;
 - unknown fields in ordinary messages, including message values stored in maps,
   are discarded rather than retained for later serialization.
 

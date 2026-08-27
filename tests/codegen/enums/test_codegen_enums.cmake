@@ -95,11 +95,14 @@ require_contains(enum_out
     "std::map<std::string,Status> names;"
     "Enum-valued map")
 require_contains(enum_out
-    "Status current;"
-    "Enum field without an explicit default")
+    "Status current = UNKNOWN;"
+    "Implicit top-level enum default")
 require_contains(enum_out
-    "Job::Priority priority;"
-    "Forward nested enum field")
+    "NonZero value = FIVE;"
+    "Implicit non-zero enum default")
+require_contains(enum_out
+    "Job::Priority priority = Job::HIGH;"
+    "Qualified forward nested enum default")
 require_contains(enum_out
     "std::vector<Job::Priority> priorities;"
     "Forward repeated nested enum field")
@@ -134,6 +137,39 @@ require_contains(enum_out
 require_contains(enum_out
     "pb.get_map_string_enum(&x.names);"
     "Enum map decoder")
+
+run_ok(no_defaults_out no_defaults_err
+    ${CODEGEN} --descriptor-set --no-default-values ${enum_pbs})
+require_contains(no_defaults_out
+    "Status status = UNKNOWN;"
+    "Implicit enum default when explicit defaults are disabled")
+require_contains(no_defaults_out
+    "Job::Priority priority = LOW;"
+    "Implicit local nested enum default when explicit defaults are disabled")
+require_contains(no_defaults_out
+    "Job::Priority priority = Job::LOW;"
+    "Implicit foreign nested enum default when explicit defaults are disabled")
+require_absent(no_defaults_out
+    "Status status = STARTED;"
+    "Disabled explicit top-level enum default")
+require_absent(no_defaults_out
+    "Job::Priority priority = HIGH;"
+    "Disabled explicit local nested enum default")
+
+run_ok(no_class_out no_class_err
+    ${CODEGEN} --descriptor-set --no-class ${enum_pbs})
+require_absent(no_class_out
+    "enum Status"
+    "Top-level enum in --no-class output")
+require_absent(no_class_out
+    "enum Priority"
+    "Nested enum in --no-class output")
+require_absent(no_class_out
+    "struct Job"
+    "Message structure in --no-class output")
+require_contains(no_class_out
+    "const Job &x"
+    "Enum message codecs in --no-class output")
 
 if(FULL_BUILD)
     run_ok(proto_out proto_err ${CODEGEN} ${enum_proto})

@@ -41,11 +41,12 @@ The grammar uses the intended lexical and syntactic forms directly:
 - map keys must be an allowed scalar key type;
 - map and oneof fields reject invalid labels and field options;
 - field numbers are 1..536870911, excluding 19000..19999;
-- enum values fit signed 32 bits;
-- the first value of a non-empty proto3 enum is zero;
+- every enum contains at least one value, and enum values fit signed 32 bits;
+- the first value of a proto3 enum is zero;
 - duplicate enum numbers require `option allow_alias = true`;
-- enum value names are unique in their containing package or message scope,
-  rather than only within each enum declaration;
+- package scope uses one name table for top-level messages, enums, and enum
+  values; each message scope likewise shares names between fields, nested
+  messages, nested enums, oneofs, and enum values;
 - duplicate field names and numbers are rejected;
 - duplicate type and oneof names are rejected in their scopes;
 - reserved and extension ranges must be ordered, disjoint, and conflict-free;
@@ -56,7 +57,8 @@ The grammar uses the intended lexical and syntactic forms directly:
 - proto3 repeated packable fields are still packed by default on the wire, but
   that effective default is derived from `FileDescriptorProto.syntax` rather than
   stored as an explicit descriptor option;
-- defaults are checked against the resolved field type and integer width;
+- defaults are checked against the resolved field type and integer width, and
+  enum defaults must name a value declared by the resolved enum;
 - float and double defaults are stored in the canonical textual form used by
   `protoc`, while string and bytes defaults follow descriptor.proto rules;
 - Unicode escapes must decode to Unicode scalar values;

@@ -1520,6 +1520,11 @@ private:
             result.value.push_back(value);
         }
 
+        if (result.value.empty()) {
+            throw ParseFailure(current_.location,
+                               "enum must contain at least one value");
+        }
+
         for (std::size_t i = 0; i < result.value.size(); ++i) {
             const std::string value_name = view_text(result.value[i].name);
             if (reserved_names.find(value_name) != reserved_names.end()) {
@@ -1696,48 +1701,95 @@ private:
         }
     }
 
-    // Protobuf enum values use the containing scope, not the enum type's scope.
-    // Reject names that would collide when emitted as unscoped C++ enumerators.
-    void validate_enum_value_names(const std::vector<EnumDescriptorProto>& enum_types,
-                                   const std::string& scope)
+    // Add one declaration to a protobuf lexical scope.  Enum values use their
+    // containing scope rather than the enum type's scope, so all declaration
+    // categories must share this table.
+    void add_scope_name(std::map<std::string, std::string>& names,
+                        const std::string& name,
+                        const std::string& kind,
+                        const std::string& scope)
     {
-        std::set<std::string> names;
-        for (std::size_t i = 0; i < enum_types.size(); ++i) {
-            for (std::size_t j = 0; j < enum_types[i].value.size(); ++j) {
-                const std::string name = view_text(enum_types[i].value[j].name);
-                if (!names.insert(name).second) {
-                    fail("duplicate enum value name " + name + " in " +
-                         (scope.empty() ? "global scope" : scope));
-                }
+        const std::pair<std::map<std::string, std::string>::iterator, bool> inserted =
+            names.insert(std::make_pair(name, kind));
+        if (!inserted.second) {
+            fail("name collision in " +
+                 (scope.empty() ? std::string("global scope") : scope) +
+                 ": " + kind + " " + name + " conflicts with " +
+                 inserted.first->second);
+        }
+    }
+
+    // Validate the file/package scope shared by top-level types and enum values.
+    void validate_file_scope_names(const std::string& scope)
+    {
+        std::map<std::string, std::string> names;
+        for (std::size_t i = 0; i < out_.file.enum_type.size(); ++i) {
+            add_scope_name(names, view_text(out_.file.enum_type[i].name),
+                           "enum type", scope);
+        }
+        for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
+            add_scope_name(names, view_text(out_.file.message_type[i].name),
+                           "message", scope);
+        }
+        for (std::size_t i = 0; i < out_.file.enum_type.size(); ++i) {
+            for (std::size_t j = 0; j < out_.file.enum_type[i].value.size(); ++j) {
+                add_scope_name(names, view_text(out_.file.enum_type[i].value[j].name),
+                               "enum value", scope);
             }
         }
     }
 
-    // Validate each lexical message scope independently, including descendants.
-    void validate_message_enum_value_names(const DescriptorProto& message,
-                                           const std::string& parent)
+    // Validate one message scope, then recurse into each nested message scope.
+    void validate_message_scope_names(const DescriptorProto& message,
+                                      const std::string& parent)
     {
         const std::string scope = parent + "." + view_text(message.name);
-        validate_enum_value_names(message.enum_type, scope);
+        std::map<std::string, std::string> names;
+        for (std::size_t i = 0; i < message.field.size(); ++i) {
+            add_scope_name(names, view_text(message.field[i].name), "field", scope);
+        }
         for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
-            validate_message_enum_value_names(message.nested_type[i], scope);
+            add_scope_name(names, view_text(message.nested_type[i].name),
+                           "nested message", scope);
+        }
+        for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
+            add_scope_name(names, view_text(message.enum_type[i].name),
+                           "nested enum type", scope);
+        }
+        for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
+            add_scope_name(names, view_text(message.oneof_decl[i].name),
+                           "oneof", scope);
+        }
+        for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
+            for (std::size_t j = 0; j < message.enum_type[i].value.size(); ++j) {
+                add_scope_name(names, view_text(message.enum_type[i].value[j].name),
+                               "enum value", scope);
+            }
+        }
+        for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+            validate_message_scope_names(message.nested_type[i], scope);
         }
     }
+
+    typedef std::map<std::string, const EnumDescriptorProto*> EnumByName;
 
     // Recursively collects fully-qualified message and enum names for
     // the semantic type-resolution pass.
     void collect_message_symbols(const DescriptorProto& message, const std::string& parent,
-                                 std::map<std::string, int>& symbols)
+                                 std::map<std::string, int>& symbols,
+                                 EnumByName& enum_types)
     {
         const std::string name = parent + "." + view_text(message.name);
         SourceLocation synthetic;
         add_symbol(symbols, name, FieldDescriptorProto::TYPE_MESSAGE, synthetic);
         for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-            add_symbol(symbols, name + "." + view_text(message.enum_type[i].name),
-                       FieldDescriptorProto::TYPE_ENUM, synthetic);
+            const std::string enum_name =
+                name + "." + view_text(message.enum_type[i].name);
+            add_symbol(symbols, enum_name, FieldDescriptorProto::TYPE_ENUM, synthetic);
+            enum_types[enum_name] = &message.enum_type[i];
         }
         for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
-            collect_message_symbols(message.nested_type[i], name, symbols);
+            collect_message_symbols(message.nested_type[i], name, symbols, enum_types);
         }
     }
 
@@ -1775,7 +1827,8 @@ private:
 
     // Type-dependent semantic validation for the textual default_value
     // previously stored by apply_default().
-    void validate_default(const FieldDescriptorProto& field, bool unresolved)
+    void validate_default(const FieldDescriptorProto& field, bool unresolved,
+                          const EnumByName& enum_types)
     {
         if (!field.has_default_value) return;
         const std::string value = view_text(field.default_value);
@@ -1794,6 +1847,17 @@ private:
                 return;
             case FieldDescriptorProto::TYPE_ENUM:
                 if (value.empty()) fail("enum default must name an enum value");
+                {
+                    const std::string enum_name = view_text(field.type_name);
+                    const EnumByName::const_iterator found = enum_types.find(enum_name);
+                    if (found == enum_types.end()) {
+                        fail("cannot validate default for unknown enum type " + enum_name);
+                    }
+                    for (std::size_t i = 0; i < found->second->value.size(); ++i) {
+                        if (view_text(found->second->value[i].name) == value) return;
+                    }
+                    fail("enum type " + enum_name + " has no value named " + value);
+                }
                 return;
             case FieldDescriptorProto::TYPE_MESSAGE:
                 if (unresolved) {
@@ -1830,7 +1894,8 @@ private:
     // applies semantic rules that require the resolved type: packed legality,
     // oneof_index bounds, and default-value validation.
     void resolve_message(DescriptorProto& message, const std::string& parent,
-                         const std::map<std::string, int>& symbols)
+                         const std::map<std::string, int>& symbols,
+                         const EnumByName& enum_types)
     {
         const std::string scope = parent + "." + view_text(message.name);
         std::set<std::string> names;
@@ -1866,7 +1931,7 @@ private:
                  static_cast<std::size_t>(field.oneof_index) >= message.oneof_decl.size())) {
                 fail("invalid oneof_index in message " + scope);
             }
-            validate_default(field, unresolved);
+            validate_default(field, unresolved, enum_types);
         }
 
         std::set<std::string> nested_names;
@@ -1879,7 +1944,7 @@ private:
             if (!nested_names.insert(view_text(message.nested_type[i].name)).second) {
                 fail("duplicate nested type name in " + scope);
             }
-            resolve_message(message.nested_type[i], scope, symbols);
+            resolve_message(message.nested_type[i], scope, symbols, enum_types);
         }
     }
 
@@ -1891,22 +1956,26 @@ private:
         // Pass 1: build the complete table before resolving any field, so
         // forward references and mutually-referential messages work.
         std::map<std::string, int> symbols;
+        EnumByName enum_types;
         const std::string prefix = package_prefix();
         SourceLocation synthetic;
-        validate_enum_value_names(out_.file.enum_type, prefix);
+        validate_file_scope_names(prefix);
         for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
-            validate_message_enum_value_names(out_.file.message_type[i], prefix);
+            validate_message_scope_names(out_.file.message_type[i], prefix);
         }
         for (std::size_t i = 0; i < out_.file.enum_type.size(); ++i) {
-            add_symbol(symbols, prefix + "." + view_text(out_.file.enum_type[i].name),
-                       FieldDescriptorProto::TYPE_ENUM, synthetic);
+            const std::string enum_name =
+                prefix + "." + view_text(out_.file.enum_type[i].name);
+            add_symbol(symbols, enum_name, FieldDescriptorProto::TYPE_ENUM, synthetic);
+            enum_types[enum_name] = &out_.file.enum_type[i];
         }
         for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
-            collect_message_symbols(out_.file.message_type[i], prefix, symbols);
+            collect_message_symbols(out_.file.message_type[i], prefix,
+                                    symbols, enum_types);
         }
         // Pass 2: resolve TypeName values and apply type-dependent checks.
         for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
-            resolve_message(out_.file.message_type[i], prefix, symbols);
+            resolve_message(out_.file.message_type[i], prefix, symbols, enum_types);
         }
     }
 };
