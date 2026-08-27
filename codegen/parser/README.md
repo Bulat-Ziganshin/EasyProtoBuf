@@ -13,7 +13,7 @@ The parser accepts a borrowed input buffer and returns a `ParsedProto` object th
 
 Imports are parsed and recorded but are not loaded yet. Unresolved imported types carry the machine-readable diagnostic code `DIAGNOSTIC_UNRESOLVED_TYPE`. Code generation refuses such schemas; descriptor printing and benchmarking continue with warnings.
 
-Top-level `service` and `rpc` declarations are syntactically validated and consumed, including unary and streaming request/response forms and service/method options. They are intentionally not retained in the trimmed descriptor model because EasyProtoBuf Codegen generates message codecs rather than RPC client/server APIs.
+Top-level `service` and `rpc` declarations are syntactically validated and consumed, including unary and streaming request/response forms and service/method options. Service names participate in package-scope collision validation, but service metadata is intentionally not retained in the trimmed descriptor model because EasyProtoBuf Codegen generates message codecs rather than RPC client/server APIs.
 
 Nested message declarations are retained recursively in `DescriptorProto::nested_type`; Codegen emits them as lexical C++ nested structs. Synthetic map-entry messages remain internal descriptor details and are not emitted as user-visible structs.
 

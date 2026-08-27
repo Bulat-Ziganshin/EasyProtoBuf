@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <iostream>
 #include <map>
 #include <string>
@@ -5,6 +6,7 @@
 #include <vector>
 
 #include "enums.generated.hpp"
+#include "open-enums.generated.hpp"
 
 
 static_assert(std::is_same<decltype(Job().status), Status>::value,
@@ -28,6 +30,9 @@ static_assert(std::is_same<decltype(Audit().priorities_by_name),
               "forward nested enum map values must preserve their type");
 static_assert(std::is_same<decltype(ImplicitDefaults().value), NonZero>::value,
               "implicit enum defaults must preserve their enum type");
+static_assert(std::is_same<std::underlying_type<OpenStatus>::type,
+                           int32_t>::value,
+              "open proto3 enums must use a fixed int32_t underlying type");
 
 
 int main()
@@ -35,13 +40,29 @@ int main()
     Job defaults;
     Audit audit_defaults;
     ImplicitDefaults implicit_defaults;
+    ShadowDefaults shadow_defaults;
     if (defaults.status != STARTED ||
         defaults.priority != Job::HIGH ||
         defaults.current != UNKNOWN ||
         audit_defaults.priority != Job::HIGH ||
-        implicit_defaults.value != FIVE)
+        implicit_defaults.value != FIVE ||
+        shadow_defaults.top != Top::X)
     {
         std::cerr << "Generated enum defaults are incorrect\n";
+        return 1;
+    }
+
+    // Proto3 enums are open: an unknown int32 value must survive decoding and
+    // re-encoding even when no enumerator with that number was declared.
+    const char unknown_open_enum_bytes[] = {0x08, 0x7b};
+    const std::string unknown_open_enum_wire(
+        unknown_open_enum_bytes, sizeof(unknown_open_enum_bytes));
+    const OpenMessage open_copy =
+        easypb::decode<OpenMessage>(unknown_open_enum_wire);
+    if (static_cast<int32_t>(open_copy.status) != 123 ||
+        easypb::encode(open_copy) != unknown_open_enum_wire)
+    {
+        std::cerr << "Unknown proto3 enum value was not preserved\n";
         return 1;
     }
 

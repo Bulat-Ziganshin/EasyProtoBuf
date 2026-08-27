@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package easypb.enums;
+
+enum OpenStatus {
+  OPEN_ZERO = 0;
+  OPEN_ONE = 1;
+}
+
+message OpenMessage {
+  OpenStatus status = 1;
+}

@@ -475,6 +475,24 @@ void test_service_is_rejected_inside_message()
     CHECK(error.message.find("service") != std::string::npos);
 }
 
+void test_rejects_service_scope_name_collisions()
+{
+    const char* collisions[] = {
+        "syntax=\"proto3\"; message S {} service S {}",
+        "syntax=\"proto3\"; enum S { X = 0; } service S {}",
+        "syntax=\"proto3\"; enum E { S = 0; } service S {}",
+        "syntax=\"proto3\"; service S {} service S {}"
+    };
+
+    for (std::size_t i = 0; i < sizeof(collisions) / sizeof(collisions[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        CHECK(!easypb_proto::parse_proto(
+            "service-name-collision.proto", collisions[i], parsed, error));
+        CHECK(error.message.find("service") != std::string::npos);
+    }
+}
+
 void test_rejects_malformed_rpc_syntax()
 {
     easypb_proto::ParsedProto parsed;
@@ -603,6 +621,7 @@ int main()
     test_malformed_custom_option_name_parts_are_rejected();
     test_service_rpc_syntax_is_consumed();
     test_service_is_rejected_inside_message();
+    test_rejects_service_scope_name_collisions();
     test_rejects_malformed_rpc_syntax();
     test_decode_all_field_descriptor_members();
     test_decode_complete_descriptor_set();

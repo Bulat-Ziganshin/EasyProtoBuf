@@ -27,11 +27,12 @@ struct
 } option;
 
 
-// Protobuf and C++ delimiters between parts of a qualified name
+// Protobuf and C++ naming/formatting constants used by the generator
 const std::string PB_TYPE_DELIMITER = ".";
 const std::string CPP_TYPE_DELIMITER = "::";
 const std::string MACRO_TYPE_DELIMITER = "_";
 const std::string CPP_INDENT = "    ";
+const std::string CPP_ENUM_BASE_TYPE = "int32_t";
 
 enum class GraphColor
 {
@@ -46,17 +47,9 @@ std::string package_name_prefix;  // package-describing prefix of message types,
 bool current_file_is_proto3 = false;
 
 
-// Codegen metadata for an enum declared in the current file.  Unscoped C++
-// enumerators live in the owning message (or in the global scope for a
-// top-level enum), so default expressions need both pieces of information.
-struct EnumInfo
-{
-    const EnumDescriptorProto* descriptor;
-    std::string cpp_owner_name;
-};
-
-
-using EnumByProtoName = std::map<std::string, EnumInfo>;
+// The descriptor supplies the first declared value used by implicit protobuf
+// defaults. Descriptor storage remains stable for the whole generator call.
+using EnumByProtoName = std::map<std::string, const EnumDescriptorProto*>;
 
 
 const char* FILE_TEMPLATE =
@@ -165,75 +158,6 @@ bool write_as_packed(const FieldDescriptorProto& field)
             option.no_packed ? false :
             field.options.has_packed ? field.options.packed :
                                        current_file_is_proto3);
-}
-
-
-// Return whether unqualified lookup from a message can see an enumerator in
-// the enum owner's class scope.
-bool enum_owner_is_visible(const std::string& owner_cpp_name,
-                           const std::string& message_cpp_name)
-{
-    return owner_cpp_name.empty() ||
-           message_cpp_name == owner_cpp_name ||
-           starts_with(message_cpp_name, owner_cpp_name + CPP_TYPE_DELIMITER);
-}
-
-
-// Either " = default_field_value" or empty string.  Enum fields use their
-// declared first value as the implicit protobuf default; integer zero cannot
-// initialize an enum in standard C++ and may not name a declared value.
-std::string default_value_str(const FieldDescriptorProto& field,
-                              const EnumByProtoName& enums,
-                              const std::string& message_cpp_name)
-{
-    if (is_repeated(field)) {
-        return "";
-    }
-
-    if (field.type == FieldDescriptorProto::TYPE_ENUM) {
-        const std::string proto_name(field.type_name.data(), field.type_name.size());
-        const auto found = enums.find(proto_name);
-
-        // Descriptor sets may reference imported enums that are not present in
-        // the selected file.  Preserve the historical explicit-default output,
-        // but an implicit value cannot be inferred without that descriptor.
-        if (found == enums.end()) {
-            return field.has_default_value && ! option.no_default_values
-                ? myformat(" = {0}", field.default_value)
-                : "";
-        }
-
-        const EnumInfo& enum_info = found->second;
-        if (enum_info.descriptor->value.empty()) {
-            throw std::runtime_error(
-                myformat("Enum type '{0}' must contain at least one value", proto_name));
-        }
-
-        const str_view value = field.has_default_value && ! option.no_default_values
-            ? field.default_value
-            : enum_info.descriptor->value.front().name;
-        const std::string value_name(value.data(), value.size());
-        const std::string qualified_value =
-            enum_owner_is_visible(enum_info.cpp_owner_name, message_cpp_name)
-                ? value_name
-                : enum_info.cpp_owner_name + CPP_TYPE_DELIMITER + value_name;
-        return myformat(" = {0}", qualified_value);
-    }
-
-    if (field.has_default_value  &&  ! option.no_default_values) {
-        // Use default field value specified in .proto file
-        bool is_bytearray_field = (field.type==FieldDescriptorProto::TYPE_STRING || field.type==FieldDescriptorProto::TYPE_BYTES);
-        const char* quote_str = (is_bytearray_field? "\"" : "");
-        return myformat(" = {0}{1}{0}", quote_str, field.default_value);
-    } else {
-        // C++ doesn't initialize scalar fields by default, so we need to enforce the initialization
-        return field.type == FieldDescriptorProto::TYPE_BOOL
-                   ? " = false" :
-               is_numeric_field(field)
-                   ? " = 0"
-               // or another field type
-                   : "";
-    }
 }
 
 
@@ -359,12 +283,13 @@ std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* ma
 }
 
 
-// Generate an unscoped C++ enum while preserving descriptor order and values.
+// Generate an unscoped C++ enum with a fixed int32_t representation.  The
+// fixed underlying type lets an open proto3 enum retain any unknown int32 value.
 std::string generate_enum(const EnumDescriptorProto& enum_type,
                           const std::string& indent)
 {
-    std::string result = myformat("{0}enum {1}\n{0}{\n",
-                                  indent, enum_type.name);
+    std::string result = myformat("{0}enum {1} : {2}\n{0}{\n",
+                                  indent, enum_type.name, CPP_ENUM_BASE_TYPE);
 
     for (std::size_t i = 0; i < enum_type.value.size(); ++i) {
         const auto& value = enum_type.value[i];
@@ -402,6 +327,63 @@ std::string generate_field_decoder(const FieldDescriptorProto& field, const MapT
     /* 4 */ hasfield_enabled(field)
                 ? myformat(", &x.has_{0}", field.name)
                 : "");
+}
+
+
+// Either " = default_field_value" or empty string.  Enum fields use their
+// declared first value as the implicit protobuf default; integer zero cannot
+// initialize an enum in standard C++ and may not name a declared value.
+std::string default_value_str(const FieldDescriptorProto& field,
+                              const EnumByProtoName& enums)
+{
+    if (is_repeated(field)) {
+        return "";
+    }
+
+    if (field.type == FieldDescriptorProto::TYPE_ENUM) {
+        const std::string proto_name(field.type_name.data(), field.type_name.size());
+        const auto found = enums.find(proto_name);
+
+        // Descriptor sets may reference imported enums that are not present in
+        // the selected file.  Preserve the historical explicit-default output,
+        // but an implicit value cannot be inferred without that descriptor.
+        if (found == enums.end()) {
+            return field.has_default_value && ! option.no_default_values
+                ? myformat(" = {0}", field.default_value)
+                : "";
+        }
+
+        const EnumDescriptorProto& enum_type = *found->second;
+        if (enum_type.value.empty()) {
+            throw std::runtime_error(
+                myformat("Enum type '{0}' must contain at least one value", proto_name));
+        }
+
+        const str_view value = field.has_default_value && ! option.no_default_values
+            ? field.default_value
+            : enum_type.value.front().name;
+        // C++11 permits qualifying an unscoped enumerator through its enum
+        // type. This prevents an enumerator in a nearer scope from shadowing
+        // the intended value.
+        return myformat(" = {0}{1}{2}",
+                        cpp_qualified_type_str(field.type_name),
+                        CPP_TYPE_DELIMITER, value);
+    }
+
+    if (field.has_default_value  &&  ! option.no_default_values) {
+        // Use default field value specified in .proto file
+        bool is_bytearray_field = (field.type==FieldDescriptorProto::TYPE_STRING || field.type==FieldDescriptorProto::TYPE_BYTES);
+        const char* quote_str = (is_bytearray_field? "\"" : "");
+        return myformat(" = {0}{1}{0}", quote_str, field.default_value);
+    } else {
+        // C++ doesn't initialize scalar fields by default, so we need to enforce the initialization
+        return field.type == FieldDescriptorProto::TYPE_BOOL
+                   ? " = false" :
+               is_numeric_field(field)
+                   ? " = 0"
+               // or another field type
+                   : "";
+    }
 }
 
 
@@ -542,13 +524,11 @@ void index_message_info(MessageInfo& info, MessageByProtoName& index)
 
 
 // Add enums from one real-message subtree to the absolute-name index used by
-// default-value generation.  Descriptor storage remains stable for the whole
-// generator call, so EnumInfo can safely retain descriptor pointers.
+// default-value generation.
 void index_message_enums(const MessageInfo& info, EnumByProtoName& index)
 {
     for (const auto& enum_type: info.descriptor->enum_type) {
-        index[info.proto_name + PB_TYPE_DELIMITER + std::string(enum_type.name)] =
-            EnumInfo{&enum_type, info.cpp_name};
+        index[info.proto_name + PB_TYPE_DELIMITER + std::string(enum_type.name)] = &enum_type;
     }
     for (const auto& child: info.children) {
         index_message_enums(child, index);
@@ -836,7 +816,7 @@ std::string generate_message(MessageInfo& info,
         auto cpptype_str = cpp_type_as_str(field, map_type);
         field_defs += myformat("{0}    {1} {2}{3};\n",
                                indent, cpptype_str, field.name,
-                               default_value_str(field, enum_index, info.cpp_name));
+                               default_value_str(field, enum_index));
 
         if (hasfield_enabled(field)) {
             has_field_defs += myformat("{0}    bool has_{1} = false;\n",
@@ -899,12 +879,11 @@ std::string generator(const FileDescriptorProto& file)
     for (auto& root: roots) resolve_message_dependencies(root, index);
     detect_dependency_cycles(roots);
 
-    // Index every local enum once so implicit defaults and nested-enum owner
-    // qualification do not depend on declaration order.
+    // Index every local enum once so implicit defaults and type-qualified
+    // initializers do not depend on declaration order.
     EnumByProtoName enum_index;
     for (const auto& enum_type: file.enum_type) {
-        enum_index[package_name_prefix + std::string(enum_type.name)] =
-            EnumInfo{&enum_type, ""};
+        enum_index[package_name_prefix + std::string(enum_type.name)] = &enum_type;
     }
     for (const auto& root: roots) index_message_enums(root, enum_index);
 

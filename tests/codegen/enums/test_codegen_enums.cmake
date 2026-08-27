@@ -54,12 +54,15 @@ endfunction()
 
 set(enum_proto "${DATA_DIR}/enum_codegen.proto")
 set(enum_pbs "${DATA_DIR}/enum_codegen.pbs")
+set(open_enum_proto "${DATA_DIR}/open_enum.proto")
+set(open_enum_pbs "${DATA_DIR}/open_enum.pbs")
 
 run_ok(enum_out enum_err ${CODEGEN} --descriptor-set ${enum_pbs})
+run_ok(open_enum_out open_enum_err ${CODEGEN} --descriptor-set ${open_enum_pbs})
 
 require_contains(enum_out
-    "enum Status"
-    "Top-level enum declaration")
+    "enum Status : int32_t"
+    "Fixed-width top-level enum declaration")
 require_contains(enum_out
     "FAILED = -1"
     "Negative enum value")
@@ -67,10 +70,10 @@ require_contains(enum_out
     "STARTED = 1,\n    ACTIVE = 1"
     "Aliased enum values")
 require_contains(enum_out
-    "enum Priority"
-    "Nested enum declaration")
+    "enum Priority : int32_t"
+    "Fixed-width nested enum declaration")
 require_before(enum_out
-    "enum Status" "struct Job"
+    "enum Status : int32_t" "struct Job"
     "Top-level enum declaration order")
 require_before(enum_out
     "enum Priority" "Status status"
@@ -80,10 +83,10 @@ require_before(enum_out
     "Nested enum owner declaration order")
 
 require_contains(enum_out
-    "Status status = STARTED;"
+    "Status status = Status::STARTED;"
     "Singular enum field and default")
 require_contains(enum_out
-    "Job::Priority priority = HIGH;"
+    "Job::Priority priority = Job::Priority::HIGH;"
     "Nested enum field and default")
 require_contains(enum_out
     "std::vector<Status> history;"
@@ -95,13 +98,19 @@ require_contains(enum_out
     "std::map<std::string,Status> names;"
     "Enum-valued map")
 require_contains(enum_out
-    "Status current = UNKNOWN;"
+    "Status current = Status::UNKNOWN;"
     "Implicit top-level enum default")
 require_contains(enum_out
-    "NonZero value = FIVE;"
+    "NonZero value = NonZero::FIVE;"
     "Implicit non-zero enum default")
 require_contains(enum_out
-    "Job::Priority priority = Job::HIGH;"
+    "Top top = Top::X;"
+    "Enum default protected from nested enumerator shadowing")
+require_absent(enum_out
+    "Top top = X;"
+    "Unqualified shadowed enum default")
+require_contains(enum_out
+    "Job::Priority priority = Job::Priority::HIGH;"
     "Qualified forward nested enum default")
 require_contains(enum_out
     "std::vector<Job::Priority> priorities;"
@@ -110,11 +119,15 @@ require_contains(enum_out
     "std::map<std::string,Job::Priority> priorities_by_name;"
     "Forward nested enum map value")
 require_absent(enum_out
-    ": int32_t"
-    "Enum underlying type")
-require_absent(enum_out
     "int32_t status"
     "Obsolete singular enum representation")
+
+require_contains(open_enum_out
+    "enum OpenStatus : int32_t"
+    "Fixed-width open proto3 enum declaration")
+require_contains(open_enum_out
+    "OpenStatus status = OpenStatus::OPEN_ZERO;"
+    "Open proto3 enum implicit default")
 
 require_contains(enum_out
     "pb.put_enum(1, x.status);"
@@ -141,19 +154,19 @@ require_contains(enum_out
 run_ok(no_defaults_out no_defaults_err
     ${CODEGEN} --descriptor-set --no-default-values ${enum_pbs})
 require_contains(no_defaults_out
-    "Status status = UNKNOWN;"
+    "Status status = Status::UNKNOWN;"
     "Implicit enum default when explicit defaults are disabled")
 require_contains(no_defaults_out
-    "Job::Priority priority = LOW;"
+    "Job::Priority priority = Job::Priority::LOW;"
     "Implicit local nested enum default when explicit defaults are disabled")
 require_contains(no_defaults_out
-    "Job::Priority priority = Job::LOW;"
+    "Job::Priority priority = Job::Priority::LOW;"
     "Implicit foreign nested enum default when explicit defaults are disabled")
 require_absent(no_defaults_out
-    "Status status = STARTED;"
+    "Status status = Status::STARTED;"
     "Disabled explicit top-level enum default")
 require_absent(no_defaults_out
-    "Job::Priority priority = HIGH;"
+    "Job::Priority priority = Job::Priority::HIGH;"
     "Disabled explicit local nested enum default")
 
 run_ok(no_class_out no_class_err
@@ -178,5 +191,13 @@ if(FULL_BUILD)
     if(NOT proto_normalized STREQUAL pbs_normalized)
         message(FATAL_ERROR
             "Enum .proto and .pbs generated outputs differ")
+    endif()
+
+    run_ok(open_proto_out open_proto_err ${CODEGEN} ${open_enum_proto})
+    normalize_source_comment(open_enum_out open_pbs_normalized)
+    normalize_source_comment(open_proto_out open_proto_normalized)
+    if(NOT open_proto_normalized STREQUAL open_pbs_normalized)
+        message(FATAL_ERROR
+            "Open enum .proto and .pbs generated outputs differ")
     endif()
 endif()

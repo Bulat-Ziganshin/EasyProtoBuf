@@ -224,6 +224,8 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-enums)
     set(codegen_enums_generated_header
         ${codegen_enums_generated_dir}/enums.generated.hpp)
+    set(codegen_open_enums_generated_header
+        ${codegen_enums_generated_dir}/open-enums.generated.hpp)
     add_custom_command(
         OUTPUT ${codegen_enums_generated_header}
         COMMAND ${CMAKE_COMMAND}
@@ -236,8 +238,22 @@ if(BUILD_TESTING)
             ${codegen_enums_data_dir}/enum_codegen.pbs
             ${codegen_enums_dir}/generate_runtime_header.cmake
         VERBATIM)
+    add_custom_command(
+        OUTPUT ${codegen_open_enums_generated_header}
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DINPUT=${codegen_enums_data_dir}/open_enum.pbs
+            -DOUTPUT=${codegen_open_enums_generated_header}
+            -P ${codegen_enums_dir}/generate_runtime_header.cmake
+        DEPENDS
+            easypb_codegen
+            ${codegen_enums_data_dir}/open_enum.pbs
+            ${codegen_enums_dir}/generate_runtime_header.cmake
+        VERBATIM)
     add_custom_target(codegen_enums_generated
-        DEPENDS ${codegen_enums_generated_header})
+        DEPENDS
+            ${codegen_enums_generated_header}
+            ${codegen_open_enums_generated_header})
 
     add_executable(codegen_enums_runtime_test
         ${codegen_enums_dir}/enum_runtime.cpp)

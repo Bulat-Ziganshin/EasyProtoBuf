@@ -15,6 +15,11 @@ enum NonZero {
   SIX = 6;
 }
 
+enum Top {
+  X = 0;
+  Y = 1;
+}
+
 message Audit {
   optional Job.Priority priority = 1 [default = HIGH];
   repeated Job.Priority priorities = 2 [packed = true];
@@ -37,4 +42,13 @@ message Job {
 
 message ImplicitDefaults {
   optional NonZero value = 1;
+}
+
+message ShadowDefaults {
+  enum Local {
+    X = 2;
+    Z = 3;
+  }
+
+  optional Top top = 1 [default = X];
 }

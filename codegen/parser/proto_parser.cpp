@@ -809,6 +809,7 @@ private:
     bool seen_syntax_;
     bool seen_package_;
     bool seen_statement_;
+    std::vector<std::string> service_names_;
 
     void advance()
     {
@@ -1072,10 +1073,11 @@ private:
     // Service <- "service" Identifier "{" ServiceElement* "}"
     // ServiceElement <- EmptyStatement / OptionStatement / Rpc
     // Services are accepted so message schemas can be consumed by Codegen,
-    // but service descriptors are outside EasyProtoBuf's trimmed model.
+    // but only their names survive until package-scope validation because
+    // service descriptors are outside EasyProtoBuf's trimmed model.
     void parse_service()
     {
-        (void)identifier();
+        service_names_.push_back(identifier());
         expect_symbol('{');
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated service body");
@@ -1719,7 +1721,7 @@ private:
         }
     }
 
-    // Validate the file/package scope shared by top-level types and enum values.
+    // Validate the file/package scope shared by top-level declarations.
     void validate_file_scope_names(const std::string& scope)
     {
         std::map<std::string, std::string> names;
@@ -1730,6 +1732,9 @@ private:
         for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
             add_scope_name(names, view_text(out_.file.message_type[i].name),
                            "message", scope);
+        }
+        for (std::size_t i = 0; i < service_names_.size(); ++i) {
+            add_scope_name(names, service_names_[i], "service", scope);
         }
         for (std::size_t i = 0; i < out_.file.enum_type.size(); ++i) {
             for (std::size_t j = 0; j < out_.file.enum_type[i].value.size(); ++j) {

@@ -37,15 +37,16 @@ The grammar uses the intended lexical and syntactic forms directly:
   declarations;
 - proto2 groups are outside the EasyPB parser;
 - service/RPC declarations are accepted at top level, including unary and streaming endpoints;
-- service and RPC options are validated and consumed but service metadata is not retained;
+- service and RPC options are validated and consumed; service names participate
+  in package-scope validation, but service metadata is not retained;
 - map keys must be an allowed scalar key type;
 - map and oneof fields reject invalid labels and field options;
 - field numbers are 1..536870911, excluding 19000..19999;
 - every enum contains at least one value, and enum values fit signed 32 bits;
 - the first value of a proto3 enum is zero;
 - duplicate enum numbers require `option allow_alias = true`;
-- package scope uses one name table for top-level messages, enums, and enum
-  values; each message scope likewise shares names between fields, nested
+- package scope uses one name table for top-level messages, enums, services,
+  and enum values; each message scope likewise shares names between fields, nested
   messages, nested enums, oneofs, and enum values;
 - duplicate field names and numbers are rejected;
 - duplicate type and oneof names are rejected in their scopes;

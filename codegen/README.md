@@ -27,7 +27,7 @@ The committed `descriptor.pb.hpp` is an internal trimmed descriptor header and i
 
 Descriptor-set input can be useful, for example, when descriptor files are already available, when that workflow is preferred, or when a schema uses imports that the built-in parser cannot link yet. A descriptor set must currently contain exactly one `FileDescriptorProto`; avoid `protoc --include_imports` until target-file selection is implemented.
 
-The generated C++ header contains unscoped enum declarations and plain structures followed by free codec overloads. Nested Protobuf messages become nested C++ structures:
+The generated C++ header contains fixed-`int32_t` unscoped enum declarations and plain structures followed by free codec overloads. Nested Protobuf messages become nested C++ structures:
 
 ```cpp
 struct Message
@@ -131,6 +131,8 @@ The [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) test che
 
 The [`codegen.maps`](../tests/codegen/maps/test_codegen_maps.cmake) test covers scalar, enum and message-valued map generation, custom map containers, malformed map descriptors, and `.proto`/`.pbs` equivalence. `codegen.maps.runtime` compiles the generated ADL codecs and verifies scalar, enum and message-valued map round trips in both full and descriptor-set-only builds.
 
+The [`codegen.enums`](../tests/codegen/enums/test_codegen_enums.cmake) test covers top-level and nested enum declarations, fixed underlying types, qualified defaults, shadowing, aliases, negative values, and `.proto`/`.pbs` equivalence. `codegen.enums.runtime` verifies enum wire behavior, including preservation of unknown proto3 enum values.
+
 The nested-message checks in [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) cover lexical C++ nesting, qualified names, forward-reference ordering, `.proto`/`.pbs` equivalence, and clean rejection of recursive value dependencies. [`codegen.nested.runtime`](../tests/codegen/nested/nested_runtime.cpp) compiles the generated C++11 code and verifies nested-message and nested-message-map round trips.
 
 The parser unit tests are in [`../tests/codegen/parser/test_parser.cpp`](../tests/codegen/parser/test_parser.cpp).
@@ -170,9 +172,9 @@ Include the corresponding container header before the generated header.
 `{0}` and `{1}` are replaced by the key and value types. If no placeholders are present,
 `<{0},{1}>` is appended. Include the corresponding container header before the generated header.
 
-Codegen supports scalar, enum and message map values. Enum fields and map values use generated unscoped C++ enum types; top-level enums are emitted before messages, while nested enums are emitted in their owning structure before fields and nested messages that use them. Aliases and negative values are preserved. Message-valued maps may use either top-level or nested message types.
+Codegen supports scalar, enum and message map values. Enum fields and map values use generated unscoped C++ enum types with a fixed `int32_t` underlying type, allowing open proto3 enums to retain unknown wire values. Top-level enums are emitted before messages, while nested enums are emitted in their owning structure before fields and nested messages that use them. Aliases and negative values are preserved. Message-valued maps may use either top-level or nested message types.
 
-Singular enum fields are initialized to their explicit schema default when present, or to the enum's first declared value otherwise. A default from an enum nested in another message is qualified with that owning C++ message type.
+Singular enum fields are initialized to their explicit schema default when present, or to the enum's first declared value otherwise. For enums declared in the generated file, initializers always use `EnumType::VALUE` qualification, which is valid for unscoped enums in C++11 and prevents nearer enumerators from shadowing the intended value.
 
 ## Code insertion points
 
