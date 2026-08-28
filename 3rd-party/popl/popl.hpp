@@ -270,13 +270,15 @@ protected:
 template <class T>
 class Implicit : public Value<T>
 {
+    // Clang 3.1 cannot validate override specifiers inherited through the
+    // dependent Value<T> base, so these declarations intentionally omit them.
 public:
     Implicit(const std::string& short_name, const std::string& long_name, const std::string& description, const T& implicit_val, T* assign_to = nullptr);
 
-    Argument argument_type() const override;
+    Argument argument_type() const;
 
 protected:
-    void parse(OptionName what_name, const char* value) override;
+    void parse(OptionName what_name, const char* value);
 };
 
 

@@ -577,13 +577,33 @@ bool is_float_text(const std::string& text)
 // FileDescriptorProto stores floating defaults in the same canonical form as
 // protobuf's SimpleFtoa/SimpleDtoa: first try a non-over-precise decimal
 // representation, then fall back to enough digits for exact round-tripping.
-template <typename T>
-std::string format_general(T value, int precision)
+std::string normalize_exponent(std::string text)
+{
+    const std::size_t marker = text.find_first_of("eE");
+    if (marker == std::string::npos) return text;
+
+    std::size_t first_digit = marker + 1;
+    if (first_digit < text.size() &&
+        (text[first_digit] == '+' || text[first_digit] == '-')) {
+        ++first_digit;
+    }
+
+    // Older MSVCRT versions emit three-digit exponents such as e-008.
+    // Protobuf keeps at least two digits but drops redundant leading zeros.
+    while (first_digit + 2 < text.size() && text[first_digit] == '0') {
+        text.erase(first_digit, 1);
+    }
+    return text;
+}
+
+// Format floating-point values only.  Exponent normalization assumes that an
+// 'e' or 'E' in the stream output starts a scientific-notation exponent.
+std::string format_FP(double value, int precision)
 {
     std::ostringstream output;
     output.imbue(std::locale::classic());
     output << std::setprecision(precision) << value;
-    return output.str();
+    return normalize_exponent(output.str());
 }
 
 std::string canonical_float_default(const std::string& text, bool single_precision)
@@ -601,20 +621,20 @@ std::string canonical_float_default(const std::string& text, bool single_precisi
 
     if (single_precision) {
         const float value = static_cast<float>(parsed);
-        std::string result = format_general(value, std::numeric_limits<float>::digits10);
+        std::string result = format_FP(value, std::numeric_limits<float>::digits10);
         char* parsed_end = 0;
         const float round_trip = static_cast<float>(std::strtod(result.c_str(), &parsed_end));
         if (parsed_end == result.c_str() || *parsed_end != '\0' || round_trip != value) {
-            result = format_general(value, std::numeric_limits<float>::digits10 + 3);
+            result = format_FP(value, std::numeric_limits<float>::digits10 + 3);
         }
         return result;
     }
 
-    std::string result = format_general(parsed, std::numeric_limits<double>::digits10);
+    std::string result = format_FP(parsed, std::numeric_limits<double>::digits10);
     char* parsed_end = 0;
     const double round_trip = std::strtod(result.c_str(), &parsed_end);
     if (parsed_end == result.c_str() || *parsed_end != '\0' || round_trip != parsed) {
-        result = format_general(parsed, std::numeric_limits<double>::digits10 + 2);
+        result = format_FP(parsed, std::numeric_limits<double>::digits10 + 2);
     }
     return result;
 }

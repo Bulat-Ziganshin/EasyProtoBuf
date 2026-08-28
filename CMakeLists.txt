@@ -78,15 +78,15 @@ if(BUILD_TESTING)
     target_include_directories(generic_api_test PRIVATE include)
     add_test(NAME generic.api COMMAND generic_api_test)
 
-    add_executable(generic_scalar_dispatch_tests
-        tests/runtime/generic_scalar_dispatch.cpp)
-    target_include_directories(generic_scalar_dispatch_tests PRIVATE include)
-    add_test(NAME generic.scalar.dispatch COMMAND generic_scalar_dispatch_tests)
+    add_executable(generic_scalar_routing_tests
+        tests/runtime/generic_scalar_routing.cpp)
+    target_include_directories(generic_scalar_routing_tests PRIVATE include)
+    add_test(NAME generic.scalar.routing COMMAND generic_scalar_routing_tests)
 
-    add_executable(generic_map_dispatch_tests
-        tests/runtime/generic_map_dispatch.cpp)
-    target_include_directories(generic_map_dispatch_tests PRIVATE include)
-    add_test(NAME generic.map.dispatch COMMAND generic_map_dispatch_tests)
+    add_executable(generic_map_routing_tests
+        tests/runtime/generic_map_routing.cpp)
+    target_include_directories(generic_map_routing_tests PRIVATE include)
+    add_test(NAME generic.map.routing COMMAND generic_map_routing_tests)
 
     set(generic_compile_fail_source
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/compile_fail/generic_api.cpp)

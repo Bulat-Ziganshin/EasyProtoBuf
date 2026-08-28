@@ -9,6 +9,14 @@
 #include "open-enums.generated.hpp"
 
 
+#if defined(__clang__) && __clang_major__ == 3 && __clang_minor__ <= 3
+// These legacy Clang toolchains support fixed enum bases, but their bundled
+// libstdc++ does not yet provide std::underlying_type.
+typedef __underlying_type(OpenStatus) OpenStatusUnderlyingType;
+#else
+typedef std::underlying_type<OpenStatus>::type OpenStatusUnderlyingType;
+#endif
+
 static_assert(std::is_same<decltype(Job().status), Status>::value,
               "singular enum fields must use the generated enum type");
 static_assert(std::is_same<decltype(Job().priority), Job::Priority>::value,
@@ -30,8 +38,7 @@ static_assert(std::is_same<decltype(Audit().priorities_by_name),
               "forward nested enum map values must preserve their type");
 static_assert(std::is_same<decltype(ImplicitDefaults().value), NonZero>::value,
               "implicit enum defaults must preserve their enum type");
-static_assert(std::is_same<std::underlying_type<OpenStatus>::type,
-                           int32_t>::value,
+static_assert(std::is_same<OpenStatusUnderlyingType, int32_t>::value,
               "open proto3 enums must use a fixed int32_t underlying type");
 
 

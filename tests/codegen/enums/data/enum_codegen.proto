@@ -8,6 +8,7 @@ enum Status {
   STARTED = 1;
   ACTIVE = 1;
   FAILED = -1;
+  MIN_VALUE = -2147483648;
 }
 
 enum NonZero {

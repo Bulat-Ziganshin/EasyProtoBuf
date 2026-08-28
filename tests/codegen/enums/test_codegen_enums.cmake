@@ -67,6 +67,9 @@ require_contains(enum_out
     "FAILED = -1"
     "Negative enum value")
 require_contains(enum_out
+    "MIN_VALUE = -2147483648"
+    "Minimum int32 enum value")
+require_contains(enum_out
     "STARTED = 1,\n    ACTIVE = 1"
     "Aliased enum values")
 require_contains(enum_out

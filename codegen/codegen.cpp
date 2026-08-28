@@ -294,7 +294,7 @@ std::string generate_enum(const EnumDescriptorProto& enum_type,
     for (std::size_t i = 0; i < enum_type.value.size(); ++i) {
         const auto& value = enum_type.value[i];
         result += myformat("{0}    {1} = {2}{3}\n",
-                           indent, value.name, std::to_string(value.number),
+                           indent, value.name, number_to_string(value.number),
                            i + 1 < enum_type.value.size() ? "," : "");
     }
 
@@ -311,7 +311,7 @@ std::string generate_field_encoder(const FieldDescriptorProto& field, const MapT
                 ? (write_as_packed(field)? "packed_" : "repeated_")
                 : "",
     /* 1 */ protobuf_type_as_str(field, map_type),
-    /* 2 */ std::to_string(field.number),
+    /* 2 */ number_to_string(field.number),
     /* 3 */ "x." + std::string(field.name));
 }
 
@@ -320,7 +320,7 @@ std::string generate_field_encoder(const FieldDescriptorProto& field, const MapT
 std::string generate_field_decoder(const FieldDescriptorProto& field, const MapType* map_type)
 {
     return myformat("            case {0}: pb.get_{1}{2}(&{3}{4}); break;\n",
-    /* 0 */ std::to_string(field.number),
+    /* 0 */ number_to_string(field.number),
     /* 1 */ ! map_type && is_repeated(field)? "repeated_" : "",
     /* 2 */ protobuf_type_as_str(field, map_type),
     /* 3 */ "x." + std::string(field.name),

@@ -1,6 +1,16 @@
 #include "parser_benchmark.hpp"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <chrono>
+#endif
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -8,6 +18,7 @@
 #include <memory>
 #include <ostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -15,6 +26,35 @@
 
 namespace easypb_proto {
 namespace {
+
+#if defined(_WIN32)
+double performance_counter_seconds_per_tick()
+{
+    LARGE_INTEGER frequency;
+    if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) {
+        throw std::runtime_error("QueryPerformanceFrequency failed");
+    }
+    return 1.0 / static_cast<double>(frequency.QuadPart);
+}
+#endif
+
+double benchmark_clock_seconds()
+{
+#if defined(_WIN32)
+    // Keep the Windows benchmark independent of incomplete legacy C++11
+    // <chrono> implementations while retaining a monotonic wall clock.
+    static const double seconds_per_tick =
+        performance_counter_seconds_per_tick();
+    LARGE_INTEGER counter;
+    if (!QueryPerformanceCounter(&counter)) {
+        throw std::runtime_error("QueryPerformanceCounter failed");
+    }
+    return static_cast<double>(counter.QuadPart) * seconds_per_tick;
+#else
+    return std::chrono::duration_cast<std::chrono::duration<double> >(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+#endif
+}
 
 struct DescriptorStats
 {
@@ -130,9 +170,7 @@ int run_parser_benchmark(const std::vector<std::string>& paths,
         static_cast<double>(minimum_milliseconds) / 1000.0;
     std::uint64_t measured_rounds = 0;
     ParsedProto scratch;
-    const std::chrono::steady_clock::time_point started =
-        std::chrono::steady_clock::now();
-    std::chrono::steady_clock::time_point finished;
+    const double started = benchmark_clock_seconds();
     double seconds = 0.0;
 
     do {
@@ -140,9 +178,7 @@ int run_parser_benchmark(const std::vector<std::string>& paths,
             if (!parse_one(paths[i], sources[i], scratch, false, errors)) return 1;
         }
         ++measured_rounds;
-        finished = std::chrono::steady_clock::now();
-        seconds = std::chrono::duration_cast<std::chrono::duration<double> >(
-                      finished - started).count();
+        seconds = benchmark_clock_seconds() - started;
     } while (seconds < minimum_seconds);
 
     const std::uint64_t measured_bytes = bytes_per_round * measured_rounds;

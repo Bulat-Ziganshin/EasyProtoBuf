@@ -41,11 +41,9 @@ Files:
 - [File-tree benchmark](examples/filetree) - demonstrates around 600 MB/s serialization and deserialization throughput
 
 Portability:
-- we target compatibility with any C++11 compiler providing int32_t and int64_t types,
-in particular gcc 4.7+ and clang 3.1+
+- we target compatibility with any C++11 compiler, in particular gcc 4.7+, clang 3.1+, and msvc 2013+
 - now we support only little-endian and big-endian CPUs with runtime detection,
 but it can be improved to support other CPUs and compile-time detection
-- in principle, the library can be ported to C++98 with a third-party replacement for `<cstdint>`
 
 CI: while the final goal is to support any C++11 compiler, so far we have tested only:
 - Linux: gcc 4.7..14 and clang 3.5, 3.8, 7..18 on Ubuntu (x64);
