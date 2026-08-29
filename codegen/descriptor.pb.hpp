@@ -1,7 +1,7 @@
 // This file will be auto-generated when I grow up (with option "-s str_view").
 // Source: https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto
-#ifndef EASYPB_DESCRIPTOR_PB_CPP_INCLUDED
-#define EASYPB_DESCRIPTOR_PB_CPP_INCLUDED
+#ifndef EASYPB_DESCRIPTOR_PB_HPP_INCLUDED
+#define EASYPB_DESCRIPTOR_PB_HPP_INCLUDED
 
 #include <cstdint>
 #include <string>

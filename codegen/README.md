@@ -1,206 +1,92 @@
 # EasyProtoBuf Codegen
 
-EasyProtoBuf Codegen accepts either a `.proto` source file or a binary descriptor set (`.pbs`).
+EasyProtoBuf Codegen turns Protocol Buffers schemas into lightweight C++ bindings for [EasyProtoBuf](../README.md). It generates a single header containing plain structures and enums together with free `inline encode(...)` and `decode(...)` overloads.
 
-For direct source input:
+The generated data types do not inherit from runtime classes and do not require generated `.cpp` files. Applications use the small header-only EasyProtoBuf runtime instead of linking the official Protobuf runtime, making Codegen useful when a transparent C++ data model, a small dependency footprint, and C++11 portability matter.
 
-```sh
-codegen tutorial.proto >tutorial.pb.hpp
+## Capabilities
+
+- Generate C++ from either `.proto` source or a binary descriptor set produced by `protoc`.
+- Generate top-level and nested messages, enums, repeated fields, and maps with scalar, enum, or message values.
+- Generate presence tracking, proto2 required-field checks, schema defaults, and packed repeated-field codecs.
+- Customize string, repeated-field, and map C++ types, or generate codecs for existing C++ types.
+- Build with the embedded `.proto` parser or as a smaller descriptor-set-only executable.
+
+## Basic use
+
+Save this schema as `person.proto`:
+
+```proto
+message Person
+{
+    required string name    = 1 [default = "AnnA"];
+    optional double weight  = 2;
+    repeated int32  numbers = 3;
+    map<fixed64,string> labels = 4;
+}
 ```
 
-For descriptor-set input, first use the official [`protoc`](https://github.com/protocolbuffers/protobuf/releases) compiler to create the descriptor set:
+Generate a C++ header:
 
 ```sh
-protoc tutorial.proto -otutorial.pbs
+codegen person.proto >person.pb.hpp
 ```
 
-Then run EasyProtoBuf Codegen using either form:
-
-```sh
-codegen tutorial.pbs >tutorial.pb.hpp
-codegen --descriptor-set tutorial.pbs >tutorial.pb.hpp
-```
-
-Codegen writes a header to stdout. The conventional output name is `<schema>.pb.hpp`, and generated output contains `#pragma once`, so it may be included from multiple translation units.
-
-The committed `descriptor.pb.hpp` is an internal trimmed descriptor header and intentionally keeps the legacy `EASYPB_DESCRIPTOR_PB_CPP_INCLUDED` include guard for portability; normal Codegen output still uses `#pragma once`.
-
-Descriptor-set input can be useful, for example, when descriptor files are already available, when that workflow is preferred, or when a schema uses imports that the built-in parser cannot link yet. A descriptor set must currently contain exactly one `FileDescriptorProto`; avoid `protoc --include_imports` until target-file selection is implemented.
-
-The generated C++ header contains fixed-`int32_t` unscoped enum declarations and plain structures followed by free codec overloads. Nested Protobuf messages become nested C++ structures:
+Depending on the selected options, Codegen can generate C++ code like this:
 
 ```cpp
-struct Message
+struct Person
 {
-    int32_t id = 0;
+    std::string name = "AnnA";
+    double weight = 0;
+    std::vector<int32_t> numbers;
+    std::map<uint64_t,std::string> labels;
 };
 
-inline void encode(easypb::Encoder &pb, const Message &x)
+inline void encode(easypb::Encoder &pb, const Person &x)
 {
-    pb.put_int32(1, x.id);
+    pb.put_string(1, x.name);
+    pb.put_double(2, x.weight);
+    pb.put_repeated_int32(3, x.numbers);
+    pb.put_map_fixed64_string(4, x.labels);
 }
 
-inline void decode(easypb::Decoder pb, Message &x)
+inline void decode(easypb::Decoder pb, Person &x)
 {
     while(pb.get_next_field())
     {
         switch(pb.field_num)
         {
-            case 1: pb.get_int32(&x.id); break;
+            case 1: pb.get_string(&x.name); break;
+            case 2: pb.get_double(&x.weight); break;
+            case 3: pb.get_repeated_int32(&x.numbers); break;
+            case 4: pb.get_map_fixed64_string(&x.labels); break;
             default: pb.skip_field();
         }
     }
 }
 ```
 
-For example:
-
-```proto
-message Outer {
-  message Inner {
-    int32 value = 1;
-  }
-  Inner inner = 1;
-}
-```
-
-generates `Outer::Inner` as a nested C++ type. Acyclic by-value message dependencies are ordered automatically, including forward references between top-level messages and nested siblings. Recursive message-value graphs are currently rejected because Codegen emits message fields and containers as C++ values and does not define an ownership/pointer policy. This is a Codegen restriction, not a parser restriction.
-
-The codec overloads are found through ADL (argument-dependent lookup), so they must be defined
-either in the same namespace as the message type or in `easypb`. See [Using the API](../README.md#using-the-api)
-for details.
-
-Files:
-- [main.cpp](main.cpp) — command-line parser and file I/O
-- [codegen.cpp](codegen.cpp) — translates `FileDescriptorProto` into C++ code
-- [descriptor.pb.hpp](descriptor.pb.hpp) — C++ header with structures and EasyProtoBuf decoders for
-  [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto)
-- [parser/](parser/) — `.proto` lexer/parser, descriptor pretty-printer and parser benchmark helper
-- [parser/README.md](parser/README.md) — parser API, lifetime and unresolved-import behavior
-- [parser/grammar/](parser/grammar/) — formal grammar and semantic notes
-- [utils.cpp](utils.cpp) — common utility functions
-
-## Parser utility modes
-
-When parser support is included, Codegen can also print the descriptor tree or benchmark `.proto` parsing:
-
-```sh
-codegen --print-descriptor tutorial.proto
-codegen --descriptor-set --print-descriptor tutorial.pbs
-codegen --benchmark-parser a.proto b.proto
-codegen --benchmark-parser --benchmark-ms 500 a.proto b.proto
-```
-
-`--benchmark-parser` reads all input files before timing, runs one unmeasured warm-up round, and then parses complete corpus rounds for at least 100 ms by default. Tests on a varied real-world corpus showed roughly **100–200 MB/s** parsing throughput, depending on schema structure and compiler.
-
-The parser recognizes and records imports but does not load them yet. Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation from `.proto` source stops rather than guessing whether an unresolved external type is a message or enum; descriptor-set input can be used for such schemas.
-
-`.proto` files may also contain `service` and `rpc` declarations. Codegen validates and skips those declarations while generating the message codecs from the same file; it does not generate RPC client or server APIs.
-
-The parser implementation and its documentation live in [`parser/`](parser/). Parser tests are kept separately under [`../tests/codegen/parser/`](../tests/codegen/parser/).
-
-## Optional descriptor-set-only build
-
-If only descriptor-set input is needed, parser support can be omitted at build time:
-
-```sh
-cmake -S . -B build-lite -DEASYPB_CODEGEN_WITH_PROTO_PARSER=OFF
-cmake --build build-lite
-```
-
-With xmake:
-
-```sh
-xmake f --codegen_parser=n
-xmake
-```
-
-In this configuration nothing from [`parser/`](parser/) is compiled. Codegen accepts descriptor sets through either `--descriptor-set file.pbs` or the implicit `.pbs` form.
-
-## Quick verification
-
-From the repository root, the normal CMake test suite exercises both input formats and the parser utilities:
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-The [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) test checks explicit and implicit descriptor-set input, `.proto` versus `.pbs` generated-code equivalence, proto2/proto3 packed behavior, descriptor printing, parser benchmarking, unresolved-type handling, and invalid empty/multi-file descriptor sets.
-
-The [`codegen.maps`](../tests/codegen/maps/test_codegen_maps.cmake) test covers scalar, enum and message-valued map generation, custom map containers, malformed map descriptors, and `.proto`/`.pbs` equivalence. `codegen.maps.runtime` compiles the generated ADL codecs and verifies scalar, enum and message-valued map round trips in both full and descriptor-set-only builds.
-
-The [`codegen.enums`](../tests/codegen/enums/test_codegen_enums.cmake) test covers top-level and nested enum declarations, fixed underlying types, qualified defaults, shadowing, aliases, negative values, and `.proto`/`.pbs` equivalence. `codegen.enums.runtime` verifies enum wire behavior, including preservation of unknown proto3 enum values.
-
-The nested-message checks in [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) cover lexical C++ nesting, qualified names, forward-reference ordering, `.proto`/`.pbs` equivalence, and clean rejection of recursive value dependencies. [`codegen.nested.runtime`](../tests/codegen/nested/nested_runtime.cpp) compiles the generated C++11 code and verifies nested-message and nested-message-map round trips.
-
-The parser unit tests are in [`../tests/codegen/parser/test_parser.cpp`](../tests/codegen/parser/test_parser.cpp).
-
-To verify the descriptor-set-only build separately:
-
-```sh
-cmake -S . -B build-lite -DEASYPB_CODEGEN_WITH_PROTO_PARSER=OFF
-cmake --build build-lite
-ctest --test-dir build-lite --output-on-failure
-```
-
-## Structural options
-
-- `-c, --no-class` — do not generate C++ structures or enum declarations. This is useful when adapting existing types:
-  declare all message and enum types first, then include output containing only the external codec overloads.
-- `-d, --no-decoder` — do not generate `decode(easypb::Decoder, T&)`.
-- `-e, --no-encoder` — do not generate `encode(easypb::Encoder&, const T&)`.
-- `-f, --no-has-fields` — do not generate `has_*` members. This also disables required-field checks.
-- `--no-required` — do not check that proto2 required fields were present.
-- `--no-default-values` — ignore explicit defaults specified in the schema. Singular enum fields still use their implicit protobuf default: the enum's first declared value.
-- `-p, --packed` — encode every eligible repeated numeric field in packed form.
-- `--no-packed` — encode every repeated field in unpacked form.
-
-## C++ type options
-
-`-s, --string-type arg (=std::string)` selects the C++ type for all string and bytes fields.
-For decode-only messages, `std::string_view` or another non-owning view may be used when the decoded object
-never outlives the input buffer.
-
-`-r, --repeated-type arg (=std::vector)` selects the container for repeated fields.
-`{}` or `{0}` is replaced by the element type. If no placeholder is present, `<{}>` is appended.
-For example, `--repeated-type 'std::deque<{}>'` produces `std::deque<int32_t>`.
-Include the corresponding container header before the generated header.
-
-`-m, --map-type arg (=std::map)` selects the container for map fields.
-`{0}` and `{1}` are replaced by the key and value types. If no placeholders are present,
-`<{0},{1}>` is appended. Include the corresponding container header before the generated header.
-
-Codegen supports scalar, enum and message map values. Enum fields and map values use generated unscoped C++ enum types with a fixed `int32_t` underlying type, allowing open proto3 enums to retain unknown wire values. Top-level enums are emitted before messages, while nested enums are emitted in their owning structure before fields and nested messages that use them. Aliases and negative values are preserved. Message-valued maps may use either top-level or nested message types.
-
-Singular enum fields are initialized to their explicit schema default when present, or to the enum's first declared value otherwise. For enums declared in the generated file, initializers always use `EnumType::VALUE` qualification, which is valid for unscoped enums in C++11 and prevents nearer enumerators from shadowing the intended value.
-
-## Code insertion points
-
-For each generated message type `{TYPE}`, Codegen recognizes four optional insertion macros:
-For nested messages, `{TYPE}` is the qualified message name with `::` replaced by `_`; for example `Outer::Inner` uses `EASYPB_Outer_Inner_*`.
-
+Include the generated header to use `Person` directly with EasyProtoBuf:
 
 ```cpp
-EASYPB_{TYPE}_EXTRA_FIELDS
-EASYPB_{TYPE}_EXTRA_ENCODING(pb, message)
-EASYPB_{TYPE}_EXTRA_DECODING(pb, message)
-EASYPB_{TYPE}_EXTRA_POST_DECODING(pb, message)
+#include <easypb.hpp>
+#include "person.pb.hpp"
+...
+
+// Encode Person into a string buffer
+std::string protobuf_msg = easypb::encode(person);
+
+// Decode Person from a string buffer
+Person person2 = easypb::decode<Person>(protobuf_msg);
 ```
 
-`pb` is the current `easypb::Encoder` or `easypb::Decoder`, and `message` is the message object.
-For example:
+## Documentation
 
-```cpp
-#define EASYPB_Message_EXTRA_FIELDS \
-    bool extra_flag = false;
+Continue with the topic-specific guides for generated-code semantics, input modes, output customization, and implementation details:
 
-#define EASYPB_Message_EXTRA_ENCODING(pb, message) \
-    (pb).put_bool(100, (message).extra_flag);
-
-#define EASYPB_Message_EXTRA_DECODING(pb, message) \
-    case 100: (pb).get_bool(&(message).extra_flag); break;
-```
-
-Define insertion macros before including the generated header. See the [Tutorial](../examples/tutorial).
+- [Building and testing](BUILDING.md) — build Codegen, omit the `.proto` parser if desired, and run its tests.
+- [Generated C++ code](GENERATED_CODE.md) — generated types/codecs, nesting, enums, maps, defaults, packed fields, insertion points, and limitations.
+- [Command-line options](OPTIONS.md) — input modes, generated-code options, C++ container/type options, and parser utility modes.
+- [Internals](INTERNALS.md) — implementation layout and generation pipeline for contributors.
+- [Embedded `.proto` parser](parser/README.md) — parser API, lifetime rules, unresolved-import behavior, and parser-specific internals.

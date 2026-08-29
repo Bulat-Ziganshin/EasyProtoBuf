@@ -265,22 +265,8 @@ e.g. define it to std::string.
 Sub-messages and packed repeated fields always use a 5-byte length prefix
 (it can make encoded messages a bit longer than with other Protobuf libraries).
 
-EasyProtoBuf currently differs from the official ProtoBuf decoding semantics
-in several ways:
-
-- generated proto2 `required` checks currently run at the end of every generated
-  `decode` call instead of once after the complete message has been merged and
-  recursively validated. A singular embedded message whose required fields are
-  split across multiple wire occurrences can therefore be rejected too early.
-  The same issue affects multiple message-valued field 2 occurrences inside one
-  map entry. Presence tracking through `has_*` is not itself the problem;
-- conversely, an omitted message value in a map entry creates a default-initialized
-  mapped object without recursively checking its required fields;
-- a missing proto2 enum map value is value-initialized to zero rather than using
-  the enum's proto2 default (its first declared value), and closed-enum
-  validation semantics are not enforced;
-- unknown fields in ordinary messages, including message values stored in maps,
-  are discarded rather than retained for later serialization.
+Generated-code limitations and differences from the official ProtoBuf semantics
+are documented in [Generated C++ code](codegen/GENERATED_CODE.md#current-limitations-and-semantic-differences).
 
 Compared with the [official][updating] ProtoBuf library, EasyProtoBuf also
 allows more flexibility in modifying the field type without losing the decoding compatibility.
