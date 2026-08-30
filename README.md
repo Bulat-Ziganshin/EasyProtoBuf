@@ -46,7 +46,7 @@ Portability:
 but it can be improved to support other CPUs and compile-time detection
 
 CI: while the final goal is to support any C++11 compiler, so far we have tested only:
-- Linux: gcc 4.7..14 and clang 3.5, 3.8, 7..18 on Ubuntu (x64);
+- Linux: gcc 4.7..16 and clang 3.1..22 on Ubuntu (x64);
 plus default gcc compilers on Ubuntu LTS 14.04..24.04, Debian 10..12 and CentOS/RockyLinux 7..9
 - macOS: clang 13..15 on macOS 11..13 (x64) and macOS 14 (ARM64), plus gcc 13 on macOS 14
 - Windows: only MSVC in x64 and x86 modes (the latter is the only 32-bit build in our tests)

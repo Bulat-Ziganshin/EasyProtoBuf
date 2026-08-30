@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CTEST_OUTPUT_ON_FAILURE: "1"
   CE_CACHE_PREFIX: "ce-v4"
@@ -20,126 +23,19 @@ env:
 
 jobs:
   #####################################################################################################################
-  # Build current GCC and Clang versions directly on Ubuntu runners, plus macOS and Windows configurations.
-  # Ubuntu 26.04 public-preview rows are non-blocking until the runner image reaches GA.
+  # Build MSVC platform toolsets separately from the Unix-like compiler matrices below.
   #####################################################################################################################
-  main:
-    name: ${{ matrix.job_name || format('{0} / {1} / {2}', matrix.os, matrix.cpp_compiler, matrix.cpp_options) }}
-    runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental == true }}
+  windows:
+    name: ${{ matrix.job_name }}
+    runs-on: ${{ matrix.os || 'windows-2022' }}
+    timeout-minutes: 30
 
     strategy:
-      # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
+      # Run every matrix combination independently even if another one fails.
       fail-fast: false
 
       matrix:
-        cpp_compiler: [g++-9, g++-10, g++-11, g++-12, g++-13, g++-14,
-                       clang++-14, clang++-15, clang++-16, clang++-17, clang++-18, clang++-19, clang++-20]
-        cpp_options: ["-std=c++17 -Wall -Wextra -Wpedantic",
-                      "-std=c++11 -Wall -Wextra -Wpedantic"]
-        os: [ubuntu-24.04]
-        extra_cmake_options: [""]
-        experimental: [false]
-        vs_component: [""]
         include:
-          # Ubuntu 26.04 public-preview configs
-          - os: ubuntu-26.04
-            cpp_compiler: g++-15
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: g++-15
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: g++-16
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: g++-16
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: clang++-21
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: clang++-21
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: clang++-22
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: clang++-22
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          # Latest GCC standard modes
-          - os: ubuntu-26.04
-            cpp_compiler: g++-16
-            cpp_options: "-std=c++20 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: g++-16
-            cpp_options: "-std=c++23 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: g++-16
-            cpp_options: "-std=c++26 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          # Latest Clang standard modes
-          - os: ubuntu-26.04
-            cpp_compiler: clang++-22
-            cpp_options: "-std=c++20 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: clang++-22
-            cpp_options: "-std=c++23 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          - os: ubuntu-26.04
-            cpp_compiler: clang++-22
-            cpp_options: "-std=c++26 -Wall -Wextra -Wpedantic"
-            experimental: true
-
-          # MacOS configs
-          - os: macos-latest
-            cpp_compiler: g++
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic -Wl,-ld_classic"
-
-          - os: macos-latest
-            cpp_compiler: g++
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic -Wl,-ld_classic"
-
-          - os: macos-14
-            cpp_compiler: clang++
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-
-          - os: macos-14
-            cpp_compiler: clang++
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-
-          - os: macos-15-intel
-            cpp_compiler: clang++
-            cpp_options: "-std=c++17 -Wall -Wextra -Wpedantic"
-
-          - os: macos-15-intel
-            cpp_compiler: clang++
-            cpp_options: "-std=c++11 -Wall -Wextra -Wpedantic"
-
           # MSVC platform toolsets:
           #   v120 = Visual Studio 2013 (not available from the modern VS Installer; not tested here)
           #   v140 = Visual Studio 2015
@@ -152,186 +48,143 @@ jobs:
           # Disabled for now: v120 is not available from the modern VS Installer and must be provisioned separately.
           # v120 has no /std switch; its compiler implements a C++11 subset. Choose/pin a compatible Windows SDK
           # when enabling these jobs.
-          # - os: windows-2022
-          #   job_name: "MSVC VS2013 v120 x64 / C++11 subset"
+          # - job_name: "MSVC VS2013 v120 x64 / C++11 subset"
           #   extra_cmake_options: "-A x64 -T v120"
           #   cpp_options: "/W3"
-          #   cpp_compiler: cl
 
-          # - os: windows-2022
-          #   job_name: "MSVC VS2013 v120 Win32 / C++11 subset"
+          # - job_name: "MSVC VS2013 v120 Win32 / C++11 subset"
           #   extra_cmake_options: "-A Win32 -T v120"
           #   cpp_options: "/W3"
-          #   cpp_compiler: cl
 
           # Visual Studio 2015 toolset (v140)
           # Pin Windows SDK 10.0.19041.0: SDK 10.0.26100.0 uses intrinsics unavailable in MSVC 19.0/v140.
           # v140 has no exact C++17 mode; /std:c++latest is its newest available language mode.
-          - os: windows-2022
-            job_name: "MSVC VS2015 v140 x64 / C++14"
+          - job_name: "MSVC VS2015 v140 x64 / C++14"
             extra_cmake_options: "-A x64,version=10.0.19041.0 -T v140"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
             vs_component: Microsoft.VisualStudio.Component.VC.140
 
-          - os: windows-2022
-            job_name: "MSVC VS2015 v140 x64 / C++latest"
+          - job_name: "MSVC VS2015 v140 x64 / C++latest"
             extra_cmake_options: "-A x64,version=10.0.19041.0 -T v140"
             cpp_options: "/std:c++latest /W3"
-            cpp_compiler: cl
             vs_component: Microsoft.VisualStudio.Component.VC.140
 
-          - os: windows-2022
-            job_name: "MSVC VS2015 v140 Win32 / C++14"
+          - job_name: "MSVC VS2015 v140 Win32 / C++14"
             extra_cmake_options: "-A Win32,version=10.0.19041.0 -T v140"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
             vs_component: Microsoft.VisualStudio.Component.VC.140
 
-          - os: windows-2022
-            job_name: "MSVC VS2015 v140 Win32 / C++latest"
+          - job_name: "MSVC VS2015 v140 Win32 / C++latest"
             extra_cmake_options: "-A Win32,version=10.0.19041.0 -T v140"
             cpp_options: "/std:c++latest /W3"
-            cpp_compiler: cl
             vs_component: Microsoft.VisualStudio.Component.VC.140
 
           # Visual Studio 2017 toolset (v141)
-          - os: windows-2022
-            job_name: "MSVC VS2017 v141 x64 / C++14"
+          - job_name: "MSVC VS2017 v141 x64 / C++14"
             extra_cmake_options: "-A x64 -T v141"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
             vs_component: Microsoft.VisualStudio.Component.VC.v141.x86.x64
 
-          - os: windows-2022
-            job_name: "MSVC VS2017 v141 x64 / C++17"
+          - job_name: "MSVC VS2017 v141 x64 / C++17"
             extra_cmake_options: "-A x64 -T v141"
             cpp_options: "/std:c++17 /W3"
-            cpp_compiler: cl
             vs_component: Microsoft.VisualStudio.Component.VC.v141.x86.x64
 
-          - os: windows-2022
-            job_name: "MSVC VS2017 v141 Win32 / C++14"
+          - job_name: "MSVC VS2017 v141 Win32 / C++14"
             extra_cmake_options: "-A Win32 -T v141"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
             vs_component: Microsoft.VisualStudio.Component.VC.v141.x86.x64
 
-          - os: windows-2022
-            job_name: "MSVC VS2017 v141 Win32 / C++17"
+          - job_name: "MSVC VS2017 v141 Win32 / C++17"
             extra_cmake_options: "-A Win32 -T v141"
             cpp_options: "/std:c++17 /W3"
-            cpp_compiler: cl
             vs_component: Microsoft.VisualStudio.Component.VC.v141.x86.x64
 
           # Visual Studio 2019 toolset (v142)
-          - os: windows-2022
-            job_name: "MSVC VS2019 v142 x64 / C++14"
+          - job_name: "MSVC VS2019 v142 x64 / C++14"
             extra_cmake_options: "-A x64 -T v142"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
 
-          - os: windows-2022
-            job_name: "MSVC VS2019 v142 x64 / C++17"
+          - job_name: "MSVC VS2019 v142 x64 / C++17"
             extra_cmake_options: "-A x64 -T v142"
             cpp_options: "/std:c++17 /W3"
-            cpp_compiler: cl
 
-          - os: windows-2022
-            job_name: "MSVC VS2019 v142 Win32 / C++14"
+          - job_name: "MSVC VS2019 v142 Win32 / C++14"
             extra_cmake_options: "-A Win32 -T v142"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
 
-          - os: windows-2022
-            job_name: "MSVC VS2019 v142 Win32 / C++17"
+          - job_name: "MSVC VS2019 v142 Win32 / C++17"
             extra_cmake_options: "-A Win32 -T v142"
             cpp_options: "/std:c++17 /W3"
-            cpp_compiler: cl
 
           # Visual Studio 2022 toolset (v143)
-          - os: windows-2022
-            job_name: "MSVC VS2022 v143 x64 / C++14"
+          - job_name: "MSVC VS2022 v143 x64 / C++14"
             extra_cmake_options: "-A x64 -T v143"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
 
-          - os: windows-2022
-            job_name: "MSVC VS2022 v143 x64 / C++17"
+          - job_name: "MSVC VS2022 v143 x64 / C++17"
             extra_cmake_options: "-A x64 -T v143"
             cpp_options: "/std:c++17 /W3"
-            cpp_compiler: cl
 
-          - os: windows-2022
-            job_name: "MSVC VS2022 v143 Win32 / C++14"
+          - job_name: "MSVC VS2022 v143 Win32 / C++14"
             extra_cmake_options: "-A Win32 -T v143"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
 
-          - os: windows-2022
-            job_name: "MSVC VS2022 v143 Win32 / C++17"
+          - job_name: "MSVC VS2022 v143 Win32 / C++17"
             extra_cmake_options: "-A Win32 -T v143"
             cpp_options: "/std:c++17 /W3"
-            cpp_compiler: cl
 
           # Visual Studio 2026 toolset (v145)
           - os: windows-2025-vs2026
             job_name: "MSVC VS2026 v145 x64 / C++14"
             extra_cmake_options: "-A x64 -T v145"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
 
           - os: windows-2025-vs2026
             job_name: "MSVC VS2026 v145 x64 / C++17"
             extra_cmake_options: "-A x64 -T v145"
             cpp_options: "/std:c++17 /W3"
-            cpp_compiler: cl
 
           - os: windows-2025-vs2026
             job_name: "MSVC VS2026 v145 Win32 / C++14"
             extra_cmake_options: "-A Win32 -T v145"
             cpp_options: "/std:c++14 /W3"
-            cpp_compiler: cl
 
           - os: windows-2025-vs2026
             job_name: "MSVC VS2026 v145 Win32 / C++17"
             extra_cmake_options: "-A Win32 -T v145"
             cpp_options: "/std:c++17 /W3"
-            cpp_compiler: cl
 
           # Latest MSVC standard modes (v145, x64)
           - os: windows-2025-vs2026
             job_name: "MSVC VS2026 v145 x64 / C++20"
             extra_cmake_options: "-A x64 -T v145"
             cpp_options: "/std:c++20 /W3"
-            cpp_compiler: cl
 
           - os: windows-2025-vs2026
             job_name: "MSVC VS2026 v145 x64 / C++23preview"
             extra_cmake_options: "-A x64 -T v145"
             cpp_options: "/std:c++23preview /W3"
-            cpp_compiler: cl
 
           # MSVC has no dedicated C++26 switch; /std:c++latest is its C++26-era mode.
           - os: windows-2025-vs2026
             job_name: "MSVC VS2026 v145 x64 / C++latest"
             extra_cmake_options: "-A x64 -T v145"
             cpp_options: "/std:c++latest /W3"
-            cpp_compiler: cl
 
     env:
+      CPP_COMPILER: ${{ matrix.cpp_compiler || 'cl' }}
       CMAKE_CONFIGURE: >-
         cmake -B build
-        -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
+        -DCMAKE_CXX_COMPILER=$env:CPP_COMPILER
         "-DEASYPB_CXX_FLAGS=${{ matrix.cpp_options }}"
         ${{ matrix.extra_cmake_options }}
-        -DCMAKE_BUILD_TYPE=
 
     steps:
     - uses: actions/checkout@v6
 
     - name: Install requested MSVC toolset
-      if: runner.os == 'Windows' && matrix.vs_component
+      if: matrix.vs_component
       shell: pwsh
       run: |
         $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -354,41 +207,13 @@ jobs:
           throw "Visual Studio Installer failed with exit code $($process.ExitCode)"
         }
 
-    - name: Install Linux compiler if needed
-      if: runner.os == 'Linux'
-      run: |
-        compiler='${{ matrix.cpp_compiler }}'
-        if command -v "$compiler" >/dev/null 2>&1; then
-          exit 0
-        fi
-
-        package="$compiler"
-        case "$compiler" in
-          clang++-*) package="clang-${compiler#clang++-}" ;;
-        esac
-
-        sudo apt-get update
-        sudo apt-get install -y "$package"
+    - name: Configure CMake
+      run: ${{ env.CMAKE_CONFIGURE }}
 
     - name: Show toolchain and platform
-      if: runner.os != 'Windows'
-      run: |
-        echo "Requested compiler: ${{ matrix.cpp_compiler }}"
-        "${{ matrix.cpp_compiler }}" --version
-        cmake --version
-        uname -a
-        uname -m
-        if [ -f /etc/os-release ]; then
-          cat /etc/os-release
-        elif command -v sw_vers >/dev/null 2>&1; then
-          sw_vers
-        fi
-
-    - name: Show toolchain and platform
-      if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        Write-Host "Requested compiler: ${{ matrix.cpp_compiler }}"
+        Write-Host "Requested compiler: ${{ env.CPP_COMPILER }}"
         Write-Host "Requested CMake options: ${{ matrix.extra_cmake_options }}"
         cmake --version
         Get-CimInstance Win32_OperatingSystem |
@@ -401,13 +226,137 @@ jobs:
         $defaultToolset = Get-Content "$installationPath\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
         Write-Host "Default VS toolset (not necessarily the requested -T toolset): $defaultToolset"
 
+        $compilerInfo = Get-ChildItem build\CMakeFiles -Recurse -Filter CMakeCXXCompiler.cmake |
+          Select-Object -First 1
+        if (-not $compilerInfo) {
+          throw "CMakeCXXCompiler.cmake was not found"
+        }
+        Write-Host "Actual CMake C++ compiler selection:"
+        Get-Content $compilerInfo.FullName |
+          Select-String 'CMAKE_CXX_COMPILER( |_(ID|VERSION))'
+
+    - name: 'Debug: Build'
+      run: cmake --build build --config Debug
+    - name: 'Debug: Test'
+      working-directory: build
+      run: ctest --build-config Debug --no-tests=error
+
+    - name: 'Release: Build'
+      run: cmake --build build --config Release
+    - name: 'Release: Test'
+      working-directory: build
+      run: ctest --build-config Release --no-tests=error
+
+    - name: 'MinSizeRel: Build'
+      run: cmake --build build --config MinSizeRel
+    - name: 'MinSizeRel: Test'
+      working-directory: build
+      run: ctest --build-config MinSizeRel --no-tests=error
+
+  #####################################################################################################################
+  # Build current GCC and Clang versions directly on Ubuntu runners, plus macOS configurations.
+  #####################################################################################################################
+  main:
+    name: ${{ matrix.job_name || format('{0} / {1} / C++{2}', matrix.os, matrix.cpp_compiler, matrix.std) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    strategy:
+      # Run every matrix combination independently even if another one fails.
+      fail-fast: false
+
+      matrix:
+        # Ubuntu 24.04: current GCC/Clang compiler matrix
+        cpp_compiler: [g++-9, g++-10, g++-11, g++-12, g++-13, g++-14,
+                       clang++-14, clang++-15, clang++-16, clang++-17, clang++-18, clang++-19, clang++-20]
+        std: ["11", "17"]
+        os: [ubuntu-24.04]
+        stdlib: [libstdc++]
+
+        include:
+          # Ubuntu 26.04: newest compiler generations
+          - { os: ubuntu-26.04, cpp_compiler: g++-15, std: "11" }
+          - { os: ubuntu-26.04, cpp_compiler: g++-15, std: "17" }
+          - { os: ubuntu-26.04, cpp_compiler: g++-16, std: "11" }
+          - { os: ubuntu-26.04, cpp_compiler: g++-16, std: "17" }
+          - { os: ubuntu-26.04, cpp_compiler: clang++-21, std: "11" }
+          - { os: ubuntu-26.04, cpp_compiler: clang++-21, std: "17" }
+          - { os: ubuntu-26.04, cpp_compiler: clang++-22, std: "11" }
+          - { os: ubuntu-26.04, cpp_compiler: clang++-22, std: "17" }
+
+          # Latest GCC/Clang standard modes
+          - { os: ubuntu-26.04, cpp_compiler: g++-16, std: "20" }
+          - { os: ubuntu-26.04, cpp_compiler: g++-16, std: "23" }
+          - { os: ubuntu-26.04, cpp_compiler: g++-16, std: "26" }
+          - { os: ubuntu-26.04, cpp_compiler: clang++-22, std: "20" }
+          - { os: ubuntu-26.04, cpp_compiler: clang++-22, std: "23" }
+          - { os: ubuntu-26.04, cpp_compiler: clang++-22, std: "26" }
+
+          # Linux: Clang with libc++ instead of the default libstdc++
+          - { os: ubuntu-24.04, cpp_compiler: clang++-20, std: "11", stdlib: libc++, extra_cpp_options: "-stdlib=libc++", extra_packages: "libc++-20-dev libc++abi-20-dev", job_name: "ubuntu-24.04 / clang++-20 + libc++ / C++11" }
+          - { os: ubuntu-24.04, cpp_compiler: clang++-20, std: "17", stdlib: libc++, extra_cpp_options: "-stdlib=libc++", extra_packages: "libc++-20-dev libc++abi-20-dev", job_name: "ubuntu-24.04 / clang++-20 + libc++ / C++17" }
+
+          # Linux ARM64: native GitHub-hosted runner
+          - { os: ubuntu-24.04-arm, cpp_compiler: g++, std: "11" }
+          - { os: ubuntu-24.04-arm, cpp_compiler: g++, std: "17" }
+
+          # macOS: explicit ARM64 and Intel runners
+          - { os: macos-26, cpp_compiler: clang++, std: "11" }
+          - { os: macos-26, cpp_compiler: clang++, std: "17" }
+          - { os: macos-15-intel, cpp_compiler: clang++, std: "11" }
+          - { os: macos-15-intel, cpp_compiler: clang++, std: "17" }
+
+    env:
+      CPP_OPTIONS: "-Wall -Wextra -Wpedantic"
+      CMAKE_CONFIGURE: >-
+        cmake -B build
+        -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
+        "-DEASYPB_CXX_FLAGS=-std=c++${{ matrix.std }} $CPP_OPTIONS ${{ matrix.extra_cpp_options }}"
+        -DCMAKE_BUILD_TYPE=
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install Linux compiler and standard library if needed
+      if: runner.os == 'Linux'
+      run: |
+        compiler='${{ matrix.cpp_compiler }}'
+        packages='${{ matrix.extra_packages }}'
+
+        if ! command -v "$compiler" >/dev/null 2>&1; then
+          package="$compiler"
+          case "$compiler" in
+            clang++-*) package="clang-${compiler#clang++-}" ;;
+          esac
+          packages="$package $packages"
+        fi
+
+        if [ -n "$(printf '%s' "$packages" | tr -d '[:space:]')" ]; then
+          sudo apt-get update
+          # Matrix package names are fixed by this workflow, so intentional word splitting is appropriate here.
+          sudo apt-get install -y $packages
+        fi
+
+    - name: Show toolchain and platform
+      run: |
+        echo "Requested compiler: ${{ matrix.cpp_compiler }}"
+        "${{ matrix.cpp_compiler }}" --version
+        cmake --version
+        uname -a
+        uname -m
+        if [ -f /etc/os-release ]; then
+          cat /etc/os-release
+        elif command -v sw_vers >/dev/null 2>&1; then
+          sw_vers
+        fi
+
     - name: 'Debug: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}Debug
     - name: 'Debug: Build'
       run: cmake --build build --config Debug
     - name: 'Debug: Test'
       working-directory: build
-      run: ctest --build-config Debug
+      run: ctest --build-config Debug --no-tests=error
 
     - name: 'Release: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}Release
@@ -415,7 +364,7 @@ jobs:
       run: cmake --build build --config Release
     - name: 'Release: Test'
       working-directory: build
-      run: ctest --build-config Release
+      run: ctest --build-config Release --no-tests=error
 
     - name: 'MinSizeRel: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}MinSizeRel
@@ -423,35 +372,39 @@ jobs:
       run: cmake --build build --config MinSizeRel
     - name: 'MinSizeRel: Test'
       working-directory: build
-      run: ctest --build-config MinSizeRel
+      run: ctest --build-config MinSizeRel --no-tests=error
 
   #####################################################################################################################
   # Build with each distribution's default compiler and standard library. Explicit compiler versions are tested in the
   # main and legacy compiler matrices.
   #####################################################################################################################
   docker:
+    name: ${{ format('{0} / {1} / C++{2}', matrix.image, matrix.cpp_compiler, matrix.std) }}
     runs-on: [ubuntu-latest]
+    timeout-minutes: 30
     container:
-      image: ${{ format('public.ecr.aws/docker/library/{0}', matrix.image) }}
+      image: ${{ startsWith(matrix.image, 'rockylinux:') && format('rockylinux/{0}', matrix.image) || format('public.ecr.aws/docker/library/{0}', matrix.image) }}
     strategy:
       matrix:
         cpp_compiler: [g++]
-        cpp_options: ["-std=c++11 -Wall -Wextra -Wpedantic"]
+        std: ["11", "17"]
+        cpp_options: ["-Wall -Wextra -Wpedantic"]
         image: ['ubuntu:20.04', 'ubuntu:22.04', 'ubuntu:24.04',
                 'ubuntu:rolling', 'ubuntu:devel',  #'i386/ubuntu', 'i386/ubuntu:22.04',
-                'debian:10', 'debian:11', 'debian:12', 'debian:testing', 'debian:experimental',
-                'rockylinux:8', 'rockylinux:9', 'fedora:latest', 'fedora:rawhide']
+                'debian:10', 'debian:11', 'debian:12', 'debian:13', 'debian:testing', 'debian:experimental',
+                'rockylinux:8', 'rockylinux:9', 'rockylinux:10', 'fedora:latest', 'fedora:rawhide',
+                'alpine:3.24']
         extra_cmake_options: [""]
 
 
-      # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
+      # Run every matrix combination independently even if another one fails.
       fail-fast: false
 
     env:
       CMAKE_CONFIGURE: >-
         cmake -B build
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
-        "-DEASYPB_CXX_FLAGS=${{ matrix.cpp_options }}"
+        "-DEASYPB_CXX_FLAGS=-std=c++${{ matrix.std }} ${{ matrix.cpp_options }}"
         ${{ matrix.extra_cmake_options }}
         -DCMAKE_BUILD_TYPE=
 
@@ -478,11 +431,21 @@ jobs:
         apt-get update -y
         apt-get install -y curl make ${{ matrix.cpp_compiler }}
 
-    - name: Install CMake
+    - name: Install dependencies on Alpine
+      if: contains(matrix.image, 'alpine')
       run: |
-        curl -L -O https://github.com/Kitware/CMake/releases/download/v3.25.3/cmake-3.25.3-linux-x86_64.sh
-        chmod +x cmake-3.25.3-linux-x86_64.sh
-        ./cmake-3.25.3-linux-x86_64.sh --skip-license --prefix=/usr/local
+        apk add --no-cache build-base cmake git
+
+    - name: Install CMake
+      if: ${{ !contains(matrix.image, 'alpine') }}
+      run: |
+        cmake_installer=cmake-3.25.3-linux-x86_64.sh
+        curl -fsSLO "https://github.com/Kitware/CMake/releases/download/v3.25.3/$cmake_installer"
+        curl -fsSLo cmake-3.25.3-SHA-256.txt \
+          https://cmake.org/files/v3.25/cmake-3.25.3-SHA-256.txt
+        grep "  $cmake_installer$" cmake-3.25.3-SHA-256.txt | sha256sum -c -
+        chmod +x "$cmake_installer"
+        ./"$cmake_installer" --skip-license --prefix=/usr/local
 
     - name: Show toolchain and platform
       run: |
@@ -501,7 +464,7 @@ jobs:
       run: cmake --build build --config Debug
     - name: 'Debug: Test'
       working-directory: build
-      run: ctest --build-config Debug
+      run: ctest --build-config Debug --no-tests=error
 
     - name: 'Release: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}Release
@@ -509,7 +472,7 @@ jobs:
       run: cmake --build build --config Release
     - name: 'Release: Test'
       working-directory: build
-      run: ctest --build-config Release
+      run: ctest --build-config Release --no-tests=error
 
     - name: 'MinSizeRel: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}MinSizeRel
@@ -517,7 +480,7 @@ jobs:
       run: cmake --build build --config MinSizeRel
     - name: 'MinSizeRel: Test'
       working-directory: build
-      run: ctest --build-config MinSizeRel
+      run: ctest --build-config MinSizeRel --no-tests=error
 
 
   #####################################################################################################################
@@ -637,6 +600,15 @@ jobs:
           echo "CE_GCC_FLAGS=$CE_GCC_FLAGS" >> "$GITHUB_ENV"
         fi
 
+    - name: Show toolchain and platform
+      run: |
+        echo "Requested CE GCC: $CE_GCC_TARGET"
+        "$CE_GCC_CXX" --version
+        cmake --version
+        uname -a
+        uname -m
+        cat /etc/os-release
+
     - name: 'Debug: Configure CMake'
       run: >-
         cmake -S . -B build
@@ -648,7 +620,7 @@ jobs:
 
     - name: 'Debug: Test'
       working-directory: build
-      run: ctest --build-config Debug
+      run: ctest --build-config Debug --no-tests=error
 
     - name: 'Release: Configure CMake'
       run: >-
@@ -660,7 +632,7 @@ jobs:
       run: cmake --build build --config Release
     - name: 'Release: Test'
       working-directory: build
-      run: ctest --build-config Release
+      run: ctest --build-config Release --no-tests=error
 
     - name: 'MinSizeRel: Configure CMake'
       run: >-
@@ -672,7 +644,7 @@ jobs:
       run: cmake --build build --config MinSizeRel
     - name: 'MinSizeRel: Test'
       working-directory: build
-      run: ctest --build-config MinSizeRel
+      run: ctest --build-config MinSizeRel --no-tests=error
 
 
   #####################################################################################################################
@@ -890,6 +862,17 @@ jobs:
         path: ${{ runner.temp }}/compiler-explorer/clang*
         key: ${{ steps.ce-clang-cache.outputs.cache-primary-key }}
 
+    - name: Show toolchain and platform
+      run: |
+        echo "Requested CE Clang: $CE_CLANG_TARGET"
+        "$CE_CLANG_CXX" --version
+        echo "Requested companion CE GCC: $CE_GCC_TARGET"
+        "$CE_GCC_ROOT/bin/g++" --version
+        cmake --version
+        uname -a
+        uname -m
+        cat /etc/os-release
+
     - name: 'Debug: Configure CMake'
       run: >-
         cmake -S . -B build
@@ -900,7 +883,7 @@ jobs:
       run: cmake --build build --config Debug
     - name: 'Debug: Test'
       working-directory: build
-      run: ctest --build-config Debug
+      run: ctest --build-config Debug --no-tests=error
 
     - name: 'Release: Configure CMake'
       run: >-
@@ -912,7 +895,7 @@ jobs:
       run: cmake --build build --config Release
     - name: 'Release: Test'
       working-directory: build
-      run: ctest --build-config Release
+      run: ctest --build-config Release --no-tests=error
 
     - name: 'MinSizeRel: Configure CMake'
       run: >-
@@ -924,4 +907,4 @@ jobs:
       run: cmake --build build --config MinSizeRel
     - name: 'MinSizeRel: Test'
       working-directory: build
-      run: ctest --build-config MinSizeRel
+      run: ctest --build-config MinSizeRel --no-tests=error
