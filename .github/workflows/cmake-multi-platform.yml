@@ -529,13 +529,13 @@ jobs:
   # GCC 5.x through 8.x also exercise CE's dependency/ld-fix handling for old GCC toolchains on Ubuntu 24.04.
   #####################################################################################################################
   ce-legacy-gcc:
-    name: GCC ${{ matrix.version }} / C++${{ matrix.standard }}
+    name: GCC ${{ matrix.version }} / C++${{ matrix.std }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     env:
       CE_GCC_TARGET: ${{ matrix.version }}
-      CE_GCC_FLAGS: "-std=c++${{ matrix.standard }} -Wall -Wextra -pedantic ${{ matrix.extra_flags }}"
+      CE_GCC_FLAGS: "-std=c++${{ matrix.std }} -Wall -Wextra -pedantic ${{ matrix.extra_flags }}"
       CE_GCC_DRIVER_FLAGS: "${{ matrix.driver_flags }}"
 
     strategy:
@@ -544,22 +544,22 @@ jobs:
         include:
           # Test every GCC major from 4.7 through 8; GCC 8 is also tested in C++17 mode.
           # Use the latest regular CE x86 target in each old major line.
-          - { version: "4.7.4", standard: "11", extra_flags: "", driver_flags: "" }
-          - { version: "4.8.5", standard: "11", extra_flags: "", driver_flags: "" }
+          - { version: "4.7.4", std: "11", extra_flags: "", driver_flags: "" }
+          - { version: "4.8.5", std: "11", extra_flags: "", driver_flags: "" }
 
           # This CE build was configured --disable-multiarch. These compatibility flags must be
           # injected by a compiler wrapper so they are present even during CMake's project()/TryCompile checks.
-          - { version: "4.9.4", standard: "11", extra_flags: "", driver_flags: "-isystem /usr/include/x86_64-linux-gnu -B/usr/lib/x86_64-linux-gnu/ -L/usr/lib/x86_64-linux-gnu" }
+          - { version: "4.9.4", std: "11", extra_flags: "", driver_flags: "-isystem /usr/include/x86_64-linux-gnu -B/usr/lib/x86_64-linux-gnu/ -L/usr/lib/x86_64-linux-gnu" }
 
-          - { version: "5.5.0", standard: "11", extra_flags: "", driver_flags: "" }
+          - { version: "5.5.0", std: "11", extra_flags: "", driver_flags: "" }
 
           # CE exposes GCC 6.4.0 as the latest regular x86 GCC 6 target;
           # GCC 6.5.0 is currently available only as the special renovated-6.5.0 target.
-          - { version: "6.4.0", standard: "11", extra_flags: "", driver_flags: "" }
+          - { version: "6.4.0", std: "11", extra_flags: "", driver_flags: "" }
 
-          - { version: "7.5.0", standard: "11", extra_flags: "", driver_flags: "" }
-          - { version: "8.5.0", standard: "11", extra_flags: "", driver_flags: "" }
-          - { version: "8.5.0", standard: "17", extra_flags: "", driver_flags: "" }
+          - { version: "7.5.0", std: "11", extra_flags: "", driver_flags: "" }
+          - { version: "8.5.0", std: "11", extra_flags: "", driver_flags: "" }
+          - { version: "8.5.0", std: "17", extra_flags: "", driver_flags: "" }
 
     steps:
     - uses: actions/checkout@v6
@@ -682,7 +682,7 @@ jobs:
   # while using the host linker.
   #####################################################################################################################
   ce-legacy-clang:
-    name: Clang ${{ matrix.label }} / C++11
+    name: Clang ${{ matrix.label }} / C++${{ matrix.std }}
     # Pin the host so a future ubuntu-latest migration does not change two variables at once.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -690,39 +690,54 @@ jobs:
     env:
       CE_CLANG_TARGET: ${{ matrix.ce_target }}
       CE_GCC_TARGET: ${{ matrix.gcc_target }}
-      CE_CLANG_FLAGS: "-std=c++11 -Wall -Wextra -pedantic"
+      CE_CLANG_FLAGS: "-std=c++${{ matrix.std }} -Wall -Wextra -pedantic"
 
     strategy:
       fail-fast: false
       matrix:
         include:
+          # C++11: pair each Clang with a CE GCC/libstdc++ close to the stock compiler of the
+          # corresponding Ubuntu release, while using the host linker.
+
           # Additional coverage for Clang 3.1 and 3.2, predating Clang's complete C++11 support.
-          - { label: "3.1", gcc_target: "4.8.5", ce_target: "3.1"            }
-          - { label: "3.2", gcc_target: "4.8.5", ce_target: "3.2"            }
+          - { label: "3.1", std: "11", gcc_target: "4.8.5", ce_target: "3.1" }
+          - { label: "3.2", std: "11", gcc_target: "4.8.5", ce_target: "3.2" }
 
           # Test with the stock GCC/libstdc++ generation from Ubuntu 14.04 (GCC 4.8 era).
-          - { label: "3.3", gcc_target: "4.8.5", ce_target: "3.3"            }
-          - { label: "3.4", gcc_target: "4.8.5", ce_target: "assertions-3.4.0" }
-          - { label: "3.5", gcc_target: "4.8.5", ce_target: "assertions-3.5.0" }
+          - { label: "3.3", std: "11", gcc_target: "4.8.5", ce_target: "3.3" }
+          - { label: "3.4", std: "11", gcc_target: "4.8.5", ce_target: "assertions-3.4.0" }
+          - { label: "3.5", std: "11", gcc_target: "4.8.5", ce_target: "assertions-3.5.0" }
 
           # CE-managed assertion builds avoid the extra runtime dependencies of the old upstream 3.5-3.8 binaries.
           # Test with the stock GCC/libstdc++ generation from Ubuntu 16.04 (GCC 5.4 era).
-          - { label: "3.6", gcc_target: "5.4.0", ce_target: "assertions-3.6.0" }
-          - { label: "3.7", gcc_target: "5.4.0", ce_target: "assertions-3.7.0" }
-          - { label: "3.8", gcc_target: "5.4.0", ce_target: "assertions-3.8.0" }
-          - { label: "3.9", gcc_target: "5.4.0", ce_target: "3.9.1"          }
-          - { label: "4.0", gcc_target: "5.4.0", ce_target: "4.0.1"          }
-          - { label: "5.0", gcc_target: "5.4.0", ce_target: "5.0.2"          }
-          - { label: "6.0", gcc_target: "5.4.0", ce_target: "6.0.1"          }
-          - { label: "7",   gcc_target: "5.4.0", ce_target: "7.0.1"          }
-          - { label: "8",   gcc_target: "5.4.0", ce_target: "8.0.1"          }
-          - { label: "9",   gcc_target: "5.4.0", ce_target: "9.0.1"          }
-          - { label: "10",  gcc_target: "5.4.0", ce_target: "10.0.1"         }
-          - { label: "11",  gcc_target: "5.4.0", ce_target: "11.0.1"         }
-          - { label: "12",  gcc_target: "5.4.0", ce_target: "12.0.1"         }
+          - { label: "3.6", std: "11", gcc_target: "5.4.0", ce_target: "assertions-3.6.0" }
+          - { label: "3.7", std: "11", gcc_target: "5.4.0", ce_target: "assertions-3.7.0" }
+          - { label: "3.8", std: "11", gcc_target: "5.4.0", ce_target: "assertions-3.8.0" }
+          - { label: "3.9", std: "11", gcc_target: "5.4.0", ce_target: "3.9.1" }
+          - { label: "4.0", std: "11", gcc_target: "5.4.0", ce_target: "4.0.1" }
+          - { label: "5.0", std: "11", gcc_target: "5.4.0", ce_target: "5.0.2" }
+          - { label: "6.0", std: "11", gcc_target: "5.4.0", ce_target: "6.0.1" }
+          - { label: "7",   std: "11", gcc_target: "5.4.0", ce_target: "7.0.1" }
+          - { label: "8",   std: "11", gcc_target: "5.4.0", ce_target: "8.0.1" }
+          - { label: "9",   std: "11", gcc_target: "5.4.0", ce_target: "9.0.1" }
+          - { label: "10",  std: "11", gcc_target: "5.4.0", ce_target: "10.0.1" }
+          - { label: "11",  std: "11", gcc_target: "5.4.0", ce_target: "11.0.1" }
+          - { label: "12",  std: "11", gcc_target: "5.4.0", ce_target: "12.0.1" }
 
           # Test with the stock GCC/libstdc++ generation from Ubuntu 18.04 (GCC 7.5 era).
-          - { label: "13",  gcc_target: "7.5.0", ce_target: "13.0.1"         }
+          - { label: "13",  std: "11", gcc_target: "7.5.0", ce_target: "13.0.1" }
+
+          # C++17: Clang 5 is the first release with complete C++17 language support. Use GCC 7.5
+          # for every row so the standard library also provides the C++17 facilities used by EasyProtoBuf.
+          - { label: "5.0", std: "17", gcc_target: "7.5.0", ce_target: "5.0.2" }
+          - { label: "6.0", std: "17", gcc_target: "7.5.0", ce_target: "6.0.1" }
+          - { label: "7",   std: "17", gcc_target: "7.5.0", ce_target: "7.0.1" }
+          - { label: "8",   std: "17", gcc_target: "7.5.0", ce_target: "8.0.1" }
+          - { label: "9",   std: "17", gcc_target: "7.5.0", ce_target: "9.0.1" }
+          - { label: "10",  std: "17", gcc_target: "7.5.0", ce_target: "10.0.1" }
+          - { label: "11",  std: "17", gcc_target: "7.5.0", ce_target: "11.0.1" }
+          - { label: "12",  std: "17", gcc_target: "7.5.0", ce_target: "12.0.1" }
+          - { label: "13",  std: "17", gcc_target: "7.5.0", ce_target: "13.0.1" }
 
     steps:
     - uses: actions/checkout@v6
