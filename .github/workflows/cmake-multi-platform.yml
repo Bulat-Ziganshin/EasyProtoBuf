@@ -971,3 +971,661 @@ jobs:
     - name: Stop legacy Ubuntu container
       if: always()
       run: docker rm --force "$LEGACY_CLANG_CONTAINER" 2>/dev/null || true
+
+
+  #####################################################################################################################
+  # Experimental Compiler Explorer GCC toolchains mirroring the legacy-gcc compiler range.
+  # These jobs validate exact CE compiler toolchains independently of the historical Ubuntu container setup.
+  # GCC 5.x through 8.x also exercise CE's dependency/ld-fix handling for old GCC toolchains on Ubuntu 24.04.
+  # Keep them non-blocking until the CE jobs are proven stable enough to replace the corresponding container jobs.
+  #####################################################################################################################
+  ce-legacy-gcc-experimental:
+    name: CE GCC ${{ matrix.version }} / C++${{ matrix.standard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+
+    env:
+      CE_GCC_TARGET: ${{ matrix.version }}
+      CE_GCC_FLAGS: "-std=c++${{ matrix.standard }} -Wall -Wextra -pedantic ${{ matrix.extra_flags }}"
+      CE_GCC_DRIVER_FLAGS: "${{ matrix.driver_flags }}"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Mirrors every GCC major currently covered by legacy-gcc containers.
+          # Use the latest regular CE x86 target in each old major line.
+          - version: "4.7.4"
+            standard: "11"
+            extra_flags: ""
+            driver_flags: ""
+
+          - version: "4.8.5"
+            standard: "11"
+            extra_flags: ""
+            driver_flags: ""
+
+          - version: "4.9.4"
+            standard: "11"
+            # This CE build was configured --disable-multiarch. These compatibility flags must be
+            # injected by a compiler wrapper so they are present even during CMake's project()/TryCompile checks.
+            extra_flags: ""
+            driver_flags: "-isystem /usr/include/x86_64-linux-gnu -B/usr/lib/x86_64-linux-gnu/ -L/usr/lib/x86_64-linux-gnu"
+
+          - version: "5.5.0"
+            standard: "11"
+            extra_flags: ""
+            driver_flags: ""
+
+          # CE exposes GCC 6.4.0 as the latest regular x86 GCC 6 target;
+          # GCC 6.5.0 is currently available only as the special renovated-6.5.0 target.
+          - version: "6.4.0"
+            standard: "11"
+            extra_flags: ""
+            driver_flags: ""
+
+          - version: "7.5.0"
+            standard: "11"
+            extra_flags: ""
+            driver_flags: ""
+
+          - version: "8.5.0"
+            standard: "11"
+            extra_flags: ""
+            driver_flags: ""
+
+          - version: "8.5.0"
+            standard: "17"
+            extra_flags: ""
+            driver_flags: ""
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set Compiler Explorer install root
+      run: echo "CE_INSTALL_ROOT=$RUNNER_TEMP/compiler-explorer" >> "$GITHUB_ENV"
+
+    # Cache the installed compiler, not build output. Bump ce-v1 if our CE installation policy changes.
+    - name: Restore cached CE GCC ${{ matrix.version }}
+      id: ce-gcc-cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/compiler-explorer/gcc-*
+        key: ce-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-gcc-${{ matrix.version }}
+
+    - name: Checkout Compiler Explorer infrastructure
+      if: steps.ce-gcc-cache.outputs.cache-hit != 'true'
+      uses: actions/checkout@v6
+      with:
+        repository: compiler-explorer/infra
+        path: .ci/compiler-explorer-infra
+
+    - name: Prepare Compiler Explorer installer
+      if: steps.ce-gcc-cache.outputs.cache-hit != 'true'
+      working-directory: .ci/compiler-explorer-infra
+      run: make ce
+
+    - name: Install CE GCC ${{ matrix.version }}
+      if: steps.ce-gcc-cache.outputs.cache-hit != 'true'
+      working-directory: .ci/compiler-explorer-infra
+      run: ./bin/ce_install --dest "$CE_INSTALL_ROOT" install "compilers/c++/x86/gcc $CE_GCC_TARGET"
+
+    # Save immediately after installation so a later compiler/test failure does not discard the toolchain download.
+    - name: Save CE GCC ${{ matrix.version }} cache
+      if: steps.ce-gcc-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ runner.temp }}/compiler-explorer/gcc-*
+        key: ${{ steps.ce-gcc-cache.outputs.cache-primary-key }}
+
+    - name: Locate and diagnose CE GCC ${{ matrix.version }}
+      run: |
+        expected_gxx="$CE_INSTALL_ROOT/gcc-$CE_GCC_TARGET/bin/g++"
+
+        echo "=== Installed CE g++ candidates ==="
+        find -L "$CE_INSTALL_ROOT" -type f -path '*/bin/g++' -perm -111 -print | sort || true
+        echo
+
+        if [ ! -x "$expected_gxx" ]; then
+          echo "Expected CE compiler not found at $expected_gxx" >&2
+          exit 1
+        fi
+
+        gcc_root="$(dirname "$(dirname "$expected_gxx")")"
+        selected_gxx="$expected_gxx"
+
+        # Compatibility options required by very old non-multiarch GCC builds must also be present
+        # during CMake's compiler-identification/TryCompile calls, before EASYPB_CXX_FLAGS exists.
+        if [ -n "$CE_GCC_DRIVER_FLAGS" ]; then
+          mkdir -p "$RUNNER_TEMP/ce-gcc-toolchain"
+          wrapper="$RUNNER_TEMP/ce-gcc-toolchain/g++-$CE_GCC_TARGET"
+          cat > "$wrapper" <<EOF_WRAPPER
+        #!/usr/bin/env bash
+        set -euo pipefail
+        exec "$expected_gxx" $CE_GCC_DRIVER_FLAGS "\$@"
+        EOF_WRAPPER
+          chmod +x "$wrapper"
+          selected_gxx="$wrapper"
+        fi
+
+        echo "CE_GCC_CXX=$selected_gxx" >> "$GITHUB_ENV"
+
+        echo "=== Selected CE GCC ==="
+        "$selected_gxx" --version
+        "$selected_gxx" -v
+        echo
+
+        # GCC 4.7's headers can emit a dependency on steady_clock::now()@GLIBCXX_3.4.17.
+        # Ensure binaries built by this row load the matching CE libstdc++ rather than the host's newer libstdc++.
+        if [ "$CE_GCC_TARGET" = "4.7.4" ]; then
+          CE_GCC_FLAGS="$CE_GCC_FLAGS -Wl,-rpath,$gcc_root/lib64"
+          echo "CE_GCC_FLAGS=$CE_GCC_FLAGS" >> "$GITHUB_ENV"
+        fi
+
+        bundled_ld="$gcc_root/x86_64-linux-gnu/bin/ld"
+
+        echo "=== Linker visible to the CE GCC toolchain ==="
+        if [ -e "$bundled_ld" ]; then
+          ls -l "$bundled_ld"
+          readlink -f "$bundled_ld" || true
+          "$bundled_ld" --version | head -n 2 || true
+        else
+          echo "No bundled linker at $bundled_ld; compiler driver will select another linker."
+        fi
+        echo
+
+        cat > .easypb-ce-gcc-probe.cpp <<'EOF_PROBE'
+        #include <iostream>
+
+        int main()
+        {
+            std::cout << "CE GCC compile/link/run probe" << std::endl;
+            return 0;
+        }
+        EOF_PROBE
+
+        echo "=== Compile, link, and execute probe ==="
+        "$selected_gxx" -v $CE_GCC_FLAGS .easypb-ce-gcc-probe.cpp -o .easypb-ce-gcc-probe
+        ./.easypb-ce-gcc-probe
+        rm -f .easypb-ce-gcc-probe.cpp .easypb-ce-gcc-probe
+
+    - name: 'Debug: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$CE_GCC_CXX"
+        "-DEASYPB_CXX_FLAGS=$CE_GCC_FLAGS"
+        -DCMAKE_BUILD_TYPE=Debug
+    - name: 'Debug: Build'
+      run: cmake --build build --config Debug
+
+    # Keep one diagnostic row for GCC 4.7 while the CE runtime rpath compatibility fix is experimental.
+    - name: Diagnose GCC 4.7 libstdc++ runtime selection
+      if: matrix.version == '4.7.4'
+      run: |
+        codegen_path=build/codegen
+        gcc_root="$(dirname "$(dirname "$CE_GCC_CXX")")"
+
+        echo "=== CE GCC libstdc++ candidates ==="
+        find "$gcc_root" -name 'libstdc++.so*' -print -exec ls -l {} \; 2>/dev/null | sort || true
+        echo
+
+        echo "=== Dynamic dependencies selected for codegen ==="
+        ldd "$codegen_path" || true
+        echo
+
+        libstdcpp="$(ldd "$codegen_path" 2>/dev/null | awk '/libstdc\+\+\.so\.6/ {print $3; exit}')"
+        echo "Selected libstdc++: ${libstdcpp:-<not found>}"
+        echo
+
+        echo "=== GLIBCXX requirements recorded by codegen ==="
+        readelf --version-info "$codegen_path" 2>/dev/null | grep -E 'GLIBCXX_3\.4\.17|GLIBCXX_' || true
+        echo
+
+        if [ -n "$libstdcpp" ] && [ -e "$libstdcpp" ]; then
+          echo "=== steady_clock::now in selected libstdc++ ==="
+          objdump -T "$libstdcpp" 2>/dev/null | grep '_ZNSt6chrono12steady_clock3nowEv' || true
+          echo
+          echo "=== GLIBCXX_3.4.17 symbols in selected libstdc++ ==="
+          objdump -T "$libstdcpp" 2>/dev/null | grep 'GLIBCXX_3.4.17' | head -n 40 || true
+        fi
+
+    - name: 'Debug: Test'
+      working-directory: build
+      run: ctest --build-config Debug
+
+    - name: 'Release: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$CE_GCC_CXX"
+        "-DEASYPB_CXX_FLAGS=$CE_GCC_FLAGS"
+        -DCMAKE_BUILD_TYPE=Release
+    - name: 'Release: Build'
+      run: cmake --build build --config Release
+    - name: 'Release: Test'
+      working-directory: build
+      run: ctest --build-config Release
+
+    - name: 'MinSizeRel: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$CE_GCC_CXX"
+        "-DEASYPB_CXX_FLAGS=$CE_GCC_FLAGS"
+        -DCMAKE_BUILD_TYPE=MinSizeRel
+    - name: 'MinSizeRel: Build'
+      run: cmake --build build --config MinSizeRel
+    - name: 'MinSizeRel: Test'
+      working-directory: build
+      run: ctest --build-config MinSizeRel
+
+
+  #####################################################################################################################
+  # Experimental Compiler Explorer toolchains mirroring the legacy-clang compiler range.
+  # These jobs intentionally run alongside legacy-clang while we compare reliability and toolchain behavior.
+  # Pair each Clang with a CE GCC/libstdc++ close to the Ubuntu release used by the legacy job, while using the host linker.
+  # Keep them non-blocking until the CE jobs are proven stable enough to replace the corresponding container jobs.
+  #####################################################################################################################
+  ce-legacy-clang-experimental:
+    name: CE Clang ${{ matrix.label }} / C++11
+    # Pin the host so a future ubuntu-latest migration does not change two variables at once.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+
+    env:
+      CE_CLANG_TARGET: ${{ matrix.ce_target }}
+      CE_GCC_TARGET: ${{ matrix.gcc_target }}
+      CE_CLANG_FLAGS: "-std=c++11 -Wall -Wextra -pedantic"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Extra pre-C++11-complete coverage retained from the initial CE experiment.
+          - label: "3.1"
+            ce_target: "3.1"
+            gcc_target: "4.8.5"
+
+          - label: "3.2"
+            ce_target: "3.2"
+            gcc_target: "4.8.5"
+
+          # Mirrors legacy-clang Ubuntu 14.04 coverage (GCC 4.8 era).
+          - label: "3.3"
+            ce_target: "3.3"
+            gcc_target: "4.8.5"
+
+          - label: "3.4"
+            ce_target: "assertions-3.4.0"
+            gcc_target: "4.8.5"
+
+          # Extra patch-release coverage retained because CE provides the official LLVM binary.
+          - label: "3.4.1"
+            ce_target: "3.4.1"
+            gcc_target: "4.8.5"
+
+          - label: "3.5"
+            ce_target: "assertions-3.5.0"
+            gcc_target: "4.8.5"
+
+          # CE-managed assertion builds avoid the extra runtime dependencies of the old upstream 3.5-3.8 binaries.
+          # Mirrors legacy-clang Ubuntu 16.04 coverage (GCC 5.4 era).
+          - label: "3.6"
+            ce_target: "assertions-3.6.0"
+            gcc_target: "5.4.0"
+
+          - label: "3.7"
+            ce_target: "assertions-3.7.0"
+            gcc_target: "5.4.0"
+
+          - label: "3.8"
+            ce_target: "assertions-3.8.0"
+            gcc_target: "5.4.0"
+
+          - label: "3.9"
+            ce_target: "3.9.1"
+            gcc_target: "5.4.0"
+
+          - label: "4.0"
+            ce_target: "4.0.1"
+            gcc_target: "5.4.0"
+
+          - label: "5.0"
+            ce_target: "5.0.2"
+            gcc_target: "5.4.0"
+
+          - label: "6.0"
+            ce_target: "6.0.1"
+            gcc_target: "5.4.0"
+
+          - label: "7"
+            ce_target: "7.0.1"
+            gcc_target: "5.4.0"
+
+          - label: "8"
+            ce_target: "8.0.1"
+            gcc_target: "5.4.0"
+
+          - label: "9"
+            ce_target: "9.0.1"
+            gcc_target: "5.4.0"
+
+          - label: "10"
+            ce_target: "10.0.1"
+            gcc_target: "5.4.0"
+
+          - label: "11"
+            ce_target: "11.0.1"
+            gcc_target: "5.4.0"
+
+          - label: "12"
+            ce_target: "12.0.1"
+            gcc_target: "5.4.0"
+
+          # Mirrors legacy-clang Ubuntu 18.04 coverage (GCC 7.5 era).
+          - label: "13"
+            ce_target: "13.0.1"
+            gcc_target: "7.5.0"
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set Compiler Explorer install root
+      run: echo "CE_INSTALL_ROOT=$RUNNER_TEMP/compiler-explorer" >> "$GITHUB_ENV"
+
+    # Cache GCC and Clang separately so many Clang rows can reuse the same GCC/libstdc++ companion cache.
+    # GCC stays on ce-v1. Clang uses ce-v3 after the second-stage minimal-runtime pruning.
+    # During the v2 -> v3 migration, restore a v2 cache on a v3 miss so we can re-prune it without hitting CE again.
+    - name: Restore cached CE GCC ${{ matrix.gcc_target }}
+      id: ce-gcc-cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/compiler-explorer/gcc-*
+        key: ce-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-gcc-${{ matrix.gcc_target }}
+
+    - name: Restore cached CE Clang ${{ matrix.ce_target }}
+      id: ce-clang-cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/compiler-explorer/clang*
+        key: ce-v3-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-clang-${{ matrix.ce_target }}
+
+    - name: Restore previous v2 CE Clang cache for re-pruning
+      id: ce-clang-cache-v2
+      if: steps.ce-clang-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/compiler-explorer/clang*
+        key: ce-v2-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-clang-${{ matrix.ce_target }}
+
+    # CE documents ce_install as the public way to install its compiler definitions.
+    # For now we deliberately track CE infra/main; pin a commit before promoting these jobs to blocking CI.
+    - name: Checkout Compiler Explorer infrastructure
+      if: steps.ce-gcc-cache.outputs.cache-hit != 'true' || (steps.ce-clang-cache.outputs.cache-hit != 'true' && steps.ce-clang-cache-v2.outputs.cache-hit != 'true')
+      uses: actions/checkout@v6
+      with:
+        repository: compiler-explorer/infra
+        path: .ci/compiler-explorer-infra
+
+    - name: Prepare Compiler Explorer installer
+      if: steps.ce-gcc-cache.outputs.cache-hit != 'true' || (steps.ce-clang-cache.outputs.cache-hit != 'true' && steps.ce-clang-cache-v2.outputs.cache-hit != 'true')
+      working-directory: .ci/compiler-explorer-infra
+      run: make ce
+
+    # LLVM's official Clang 3.4.1 Ubuntu 12.04 binary is linked against libtinfo.so.5.
+    # Ubuntu 24.04 ships libtinfo.so.6, so install the legacy library side-by-side only for this row.
+    - name: Install Clang 3.4.1 legacy runtime dependency
+      if: matrix.ce_target == '3.4.1'
+      run: |
+        libtinfo_deb="$RUNNER_TEMP/libtinfo5_6.3-2ubuntu0.2_amd64.deb"
+        curl --fail --location --retry 3 --output "$libtinfo_deb" \
+          https://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.2_amd64.deb
+        echo "b9bb64e716a7d9de05b1b33992763142ca81bcae3a7f8ce7e29fa3c6fd32f1e8  $libtinfo_deb" | sha256sum --check --strict
+        sudo dpkg --install "$libtinfo_deb"
+
+    - name: Install CE GCC ${{ matrix.gcc_target }}
+      if: steps.ce-gcc-cache.outputs.cache-hit != 'true'
+      working-directory: .ci/compiler-explorer-infra
+      run: ./bin/ce_install --dest "$CE_INSTALL_ROOT" install "compilers/c++/x86/gcc $CE_GCC_TARGET"
+
+    - name: Save CE GCC ${{ matrix.gcc_target }} cache
+      if: steps.ce-gcc-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ runner.temp }}/compiler-explorer/gcc-*
+        key: ${{ steps.ce-gcc-cache.outputs.cache-primary-key }}
+
+    - name: Install CE Clang ${{ matrix.label }}
+      if: steps.ce-clang-cache.outputs.cache-hit != 'true' && steps.ce-clang-cache-v2.outputs.cache-hit != 'true'
+      working-directory: .ci/compiler-explorer-infra
+      run: ./bin/ce_install --dest "$CE_INSTALL_ROOT" install "compilers/c++/clang $CE_CLANG_TARGET"
+
+    - name: Locate CE toolchains and create Clang wrapper
+      run: |
+        mapfile -t clang_candidates < <(find -L "$CE_INSTALL_ROOT" -type f -path '*/bin/clang++' -perm -111 -print | sort)
+        expected_gxx="$CE_INSTALL_ROOT/gcc-$CE_GCC_TARGET/bin/g++"
+
+        printf 'CE clang++ candidates:\n'
+        printf '  %s\n' "${clang_candidates[@]}"
+        echo 'CE g++ candidates:'
+        find -L "$CE_INSTALL_ROOT" -type f -path '*/bin/g++' -perm -111 -print | sort || true
+
+        if [ "${#clang_candidates[@]}" -ne 1 ]; then
+          echo "Expected exactly one CE clang++ installation, found ${#clang_candidates[@]}" >&2
+          exit 1
+        fi
+        if [ ! -x "$expected_gxx" ]; then
+          echo "Expected CE GCC companion not found at $expected_gxx" >&2
+          exit 1
+        fi
+
+        ce_clang_cxx_raw="${clang_candidates[0]}"
+        ce_clang_real="$(readlink -f "$ce_clang_cxx_raw")"
+        clang_root="$(dirname "$(dirname "$ce_clang_cxx_raw")")"
+        ce_gcc_cxx="$expected_gxx"
+        ce_gcc_root="$(dirname "$(dirname "$ce_gcc_cxx")")"
+
+        # Clang 4.0 and older do not support -print-resource-dir. Prefer the driver query when available,
+        # otherwise discover the single installed resource directory under lib/clang/.
+        resource_dir="$("$ce_clang_cxx_raw" -print-resource-dir 2>/dev/null || true)"
+        if [ -z "$resource_dir" ] || [ ! -d "$resource_dir" ]; then
+          mapfile -t resource_candidates < <(find "$clang_root/lib/clang" -mindepth 1 -maxdepth 1 -type d -print | sort)
+          if [ "${#resource_candidates[@]}" -ne 1 ]; then
+            echo "Unable to determine Clang resource directory; found ${#resource_candidates[@]} candidates under $clang_root/lib/clang" >&2
+            printf '  %s\n' "${resource_candidates[@]}" >&2
+            exit 1
+          fi
+          resource_dir="${resource_candidates[0]}"
+          echo "Clang $CE_CLANG_TARGET does not provide -print-resource-dir; discovered resource directory: $resource_dir"
+        fi
+        case "$resource_dir" in
+          "$clang_root/lib/clang"|"$clang_root/lib/clang/"*) ;;
+          *)
+            echo "Unexpected Clang resource directory outside $clang_root/lib/clang: $resource_dir" >&2
+            exit 1
+            ;;
+        esac
+
+        echo "CE_CLANG_CXX_RAW=$ce_clang_cxx_raw" >> "$GITHUB_ENV"
+        echo "CE_CLANG_REAL=$ce_clang_real" >> "$GITHUB_ENV"
+        echo "CLANG_ROOT=$clang_root" >> "$GITHUB_ENV"
+        echo "CE_CLANG_RESOURCE_DIR=$resource_dir" >> "$GITHUB_ENV"
+        echo "CE_GCC_CXX=$ce_gcc_cxx" >> "$GITHUB_ENV"
+        echo "CE_GCC_ROOT=$ce_gcc_root" >> "$GITHUB_ENV"
+
+        mkdir -p "$RUNNER_TEMP/ce-clang-toolchain"
+        cat > "$RUNNER_TEMP/ce-clang-toolchain/clang++" <<'EOF_WRAPPER'
+        #!/usr/bin/env bash
+        set -euo pipefail
+        exec "$CE_CLANG_CXX_RAW" -gcc-toolchain "$CE_GCC_ROOT" "$@"
+        EOF_WRAPPER
+        chmod +x "$RUNNER_TEMP/ce-clang-toolchain/clang++"
+        echo "CE_CLANG_CXX=$RUNNER_TEMP/ce-clang-toolchain/clang++" >> "$GITHUB_ENV"
+
+    # Keep only the Clang driver and its lib/clang resource tree. v8 proved that every CE Clang 3.1-13
+    # executable depends only on host libraries, so top-level LLVM/Clang shared/development libraries are unnecessary
+    # for this CI workload. Guard the aggressive prune with ldd/resource-dir checks for future CE layout changes.
+    - name: Diagnose and prune CE Clang ${{ matrix.label }} before caching
+      if: steps.ce-clang-cache.outputs.cache-hit != 'true'
+      run: |
+        echo "=== CE Clang tree before pruning ==="
+        du -sh "$CLANG_ROOT"
+        echo
+
+        echo "=== Actual Clang executable ==="
+        ls -l "$CE_CLANG_CXX_RAW" "$CE_CLANG_REAL" || true
+        echo
+
+        echo "=== Dynamic dependencies before pruning ==="
+        ldd "$CE_CLANG_REAL" || true
+        echo
+
+        echo "=== Resource directory before pruning ==="
+        echo "$CE_CLANG_RESOURCE_DIR"
+        du -sh "$CE_CLANG_RESOURCE_DIR" 2>/dev/null || true
+        echo
+
+        # Preserve the driver symlinks and the actual executable they resolve to; remove every other LLVM tool.
+        for entry in "$CLANG_ROOT"/bin/*; do
+          [ -e "$entry" ] || [ -L "$entry" ] || continue
+          resolved="$(readlink -f "$entry" 2>/dev/null || true)"
+          case "$entry" in
+            "$CLANG_ROOT/bin/clang"|"$CLANG_ROOT/bin/clang++") continue ;;
+          esac
+          if [ -n "$resolved" ] && [ "$resolved" = "$CE_CLANG_REAL" ]; then
+            continue
+          fi
+          rm -rf -- "$entry"
+        done
+
+        # Development-only material. Do not touch lib/clang/** because it contains Clang builtin headers/runtimes.
+        rm -rf -- "$CLANG_ROOT/include" "$CLANG_ROOT/share" "$CLANG_ROOT/libexec" "$CLANG_ROOT/lib/cmake"
+        find "$CLANG_ROOT/lib" -maxdepth 1 -type f -name '*.a' -delete 2>/dev/null || true
+
+        echo "=== Clang resource tree retained for compilation ==="
+        echo "$CE_CLANG_RESOURCE_DIR"
+        du -sh "$CE_CLANG_RESOURCE_DIR" 2>/dev/null || true
+        echo
+        if [ ! -d "$CE_CLANG_RESOURCE_DIR" ]; then
+          echo "Clang resource directory disappeared during pruning: $CE_CLANG_RESOURCE_DIR" >&2
+          exit 1
+        fi
+
+        # In v8 all tested Clang 3.1-13 executables resolved exclusively against host libraries. If a future
+        # CE build starts depending on a bundled shared library, keep lib/ intact instead of breaking the compiler.
+        if ldd "$CE_CLANG_REAL" 2>/dev/null | grep -F "$CLANG_ROOT/"; then
+          echo "Bundled runtime dependency detected; preserving remaining top-level lib/ contents."
+        else
+          echo "No bundled runtime dependencies detected; keeping only lib/clang/**."
+          find "$CLANG_ROOT/lib" -mindepth 1 -maxdepth 1 ! -name clang -exec rm -rf -- {} +
+        fi
+
+        echo "=== CE Clang tree after pruning ==="
+        du -sh "$CLANG_ROOT"
+        du -sh "$CLANG_ROOT/bin" "$CLANG_ROOT/lib" 2>/dev/null || true
+        echo
+
+        echo "=== Dynamic dependencies after pruning ==="
+        ldd "$CE_CLANG_REAL" || true
+
+    - name: Diagnose CE Clang toolchain
+      run: |
+        echo "=== Raw CE Clang ==="
+        "$CE_CLANG_CXX_RAW" --version
+        echo
+
+        echo "=== CE GCC companion ==="
+        "$CE_GCC_CXX" --version
+        echo
+
+        echo "=== Host linker ==="
+        command -v ld
+        ld --version | head -n 2
+        echo
+
+        echo "=== CE Clang root and resolved executable ==="
+        echo "CLANG_ROOT=$CLANG_ROOT"
+        echo "CE_CLANG_REAL=$CE_CLANG_REAL"
+        ls -l "$CE_CLANG_CXX_RAW" "$CE_CLANG_REAL" || true
+        echo
+
+        echo "=== Dynamic dependencies of the actual CE Clang executable ==="
+        # This runs for every CE Clang row (3.1 through 13), analogous to: ldd "$CLANG_ROOT/bin/clang-13".
+        ldd "$CE_CLANG_REAL" || true
+        echo
+
+        echo "=== Clang resource directory ==="
+        echo "$CE_CLANG_RESOURCE_DIR"
+        du -sh "$CE_CLANG_RESOURCE_DIR" 2>/dev/null || true
+        echo
+
+        echo "=== Clang driver, selected GCC installation, and include search paths ==="
+        "$CE_CLANG_CXX" -v -E -x c++ /dev/null
+        echo
+
+        cat > .easypb-ce-clang-probe.cpp <<'EOF_PROBE'
+        #include <cstddef>
+        #include <iostream>
+
+        int main()
+        {
+            std::cout << "CE Clang C++11 link/run probe" << std::endl;
+            return 0;
+        }
+        EOF_PROBE
+
+        echo "=== Standard library macros in C++11 mode ==="
+        "$CE_CLANG_CXX" -std=c++11 -dM -E -x c++ .easypb-ce-clang-probe.cpp |
+          grep -E '^#define (__GLIBCXX__|__GLIBCPP__|_GLIBCXX_RELEASE|_LIBCPP_VERSION) ' || true
+        echo
+
+        echo "=== C++11 compile, link, and execute probe ==="
+        "$CE_CLANG_CXX" -v -std=c++11 -Wall -Wextra -pedantic .easypb-ce-clang-probe.cpp -o .easypb-ce-clang-probe
+        ./.easypb-ce-clang-probe
+
+        rm -f .easypb-ce-clang-probe.cpp .easypb-ce-clang-probe
+
+    # Save only after pruning and after the pruned compiler has passed the C++11 compile/link/run probe.
+    # This still occurs before EasyProtoBuf tests, so the known Clang 3.1 test failure does not prevent caching.
+    - name: Save pruned CE Clang ${{ matrix.ce_target }} cache
+      if: steps.ce-clang-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ runner.temp }}/compiler-explorer/clang*
+        key: ${{ steps.ce-clang-cache.outputs.cache-primary-key }}
+
+    - name: 'Debug: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$CE_CLANG_CXX"
+        "-DEASYPB_CXX_FLAGS=$CE_CLANG_FLAGS"
+        -DCMAKE_BUILD_TYPE=Debug
+    - name: 'Debug: Build'
+      run: cmake --build build --config Debug
+    - name: 'Debug: Test'
+      working-directory: build
+      run: ctest --build-config Debug
+
+    - name: 'Release: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$CE_CLANG_CXX"
+        "-DEASYPB_CXX_FLAGS=$CE_CLANG_FLAGS"
+        -DCMAKE_BUILD_TYPE=Release
+    - name: 'Release: Build'
+      run: cmake --build build --config Release
+    - name: 'Release: Test'
+      working-directory: build
+      run: ctest --build-config Release
+
+    - name: 'MinSizeRel: Configure CMake'
+      run: >-
+        cmake -S . -B build
+        -DCMAKE_CXX_COMPILER="$CE_CLANG_CXX"
+        "-DEASYPB_CXX_FLAGS=$CE_CLANG_FLAGS"
+        -DCMAKE_BUILD_TYPE=MinSizeRel
+    - name: 'MinSizeRel: Build'
+      run: cmake --build build --config MinSizeRel
+    - name: 'MinSizeRel: Test'
+      working-directory: build
+      run: ctest --build-config MinSizeRel
