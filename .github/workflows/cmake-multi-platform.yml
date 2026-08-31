@@ -293,8 +293,21 @@ jobs:
           - { os: ubuntu-26.04, cpp_compiler: clang++-22, std: "26" }
 
           # Linux: Clang with libc++ instead of the default libstdc++
-          - { os: ubuntu-24.04, cpp_compiler: clang++-20, std: "11", stdlib: libc++, extra_cpp_options: "-stdlib=libc++", extra_packages: "libc++-20-dev libc++abi-20-dev", job_name: "ubuntu-24.04 / clang++-20 + libc++ / C++11" }
-          - { os: ubuntu-24.04, cpp_compiler: clang++-20, std: "17", stdlib: libc++, extra_cpp_options: "-stdlib=libc++", extra_packages: "libc++-20-dev libc++abi-20-dev", job_name: "ubuntu-24.04 / clang++-20 + libc++ / C++17" }
+          - job_name: "ubuntu-24.04 / clang++-20 + libc++ / C++11"
+            os: ubuntu-24.04
+            cpp_compiler: clang++-20
+            std: "11"
+            stdlib: libc++
+            extra_cpp_options: "-stdlib=libc++"
+            extra_packages: "libc++-20-dev libc++abi-20-dev"
+
+          - job_name: "ubuntu-24.04 / clang++-20 + libc++ / C++17"
+            os: ubuntu-24.04
+            cpp_compiler: clang++-20
+            std: "17"
+            stdlib: libc++
+            extra_cpp_options: "-stdlib=libc++"
+            extra_packages: "libc++-20-dev libc++abi-20-dev"
 
           # Linux ARM64: native GitHub-hosted runner
           - { os: ubuntu-24.04-arm, cpp_compiler: g++, std: "11" }
@@ -388,24 +401,52 @@ jobs:
       matrix:
         cpp_compiler: [g++]
         std: ["11", "17"]
-        cpp_options: ["-Wall -Wextra -Wpedantic"]
-        image: ['ubuntu:20.04', 'ubuntu:22.04', 'ubuntu:24.04',
+        # Stable/LTS distributions use their stock GCC by default. Ubuntu 16.04 is added below
+        # as C++11-only because its stock libstdc++ predates the C++17 facilities used by EasyProtoBuf.
+        image: [ #'ubuntu:18.04', -- ubuntu:16.04 and 18.04 requires more work
+                'ubuntu:20.04', 'ubuntu:22.04', 'ubuntu:24.04', 'ubuntu:26.04',
                 'ubuntu:rolling', 'ubuntu:devel',  #'i386/ubuntu', 'i386/ubuntu:22.04',
                 'debian:10', 'debian:11', 'debian:12', 'debian:13', 'debian:testing', 'debian:experimental',
                 'rockylinux:8', 'rockylinux:9', 'rockylinux:10', 'fedora:latest', 'fedora:rawhide',
                 'alpine:3.24']
-        extra_cmake_options: [""]
 
+        include:
+          # Ubuntu LTS stock toolchains. Ubuntu 16.04: GCC 5 / Clang 3.8, C++11 only.
+          #- { image: 'ubuntu:16.04', cpp_compiler: g++,     std: "11" }
+          #- { image: 'ubuntu:16.04', cpp_compiler: clang++, std: "11" }
+
+          # Ubuntu 18.04 through 26.04: add the distribution's stock Clang alongside stock GCC.
+          # Expected default Clang generations: 6, 10, 14, 18, 21 respectively.
+          #- { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "11" }
+          #- { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "17" }
+          - { image: 'ubuntu:20.04', cpp_compiler: clang++, std: "11" }
+          - { image: 'ubuntu:20.04', cpp_compiler: clang++, std: "17" }
+          - { image: 'ubuntu:22.04', cpp_compiler: clang++, std: "11" }
+          - { image: 'ubuntu:22.04', cpp_compiler: clang++, std: "17" }
+          - { image: 'ubuntu:24.04', cpp_compiler: clang++, std: "11" }
+          - { image: 'ubuntu:24.04', cpp_compiler: clang++, std: "17" }
+          - { image: 'ubuntu:26.04', cpp_compiler: clang++, std: "11" }
+          - { image: 'ubuntu:26.04', cpp_compiler: clang++, std: "17" }
+
+          # Debian: keep GCC on every release, and add stock Clang at the old/current stable endpoints.
+          - { image: 'debian:10', cpp_compiler: clang++, std: "11" }
+          - { image: 'debian:10', cpp_compiler: clang++, std: "17" }
+          - { image: 'debian:13', cpp_compiler: clang++, std: "11" }
+          - { image: 'debian:13', cpp_compiler: clang++, std: "17" }
+
+          # Alpine/musl: exercise both GNU and LLVM frontends on the non-glibc Linux platform.
+          - { image: 'alpine:3.24', cpp_compiler: clang++, std: "11" }
+          - { image: 'alpine:3.24', cpp_compiler: clang++, std: "17" }
 
       # Run every matrix combination independently even if another one fails.
       fail-fast: false
 
     env:
+      CPP_OPTIONS: "-Wall -Wextra -Wpedantic"
       CMAKE_CONFIGURE: >-
         cmake -B build
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
-        "-DEASYPB_CXX_FLAGS=-std=c++${{ matrix.std }} ${{ matrix.cpp_options }}"
-        ${{ matrix.extra_cmake_options }}
+        "-DEASYPB_CXX_FLAGS=-std=c++${{ matrix.std }} $CPP_OPTIONS"
         -DCMAKE_BUILD_TYPE=
 
 
@@ -425,16 +466,25 @@ jobs:
       run: |
         yum install -y make gcc-c++
 
-    - name: Install dependencies on Debian
+    - name: Install dependencies on Debian/Ubuntu
       if: contains(matrix.image, 'ubuntu') || contains(matrix.image, 'debian')
       run: |
+        case '${{ matrix.cpp_compiler }}' in
+          g++)      compiler_package='g++' ;;
+          clang++)  compiler_package='clang' ;;
+          *)        compiler_package='${{ matrix.cpp_compiler }}' ;;
+        esac
         apt-get update -y
-        apt-get install -y curl make ${{ matrix.cpp_compiler }}
+        apt-get install -y curl make "$compiler_package"
 
     - name: Install dependencies on Alpine
       if: contains(matrix.image, 'alpine')
       run: |
-        apk add --no-cache build-base cmake git
+        packages='build-base cmake git'
+        if [ '${{ matrix.cpp_compiler }}' = 'clang++' ]; then
+          packages="$packages clang"
+        fi
+        apk add --no-cache $packages
 
     - name: Install CMake
       if: ${{ !contains(matrix.image, 'alpine') }}
