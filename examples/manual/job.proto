@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+enum State {
+  queued = 0;
+  running = 1;
+  finished = 2;
+}
+
+message Attribute {
+  string name = 1;
+  double value = 2;
+}
+
+message Job {
+  uint64 id = 1;
+  State state = 2;
+  repeated sint32 deltas = 3 [packed = true];
+  map<string, uint32> counters = 4;
+  repeated Attribute attributes = 5;
+}

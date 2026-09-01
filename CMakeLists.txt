@@ -47,6 +47,9 @@ target_include_directories(decoder PRIVATE include)
 add_executable(tutorial examples/tutorial/main.cpp)
 target_include_directories(tutorial PRIVATE include)
 
+add_executable(manual_example examples/manual/main.cpp)
+target_include_directories(manual_example PRIVATE include)
+
 # "codegen" became a reserved target name in CMake 3.31. Keep the produced
 # executable name while using a non-reserved internal target name.
 add_executable(easypb_codegen codegen/main.cpp)
