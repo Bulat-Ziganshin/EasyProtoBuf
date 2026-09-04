@@ -243,6 +243,73 @@ if(BUILD_TESTING)
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/parser/test_codegen_modes.cmake)
 
+    # Self-recursive std::vector<T> is already part of Codegen's practical
+    # compiler/library baseline: descriptor.pb.hpp itself contains
+    # std::vector<DescriptorProto> nested_type. Compile the generated repeated
+    # runtime test unconditionally so this remains an explicit regression test.
+    #
+    # Recursive std::map<K, T> has no equivalent standard guarantee, so keep
+    # that runtime test conditional on a configure-time capability probe.
+    include(CheckCXXSourceCompiles)
+    check_cxx_source_compiles([=[
+        #include <map>
+        #include <string>
+        struct MapNode { std::map<std::string, MapNode> children; };
+        int main()
+        {
+            MapNode mapped;
+            mapped.children["child"] = MapNode();
+            return 0;
+        }
+    ]=] EASYPB_HAS_SELF_RECURSIVE_DEFAULT_MAP)
+
+    set(codegen_recursive_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/recursive)
+    set(codegen_recursive_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-recursive)
+    set(codegen_recursive_repeated_header
+        ${codegen_recursive_generated_dir}/recursive-repeated.generated.hpp)
+    set(codegen_recursive_map_header
+        ${codegen_recursive_generated_dir}/recursive-map.generated.hpp)
+
+    add_custom_command(
+        OUTPUT
+            ${codegen_recursive_repeated_header}
+            ${codegen_recursive_map_header}
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/codegen/parser/data
+            -DOUTPUT_DIR=${codegen_recursive_generated_dir}
+            -P ${codegen_recursive_dir}/generate_headers.cmake
+        DEPENDS
+            easypb_codegen
+            ${CMAKE_CURRENT_SOURCE_DIR}/codegen/parser/data/nested-recursive-repeated.pbs
+            ${CMAKE_CURRENT_SOURCE_DIR}/codegen/parser/data/nested-recursive-map.pbs
+            ${codegen_recursive_dir}/generate_headers.cmake
+        VERBATIM)
+    add_custom_target(codegen_recursive_generated
+        DEPENDS
+            ${codegen_recursive_repeated_header}
+            ${codegen_recursive_map_header})
+
+    add_executable(codegen_recursive_repeated_runtime_test
+        ${codegen_recursive_dir}/recursive_repeated_runtime.cpp)
+    add_dependencies(codegen_recursive_repeated_runtime_test codegen_recursive_generated)
+    target_include_directories(codegen_recursive_repeated_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_recursive_generated_dir})
+    add_test(NAME codegen.recursive.repeated.runtime
+        COMMAND codegen_recursive_repeated_runtime_test)
+
+    if(EASYPB_HAS_SELF_RECURSIVE_DEFAULT_MAP)
+        add_executable(codegen_recursive_map_runtime_test
+            ${codegen_recursive_dir}/recursive_map_runtime.cpp)
+        add_dependencies(codegen_recursive_map_runtime_test codegen_recursive_generated)
+        target_include_directories(codegen_recursive_map_runtime_test PRIVATE
+            ${easypb_test_include_dir} ${codegen_recursive_generated_dir})
+        add_test(NAME codegen.recursive.map.runtime
+            COMMAND codegen_recursive_map_runtime_test)
+    endif()
+
     if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
         add_executable(parser_tests codegen/parser/test_parser.cpp)
         target_include_directories(parser_tests PRIVATE

@@ -29,7 +29,17 @@ message Outer {
 
 generates `Outer::Inner` as a nested C++ type.
 
-Acyclic by-value message dependencies are ordered automatically, including forward references between top-level messages and nested siblings. Recursive message-value graphs are currently rejected because Codegen emits message fields and containers as C++ values and does not define an ownership/pointer policy. This is a Codegen restriction, not a parser restriction.
+Acyclic by-value message dependencies are ordered automatically, including forward references between top-level messages and nested siblings.
+
+### Self-recursive containers
+
+By default, recursive message-value graphs are rejected because Codegen emits message fields and containers as C++ values and does not define an ownership/pointer policy. With [`--allow-self-recursive-containers`](OPTIONS.md#structural-options), a message may directly contain itself through a repeated field or as the value of a map. Codegen then emits the ordinary configured C++ container, for example `std::vector<Node>` or `std::map<std::string, Node>`.
+
+The selected C++ container and standard-library implementation must support the incomplete contained type. The C++ standard formally guarantees this for `std::vector` starting with C++17, but the facility predates C++17 in the implementations supported by EasyProtoBuf. In particular, Codegen's own `DescriptorProto` contains `std::vector<DescriptorProto> nested_type`; every CI configuration that builds Codegen therefore already compiles the same self-recursive `std::vector<T>` pattern, including the project's C++11 GCC and Clang/libstdc++ configurations and its pre-C++17 MSVC configurations. The default repeated representation is consequently part of the project's tested C++11 compatibility surface.
+
+Recursive `std::map<K, T>` has no equivalent standard guarantee and is tested separately when the active library accepts it. Custom `--repeated-type` and `--map-type` settings are emitted as requested; Codegen cannot prove that an arbitrary user-selected container supports an incomplete contained or mapped type.
+
+Singular self-recursion, mutual recursion, ancestor recursion, and other recursive message dependency graphs remain rejected. This is a Codegen restriction, not a parser restriction. The container portability responsibility, together with this deliberately narrow recursion scope, is why the feature remains opt-in.
 
 ## Enums
 
@@ -94,7 +104,7 @@ Define insertion macros before including the generated header. See the [Tutorial
 - `oneof` declarations are parsed, but their alternatives are generated as ordinary fields. Codegen does not enforce mutual exclusion or generate a case discriminator.
 - Declared `group` fields are not supported by Codegen. The EasyProtoBuf decoder can skip unknown groups encountered on the wire, but Codegen does not generate group fields or encoders.
 - The embedded parser validates and skips `service` and `rpc` declarations. It also validates `extend` declarations but does not retain them in the trimmed descriptor model. No RPC or extension APIs are generated.
-- Recursive message-value graphs are rejected because generated message fields and containers store values directly; see [Nested messages and declaration ordering](#nested-messages-and-declaration-ordering).
+- Recursive message-value graphs are rejected by default because generated message fields and containers store values directly. Direct self-recursion through a repeated field or map value can be enabled explicitly with `--allow-self-recursive-containers`; other recursive message dependency graphs remain rejected. See [Self-recursive containers](#self-recursive-containers).
 - Generated proto2 required-field checks run at the end of every generated `decode` call rather than once after the complete message has been merged and recursively validated. A singular embedded message whose required fields are split across multiple wire occurrences can therefore be rejected too early. The same issue affects multiple message-value occurrences inside one map entry.
 - Conversely, an omitted message value in a map entry creates a default-initialized mapped object without recursively checking its required fields.
 - A missing proto2 enum map value is value-initialized to zero rather than using the enum's first declared value, and closed-enum validation semantics are not enforced.

@@ -65,6 +65,8 @@ The two options cannot be used together. Without either override, Codegen follow
 
 `-m, --map-type arg (=std::map)` selects the container for map fields. `{0}` and `{1}` are replaced by the key and value types. If no placeholders are present, `<{0},{1}>` is appended. Include the corresponding container header before the generated header.
 
+`--allow-self-recursive-containers` — allow a message type to refer to itself in repeated fields and map values. See [Self-recursive containers](GENERATED_CODE.md#self-recursive-containers) for details.
+
 See [Generated C++ code](GENERATED_CODE.md) for the generated enum/map semantics and optional code insertion macros.
 
 ## Parser utility modes

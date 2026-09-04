@@ -66,18 +66,22 @@ endif()
 
 
 # Nested message definitions are lexical C++ nested types.  Both source and
-# descriptor-set inputs must produce the same output, and recursive by-value
-# message graphs must fail before any partial header is emitted.
+# descriptor-set inputs must produce the same output. Recursive by-value
+# message graphs fail by default before any partial header is emitted; the
+# explicit self-recursive-container mode is tested separately below.
 set(nested_proto "${DATA_DIR}/nested-messages.proto")
 set(nested_pbs "${DATA_DIR}/nested-messages.pbs")
 set(forward_proto "${DATA_DIR}/nested-forward.proto")
 set(forward_pbs "${DATA_DIR}/nested-forward.pbs")
 set(recursive_proto "${DATA_DIR}/nested-recursive.proto")
 set(recursive_pbs "${DATA_DIR}/nested-recursive.pbs")
+set(repeated_recursive_proto "${DATA_DIR}/nested-recursive-repeated.proto")
 set(mutual_pbs "${DATA_DIR}/nested-mutual.pbs")
+set(mutual_containers_proto "${DATA_DIR}/nested-mutual-containers.proto")
 set(ancestor_pbs "${DATA_DIR}/nested-ancestor-recursive.pbs")
 set(lexical_cycle_pbs "${DATA_DIR}/nested-lexical-cycle.pbs")
 set(repeated_recursive_pbs "${DATA_DIR}/nested-recursive-repeated.pbs")
+set(map_recursive_proto "${DATA_DIR}/nested-recursive-map.proto")
 set(map_recursive_pbs "${DATA_DIR}/nested-recursive-map.pbs")
 
 run_ok(nested_pbs_out nested_pbs_err ${CODEGEN} --descriptor-set ${nested_pbs})
@@ -183,6 +187,53 @@ if(NOT map_recursive_out STREQUAL "")
     message(FATAL_ERROR "Recursive message-map emitted partial generated output")
 endif()
 
+# The opt-in mode removes only direct self-recursive repeated/map fields from
+# the C++ definition-dependency graph.  It must not weaken the remaining
+# recursive-value checks.
+run_fail(recursive_allowed_out recursive_allowed_err
+    ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${recursive_pbs})
+if(NOT recursive_allowed_err MATCHES "recursive message value dependency")
+    message(FATAL_ERROR "Singular self recursion unexpectedly changed with opt-in mode: ${recursive_allowed_err}")
+endif()
+
+run_fail(mutual_allowed_out mutual_allowed_err
+    ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${mutual_pbs})
+if(NOT mutual_allowed_err MATCHES "recursive message value dependency")
+    message(FATAL_ERROR "Mutual recursion unexpectedly changed with opt-in mode: ${mutual_allowed_err}")
+endif()
+
+run_fail(ancestor_allowed_out ancestor_allowed_err
+    ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${ancestor_pbs})
+if(NOT ancestor_allowed_err MATCHES "recursive message value dependency")
+    message(FATAL_ERROR "Ancestor recursion unexpectedly changed with opt-in mode: ${ancestor_allowed_err}")
+endif()
+
+run_fail(lexical_allowed_out lexical_allowed_err
+    ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${lexical_cycle_pbs})
+if(NOT lexical_allowed_err MATCHES "recursive message value dependency")
+    message(FATAL_ERROR "Lexical recursion unexpectedly changed with opt-in mode: ${lexical_allowed_err}")
+endif()
+
+run_ok(repeated_recursive_allowed repeated_recursive_allowed_err
+    ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${repeated_recursive_pbs})
+string(FIND "${repeated_recursive_allowed}" "std::vector<RepeatedNode> children;" repeated_recursive_field_pos)
+string(FIND "${repeated_recursive_allowed}" "put_repeated_message(1, x.children)" repeated_recursive_encoder_pos)
+string(FIND "${repeated_recursive_allowed}" "get_repeated_message(&x.children)" repeated_recursive_decoder_pos)
+if(repeated_recursive_field_pos EQUAL -1 OR repeated_recursive_encoder_pos EQUAL -1 OR
+   repeated_recursive_decoder_pos EQUAL -1)
+    message(FATAL_ERROR "Opt-in repeated self recursion generated unexpected C++:\n${repeated_recursive_allowed}")
+endif()
+
+run_ok(map_recursive_allowed map_recursive_allowed_err
+    ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${map_recursive_pbs})
+string(FIND "${map_recursive_allowed}" "std::map<std::string,MapNode> children;" map_recursive_field_pos)
+string(FIND "${map_recursive_allowed}" "put_map_string_message(1, x.children)" map_recursive_encoder_pos)
+string(FIND "${map_recursive_allowed}" "get_map_string_message(&x.children)" map_recursive_decoder_pos)
+if(map_recursive_field_pos EQUAL -1 OR map_recursive_encoder_pos EQUAL -1 OR
+   map_recursive_decoder_pos EQUAL -1)
+    message(FATAL_ERROR "Opt-in map self recursion generated unexpected C++:\n${map_recursive_allowed}")
+endif()
+
 if(FULL_BUILD)
     run_ok(nested_proto_out nested_proto_err ${CODEGEN} ${nested_proto})
     normalize_generated("${nested_pbs_out}" nested_pbs_normalized)
@@ -205,6 +256,29 @@ if(FULL_BUILD)
     if(NOT recursive_proto_out STREQUAL "")
         message(FATAL_ERROR "Recursive source emitted partial generated output")
     endif()
+
+    run_fail(mutual_containers_out mutual_containers_err
+        ${CODEGEN} --allow-self-recursive-containers ${mutual_containers_proto})
+    if(NOT mutual_containers_err MATCHES "recursive message value dependency")
+        message(FATAL_ERROR "Mutual container recursion unexpectedly succeeded: ${mutual_containers_err}")
+    endif()
+
+    run_ok(repeated_recursive_proto_allowed repeated_recursive_proto_allowed_err
+        ${CODEGEN} --allow-self-recursive-containers ${repeated_recursive_proto})
+    normalize_generated("${repeated_recursive_allowed}" repeated_recursive_pbs_normalized)
+    normalize_generated("${repeated_recursive_proto_allowed}" repeated_recursive_proto_normalized)
+    if(NOT repeated_recursive_proto_normalized STREQUAL repeated_recursive_pbs_normalized)
+        message(FATAL_ERROR "Opt-in repeated-recursive .proto and .pbs outputs differ")
+    endif()
+
+    run_ok(map_recursive_proto_allowed map_recursive_proto_allowed_err
+        ${CODEGEN} --allow-self-recursive-containers ${map_recursive_proto})
+    normalize_generated("${map_recursive_allowed}" map_recursive_pbs_normalized)
+    normalize_generated("${map_recursive_proto_allowed}" map_recursive_proto_normalized)
+    if(NOT map_recursive_proto_normalized STREQUAL map_recursive_pbs_normalized)
+        message(FATAL_ERROR "Opt-in map-recursive .proto and .pbs outputs differ")
+    endif()
+
     run_ok(src2 src2_err ${CODEGEN} ${proto2})
     normalize_generated("${src2}" src2_norm)
     normalize_generated("${pbs2_explicit}" pbs2_norm)

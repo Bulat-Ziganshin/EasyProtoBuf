@@ -10,6 +10,7 @@ The generated data types do not inherit from runtime classes and do not require 
 - Generate top-level and nested messages, enums, repeated fields, and maps with scalar, enum, or message values.
 - Generate presence tracking, proto2 required-field checks, schema defaults, and packed repeated-field codecs.
 - Customize string, repeated-field, and map C++ types, or generate codecs for existing C++ types.
+- Optionally generate direct self-recursive repeated/map message containers with [`--allow-self-recursive-containers`](OPTIONS.md#structural-options).
 - Build with the embedded `.proto` parser or as a smaller descriptor-set-only executable.
 
 ## Basic use

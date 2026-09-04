@@ -21,6 +21,7 @@ struct
     bool no_default_values = false;
     bool packed = false;
     bool no_packed = false;
+    bool allow_self_recursive_containers = false;
     std::string cpp_string_type;
     std::string cpp_repeated_type;
     std::string cpp_map_type;
@@ -462,6 +463,9 @@ const MapType* find_map_type(const FieldDescriptorProto& field,
 // `children` contains lexical nested messages but deliberately excludes synthetic
 // map-entry messages.  Objects live inside the root `std::vector<MessageInfo>`;
 // pointers stored in `dependencies` are filled only after that tree is complete.
+// `dependencies` is the C++ definition-dependency graph: it contains only
+// references whose target type must be complete before this message definition
+// is emitted, not necessarily every Protobuf type reference.
 struct MessageInfo
 {
     const DescriptorProto* descriptor = nullptr;
@@ -568,6 +572,30 @@ void add_dependency(MessageInfo& source, MessageInfo* target)
 }
 
 
+// Return whether this field requires the target C++ message definition to be
+// complete before the owning message can be emitted.  Today the only exception
+// is an explicitly enabled direct self-reference through a repeated field or a
+// map value.  Keeping this as a semantic decision point also leaves room for
+// future indirect/pointer-like message storage, which likewise may not require
+// a complete target type at structure-definition time.
+bool requires_definition_dependency(const MessageInfo& owner,
+                                    const FieldDescriptorProto& field,
+                                    const FieldDescriptorProto& dependency_field,
+                                    const MapType* map_type,
+                                    const MessageInfo* target)
+{
+    if (option.allow_self_recursive_containers &&
+        target == &owner &&
+        dependency_field.type == FieldDescriptorProto::TYPE_MESSAGE &&
+        (map_type || field.label == FieldDescriptorProto::LABEL_REPEATED))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+
 // Resolve the message definition required by a field's user-defined type.
 // Message fields need their target message, while nested enum fields need the
 // message that owns the enum. Top-level enums have no message dependency.
@@ -611,7 +639,11 @@ void resolve_message_dependencies(MessageInfo& info,
         MessageInfo* target = find_type_owner(dependency_field, index);
         if (! target) continue;
 
+        const bool needs_definition = requires_definition_dependency(
+            info, field, dependency_field, map_type, target);
+
         if (dependency_field.type == FieldDescriptorProto::TYPE_MESSAGE &&
+            needs_definition &&
             is_ancestor_message(*target, info))
         {
             throw std::runtime_error(
@@ -626,7 +658,9 @@ void resolve_message_dependencies(MessageInfo& info,
         {
             continue;
         }
-        add_dependency(info, target);
+        if (needs_definition) {
+            add_dependency(info, target);
+        }
     }
 
     for (auto& child: info.children) {

@@ -191,6 +191,10 @@ CommandLine parse_cmdline(int argc, char** argv)
         "p", "packed", "make all repeated fields packed when allowed", &option.packed);
     auto no_packed_option = parser.add<Switch>(
         "", "no-packed", "make all repeated fields non-packed", &option.no_packed);
+    auto allow_self_recursive_containers_option = parser.add<Switch>(
+        "", "allow-self-recursive-containers",
+        "allow direct self-recursive repeated/map message fields",
+        &option.allow_self_recursive_containers);
 
     auto string_type_option = parser.add<Value<std::string> >(
         "s", "string-type", "C++ type for string/bytes fields",
@@ -257,6 +261,7 @@ CommandLine parse_cmdline(int argc, char** argv)
         no_encoder_option->is_set() || no_has_option->is_set() ||
         no_required_option->is_set() || no_defaults_option->is_set() ||
         packed_option->is_set() || no_packed_option->is_set() ||
+        allow_self_recursive_containers_option->is_set() ||
         string_type_option->is_set() || repeated_type_option->is_set() ||
         map_type_option->is_set();
     if (command.action != ACTION_GENERATE && generation_option_set) {

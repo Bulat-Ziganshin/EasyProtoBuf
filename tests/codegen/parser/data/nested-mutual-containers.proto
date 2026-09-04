@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+message ContainerA {
+  repeated ContainerB bs = 1;
+}
+
+message ContainerB {
+  repeated ContainerA as = 1;
+}
