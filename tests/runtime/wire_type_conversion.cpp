@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <iostream>
@@ -84,7 +85,7 @@ void test_packed_writer_converts_to_protobuf_type()
 {
     {
         easypb::Encoder encoder;
-        const std::vector<int64_t> values(1, -1);
+        const std::vector<int64_t> values(std::size_t(1), -1);
         encoder.put_packed_uint32(1, values);
         expect_packed_payload(encoder.result(),
                               bytes({0xff, 0xff, 0xff, 0xff, 0x0f}),
@@ -103,7 +104,7 @@ void test_packed_writer_converts_to_protobuf_type()
 
     {
         easypb::Encoder encoder;
-        const std::vector<int64_t> values(1, 1);
+        const std::vector<int64_t> values(std::size_t(1), 1);
         encoder.put_packed_sfixed32(1, values);
         expect_packed_payload(encoder.result(), bytes({0x01, 0x00, 0x00, 0x00}),
                               "packed sfixed32 writes four bytes per converted value");
@@ -111,7 +112,7 @@ void test_packed_writer_converts_to_protobuf_type()
 
     {
         easypb::Encoder encoder;
-        const std::vector<uint32_t> values(1, 1);
+        const std::vector<uint32_t> values(std::size_t(1), 1);
         encoder.put_packed_fixed64(1, values);
         expect_packed_payload(encoder.result(),
                               bytes({0x01, 0x00, 0x00, 0x00,
@@ -129,7 +130,7 @@ void test_packed_writer_converts_to_protobuf_type()
 
     {
         easypb::Encoder encoder;
-        const std::vector<int> values(1, 2);
+        const std::vector<int> values(std::size_t(1), 2);
         encoder.put_packed_bool(1, values);
         expect_packed_payload(encoder.result(), bytes({0x01}),
                               "packed bool canonicalizes converted values");

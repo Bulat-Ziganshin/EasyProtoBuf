@@ -13,8 +13,31 @@ using FixedString = std::string;
 template <class T>
 using MessageBox = T;
 
+// GCC 4.7 crashes when an alias template of a nested enum is used as a data
+// member. A wrapper keeps this placeholder test portable while exercising the
+// conversions required by the generated enum codec.
 template <class T>
-using EnumBox = T;
+class EnumBox
+{
+public:
+    EnumBox(int32_t value) : value_(static_cast<T>(value)) {}
+
+    EnumBox& operator=(T value)
+    {
+        value_ = value;
+        return *this;
+    }
+
+    operator T() const { return value_; }
+
+    bool operator!=(const EnumBox& other) const
+    {
+        return value_ != other.value_;
+    }
+
+private:
+    T value_;
+};
 
 template <class T, std::size_t N>
 using SmallVector = std::deque<T>;
