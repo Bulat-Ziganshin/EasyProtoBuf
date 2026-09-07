@@ -49,12 +49,12 @@ Portability:
 but it can be improved to support other CPUs and compile-time detection
 
 CI: while the final goal is to support any C++11 compiler, the current test matrix covers:
-- Linux: GCC 4.7..16 and Clang 3.1..22 on x64, including C++17 tests from GCC 8 and Clang 5 onward; current Clang is also tested with libc++, and Ubuntu 24.04 is tested natively on ARM64.
-- Linux distributions: stock GCC/Clang toolchains on Ubuntu 16.04..26.04, Debian 10..13, Rocky Linux 8..10, Fedora, and Alpine/musl, plus rolling/development distribution images.
-- macOS: Apple Clang on macOS 15 and 26, both ARM64 and Intel.
-- Windows: MSVC from Visual Studio 2013 (v120) through Visual Studio 2026 (v145), in both x64 and x86 modes. VS2013 is tested separately on AppVeyor; newer toolsets use GitHub Actions. Windows x86 is currently the only 32-bit target.
-- Language modes: C++11 and C++17 across the compiler matrix where supported, plus C++20/23/26-era modes on the latest GCC, Clang, and MSVC toolsets.
-- Big-endian CPUs: support is implemented, but has not been tested yet.
+- Linux: GCC 4.7..16 and Clang 3.1..22 on x64, including C++17 tests from GCC 8 and Clang 5 onward; current Clang is also tested with libc++, and Ubuntu 24.04/26.04 are tested natively on ARM64
+- Linux distributions: stock GCC/Clang toolchains on Ubuntu 16.04..26.04, Debian 10..13, Rocky Linux 8..10, Fedora, and Alpine/musl, plus rolling/development distribution images
+- macOS: Apple Clang on macOS 15 and 26, both ARM64 and Intel
+- Windows: MSVC from Visual Studio 2013 (v120) through Visual Studio 2026 (v145), in both x64 and x86 modes. VS2013 is tested separately on AppVeyor; newer toolsets use GitHub Actions. Windows x86 is currently the only 32-bit target
+- Language modes: C++11 and C++17 across the compiler matrix where supported, plus C++20/23/26-era modes on the latest GCC, Clang, and MSVC toolsets
+- Big-endian CPUs: support is implemented, but has not been tested yet
 - planned:
   - extend the architecture matrix with big-endian and additional non-x86 targets, using the CI approaches of [protozero][] and [xxHash][] as references.
 

@@ -301,9 +301,11 @@ jobs:
             extra_cpp_options: "-stdlib=libc++"
             extra_packages: "libc++-20-dev libc++abi-20-dev"
 
-          # Linux ARM64: native GitHub-hosted runner
+          # Linux ARM64: native GitHub-hosted runners
           - { os: ubuntu-24.04-arm, cpp_compiler: g++, std: "11" }
           - { os: ubuntu-24.04-arm, cpp_compiler: g++, std: "17" }
+          - { os: ubuntu-26.04-arm, cpp_compiler: g++, std: "11" }
+          - { os: ubuntu-26.04-arm, cpp_compiler: g++, std: "17" }
 
           # macOS 15/26: ARM64 and Intel runners
           - { os: macos-15, cpp_compiler: clang++, std: "11" }
