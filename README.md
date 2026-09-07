@@ -21,24 +21,27 @@ Library features:
 - map fields can be stored in any C++ container similar enough to std::map
 - limited `group` support: unknown groups are skipped during decoding, but declaring and encoding groups is not supported
 - [protozero][] is a production-grade library with a similar API
+- planned:
+  - encoding and decoding support for pointer-backed message fields
 
 [Codegen](codegen) features:
 - generates C++ structures/enums and `encode`/`decode` implementations for top-level and nested types
 - supports map fields with scalar, enum and message values, including nested message values
 - the generated decoder checks the presence of required fields in the decoded message
 - command-line options to tailor the generated code
-- per-field C++ type templates through the `(easypb.cpp).type` Protobuf custom option
+- per-field control of packed encoding, default values, and generated C++ types
 - planned:
-  - support for oneof fields
+  - complete import handling and package-to-C++ namespace mapping
   - protoc plugin
+  - support for oneof fields
   - validation of enum, integer and bool values by the generated code
 
-Files:
+Files and directories:
 - [easypb.hpp](include/easypb.hpp) - the entire library
+- [Tutorial](docs/tutorial.md) - learn how to use the library
+- [Manual](docs/manual.md) - user guide to the library
 - [Codegen](codegen) - generates C++ structures and (de)coders from `.proto` source files or `.pbs` descriptor sets
-- [Tutorial](examples/tutorial) - learn how to use the library
-- [Decoder](examples/decoder) - schema-less decoder of arbitrary ProtoBuf messages
-- [File-tree benchmark](examples/filetree) - demonstrates around 600 MB/s serialization and deserialization throughput
+- [Examples](examples) - sample programs demonstrating the library and Codegen
 
 Portability:
 - we target compatibility with any C++11 compiler, in particular gcc 4.7+, clang 3.1+, and msvc 2013+
@@ -103,7 +106,7 @@ Person person2 = easypb::decode<Person>(protobuf_msg);
 ```
 
 And that's all you need to know to start using the library.
-See the technical details in the [Tutorial](examples/tutorial).
+For more details, see the [Tutorial](docs/tutorial.md) and [Manual](docs/manual.md).
 
 
 
