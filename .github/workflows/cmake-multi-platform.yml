@@ -403,8 +403,7 @@ jobs:
         std: ["11", "17"]
         # Stable/LTS distributions use their stock GCC by default. Ubuntu 16.04 is added below
         # as C++11-only because its stock libstdc++ predates the C++17 facilities used by EasyProtoBuf.
-        image: [ #'ubuntu:18.04', -- ubuntu:16.04 and 18.04 requires more work
-                'ubuntu:20.04', 'ubuntu:22.04', 'ubuntu:24.04', 'ubuntu:26.04',
+        image: ['ubuntu:18.04', 'ubuntu:20.04', 'ubuntu:22.04', 'ubuntu:24.04', 'ubuntu:26.04',
                 'ubuntu:rolling', 'ubuntu:devel',  #'i386/ubuntu', 'i386/ubuntu:22.04',
                 'debian:10', 'debian:11', 'debian:12', 'debian:13', 'debian:testing', 'debian:experimental',
                 'rockylinux:8', 'rockylinux:9', 'rockylinux:10', 'fedora:latest', 'fedora:rawhide',
@@ -412,13 +411,13 @@ jobs:
 
         include:
           # Ubuntu LTS stock toolchains. Ubuntu 16.04: GCC 5 / Clang 3.8, C++11 only.
-          #- { image: 'ubuntu:16.04', cpp_compiler: g++,     std: "11" }
-          #- { image: 'ubuntu:16.04', cpp_compiler: clang++, std: "11" }
+          - { image: 'ubuntu:16.04', cpp_compiler: g++,     std: "11" }
+          - { image: 'ubuntu:16.04', cpp_compiler: clang++, std: "11" }
 
           # Ubuntu 18.04 through 26.04: add the distribution's stock Clang alongside stock GCC.
           # Expected default Clang generations: 6, 10, 14, 18, 21 respectively.
-          #- { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "11" }
-          #- { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "17" }
+          - { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "11" }
+          - { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "17" }
           - { image: 'ubuntu:20.04', cpp_compiler: clang++, std: "11" }
           - { image: 'ubuntu:20.04', cpp_compiler: clang++, std: "17" }
           - { image: 'ubuntu:22.04', cpp_compiler: clang++, std: "11" }
@@ -506,7 +505,22 @@ jobs:
         uname -m
         cat /etc/os-release
 
+    # JavaScript actions run inside job containers. checkout@v6 uses Node 24, whose runner-provided
+    # binary requires glibc 2.28; Xenial (2.23) and Bionic (2.27) cannot execute it. Download the
+    # exact source archive instead, using the workflow's existing contents:read permission.
+    - name: Checkout source on Ubuntu 16.04/18.04
+      if: matrix.image == 'ubuntu:16.04' || matrix.image == 'ubuntu:18.04'
+      env:
+        EASYPB_CI_TOKEN: ${{ github.token }}
+      run: |
+        curl -fsSL \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer $EASYPB_CI_TOKEN" \
+          "https://api.github.com/repos/$GITHUB_REPOSITORY/tarball/$GITHUB_SHA" \
+          | tar -xz --strip-components=1
+
     - uses: actions/checkout@v6
+      if: matrix.image != 'ubuntu:16.04' && matrix.image != 'ubuntu:18.04'
 
     - name: 'Debug: Configure CMake'
       run: ${{ env.CMAKE_CONFIGURE }}Debug
