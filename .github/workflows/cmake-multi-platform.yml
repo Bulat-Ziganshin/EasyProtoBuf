@@ -313,11 +313,15 @@ jobs:
           - { os: ubuntu-24.04-arm, cpp_compiler: g++, std: "11" }
           - { os: ubuntu-24.04-arm, cpp_compiler: g++, std: "17" }
 
-          # macOS: explicit ARM64 and Intel runners
-          - { os: macos-26, cpp_compiler: clang++, std: "11" }
-          - { os: macos-26, cpp_compiler: clang++, std: "17" }
+          # macOS 15/26: ARM64 and Intel runners
+          - { os: macos-15, cpp_compiler: clang++, std: "11" }
+          - { os: macos-15, cpp_compiler: clang++, std: "17" }
           - { os: macos-15-intel, cpp_compiler: clang++, std: "11" }
           - { os: macos-15-intel, cpp_compiler: clang++, std: "17" }
+          - { os: macos-26, cpp_compiler: clang++, std: "11" }
+          - { os: macos-26, cpp_compiler: clang++, std: "17" }
+          - { os: macos-26-intel, cpp_compiler: clang++, std: "11" }
+          - { os: macos-26-intel, cpp_compiler: clang++, std: "17" }
 
     env:
       CPP_OPTIONS: "-Wall -Wextra -Wpedantic"
