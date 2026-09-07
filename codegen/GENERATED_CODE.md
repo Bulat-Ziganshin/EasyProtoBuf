@@ -51,11 +51,6 @@ Singular fields using an enum declared in the selected file are initialized to t
 
 For an imported enum whose definition is absent from the descriptor set, Codegen preserves an explicit default when available but cannot infer the first declared value. Without an explicit default, it emits no initializer for that field. `--no-default-values` also removes an explicit imported-enum default.
 
-## Repeated and map fields
-
-By default, repeated fields use `std::vector` and map fields use `std::map`. These container templates can be changed with [`--repeated-type`](OPTIONS.md#c-type-options) and [`--map-type`](OPTIONS.md#c-type-options).
-
-Codegen supports scalar, enum and message map values. Message-valued maps may use either top-level or nested message types. Synthetic map-entry messages are descriptor details and are not emitted as user-visible C++ structures.
 
 ## Presence, required fields, and defaults
 
@@ -71,7 +66,166 @@ Eligible repeated numeric fields can be encoded in packed or unpacked form. [`--
 
 `--no-class` suppresses generated structures and enum declarations while leaving the codec overloads available. This can be used to adapt existing C++ types: declare the required message and enum types first, then include the generated output containing only the external codec overloads.
 
-The generated field types themselves can also be customized with `--string-type`, `--repeated-type`, and `--map-type`; see [Command-line options](OPTIONS.md#c-type-options).
+## Base C++ type generation
+
+Before applying a field/container template, Codegen determines the base C++ type corresponding to each singular Protobuf type:
+
+| Protobuf type | Base C++ type |
+|---|---|
+| `int32`, `sint32`, `sfixed32` | `int32_t` |
+| `int64`, `sint64`, `sfixed64` | `int64_t` |
+| `uint32`, `fixed32` | `uint32_t` |
+| `uint64`, `fixed64` | `uint64_t` |
+| `double` | `double` |
+| `float` | `float` |
+| `bool` | `bool` |
+| `string`, `bytes` | `--string-type`, `std::string` by default |
+| enum | generated C++ enum type |
+| message | generated C++ message type |
+
+For enum and message types, Codegen starts from the fully qualified Protobuf type name and preserves lexical nesting in the generated C++ name. The current file's package prefix is removed and Protobuf name separators become `::`, so `.pkg.Outer.Inner` becomes `Outer::Inner`. A type from another package remains absolute, for example `.other.Type` becomes `::other::Type`. See [Packages and C++ namespaces](#packages-and-c-namespaces) and [Nested messages and declaration ordering](#nested-messages-and-declaration-ordering).
+
+This base type is used directly by ordinary singular fields and as the component type substituted into repeated and map field templates.
+
+## C++ field type generation
+
+To use a per-field C++ type in a schema that is also processed by `protoc`, import the EasyProtoBuf option definition:
+
+```proto
+syntax = "proto3";
+
+import "easypb/options.proto";
+
+message Example {
+    repeated int32 values = 1
+        [(easypb.cpp).type = "SmallVector<{}, 4>"];
+}
+```
+
+`easypb/options.proto` is distributed as `codegen/easypb/options.proto`, so the `codegen` directory is the include root for `protoc`. For example:
+
+```sh
+protoc \
+    -I . \
+    -I /path/to/EasyProtoBuf/codegen \
+    --descriptor_set_out=example.pbs \
+    example.proto
+```
+
+Do not add `--include_imports`: Codegen currently requires each descriptor set to contain exactly one `FileDescriptorProto`. The embedded `.proto` parser recognizes the EasyProtoBuf option directly and does not need to load `easypb/options.proto`.
+
+The C++ type of each field is generated from its Protobuf type using a type template. The template is selected according to the field category:
+
+<table>
+<thead>
+<tr>
+<th>Field category</th>
+<th>Built-in template</th>
+<th>Global override</th>
+<th>Per-field override</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>singular</td>
+<td><code>{0}</code></td>
+<td><code>--string-type</code> for <code>string</code> and <code>bytes</code></td>
+<td rowspan="3"><code>(easypb.cpp).type</code></td>
+</tr>
+<tr>
+<td>repeated</td>
+<td><code>std::vector&lt;{0}&gt;</code></td>
+<td><code>--repeated-type</code></td>
+</tr>
+<tr>
+<td>map</td>
+<td><code>std::map&lt;{0}, {1}&gt;</code></td>
+<td><code>--map-type</code></td>
+</tr>
+</tbody>
+</table>
+
+A per-field template takes precedence over the corresponding global or built-in template. Choosing a per-field template for a repeated or map field does not bypass normal generation of its component C++ types: those component types are what get substituted into the selected template.
+
+For a **singular field**, `{0}` is the C++ type that Codegen normally generates for its Protobuf type, as described above. For message fields this is the generated message type with the appropriate qualification for namespaces and nested types.
+
+For a **repeated field**, `{0}` is the C++ type that Codegen would generate for its element as a singular field. For example, a repeated message field uses the generated C++ message type, while a repeated `string` field uses the C++ string type selected by `--string-type` or its default.
+
+For a **map field**, `{0}` and `{1}` are the C++ types that Codegen would generate for the key and value respectively as singular fields.
+
+Codegen supports scalar, enum, and message map values. Message-valued maps may use either top-level or nested message types. Synthetic map-entry messages are descriptor details and are not emitted as user-visible C++ structures.
+
+Unnumbered `{}` placeholders in templates are interpreted in order: the first is `{0}`, the second is `{1}`, and so on.
+
+If no placeholder is present in a command-line option, `<{}>` is appended for `--repeated-type` and `<{0},{1}>` for `--map-type`.
+
+A per-field `(easypb.cpp).type` value is always treated as a complete type template. Unlike the command-line repeated/map options, Codegen does not append template arguments when a per-field value contains no placeholders.
+
+For example:
+
+```proto
+message Example {
+    message Item {...}
+
+    string name = 1;
+    Item item = 2;
+    repeated string aliases = 3;
+    repeated Item items = 4;
+    map<string, Item> items_by_name = 5;
+}
+```
+
+With the default settings, Codegen generates:
+
+```cpp
+    std::string name;
+    Example::Item item;
+    std::vector<std::string> aliases;
+    std::vector<Example::Item> items;
+    std::map<std::string, Example::Item> items_by_name;
+```
+
+Using command-line type templates:
+
+```sh
+codegen \
+    --string-type 'MyString' \
+    --repeated-type 'SmallVector<{}>' \
+    --map-type 'FlatMap' \
+    example.proto
+```
+
+produces:
+
+```cpp
+    MyString name;
+    Example::Item item;
+    SmallVector<MyString> aliases;
+    SmallVector<Example::Item> items;
+    FlatMap<MyString, Example::Item> items_by_name;
+```
+
+Individual fields can override these templates:
+
+```proto
+    string name = 1                      [(easypb.cpp).type = "FixedString<64>"];
+    Item item = 2                        [(easypb.cpp).type = "std::unique_ptr<{}>"];
+    repeated string aliases = 3          [(easypb.cpp).type = "SmallVector<{}, 4>"];
+    repeated Item items = 4              [(easypb.cpp).type = "std::deque<{}>"];
+    map<string, Item> items_by_name = 5  [(easypb.cpp).type = "FlatMap<{}, {}>"];
+```
+
+With the default settings, this generates:
+
+```cpp
+    FixedString<64> name;
+    std::unique_ptr<Example::Item> item;
+    SmallVector<std::string, 4> aliases;
+    std::deque<Example::Item> items;
+    FlatMap<std::string, Example::Item> items_by_name;
+```
+
+The selected C++ type does not change the Protobuf field type or the generated codec. Custom types therefore still have to support the operations required by the corresponding EasyProtoBuf encoder and decoder.
 
 ## Code insertion points
 

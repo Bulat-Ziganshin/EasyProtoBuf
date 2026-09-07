@@ -48,11 +48,26 @@ struct EnumDescriptorProto
 };
 
 
+// EasyProtoBuf-specific field options. The extension number is mirrored by
+// codegen/easypb/options.proto so .proto parsing and .pbs decoding normalize
+// into the same trimmed descriptor representation.
+enum { EASYPB_CPP_FIELD_OPTIONS_NUMBER = 52777 };
+
+struct CppFieldOptions
+{
+    str_view type;
+
+    bool has_type = false;
+};
+
+
 struct FieldOptions
 {
     bool packed = false;
+    CppFieldOptions cpp;
 
     bool has_packed = false;
+    bool has_cpp = false;
 };
 
 
@@ -192,6 +207,19 @@ inline void decode(easypb::Decoder pb, EnumDescriptorProto &x)
 }
 
 
+inline void decode(easypb::Decoder pb, CppFieldOptions &x)
+{
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 1: pb.get_string(&x.type, &x.has_type); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
 inline void decode(easypb::Decoder pb, FieldOptions &x)
 {
     while(pb.get_next_field())
@@ -199,6 +227,8 @@ inline void decode(easypb::Decoder pb, FieldOptions &x)
         switch(pb.field_num)
         {
             case 2: pb.get_bool(&x.packed, &x.has_packed); break;
+            case EASYPB_CPP_FIELD_OPTIONS_NUMBER:
+                pb.get_message(&x.cpp, &x.has_cpp); break;
             default: pb.skip_field();
         }
     }

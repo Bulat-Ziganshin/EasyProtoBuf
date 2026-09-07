@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+import "easypb/options.proto";
+
+message TemplateCases {
+    bytes data = 1 [(.easypb.cpp).type = "BytesBox<{0}>"];
+    repeated int32 values = 2 [(easypb.cpp).type = "NumberedVec<{0}>"];
+    map<int32, string> swapped = 3 [(easypb.cpp).type = "ReorderedMap<{1}, {0}>"];
+}

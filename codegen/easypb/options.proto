@@ -1,0 +1,16 @@
+syntax = "proto2";
+
+package easypb;
+
+import "google/protobuf/descriptor.proto";
+
+// C++-specific storage customization understood by EasyProtoBuf Codegen.
+message CppFieldOptions {
+    optional string type = 1;
+}
+
+// Experimental extension number. Reserve a globally unique public number
+// before treating this schema as a stable external format.
+extend google.protobuf.FieldOptions {
+    optional CppFieldOptions cpp = 52777;
+}

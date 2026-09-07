@@ -27,11 +27,11 @@ Library features:
 - supports map fields with scalar, enum and message values, including nested message values
 - the generated decoder checks the presence of required fields in the decoded message
 - command-line options to tailor the generated code
+- per-field C++ type templates through the `(easypb.cpp).type` Protobuf custom option
 - planned:
   - support for oneof fields
   - protoc plugin
   - validation of enum, integer and bool values by the generated code
-  - per-field C++ type specification
 
 Files:
 - [easypb.hpp](include/easypb.hpp) - the entire library

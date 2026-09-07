@@ -38,6 +38,7 @@ descriptor.pb.hpp decoder|
 - [`main.cpp`](main.cpp) — command-line parser, input-mode selection, file I/O, descriptor decoding, parser diagnostics, and utility-mode dispatch.
 - [`codegen.cpp`](codegen.cpp) — translates `FileDescriptorProto` into C++ code.
 - [`descriptor.pb.hpp`](descriptor.pb.hpp) — internal trimmed C++ representation and EasyProtoBuf decoders for [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto).
+- [`easypb/options.proto`](easypb/options.proto) — EasyProtoBuf's Protobuf custom-option schema, currently including the per-field C++ type template.
 - [`parser/`](parser/) — `.proto` lexer/parser, descriptor pretty-printer, and parser benchmark helper.
 - [`parser/README.md`](parser/README.md) — parser API, lifetime and unresolved-import behavior.
 - [`parser/grammar/`](parser/grammar/) — formal grammar and semantic notes.
@@ -87,6 +88,8 @@ Both frontends therefore produce data in the same model:
 
 - `.proto` input: parser constructs the descriptor tree directly;
 - `.pbs` input: EasyProtoBuf decodes the `FileDescriptorSet`, after which `main.cpp` requires exactly one `FileDescriptorProto`.
+
+Recognized EasyProtoBuf field options are preserved in this common descriptor model. For `.pbs` input, the descriptor decoder recognizes EasyProtoBuf's fixed extension number directly; Codegen does not implement a general Protobuf extension registry.
 
 ## Tests
 

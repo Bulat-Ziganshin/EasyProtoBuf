@@ -268,19 +268,30 @@ std::string protobuf_type_as_str(const FieldDescriptorProto& field, const MapTyp
 // Return C++ type for the Protobuf field
 std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* map_type)
 {
-    auto basetype_str = base_cpp_type_as_str(field);
+    const bool has_cpp_type =
+        field.has_options && field.options.has_cpp && field.options.cpp.has_type;
+
+    if (has_cpp_type && field.options.cpp.type.empty()) {
+        throw std::runtime_error(
+            myformat("EasyProtoBuf C++ type option for field '{0}' must not be empty",
+                     field.name));
+    }
 
     if (map_type) {
-        return myformat(option.cpp_map_type,
+        return myformat(has_cpp_type ? field.options.cpp.type : option.cpp_map_type,
                         base_cpp_type_as_str(*map_type->key_field),
                         base_cpp_type_as_str(*map_type->value_field));
     }
 
+    const std::string basetype_str = base_cpp_type_as_str(field);
+
     if (is_repeated(field)) {
-        return myformat(option.cpp_repeated_type, basetype_str);
-    } else {
-        return basetype_str;
+        return myformat(has_cpp_type ? field.options.cpp.type : option.cpp_repeated_type,
+                        basetype_str);
     }
+
+    return has_cpp_type ? myformat(field.options.cpp.type, basetype_str)
+                        : basetype_str;
 }
 
 

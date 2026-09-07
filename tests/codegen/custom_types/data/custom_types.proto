@@ -1,0 +1,29 @@
+syntax = "proto3";
+package easypb.test;
+
+import "easypb/options.proto";
+
+message CustomTypes {
+    message Item {
+        int32 value = 1;
+    }
+
+    enum Kind {
+        ZERO = 0;
+        ONE = 1;
+    }
+
+    string ordinary_name = 1;
+    repeated string ordinary_aliases = 2;
+    map<string, Item> ordinary_items = 3;
+
+    string custom_name = 4                    [(easypb.cpp).type = "FixedString<64>"];
+    Item item = 5                             [(easypb.cpp).type = "MessageBox<{}>"];
+    repeated string aliases = 6               [(easypb.cpp).type = "SmallVector<{}, 4>"];
+    repeated Item items = 7                   [(easypb.cpp).type = "std::deque<{}>"];
+    map<string, Item> items_by_name = 8       [(easypb.cpp).type = "std::unordered_map<{}, {}>"];
+    int32 scalar = 9                          [(easypb.cpp).type = "WrappedInt"];
+    Kind kind = 10                            [(easypb.cpp).type = "EnumBox<{}>"];
+    repeated int32 opaque_values = 11         [(easypb.cpp).type = "OpaqueRepeated"];
+    map<string, int32> opaque_map = 12        [(easypb.cpp).type = "OpaqueMap"];
+}

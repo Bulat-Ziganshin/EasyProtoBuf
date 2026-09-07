@@ -749,8 +749,12 @@ struct FieldOptionState
     Constant default_value;
     bool has_packed;
     bool packed;
+    bool has_cpp_type;
+    std::string cpp_type;
 
-    FieldOptionState() : has_default(false), has_packed(false), packed(false) {}
+    FieldOptionState()
+        : has_default(false), has_packed(false), packed(false),
+          has_cpp_type(false) {}
 };
 
 struct NumberRange
@@ -959,7 +963,9 @@ private:
     {
         if (!accept_symbol('(')) return identifier();
 
-        std::string part = "(" + full_identifier(true);
+        std::string identifier = full_identifier(true);
+        if (!identifier.empty() && identifier[0] == '.') identifier.erase(0, 1);
+        std::string part = "(" + identifier;
         expect_symbol(')');
         part += ")";
         return part;
@@ -1115,8 +1121,9 @@ private:
     }
 
     // FieldOptions <- "[" FieldOption ("," FieldOption)* "]"
-    // Only default and packed affect the trimmed descriptor; other options are
-    // still parsed as OptionName "=" Constant and then ignored.
+    // Standard options used by Codegen plus the EasyProtoBuf C++ type option
+    // are retained in the trimmed descriptor. Other options are still parsed
+    // as OptionName "=" Constant and then ignored.
     FieldOptionState field_options()
     {
         FieldOptionState state;
@@ -1137,6 +1144,28 @@ private:
                 }
                 state.has_packed = true;
                 state.packed = value.text == "true";
+            } else if (name == "(easypb.cpp).type") {
+                if (state.has_cpp_type) {
+                    throw ParseFailure(option_location,
+                        "duplicate EasyProtoBuf C++ type option");
+                }
+                if (value.kind != Constant::STRING_VALUE) {
+                    throw ParseFailure(value.location,
+                        "EasyProtoBuf C++ type option must be a string literal");
+                }
+                if (value.text.empty()) {
+                    throw ParseFailure(value.location,
+                        "EasyProtoBuf C++ type must not be empty");
+                }
+                state.has_cpp_type = true;
+                state.cpp_type = value.text;
+            } else if (name == "(easypb.cpp)") {
+                throw ParseFailure(option_location,
+                    "use (easypb.cpp).type = \"...\" instead of assigning "
+                    "(easypb.cpp) directly");
+            } else if (name.compare(0, 13, "(easypb.cpp).") == 0) {
+                throw ParseFailure(option_location,
+                    "unknown EasyProtoBuf C++ field option " + name);
             }
         } while (accept_symbol(','));
         expect_symbol(']');
@@ -1315,6 +1344,12 @@ private:
             field.options.has_packed = true;
             field.has_options = true;
         }
+        if (options.has_cpp_type) {
+            field.options.cpp.type = out_.strings.save(options.cpp_type);
+            field.options.cpp.has_type = true;
+            field.options.has_cpp = true;
+            field.has_options = true;
+        }
         return field;
     }
 
@@ -1387,6 +1422,12 @@ private:
         field.has_type = true;
         field.type_name = out_.strings.save(entry_name);
         field.has_type_name = true;
+        if (options.has_cpp_type) {
+            field.options.cpp.type = out_.strings.save(options.cpp_type);
+            field.options.cpp.has_type = true;
+            field.options.has_cpp = true;
+            field.has_options = true;
+        }
 
         message.nested_type.push_back(entry);
         message.field.push_back(field);
@@ -1534,8 +1575,9 @@ private:
             }
             if (current_.kind == TOKEN_SYMBOL && current_.symbol == '[') {
                 const FieldOptionState ignored = field_options();
-                if (ignored.has_default || ignored.has_packed) {
-                    throw ParseFailure(value_location, "default and packed are not enum-value options");
+                if (ignored.has_default || ignored.has_packed || ignored.has_cpp_type) {
+                    throw ParseFailure(value_location,
+                        "field-only options are not enum-value options");
                 }
             }
             expect_symbol(';');

@@ -415,6 +415,53 @@ void test_full_custom_option_name_parts_are_consumed()
     CHECK(proto3_values && !proto3_values->options.packed);
 }
 
+void test_easypb_cpp_field_options_are_retained()
+{
+    const char* source =
+        "syntax = \"proto3\";\n"
+        "message M {\n"
+        "  int32 scalar = 1 [(easypb.cpp).type = \"Wrapped<{}>\"];\n"
+        "  repeated string values = 2 [(easypb.cpp).type = \"Small<{},4>\"];\n"
+        "  map<string, int32> lookup = 3 [(easypb.cpp).type = \"Flat<{},{}>\"];\n"
+        "  int32 ignored = 4 [(other.vendor).type = \"Other\"];\n"
+        "}\n";
+
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    const bool ok = easypb_proto::parse_proto("cpp-options.proto", source, parsed, error);
+    CHECK(ok);
+    if (!ok || parsed.file.message_type.empty()) return;
+
+    const DescriptorProto& message = parsed.file.message_type[0];
+    const FieldDescriptorProto* scalar = find_field(message, "scalar");
+    const FieldDescriptorProto* values = find_field(message, "values");
+    const FieldDescriptorProto* lookup = find_field(message, "lookup");
+    const FieldDescriptorProto* ignored = find_field(message, "ignored");
+
+    CHECK(scalar && scalar->has_options && scalar->options.has_cpp);
+    CHECK(scalar && scalar->options.cpp.has_type &&
+          text(scalar->options.cpp.type) == "Wrapped<{}>");
+    CHECK(values && values->has_options && values->options.has_cpp);
+    CHECK(values && text(values->options.cpp.type) == "Small<{},4>");
+    CHECK(lookup && lookup->has_options && lookup->options.has_cpp);
+    CHECK(lookup && text(lookup->options.cpp.type) == "Flat<{},{}>");
+    CHECK(ignored && !ignored->has_options && !ignored->options.has_cpp);
+
+    const char* invalid[] = {
+        "syntax=\"proto3\"; message M { int32 x=1 [(easypb.cpp).type=\"\"]; }",
+        "syntax=\"proto3\"; message M { int32 x=1 [(easypb.cpp).type=1]; }",
+        "syntax=\"proto3\"; message M { int32 x=1 [(easypb.cpp).type=\"A\", (easypb.cpp).type=\"B\"]; }",
+        "syntax=\"proto3\"; message M { int32 x=1 [(easypb.cpp).typo=\"A\"]; }",
+        "syntax=\"proto3\"; enum E { ZERO=0 [(easypb.cpp).type=\"A\"]; }"
+    };
+    for (std::size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        easypb_proto::ParsedProto bad;
+        easypb_proto::Diagnostic bad_error;
+        CHECK(!easypb_proto::parse_proto("bad-cpp-options.proto", invalid[i], bad, bad_error));
+        CHECK(!bad_error.message.empty());
+    }
+}
+
 void test_malformed_custom_option_name_parts_are_rejected()
 {
     const char* malformed[] = {
@@ -618,6 +665,7 @@ int main()
     test_rejects_duplicate_oneof_names();
     test_buffer_api_owns_result_strings();
     test_full_custom_option_name_parts_are_consumed();
+    test_easypb_cpp_field_options_are_retained();
     test_malformed_custom_option_name_parts_are_rejected();
     test_service_rpc_syntax_is_consumed();
     test_service_is_rejected_inside_message();

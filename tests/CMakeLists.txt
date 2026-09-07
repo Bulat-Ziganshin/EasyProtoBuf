@@ -152,6 +152,46 @@ if(BUILD_TESTING)
         ${easypb_test_include_dir} ${codegen_maps_generated_dir})
     add_test(NAME codegen.maps.runtime COMMAND codegen_maps_runtime_test)
 
+    set(codegen_custom_types_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/custom_types)
+    set(codegen_custom_types_data_dir ${codegen_custom_types_dir}/data)
+
+    add_test(NAME codegen.custom_types
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_custom_types_data_dir}
+            -DOPTIONS_PROTO=${PROJECT_SOURCE_DIR}/codegen/easypb/options.proto
+            -DDESCRIPTOR_HPP=${PROJECT_SOURCE_DIR}/codegen/descriptor.pb.hpp
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_custom_types_dir}/test_codegen_custom_types.cmake)
+
+    set(codegen_custom_types_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-custom-types)
+    set(codegen_custom_types_generated_header
+        ${codegen_custom_types_generated_dir}/custom-types.generated.hpp)
+    add_custom_command(
+        OUTPUT ${codegen_custom_types_generated_header}
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DINPUT=${codegen_custom_types_data_dir}/custom_types.pbs
+            -DOUTPUT=${codegen_custom_types_generated_header}
+            -P ${codegen_custom_types_dir}/generate_runtime_header.cmake
+        DEPENDS
+            easypb_codegen
+            ${codegen_custom_types_data_dir}/custom_types.pbs
+            ${codegen_custom_types_dir}/generate_runtime_header.cmake
+        VERBATIM)
+    add_custom_target(codegen_custom_types_generated
+        DEPENDS ${codegen_custom_types_generated_header})
+
+    add_executable(codegen_custom_types_runtime_test
+        ${codegen_custom_types_dir}/custom_types_runtime.cpp)
+    add_dependencies(codegen_custom_types_runtime_test codegen_custom_types_generated)
+    target_include_directories(codegen_custom_types_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_custom_types_generated_dir})
+    add_test(NAME codegen.custom_types.runtime
+        COMMAND codegen_custom_types_runtime_test)
+
     set(codegen_enums_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/enums)
     set(codegen_enums_data_dir ${codegen_enums_dir}/data)
