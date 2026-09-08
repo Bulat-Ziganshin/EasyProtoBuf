@@ -66,10 +66,10 @@ set(malformed_pbs "${DATA_DIR}/malformed_map.pbs")
 
 run_ok(scalar_out scalar_err ${CODEGEN} --descriptor-set ${scalar_pbs})
 require_contains(scalar_out
-    "std::map<std::string,int32_t> counts;"
+    "::std::map<::std::string,::int32_t> counts;"
     "Scalar map C++ type")
 require_contains(scalar_out
-    "std::map<int64_t,std::string> payloads;"
+    "::std::map<::int64_t,::std::string> payloads;"
     "Bytes map C++ type")
 require_contains(scalar_out
     "pb.put_map_string_int32(1, x.counts);"
@@ -81,13 +81,13 @@ require_contains(scalar_out
     "pb.put_packed_int32(3, x.samples);"
     "Packed repeated-field encoder")
 require_contains(scalar_out
-    "inline void encode(easypb::Encoder &pb, const ScalarMaps &x)"
+    "inline void encode(::easypb::Encoder &pb, const ::easypb::test::ScalarMaps &x)"
     "Scalar map ADL encoder")
 require_contains(scalar_out
-    "inline void decode(easypb::Decoder pb, ScalarMaps &x)"
+    "inline void decode(::easypb::Decoder pb, ::easypb::test::ScalarMaps &x)"
     "Scalar map ADL decoder")
 require_absent(scalar_out
-    "void encode(easypb::Encoder &pb) const;"
+    "void encode(::easypb::Encoder &pb) const;"
     "Scalar map generated code")
 
 run_ok(enum_out enum_err ${CODEGEN} --descriptor-set ${enum_pbs})
@@ -95,7 +95,7 @@ require_contains(enum_out
     "enum Status"
     "Enum declaration")
 require_contains(enum_out
-    "std::map<std::string,Status> statuses;"
+    "::std::map<::std::string,::easypb::test::Status> statuses;"
     "Enum map C++ type")
 require_contains(enum_out
     "pb.put_map_string_enum(1, x.statuses);"
@@ -104,27 +104,27 @@ require_contains(enum_out
     "pb.get_map_string_enum(&x.statuses);"
     "Enum map decoder")
 require_contains(enum_out
-    "inline void encode(easypb::Encoder &pb, const EnumMap &x)"
+    "inline void encode(::easypb::Encoder &pb, const ::easypb::test::EnumMap &x)"
     "Enum map ADL encoder")
 require_contains(enum_out
-    "inline void decode(easypb::Decoder pb, EnumMap &x)"
+    "inline void decode(::easypb::Decoder pb, ::easypb::test::EnumMap &x)"
     "Enum map ADL decoder")
 require_absent(enum_out
-    "void encode(easypb::Encoder &pb) const;"
+    "void encode(::easypb::Encoder &pb) const;"
     "Enum map generated code")
 
 run_ok(custom_out custom_err
     ${CODEGEN} --descriptor-set --map-type=custom_map ${scalar_pbs})
 require_contains(custom_out
-    "custom_map<std::string,int32_t> counts;"
+    "custom_map<::std::string,::int32_t> counts;"
     "Custom scalar map container")
 require_contains(custom_out
-    "custom_map<int64_t,std::string> payloads;"
+    "custom_map<::int64_t,::std::string> payloads;"
     "Custom bytes map container")
 
 run_ok(message_out message_err ${CODEGEN} --descriptor-set ${message_pbs})
 require_contains(message_out
-    "std::map<std::string,Item> items;"
+    "::std::map<::std::string,::easypb::test::Item> items;"
     "Message map C++ type")
 require_contains(message_out
     "pb.put_map_string_message(1, x.items);"

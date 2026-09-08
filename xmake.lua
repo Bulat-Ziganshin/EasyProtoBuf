@@ -27,7 +27,7 @@ end
 target("codegen")
     set_kind("binary")
     add_includedirs("3rd-party/popl", "codegen")
-    add_files("codegen/main.cpp")
+    add_files("codegen/main.cpp", "codegen/cpp_names.cpp")
     if has_config("codegen_parser") then
         add_defines("EASYPB_CODEGEN_WITH_PROTO_PARSER=1")
         add_files("codegen/parser/pretty_printer.cpp",

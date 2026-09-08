@@ -1,6 +1,6 @@
 # Generated C++ code
 
-EasyProtoBuf Codegen generates plain C++ structures and fixed-`int32_t` unscoped enum declarations followed by free codec overloads.
+EasyProtoBuf Codegen generates plain C++ structures and fixed-`::int32_t` unscoped enum declarations followed by free codec overloads.
 
 Generated output contains `#pragma once`, so it may be included from multiple translation units. The codec functions are emitted as `inline` functions.
 
@@ -10,9 +10,19 @@ The codec overloads are found through ADL (argument-dependent lookup), so they m
 
 ## Packages and C++ namespaces
 
-Codegen uses a schema's package when resolving Protobuf type names but does not generate a corresponding C++ namespace. The current file's package prefix is removed, so its top-level messages and enums are emitted in the global C++ namespace. Schemas from different packages can therefore produce colliding top-level C++ names.
+A Protobuf package is emitted as nested C++ namespaces. For example:
 
-Descriptor-set generation does not emit definitions for types imported from another schema. Same-package imported types use the same unqualified mapping as local top-level types, while names from another package become absolute C++ names such as `::other::Type`. Include, declare, or alias the corresponding C++ types before they are needed by the generated header. Because Codegen does not create package namespaces, separately generating the imported schema automatically provides the expected name only for same-package imports; cross-package imports need an application-supplied namespace mapping or adapter.
+```proto
+package foo.bar;
+
+message Request {}
+```
+
+generates `foo::bar::Request`, with the message declaration and its free `encode`/`decode` overloads inside `namespace foo { namespace bar { ... } }`. A schema without a package is emitted in the global namespace. Includes and `#pragma once` remain outside package namespaces.
+
+Generated references to user-defined message and enum types use absolute C++ names such as `::foo::bar::Outer::Inner`. This prevents a nearer C++ declaration from changing which Protobuf type a field names. Package components are emitted verbatim and must therefore be valid, non-reserved C++ namespace identifiers; Codegen rejects C++ keywords, reserved identifier forms, and a package whose first component is `std`.
+
+Descriptor-set generation still does not emit definitions for imported types. Their fully qualified Protobuf names map to absolute C++ names, so `.other.Type` becomes `::other::Type`. The corresponding C++ definition must be available before the generated field declaration is compiled. Generating an imported schema separately now naturally places its declarations in the namespace derived from its own package, but Codegen does not yet load imports or emit dependency includes automatically.
 
 ## Nested messages and declaration ordering
 
@@ -43,14 +53,13 @@ Singular self-recursion, mutual recursion, ancestor recursion, and other recursi
 
 ## Enums
 
-Enum fields and map values use generated unscoped C++ enum types with a fixed `int32_t` underlying type, allowing open proto3 enums to retain unknown wire values.
+Enum fields and map values use generated unscoped C++ enum types with a fixed `::int32_t` underlying type, allowing open proto3 enums to retain unknown wire values.
 
 Top-level enums are emitted before messages, while nested enums are emitted in their owning structure before fields and nested messages that use them. Aliases and negative values are preserved.
 
 Singular fields using an enum declared in the selected file are initialized to their explicit schema default when present, or to the enum's first declared value otherwise. Their initializers use `EnumType::VALUE` qualification, which is valid for unscoped enums in C++11 and prevents nearer enumerators from shadowing the intended value.
 
 For an imported enum whose definition is absent from the descriptor set, Codegen preserves an explicit default when available but cannot infer the first declared value. Without an explicit default, it emits no initializer for that field. `--no-default-values` also removes an explicit imported-enum default.
-
 
 ## Presence, required fields, and defaults
 
@@ -64,7 +73,7 @@ Eligible repeated numeric fields can be encoded in packed or unpacked form. [`--
 
 ## Adapting existing C++ types
 
-`--no-class` suppresses generated structures and enum declarations while leaving the codec overloads available. This can be used to adapt existing C++ types: declare the required message and enum types first, then include the generated output containing only the external codec overloads.
+`--no-class` suppresses generated structures and enum declarations while leaving the codec overloads available. This can be used to adapt existing C++ types: declare the required message and enum types first, then include the generated output containing only the external codec overloads. For packaged schemas, those handwritten types must be declared in the mapped package namespace.
 
 ## Base C++ type generation
 
@@ -72,18 +81,18 @@ Before applying a field/container template, Codegen determines the base C++ type
 
 | Protobuf type | Base C++ type |
 |---|---|
-| `int32`, `sint32`, `sfixed32` | `int32_t` |
-| `int64`, `sint64`, `sfixed64` | `int64_t` |
-| `uint32`, `fixed32` | `uint32_t` |
-| `uint64`, `fixed64` | `uint64_t` |
+| `int32`, `sint32`, `sfixed32` | `::int32_t` |
+| `int64`, `sint64`, `sfixed64` | `::int64_t` |
+| `uint32`, `fixed32` | `::uint32_t` |
+| `uint64`, `fixed64` | `::uint64_t` |
 | `double` | `double` |
 | `float` | `float` |
 | `bool` | `bool` |
-| `string`, `bytes` | `--string-type`, `std::string` by default |
+| `string`, `bytes` | `--string-type`, `::std::string` by default |
 | enum | generated C++ enum type |
 | message | generated C++ message type |
 
-For enum and message types, Codegen starts from the fully qualified Protobuf type name and preserves lexical nesting in the generated C++ name. The current file's package prefix is removed and Protobuf name separators become `::`, so `.pkg.Outer.Inner` becomes `Outer::Inner`. A type from another package remains absolute, for example `.other.Type` becomes `::other::Type`. See [Packages and C++ namespaces](#packages-and-c-namespaces) and [Nested messages and declaration ordering](#nested-messages-and-declaration-ordering).
+For enum and message types, Codegen starts from the fully qualified Protobuf type name, preserves lexical nesting, and emits an absolute C++ reference. Thus `.pkg.Outer.Inner` becomes `::pkg::Outer::Inner`, while `.other.Type` becomes `::other::Type`. See [Packages and C++ namespaces](#packages-and-c-namespaces) and [Nested messages and declaration ordering](#nested-messages-and-declaration-ordering).
 
 This base type is used directly by ordinary singular fields and as the component type substituted into repeated and map field templates.
 
@@ -134,12 +143,12 @@ The C++ type of each field is generated from its Protobuf type using a type temp
 </tr>
 <tr>
 <td>repeated</td>
-<td><code>std::vector&lt;{0}&gt;</code></td>
+<td><code>::std::vector&lt;{0}&gt;</code></td>
 <td><code>--repeated-type</code></td>
 </tr>
 <tr>
 <td>map</td>
-<td><code>std::map&lt;{0}, {1}&gt;</code></td>
+<td><code>::std::map&lt;{0}, {1}&gt;</code></td>
 <td><code>--map-type</code></td>
 </tr>
 </tbody>
@@ -178,11 +187,11 @@ message Example {
 With the default settings, Codegen generates:
 
 ```cpp
-    std::string name;
-    Example::Item item;
-    std::vector<std::string> aliases;
-    std::vector<Example::Item> items;
-    std::map<std::string, Example::Item> items_by_name;
+    ::std::string name;
+    ::Example::Item item;
+    ::std::vector<::std::string> aliases;
+    ::std::vector<::Example::Item> items;
+    ::std::map<::std::string, ::Example::Item> items_by_name;
 ```
 
 Using command-line type templates:
@@ -199,10 +208,10 @@ produces:
 
 ```cpp
     MyString name;
-    Example::Item item;
+    ::Example::Item item;
     SmallVector<MyString> aliases;
-    SmallVector<Example::Item> items;
-    FlatMap<MyString, Example::Item> items_by_name;
+    SmallVector<::Example::Item> items;
+    FlatMap<MyString, ::Example::Item> items_by_name;
 ```
 
 Individual fields can override these templates:
@@ -219,17 +228,17 @@ With the default settings, this generates:
 
 ```cpp
     FixedString<64> name;
-    std::unique_ptr<Example::Item> item;
-    SmallVector<std::string, 4> aliases;
-    std::deque<Example::Item> items;
-    FlatMap<std::string, Example::Item> items_by_name;
+    std::unique_ptr<::Example::Item> item;
+    SmallVector<::std::string, 4> aliases;
+    std::deque<::Example::Item> items;
+    FlatMap<::std::string, ::Example::Item> items_by_name;
 ```
 
 The selected C++ type does not change the Protobuf field type or the generated codec. Custom types therefore still have to support the operations required by the corresponding EasyProtoBuf encoder and decoder.
 
 ## Code insertion points
 
-For each generated message type `{TYPE}`, Codegen recognizes four optional insertion macros. For nested messages, `{TYPE}` is the qualified message name with `::` replaced by `_`; for example `Outer::Inner` uses `EASYPB_Outer_Inner_*`.
+For each generated message type `{TYPE}`, Codegen recognizes four optional insertion macros. Their naming mechanism is unchanged by package namespaces: package components are **not** added to the macro name. For nested messages, `{TYPE}` is the lexical message name with nesting flattened by `_`; for example `Outer::Inner` uses `EASYPB_Outer_Inner_*`, including when `Outer` belongs to a Protobuf package. Consequently, identically named message paths in different packages share the same insertion-macro names.
 
 ```cpp
 EASYPB_{TYPE}_EXTRA_FIELDS

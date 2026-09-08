@@ -1,0 +1,6 @@
+syntax = "proto3";
+package app.import;
+
+message Request {
+  string text = 1;
+}

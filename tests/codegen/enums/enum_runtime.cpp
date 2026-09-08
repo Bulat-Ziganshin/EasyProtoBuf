@@ -8,6 +8,8 @@
 #include "enums.generated.hpp"
 #include "open-enums.generated.hpp"
 
+using namespace easypb::enums;
+
 
 #if defined(__clang__) && __clang_major__ == 3 && __clang_minor__ <= 3
 // These legacy Clang toolchains support fixed enum bases, but their bundled

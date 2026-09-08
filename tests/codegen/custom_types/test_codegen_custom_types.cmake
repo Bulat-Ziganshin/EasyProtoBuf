@@ -90,20 +90,20 @@ if(NOT options_proto_number STREQUAL descriptor_hpp_number)
 endif()
 
 run_ok(default_out default_err ${CODEGEN} --descriptor-set ${pbs})
-require_contains(default_out "std::string ordinary_name;" "Default string type")
-require_contains(default_out "std::vector<std::string> ordinary_aliases;" "Default repeated type")
-require_contains(default_out "std::map<std::string,CustomTypes::Item> ordinary_items;" "Default map type")
+require_contains(default_out "::std::string ordinary_name;" "Default string type")
+require_contains(default_out "::std::vector<::std::string> ordinary_aliases;" "Default repeated type")
+require_contains(default_out "::std::map<::std::string,::easypb::test::CustomTypes::Item> ordinary_items;" "Default map type")
 require_contains(default_out "FixedString<64> custom_name;" "Literal singular override")
-require_contains(default_out "MessageBox<CustomTypes::Item> item;" "Singular message placeholder")
-require_contains(default_out "SmallVector<std::string, 4> aliases;" "Repeated string component substitution")
-require_contains(default_out "std::deque<CustomTypes::Item> items;" "Repeated message override")
-require_contains(default_out "std::unordered_map<std::string, CustomTypes::Item> items_by_name;" "Map override")
+require_contains(default_out "MessageBox<::easypb::test::CustomTypes::Item> item;" "Singular message placeholder")
+require_contains(default_out "SmallVector<::std::string, 4> aliases;" "Repeated string component substitution")
+require_contains(default_out "std::deque<::easypb::test::CustomTypes::Item> items;" "Repeated message override")
+require_contains(default_out "std::unordered_map<::std::string, ::easypb::test::CustomTypes::Item> items_by_name;" "Map override")
 require_contains(default_out "WrappedInt scalar = 0;" "Literal scalar override")
-require_contains(default_out "EnumBox<CustomTypes::Kind> kind = CustomTypes::Kind::ZERO;" "Enum placeholder")
+require_contains(default_out "EnumBox<::easypb::test::CustomTypes::Kind> kind = ::easypb::test::CustomTypes::Kind::ZERO;" "Enum placeholder")
 require_contains(default_out "OpaqueRepeated opaque_values;" "Per-field repeated literal is not abbreviated")
 require_contains(default_out "OpaqueMap opaque_map;" "Per-field map literal is not abbreviated")
-require_absent(default_out "OpaqueRepeated<int32_t>" "Per-field repeated abbreviation")
-require_absent(default_out "OpaqueMap<std::string" "Per-field map abbreviation")
+require_absent(default_out "OpaqueRepeated<::int32_t>" "Per-field repeated abbreviation")
+require_absent(default_out "OpaqueMap<::std::string" "Per-field map abbreviation")
 
 require_contains(default_out "pb.put_string(4, x.custom_name);" "String codec remains protobuf-driven")
 require_contains(default_out "pb.put_message(5, x.item);" "Message codec remains protobuf-driven")
@@ -119,10 +119,10 @@ run_ok(global_out global_err ${CODEGEN} --descriptor-set
     ${pbs})
 require_contains(global_out "MyString ordinary_name;" "Global string override")
 require_contains(global_out "GlobalVec<MyString> ordinary_aliases;" "Global repeated abbreviation")
-require_contains(global_out "GlobalMap<MyString,CustomTypes::Item> ordinary_items;" "Global map abbreviation")
+require_contains(global_out "GlobalMap<MyString,::easypb::test::CustomTypes::Item> ordinary_items;" "Global map abbreviation")
 require_contains(global_out "FixedString<64> custom_name;" "Per-field singular overrides global string")
 require_contains(global_out "SmallVector<MyString, 4> aliases;" "Per-field repeated keeps global string component")
-require_contains(global_out "std::unordered_map<MyString, CustomTypes::Item> items_by_name;" "Per-field map keeps global string component")
+require_contains(global_out "std::unordered_map<MyString, ::easypb::test::CustomTypes::Item> items_by_name;" "Per-field map keeps global string component")
 require_contains(global_out "OpaqueRepeated opaque_values;" "Per-field repeated literal stays literal with globals")
 require_contains(global_out "OpaqueMap opaque_map;" "Per-field map literal stays literal with globals")
 
@@ -131,10 +131,10 @@ require_contains(global_out "OpaqueMap opaque_map;" "Per-field map literal stays
 # fields from a future schema version that this decoder does not know yet.
 run_ok(no_type_cpp_out no_type_cpp_err ${CODEGEN} --descriptor-set ${no_type_cpp_pbs})
 require_contains(no_type_cpp_out
-    "std::vector<std::string> empty_cpp;"
+    "::std::vector<::std::string> empty_cpp;"
     "Empty cpp group does not override the repeated field type")
 require_contains(no_type_cpp_out
-    "std::vector<std::string> future_cpp;"
+    "::std::vector<::std::string> future_cpp;"
     "Cpp group without type remains non-overriding when unknown members are present")
 
 run_ok(no_type_cpp_global_out no_type_cpp_global_err ${CODEGEN} --descriptor-set
@@ -162,7 +162,7 @@ endif()
 run_ok(foreign_51000_out foreign_51000_err
     ${CODEGEN} --descriptor-set ${foreign_51000_pbs})
 require_contains(foreign_51000_out
-    "std::string value;"
+    "::std::string value;"
     "Foreign FieldOptions extension 51000 remains ignored")
 
 # Valid numbered/reordered placeholders, bytes/string layering, and a
@@ -170,13 +170,13 @@ require_contains(foreign_51000_out
 run_ok(template_cases_out template_cases_err
     ${CODEGEN} --descriptor-set ${template_cases_pbs})
 require_contains(template_cases_out
-    "BytesBox<std::string> data;"
+    "BytesBox<::std::string> data;"
     "Bytes field placeholder uses the default string component type")
 require_contains(template_cases_out
-    "NumberedVec<int32_t> values;"
+    "NumberedVec<::int32_t> values;"
     "Repeated field accepts explicit {0}")
 require_contains(template_cases_out
-    "ReorderedMap<std::string, int32_t> swapped;"
+    "ReorderedMap<::std::string, ::int32_t> swapped;"
     "Map field accepts reordered {1}, {0} placeholders")
 
 run_ok(template_cases_global_out template_cases_global_err ${CODEGEN} --descriptor-set
@@ -186,7 +186,7 @@ require_contains(template_cases_global_out
     "BytesBox<MyString> data;"
     "Bytes per-field template preserves global string customization")
 require_contains(template_cases_global_out
-    "ReorderedMap<MyString, int32_t> swapped;"
+    "ReorderedMap<MyString, ::int32_t> swapped;"
     "Scalar/string map placeholders preserve global string customization")
 
 if(FULL_BUILD)
@@ -260,7 +260,7 @@ if(FULL_BUILD)
     file(WRITE "${tmp_dir}/other.proto"
         "syntax=\"proto3\"; message M { int32 x=1 [(other.pkg).type=\"A\"]; }\n")
     run_ok(other_out other_err ${CODEGEN} "${tmp_dir}/other.proto")
-    require_contains(other_out "int32_t x = 0;" "Unrelated custom option remains ignored")
+    require_contains(other_out "::int32_t x = 0;" "Unrelated custom option remains ignored")
 
     # Per-field and global templates intentionally share myformat(), including
     # the same out-of-range placeholder failure.
@@ -301,6 +301,6 @@ if(FULL_BUILD)
     run_ok(repeated_recursive_allowed repeated_recursive_allowed_err
         ${CODEGEN} --allow-self-recursive-containers "${tmp_dir}/custom-repeated-recursive.proto")
     require_contains(repeated_recursive_allowed
-        "RecursiveVec<Node> children;"
+        "RecursiveVec<::Node> children;"
         "Custom repeated recursion with explicit opt-in")
 endif()

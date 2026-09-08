@@ -1,0 +1,3 @@
+syntax = "proto3";
+package alpha;
+message Box { int32 value = 1; }

@@ -88,9 +88,9 @@ run_ok(nested_pbs_out nested_pbs_err ${CODEGEN} --descriptor-set ${nested_pbs})
 string(FIND "${nested_pbs_out}" "struct Outer" nested_outer_pos)
 string(FIND "${nested_pbs_out}" "struct Inner" nested_inner_pos)
 string(FIND "${nested_pbs_out}" "struct Leaf" nested_leaf_pos)
-string(FIND "${nested_pbs_out}" "Outer::Inner item;" nested_holder_pos)
-string(FIND "${nested_pbs_out}" "std::map<std::string,Outer::Inner> by_name;" nested_map_pos)
-string(FIND "${nested_pbs_out}" "const Outer::Inner::Leaf &x" nested_leaf_encoder_pos)
+string(FIND "${nested_pbs_out}" "::Outer::Inner item;" nested_holder_pos)
+string(FIND "${nested_pbs_out}" "::std::map<::std::string,::Outer::Inner> by_name;" nested_map_pos)
+string(FIND "${nested_pbs_out}" "const ::Outer::Inner::Leaf &x" nested_leaf_encoder_pos)
 if(nested_outer_pos EQUAL -1 OR nested_inner_pos EQUAL -1 OR nested_leaf_pos EQUAL -1 OR
    nested_holder_pos EQUAL -1 OR nested_map_pos EQUAL -1 OR nested_leaf_encoder_pos EQUAL -1)
     message(FATAL_ERROR "Nested message output is incomplete:\n${nested_pbs_out}")
@@ -105,7 +105,7 @@ run_ok(nested_no_class nested_no_class_err ${CODEGEN} --descriptor-set --no-clas
 if(nested_no_class MATCHES "struct Outer" OR nested_no_class MATCHES "struct Inner")
     message(FATAL_ERROR "--no-class emitted nested structures")
 endif()
-if(NOT nested_no_class MATCHES "const Outer::Inner::Leaf &x")
+if(NOT nested_no_class MATCHES "const ::Outer::Inner::Leaf &x")
     message(FATAL_ERROR "--no-class suppressed nested codecs")
 endif()
 
@@ -216,7 +216,7 @@ endif()
 
 run_ok(repeated_recursive_allowed repeated_recursive_allowed_err
     ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${repeated_recursive_pbs})
-string(FIND "${repeated_recursive_allowed}" "std::vector<RepeatedNode> children;" repeated_recursive_field_pos)
+string(FIND "${repeated_recursive_allowed}" "::std::vector<::RepeatedNode> children;" repeated_recursive_field_pos)
 string(FIND "${repeated_recursive_allowed}" "put_repeated_message(1, x.children)" repeated_recursive_encoder_pos)
 string(FIND "${repeated_recursive_allowed}" "get_repeated_message(&x.children)" repeated_recursive_decoder_pos)
 if(repeated_recursive_field_pos EQUAL -1 OR repeated_recursive_encoder_pos EQUAL -1 OR
@@ -226,7 +226,7 @@ endif()
 
 run_ok(map_recursive_allowed map_recursive_allowed_err
     ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${map_recursive_pbs})
-string(FIND "${map_recursive_allowed}" "std::map<std::string,MapNode> children;" map_recursive_field_pos)
+string(FIND "${map_recursive_allowed}" "::std::map<::std::string,::MapNode> children;" map_recursive_field_pos)
 string(FIND "${map_recursive_allowed}" "put_map_string_message(1, x.children)" map_recursive_encoder_pos)
 string(FIND "${map_recursive_allowed}" "get_map_string_message(&x.children)" map_recursive_decoder_pos)
 if(map_recursive_field_pos EQUAL -1 OR map_recursive_encoder_pos EQUAL -1 OR

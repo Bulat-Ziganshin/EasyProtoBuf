@@ -8,6 +8,7 @@ The generated data types do not inherit from runtime classes and do not require 
 
 - Generate C++ from either `.proto` source or a binary descriptor set produced by `protoc`.
 - Generate top-level and nested messages, enums, repeated fields, and maps with scalar, enum, or message values.
+- Map Protobuf packages directly to C++ namespaces.
 - Generate presence tracking, proto2 required-field checks, schema defaults, and packed repeated-field codecs.
 - Customize C++ data types of generated message fields globally or per field, or generate codecs for existing C++ types.
 - Optionally generate direct self-recursive repeated/map message containers with [`--allow-self-recursive-containers`](OPTIONS.md#structural-options).
@@ -38,13 +39,13 @@ Depending on the selected options, Codegen can generate C++ code like this:
 ```cpp
 struct Person
 {
-    std::string name = "AnnA";
+    ::std::string name = "AnnA";
     double weight = 0;
-    std::vector<int32_t> numbers;
-    std::map<uint64_t,std::string> labels;
+    ::std::vector<::int32_t> numbers;
+    ::std::map<::uint64_t,::std::string> labels;
 };
 
-inline void encode(easypb::Encoder &pb, const Person &x)
+inline void encode(::easypb::Encoder &pb, const Person &x)
 {
     pb.put_string(1, x.name);
     pb.put_double(2, x.weight);
@@ -52,7 +53,7 @@ inline void encode(easypb::Encoder &pb, const Person &x)
     pb.put_map_fixed64_string(4, x.labels);
 }
 
-inline void decode(easypb::Decoder pb, Person &x)
+inline void decode(::easypb::Decoder pb, Person &x)
 {
     while(pb.get_next_field())
     {

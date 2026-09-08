@@ -3,6 +3,8 @@
 
 #include "maps.generated.hpp"
 
+using namespace easypb::test;
+
 
 int main()
 {

@@ -1,0 +1,8 @@
+syntax = "proto2";
+package consumer;
+import "other.proto";
+message UseExternal {
+  optional other.State state = 1 [default = READY];
+  optional other.External item = 2;
+  optional other.State implicit_state = 3;
+}

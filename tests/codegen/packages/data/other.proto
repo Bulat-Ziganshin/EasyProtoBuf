@@ -1,0 +1,5 @@
+syntax = "proto2";
+package other;
+
+enum State { READY = 7; }
+message External { optional int32 value = 1; }

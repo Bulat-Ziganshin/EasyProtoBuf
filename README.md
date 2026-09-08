@@ -30,8 +30,9 @@ Library features:
 - the generated decoder checks the presence of required fields in the decoded message
 - command-line options to tailor the generated code
 - per-field control of packed encoding, default values, and generated C++ types
+- maps Protobuf packages to C++ namespaces
 - planned:
-  - complete import handling and package-to-C++ namespace mapping
+  - complete import handling
   - protoc plugin
   - support for oneof fields
   - validation of enum, integer and bool values by the generated code
@@ -49,15 +50,27 @@ Portability:
 but it can be improved to support other CPUs and compile-time detection
 
 CI: while the final goal is to support any C++11 compiler, the current test matrix covers:
-- Linux: GCC 4.7..16 and Clang 3.1..22 on x64, including C++17 tests from GCC 8 and Clang 5 onward; current Clang is also tested with libc++, and Ubuntu 24.04/26.04 are tested natively on ARM64
-- Linux distributions: stock GCC/Clang toolchains on Ubuntu 16.04..26.04, Debian 10..13, Rocky Linux 8..10, Fedora, and Alpine/musl, plus rolling/development distribution images
-- macOS: Apple Clang on macOS 15 and 26, both ARM64 and Intel
-- Windows: MSVC from Visual Studio 2013 (v120) through Visual Studio 2026 (v145), in both x64 and x86 modes. VS2013 is tested separately on AppVeyor; newer toolsets use GitHub Actions. Windows x86 is currently the only 32-bit target
-- Language modes: C++11 and C++17 across the compiler matrix where supported, plus C++20/23/26-era modes on the latest GCC, Clang, and MSVC toolsets
-- Big-endian CPUs: support is implemented, but has not been tested yet
-- planned:
-  - extend the architecture matrix with big-endian and additional non-x86 targets, using the CI approaches of [protozero][] and [xxHash][] as references.
-
+* **Compilers**
+  * GCC 4.7..16
+  * Clang 3.1..22
+  * MSVC from Visual Studio 2013 (v120) through Visual Studio 2026 (v145)
+  * current Clang is also tested with libc++
+* **Operating systems and architectures**
+  * Linux x64 across Ubuntu 16.04..26.04, Debian 10..13, Rocky Linux 8..10, Fedora, Alpine/musl, and rolling/development distribution images
+  * Linux ARM64 on Ubuntu 24.04 and 26.04
+  * macOS 15 and 26 on both ARM64 and Intel
+  * Windows on both x64 and x86; x86 is currently the only 32-bit target
+  * VS2013 is tested separately on AppVeyor; the remaining platforms and MSVC toolsets use GitHub Actions
+* **Language modes**
+  * C++11 across the supported GCC and Clang range
+  * C++17 from GCC 8 and Clang 5 onward
+  * MSVC in C++14 and C++17 modes where appropriate
+  * newer C++20/23/26-era modes on the latest GCC, Clang, and MSVC toolsets
+* **Not yet covered**
+  * big-endian CPUs; support is implemented, but has not yet been tested
+  * additional non-x86 architectures
+* **Planned**
+  * extend the architecture matrix with big-endian and other non-x86 targets, using the CI approaches of [protozero][] and [xxHash][] as references
 
 
 ## Motivating example

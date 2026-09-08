@@ -35,7 +35,7 @@ codegen tutorial.pbs >tutorial.pb.hpp
 codegen --descriptor-set tutorial.pbs >tutorial.pb.hpp
 ```
 
-Descriptor-set input is useful when descriptor files are already available or when `protoc` is needed to resolve imported field types that the embedded parser cannot link. Definitions of imported C++ types are not emitted; they must be available to the generated header separately. See [Packages and C++ namespaces](GENERATED_CODE.md#packages-and-c-namespaces) for the generated names.
+Descriptor-set input is useful when descriptor files are already available or when `protoc` is needed to resolve imported field types that the embedded parser cannot link. Definitions of imported C++ types are not emitted; they must be available to the generated header separately. Fully qualified Protobuf names map to absolute C++ names in their package namespaces. See [Packages and C++ namespaces](GENERATED_CODE.md#packages-and-c-namespaces) for the generated names.
 
 Each descriptor set must currently contain exactly one `FileDescriptorProto`. Avoid `protoc --include_imports` until target-file selection is implemented.
 

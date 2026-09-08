@@ -1,0 +1,150 @@
+cmake_minimum_required(VERSION 3.10)
+
+if(NOT DEFINED CODEGEN OR NOT DEFINED DATA_DIR)
+    message(FATAL_ERROR "CODEGEN and DATA_DIR are required")
+endif()
+
+function(run_ok out_var err_var)
+    execute_process(
+        COMMAND ${ARGN}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "Command failed (${result}): ${ARGN}\n${error}")
+    endif()
+    set(${out_var} "${output}" PARENT_SCOPE)
+    set(${err_var} "${error}" PARENT_SCOPE)
+endfunction()
+
+function(run_fail out_var err_var)
+    execute_process(
+        COMMAND ${ARGN}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error)
+    if(result EQUAL 0)
+        message(FATAL_ERROR "Command unexpectedly succeeded: ${ARGN}")
+    endif()
+    set(${out_var} "${output}" PARENT_SCOPE)
+    set(${err_var} "${error}" PARENT_SCOPE)
+endfunction()
+
+function(require_contains text needle label)
+    string(FIND "${text}" "${needle}" pos)
+    if(pos EQUAL -1)
+        message(FATAL_ERROR "${label}: expected '${needle}'\n--- output ---\n${text}")
+    endif()
+endfunction()
+
+function(require_not_contains text needle label)
+    string(FIND "${text}" "${needle}" pos)
+    if(NOT pos EQUAL -1)
+        message(FATAL_ERROR "${label}: unexpected '${needle}'\n--- output ---\n${text}")
+    endif()
+endfunction()
+
+function(normalize_source_comment input_var output_var)
+    set(text "${${input_var}}")
+    string(REGEX REPLACE "// Source: [^\n]*\n" "// Source: <normalized>\n" text "${text}")
+    set(${output_var} "${text}" PARENT_SCOPE)
+endfunction()
+
+set(names_pbs "${DATA_DIR}/names.pbs")
+set(names_proto "${DATA_DIR}/names.proto")
+set(external_pbs "${DATA_DIR}/external.pbs")
+set(invalid_std_pbs "${DATA_DIR}/invalid-std.pbs")
+set(invalid_std_proto "${DATA_DIR}/invalid-std.proto")
+set(shadow_pbs "${DATA_DIR}/shadow.pbs")
+set(module_pbs "${DATA_DIR}/module-package.pbs")
+set(module_proto "${DATA_DIR}/module-package.proto")
+set(import_pbs "${DATA_DIR}/import-package.pbs")
+set(import_proto "${DATA_DIR}/import-package.proto")
+
+run_ok(names_out names_err ${CODEGEN} --descriptor-set "${names_pbs}")
+require_contains("${names_out}" "namespace foo {" "First package namespace")
+require_contains("${names_out}" "namespace bar {" "Second package namespace")
+require_contains("${names_out}" "enum State : ::int32_t" "Qualified fixed-width enum base")
+require_contains("${names_out}" "::int32_t value = 0;" "Qualified fixed-width field type")
+require_contains("${names_out}" "::foo::bar::Outer::Inner child;" "Absolute nested message field")
+require_contains("${names_out}" "::foo::bar::State state = ::foo::bar::State::READY;" "Absolute enum type/default")
+require_contains("${names_out}" "inline void encode(::easypb::Encoder &pb, const ::foo::bar::Outer &x)" "Packaged encoder ADL namespace")
+require_contains("${names_out}" "inline void decode(::easypb::Decoder pb, ::foo::bar::Outer::Inner &x)" "Nested packaged decoder")
+# Insertion macros deliberately keep their existing spelling and do not include packages.
+require_contains("${names_out}" "EASYPB_Outer_EXTRA_FIELDS" "Existing insertion macro spelling")
+require_contains("${names_out}" "EASYPB_Outer_Inner_EXTRA_ENCODING" "Existing nested insertion macro spelling")
+
+run_ok(no_class_out no_class_err ${CODEGEN} --descriptor-set --no-class "${names_pbs}")
+require_contains("${no_class_out}" "namespace foo {" "--no-class namespace")
+require_contains("${no_class_out}" "inline void encode(::easypb::Encoder &pb, const ::foo::bar::Outer &x)" "--no-class packaged codec")
+string(FIND "${no_class_out}" "struct Outer" no_class_struct)
+if(NOT no_class_struct EQUAL -1)
+    message(FATAL_ERROR "--no-class unexpectedly emitted struct Outer")
+endif()
+
+run_ok(external_out external_err ${CODEGEN} --descriptor-set "${external_pbs}")
+require_contains("${external_out}" "::other::State state = ::other::State::READY;" "Explicit imported enum default")
+require_contains("${external_out}" "::other::External item;" "Absolute imported message type")
+require_contains("${external_out}" "::other::State implicit_state;" "Implicit imported enum has no guessed initializer")
+run_ok(external_no_defaults_out external_no_defaults_err
+    ${CODEGEN} --descriptor-set --no-default-values "${external_pbs}")
+require_not_contains("${external_no_defaults_out}" "state = ::other::State::READY"
+    "--no-default-values suppresses imported enum default")
+
+run_ok(shadow_out shadow_err ${CODEGEN} --descriptor-set "${shadow_pbs}")
+require_contains("${shadow_out}" "namespace std {" "Nested std namespace is legal")
+require_contains("${shadow_out}" "namespace easypb {" "Nested easypb namespace is legal")
+require_contains("${shadow_out}" "::std::string text;" "Global std type is not shadowed")
+require_contains("${shadow_out}" "::int32_t value = 0;" "Global int32_t is not shadowed")
+require_contains("${shadow_out}" "::int64_t value64 = 0;" "Global int64_t is not shadowed")
+require_contains("${shadow_out}" "::uint32_t uvalue = 0;" "Global uint32_t is not shadowed")
+require_contains("${shadow_out}" "::uint64_t uvalue64 = 0;" "Global uint64_t is not shadowed")
+require_contains("${shadow_out}" "::std::vector<::int32_t> values;" "Repeated fixed-width type is globally qualified")
+require_contains("${shadow_out}" "::std::map<::std::string,::int32_t> lookup;" "Map fixed-width type is globally qualified")
+require_contains("${shadow_out}" "inline void encode(::easypb::Encoder &pb, const ::app::std::easypb::Shadow &x)" "Global EasyProtoBuf runtime is not shadowed")
+
+run_fail(invalid_out invalid_err ${CODEGEN} --descriptor-set "${invalid_std_pbs}")
+if(NOT invalid_out STREQUAL "")
+    message(FATAL_ERROR "Invalid package wrote partial generated output: ${invalid_out}")
+endif()
+if(NOT invalid_err MATCHES "global C\\+\\+ namespace 'std'")
+    message(FATAL_ERROR "Invalid package diagnostic is unclear: ${invalid_err}")
+endif()
+
+run_ok(module_out module_err ${CODEGEN} --descriptor-set "${module_pbs}")
+require_contains("${module_out}" "namespace module {" "Contextual module package component")
+require_contains("${module_out}" "::app::module::Request" "Generated module package API")
+
+run_ok(import_out import_err ${CODEGEN} --descriptor-set "${import_pbs}")
+require_contains("${import_out}" "namespace import {" "Contextual import package component")
+require_contains("${import_out}" "::app::import::Request" "Generated import package API")
+
+if(FULL_BUILD)
+    run_ok(source_out source_err ${CODEGEN} "${names_proto}")
+    normalize_source_comment(names_out pbs_normalized)
+    normalize_source_comment(source_out source_normalized)
+    if(NOT source_normalized STREQUAL pbs_normalized)
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/package-source.hpp" "${source_normalized}")
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/package-pbs.hpp" "${pbs_normalized}")
+        message(FATAL_ERROR ".proto and .pbs package outputs differ")
+    endif()
+
+    run_ok(module_source_out module_source_err ${CODEGEN} "${module_proto}")
+    normalize_source_comment(module_out module_pbs_normalized)
+    normalize_source_comment(module_source_out module_source_normalized)
+    if(NOT module_source_normalized STREQUAL module_pbs_normalized)
+        message(FATAL_ERROR "module package .proto and .pbs outputs differ")
+    endif()
+
+    run_ok(import_source_out import_source_err ${CODEGEN} "${import_proto}")
+    normalize_source_comment(import_out import_pbs_normalized)
+    normalize_source_comment(import_source_out import_source_normalized)
+    if(NOT import_source_normalized STREQUAL import_pbs_normalized)
+        message(FATAL_ERROR "import package .proto and .pbs outputs differ")
+    endif()
+
+    run_fail(invalid_source_out invalid_source_err ${CODEGEN} "${invalid_std_proto}")
+    if(NOT invalid_source_out STREQUAL "")
+        message(FATAL_ERROR "Invalid source package wrote partial generated output: ${invalid_source_out}")
+    endif()
+endif()

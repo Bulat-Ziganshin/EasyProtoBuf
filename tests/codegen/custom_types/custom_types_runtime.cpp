@@ -47,6 +47,8 @@ using OpaqueMap = std::unordered_map<std::string, int32_t>;
 
 #include "custom-types.generated.hpp"
 
+using namespace easypb::test;
+
 namespace {
 
 bool equal_item(const CustomTypes::Item& a, const CustomTypes::Item& b)

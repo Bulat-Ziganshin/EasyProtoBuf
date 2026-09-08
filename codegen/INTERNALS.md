@@ -37,6 +37,7 @@ descriptor.pb.hpp decoder|
 
 - [`main.cpp`](main.cpp) — command-line parser, input-mode selection, file I/O, descriptor decoding, parser diagnostics, and utility-mode dispatch.
 - [`codegen.cpp`](codegen.cpp) — translates `FileDescriptorProto` into C++ code.
+- [`cpp_names.hpp`](cpp_names.hpp) / [`cpp_names.cpp`](cpp_names.cpp) — validate package namespace names and convert absolute Protobuf identities to C++ spellings.
 - [`descriptor.pb.hpp`](descriptor.pb.hpp) — internal trimmed C++ representation and EasyProtoBuf decoders for [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto).
 - [`easypb/options.proto`](easypb/options.proto) — EasyProtoBuf's Protobuf custom-option schema, currently including the per-field C++ type template.
 - [`parser/`](parser/) — `.proto` lexer/parser, descriptor pretty-printer, and parser benchmark helper.
@@ -53,6 +54,14 @@ Only [`parser/proto_parser.cpp`](parser/proto_parser.cpp) belongs to the reusabl
 The parser returns the same trimmed descriptor structures that descriptor-set input decodes into, so generation after the frontend boundary does not depend on whether the original input was `.proto` or `.pbs`.
 
 Imports are parsed and recorded but are not loaded yet. Unresolved imported types are therefore a frontend diagnostic; `main.cpp` refuses to pass such source schemas to the generator. See [the parser documentation](parser/README.md) for the parser-level behavior.
+
+## Protobuf and C++ names
+
+The generator keeps Protobuf identity separate from C++ spelling. Message metadata stores the absolute Protobuf name (for example `.foo.bar.Outer.Inner`), the package-local C++ spelling (`Outer::Inner`), and the absolute C++ spelling (`::foo::bar::Outer::Inner`). Field and enum-default references use the absolute C++ spelling.
+
+[`cpp_names.cpp`](cpp_names.cpp) owns package validation and the shared name conversions. The package itself is emitted as C++11-compatible nested namespace blocks around top-level enums, message structures, and free codec overloads. Runtime names such as `::easypb::Encoder` and built-in standard-library/default integer spellings are absolute so an application namespace cannot shadow them. User-supplied C++ type fragments remain literal.
+
+Insertion macros deliberately keep their pre-existing `EASYPB_{TYPE}_...` naming convention and do not include package components. This avoids changing the insertion-hook mechanism as part of namespace generation.
 
 ## Message model and dependency analysis
 
@@ -93,4 +102,4 @@ Recognized EasyProtoBuf field options are preserved in this common descriptor mo
 
 ## Tests
 
-Codegen tests live under [`../tests/codegen/`](../tests/codegen/), grouped by generated-code feature (`maps`, `enums`, `nested`) and parser/input behavior (`parser`). See [BUILDING.md](BUILDING.md#testing) for the user-facing test commands and test-suite overview.
+Codegen tests live under [`../tests/codegen/`](../tests/codegen/), grouped by generated-code feature (`maps`, `enums`, `packages`, `nested`) and parser/input behavior (`parser`). See [BUILDING.md](BUILDING.md#testing) for the user-facing test commands and test-suite overview.

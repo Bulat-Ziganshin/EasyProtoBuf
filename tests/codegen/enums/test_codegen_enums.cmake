@@ -61,7 +61,7 @@ run_ok(enum_out enum_err ${CODEGEN} --descriptor-set ${enum_pbs})
 run_ok(open_enum_out open_enum_err ${CODEGEN} --descriptor-set ${open_enum_pbs})
 
 require_contains(enum_out
-    "enum Status : int32_t"
+    "enum Status : ::int32_t"
     "Fixed-width top-level enum declaration")
 require_contains(enum_out
     "FAILED = -1"
@@ -73,10 +73,10 @@ require_contains(enum_out
     "STARTED = 1,\n    ACTIVE = 1"
     "Aliased enum values")
 require_contains(enum_out
-    "enum Priority : int32_t"
+    "enum Priority : ::int32_t"
     "Fixed-width nested enum declaration")
 require_before(enum_out
-    "enum Status : int32_t" "struct Job"
+    "enum Status : ::int32_t" "struct Job"
     "Top-level enum declaration order")
 require_before(enum_out
     "enum Priority" "Status status"
@@ -86,50 +86,50 @@ require_before(enum_out
     "Nested enum owner declaration order")
 
 require_contains(enum_out
-    "Status status = Status::STARTED;"
+    "::easypb::enums::Status status = ::easypb::enums::Status::STARTED;"
     "Singular enum field and default")
 require_contains(enum_out
-    "Job::Priority priority = Job::Priority::HIGH;"
+    "::easypb::enums::Job::Priority priority = ::easypb::enums::Job::Priority::HIGH;"
     "Nested enum field and default")
 require_contains(enum_out
-    "std::vector<Status> history;"
+    "::std::vector<::easypb::enums::Status> history;"
     "Repeated enum field")
 require_contains(enum_out
-    "std::vector<Status> packed_history;"
+    "::std::vector<::easypb::enums::Status> packed_history;"
     "Packed repeated enum field")
 require_contains(enum_out
-    "std::map<std::string,Status> names;"
+    "::std::map<::std::string,::easypb::enums::Status> names;"
     "Enum-valued map")
 require_contains(enum_out
-    "Status current = Status::UNKNOWN;"
+    "::easypb::enums::Status current = ::easypb::enums::Status::UNKNOWN;"
     "Implicit top-level enum default")
 require_contains(enum_out
-    "NonZero value = NonZero::FIVE;"
+    "::easypb::enums::NonZero value = ::easypb::enums::NonZero::FIVE;"
     "Implicit non-zero enum default")
 require_contains(enum_out
-    "Top top = Top::X;"
+    "::easypb::enums::Top top = ::easypb::enums::Top::X;"
     "Enum default protected from nested enumerator shadowing")
 require_absent(enum_out
-    "Top top = X;"
+    "::easypb::enums::Top top = X;"
     "Unqualified shadowed enum default")
 require_contains(enum_out
-    "Job::Priority priority = Job::Priority::HIGH;"
+    "::easypb::enums::Job::Priority priority = ::easypb::enums::Job::Priority::HIGH;"
     "Qualified forward nested enum default")
 require_contains(enum_out
-    "std::vector<Job::Priority> priorities;"
+    "::std::vector<::easypb::enums::Job::Priority> priorities;"
     "Forward repeated nested enum field")
 require_contains(enum_out
-    "std::map<std::string,Job::Priority> priorities_by_name;"
+    "::std::map<::std::string,::easypb::enums::Job::Priority> priorities_by_name;"
     "Forward nested enum map value")
 require_absent(enum_out
-    "int32_t status"
+    "::int32_t status"
     "Obsolete singular enum representation")
 
 require_contains(open_enum_out
-    "enum OpenStatus : int32_t"
+    "enum OpenStatus : ::int32_t"
     "Fixed-width open proto3 enum declaration")
 require_contains(open_enum_out
-    "OpenStatus status = OpenStatus::OPEN_ZERO;"
+    "::easypb::enums::OpenStatus status = ::easypb::enums::OpenStatus::OPEN_ZERO;"
     "Open proto3 enum implicit default")
 
 require_contains(enum_out
@@ -157,19 +157,19 @@ require_contains(enum_out
 run_ok(no_defaults_out no_defaults_err
     ${CODEGEN} --descriptor-set --no-default-values ${enum_pbs})
 require_contains(no_defaults_out
-    "Status status = Status::UNKNOWN;"
+    "::easypb::enums::Status status = ::easypb::enums::Status::UNKNOWN;"
     "Implicit enum default when explicit defaults are disabled")
 require_contains(no_defaults_out
-    "Job::Priority priority = Job::Priority::LOW;"
+    "::easypb::enums::Job::Priority priority = ::easypb::enums::Job::Priority::LOW;"
     "Implicit local nested enum default when explicit defaults are disabled")
 require_contains(no_defaults_out
-    "Job::Priority priority = Job::Priority::LOW;"
+    "::easypb::enums::Job::Priority priority = ::easypb::enums::Job::Priority::LOW;"
     "Implicit foreign nested enum default when explicit defaults are disabled")
 require_absent(no_defaults_out
-    "Status status = Status::STARTED;"
+    "::easypb::enums::Status status = ::easypb::enums::Status::STARTED;"
     "Disabled explicit top-level enum default")
 require_absent(no_defaults_out
-    "Job::Priority priority = Job::Priority::HIGH;"
+    "::easypb::enums::Job::Priority priority = ::easypb::enums::Job::Priority::HIGH;"
     "Disabled explicit local nested enum default")
 
 run_ok(no_class_out no_class_err
@@ -184,7 +184,7 @@ require_absent(no_class_out
     "struct Job"
     "Message structure in --no-class output")
 require_contains(no_class_out
-    "const Job &x"
+    "const ::easypb::enums::Job &x"
     "Enum message codecs in --no-class output")
 
 if(FULL_BUILD)

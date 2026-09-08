@@ -198,13 +198,13 @@ CommandLine parse_cmdline(int argc, char** argv)
 
     auto string_type_option = parser.add<Value<std::string> >(
         "s", "string-type", "C++ type for string/bytes fields",
-        "std::string", &option.cpp_string_type);
+        "::std::string", &option.cpp_string_type);
     auto repeated_type_option = parser.add<Value<std::string> >(
         "r", "repeated-type", "C++ container type for repeated fields",
-        "std::vector", &option.cpp_repeated_type);
+        "::std::vector", &option.cpp_repeated_type);
     auto map_type_option = parser.add<Value<std::string> >(
         "m", "map-type", "C++ container type for map fields",
-        "std::map", &option.cpp_map_type);
+        "::std::map", &option.cpp_map_type);
 
     parser.parse(argc, argv);
 

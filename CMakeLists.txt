@@ -52,7 +52,7 @@ target_include_directories(manual_example PRIVATE include)
 
 # "codegen" became a reserved target name in CMake 3.31. Keep the produced
 # executable name while using a non-reserved internal target name.
-add_executable(easypb_codegen codegen/main.cpp)
+add_executable(easypb_codegen codegen/main.cpp codegen/cpp_names.cpp)
 set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
 target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl codegen)
 

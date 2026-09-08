@@ -245,6 +245,105 @@ if(BUILD_TESTING)
         ${easypb_test_include_dir} ${codegen_enums_generated_dir})
     add_test(NAME codegen.enums.runtime COMMAND codegen_enums_runtime_test)
 
+    set(codegen_packages_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/packages)
+    set(codegen_packages_data_dir ${codegen_packages_dir}/data)
+
+    add_executable(codegen_cpp_names_test
+        ${codegen_packages_dir}/cpp_names_test.cpp
+        ${PROJECT_SOURCE_DIR}/codegen/cpp_names.cpp)
+    target_include_directories(codegen_cpp_names_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/codegen)
+    add_test(NAME codegen.packages.naming COMMAND codegen_cpp_names_test)
+
+    add_test(NAME codegen.packages
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_packages_data_dir}
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_packages_dir}/test_codegen_packages.cmake)
+
+    set(codegen_packages_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-packages)
+    set(codegen_packages_names_header
+        ${codegen_packages_generated_dir}/names.generated.hpp)
+    set(codegen_packages_alpha_header
+        ${codegen_packages_generated_dir}/alpha.generated.hpp)
+    set(codegen_packages_beta_header
+        ${codegen_packages_generated_dir}/beta.generated.hpp)
+    set(codegen_packages_external_header
+        ${codegen_packages_generated_dir}/external.generated.hpp)
+    set(codegen_packages_shadow_header
+        ${codegen_packages_generated_dir}/shadow.generated.hpp)
+    set(codegen_packages_module_header
+        ${codegen_packages_generated_dir}/module-package.generated.hpp)
+    set(codegen_packages_import_header
+        ${codegen_packages_generated_dir}/import-package.generated.hpp)
+    set(codegen_packages_no_class_header
+        ${codegen_packages_generated_dir}/names.no-class.generated.hpp)
+    add_custom_command(
+        OUTPUT
+            ${codegen_packages_names_header}
+            ${codegen_packages_alpha_header}
+            ${codegen_packages_beta_header}
+            ${codegen_packages_external_header}
+            ${codegen_packages_shadow_header}
+            ${codegen_packages_module_header}
+            ${codegen_packages_import_header}
+            ${codegen_packages_no_class_header}
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_packages_data_dir}
+            -DOUTPUT_DIR=${codegen_packages_generated_dir}
+            -P ${codegen_packages_dir}/generate_headers.cmake
+        DEPENDS
+            easypb_codegen
+            ${codegen_packages_data_dir}/names.pbs
+            ${codegen_packages_data_dir}/alpha.pbs
+            ${codegen_packages_data_dir}/beta.pbs
+            ${codegen_packages_data_dir}/external.pbs
+            ${codegen_packages_data_dir}/shadow.pbs
+            ${codegen_packages_data_dir}/module-package.pbs
+            ${codegen_packages_data_dir}/import-package.pbs
+            ${codegen_packages_dir}/generate_headers.cmake
+        VERBATIM)
+    add_custom_target(codegen_packages_generated
+        DEPENDS
+            ${codegen_packages_names_header}
+            ${codegen_packages_alpha_header}
+            ${codegen_packages_beta_header}
+            ${codegen_packages_external_header}
+            ${codegen_packages_shadow_header}
+            ${codegen_packages_module_header}
+            ${codegen_packages_import_header}
+            ${codegen_packages_no_class_header})
+
+    add_executable(codegen_packages_runtime_test
+        ${codegen_packages_dir}/package_runtime_main.cpp
+        ${codegen_packages_dir}/package_runtime_helper.cpp)
+    add_dependencies(codegen_packages_runtime_test codegen_packages_generated)
+    target_include_directories(codegen_packages_runtime_test PRIVATE
+        ${easypb_test_include_dir}
+        ${codegen_packages_generated_dir}
+        ${codegen_packages_dir})
+    add_test(NAME codegen.packages.runtime COMMAND codegen_packages_runtime_test)
+
+    add_executable(codegen_packages_no_class_runtime_test
+        ${codegen_packages_dir}/no_class_runtime.cpp)
+    add_dependencies(codegen_packages_no_class_runtime_test codegen_packages_generated)
+    target_include_directories(codegen_packages_no_class_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_packages_generated_dir})
+    add_test(NAME codegen.packages.no_class.runtime
+        COMMAND codegen_packages_no_class_runtime_test)
+
+    add_executable(codegen_packages_external_runtime_test
+        ${codegen_packages_dir}/external_runtime.cpp)
+    add_dependencies(codegen_packages_external_runtime_test codegen_packages_generated)
+    target_include_directories(codegen_packages_external_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_packages_generated_dir})
+    add_test(NAME codegen.packages.external.runtime
+        COMMAND codegen_packages_external_runtime_test)
+
     set(codegen_nested_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/nested)
     set(codegen_nested_generated_dir

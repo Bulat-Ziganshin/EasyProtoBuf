@@ -1,0 +1,23 @@
+syntax = "proto3";
+package app.std.easypb;
+
+message int32_t { int32 dummy = 1; }
+message int64_t { int32 dummy = 1; }
+message uint32_t { int32 dummy = 1; }
+message uint64_t { int32 dummy = 1; }
+
+enum Kind {
+  ZERO = 0;
+  ONE = 1;
+}
+
+message Shadow {
+  string text = 1;
+  int32 value = 2;
+  int64 value64 = 3;
+  uint32 uvalue = 4;
+  uint64 uvalue64 = 5;
+  repeated int32 values = 6;
+  map<string, int32> lookup = 7;
+  Kind kind = 8;
+}
