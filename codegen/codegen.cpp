@@ -261,6 +261,15 @@ std::string protobuf_type_as_str(const FieldDescriptorProto& field, const MapTyp
     return std::string(pbtype_name(field));
 }
 
+// GCC 4.7 still tokenizes "<::" as the alternative token "<:" followed by ':',
+// even in contexts where newer C++11 compilers correctly interpret it as '<' + '::'.
+// Keep generated type spellings accepted by that compiler by separating the tokens.
+std::string cpp_type_legacy_safe(std::string type)
+{
+    return string_replace_all(type, "<::", "< ::");
+}
+
+
 // Return C++ type for the Protobuf field
 std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* map_type)
 {
@@ -274,19 +283,21 @@ std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* ma
     }
 
     if (map_type) {
-        return myformat(has_cpp_type ? field.options.cpp.type : option.cpp_map_type,
-                        base_cpp_type_as_str(*map_type->key_field),
-                        base_cpp_type_as_str(*map_type->value_field));
+        return cpp_type_legacy_safe(
+            myformat(has_cpp_type ? field.options.cpp.type : option.cpp_map_type,
+                     base_cpp_type_as_str(*map_type->key_field),
+                     base_cpp_type_as_str(*map_type->value_field)));
     }
 
     const std::string basetype_str = base_cpp_type_as_str(field);
 
     if (is_repeated(field)) {
-        return myformat(has_cpp_type ? field.options.cpp.type : option.cpp_repeated_type,
-                        basetype_str);
+        return cpp_type_legacy_safe(
+            myformat(has_cpp_type ? field.options.cpp.type : option.cpp_repeated_type,
+                     basetype_str));
     }
 
-    return has_cpp_type ? myformat(field.options.cpp.type, basetype_str)
+    return has_cpp_type ? cpp_type_legacy_safe(myformat(field.options.cpp.type, basetype_str))
                         : basetype_str;
 }
 

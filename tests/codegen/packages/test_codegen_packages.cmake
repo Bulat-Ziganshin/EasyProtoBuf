@@ -99,8 +99,8 @@ require_contains("${shadow_out}" "::int32_t value = 0;" "Global int32_t is not s
 require_contains("${shadow_out}" "::int64_t value64 = 0;" "Global int64_t is not shadowed")
 require_contains("${shadow_out}" "::uint32_t uvalue = 0;" "Global uint32_t is not shadowed")
 require_contains("${shadow_out}" "::uint64_t uvalue64 = 0;" "Global uint64_t is not shadowed")
-require_contains("${shadow_out}" "::std::vector<::int32_t> values;" "Repeated fixed-width type is globally qualified")
-require_contains("${shadow_out}" "::std::map<::std::string,::int32_t> lookup;" "Map fixed-width type is globally qualified")
+require_contains("${shadow_out}" "::std::vector< ::int32_t> values;" "Repeated fixed-width type is globally qualified")
+require_contains("${shadow_out}" "::std::map< ::std::string,::int32_t> lookup;" "Map fixed-width type is globally qualified")
 require_contains("${shadow_out}" "inline void encode(::easypb::Encoder &pb, const ::app::std::easypb::Shadow &x)" "Global EasyProtoBuf runtime is not shadowed")
 
 run_fail(invalid_out invalid_err ${CODEGEN} --descriptor-set "${invalid_std_pbs}")

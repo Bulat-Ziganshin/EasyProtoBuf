@@ -92,13 +92,13 @@ require_contains(enum_out
     "::easypb::enums::Job::Priority priority = ::easypb::enums::Job::Priority::HIGH;"
     "Nested enum field and default")
 require_contains(enum_out
-    "::std::vector<::easypb::enums::Status> history;"
+    "::std::vector< ::easypb::enums::Status> history;"
     "Repeated enum field")
 require_contains(enum_out
-    "::std::vector<::easypb::enums::Status> packed_history;"
+    "::std::vector< ::easypb::enums::Status> packed_history;"
     "Packed repeated enum field")
 require_contains(enum_out
-    "::std::map<::std::string,::easypb::enums::Status> names;"
+    "::std::map< ::std::string,::easypb::enums::Status> names;"
     "Enum-valued map")
 require_contains(enum_out
     "::easypb::enums::Status current = ::easypb::enums::Status::UNKNOWN;"
@@ -116,10 +116,10 @@ require_contains(enum_out
     "::easypb::enums::Job::Priority priority = ::easypb::enums::Job::Priority::HIGH;"
     "Qualified forward nested enum default")
 require_contains(enum_out
-    "::std::vector<::easypb::enums::Job::Priority> priorities;"
+    "::std::vector< ::easypb::enums::Job::Priority> priorities;"
     "Forward repeated nested enum field")
 require_contains(enum_out
-    "::std::map<::std::string,::easypb::enums::Job::Priority> priorities_by_name;"
+    "::std::map< ::std::string,::easypb::enums::Job::Priority> priorities_by_name;"
     "Forward nested enum map value")
 require_absent(enum_out
     "::int32_t status"

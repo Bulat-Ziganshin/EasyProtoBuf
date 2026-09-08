@@ -189,9 +189,9 @@ With the default settings, Codegen generates:
 ```cpp
     ::std::string name;
     ::Example::Item item;
-    ::std::vector<::std::string> aliases;
-    ::std::vector<::Example::Item> items;
-    ::std::map<::std::string, ::Example::Item> items_by_name;
+    ::std::vector< ::std::string> aliases;
+    ::std::vector< ::Example::Item> items;
+    ::std::map< ::std::string, ::Example::Item> items_by_name;
 ```
 
 Using command-line type templates:
@@ -210,7 +210,7 @@ produces:
     MyString name;
     ::Example::Item item;
     SmallVector<MyString> aliases;
-    SmallVector<::Example::Item> items;
+    SmallVector< ::Example::Item> items;
     FlatMap<MyString, ::Example::Item> items_by_name;
 ```
 
@@ -228,10 +228,10 @@ With the default settings, this generates:
 
 ```cpp
     FixedString<64> name;
-    std::unique_ptr<::Example::Item> item;
-    SmallVector<::std::string, 4> aliases;
-    std::deque<::Example::Item> items;
-    FlatMap<::std::string, ::Example::Item> items_by_name;
+    std::unique_ptr< ::Example::Item> item;
+    SmallVector< ::std::string, 4> aliases;
+    std::deque< ::Example::Item> items;
+    FlatMap< ::std::string, ::Example::Item> items_by_name;
 ```
 
 The selected C++ type does not change the Protobuf field type or the generated codec. Custom types therefore still have to support the operations required by the corresponding EasyProtoBuf encoder and decoder.

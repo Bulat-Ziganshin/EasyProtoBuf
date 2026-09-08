@@ -89,7 +89,7 @@ string(FIND "${nested_pbs_out}" "struct Outer" nested_outer_pos)
 string(FIND "${nested_pbs_out}" "struct Inner" nested_inner_pos)
 string(FIND "${nested_pbs_out}" "struct Leaf" nested_leaf_pos)
 string(FIND "${nested_pbs_out}" "::Outer::Inner item;" nested_holder_pos)
-string(FIND "${nested_pbs_out}" "::std::map<::std::string,::Outer::Inner> by_name;" nested_map_pos)
+string(FIND "${nested_pbs_out}" "::std::map< ::std::string,::Outer::Inner> by_name;" nested_map_pos)
 string(FIND "${nested_pbs_out}" "const ::Outer::Inner::Leaf &x" nested_leaf_encoder_pos)
 if(nested_outer_pos EQUAL -1 OR nested_inner_pos EQUAL -1 OR nested_leaf_pos EQUAL -1 OR
    nested_holder_pos EQUAL -1 OR nested_map_pos EQUAL -1 OR nested_leaf_encoder_pos EQUAL -1)
@@ -216,7 +216,7 @@ endif()
 
 run_ok(repeated_recursive_allowed repeated_recursive_allowed_err
     ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${repeated_recursive_pbs})
-string(FIND "${repeated_recursive_allowed}" "::std::vector<::RepeatedNode> children;" repeated_recursive_field_pos)
+string(FIND "${repeated_recursive_allowed}" "::std::vector< ::RepeatedNode> children;" repeated_recursive_field_pos)
 string(FIND "${repeated_recursive_allowed}" "put_repeated_message(1, x.children)" repeated_recursive_encoder_pos)
 string(FIND "${repeated_recursive_allowed}" "get_repeated_message(&x.children)" repeated_recursive_decoder_pos)
 if(repeated_recursive_field_pos EQUAL -1 OR repeated_recursive_encoder_pos EQUAL -1 OR
@@ -226,7 +226,7 @@ endif()
 
 run_ok(map_recursive_allowed map_recursive_allowed_err
     ${CODEGEN} --descriptor-set --allow-self-recursive-containers ${map_recursive_pbs})
-string(FIND "${map_recursive_allowed}" "::std::map<::std::string,::MapNode> children;" map_recursive_field_pos)
+string(FIND "${map_recursive_allowed}" "::std::map< ::std::string,::MapNode> children;" map_recursive_field_pos)
 string(FIND "${map_recursive_allowed}" "put_map_string_message(1, x.children)" map_recursive_encoder_pos)
 string(FIND "${map_recursive_allowed}" "get_map_string_message(&x.children)" map_recursive_decoder_pos)
 if(map_recursive_field_pos EQUAL -1 OR map_recursive_encoder_pos EQUAL -1 OR

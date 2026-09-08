@@ -41,8 +41,8 @@ struct Person
 {
     ::std::string name = "AnnA";
     double weight = 0;
-    ::std::vector<::int32_t> numbers;
-    ::std::map<::uint64_t,::std::string> labels;
+    ::std::vector< ::int32_t> numbers;
+    ::std::map< ::uint64_t,::std::string> labels;
 };
 
 inline void encode(::easypb::Encoder &pb, const Person &x)
