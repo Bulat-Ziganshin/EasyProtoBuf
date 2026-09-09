@@ -458,6 +458,14 @@ if(BUILD_TESTING)
         target_link_libraries(parser_tests PRIVATE easypb_proto_parser)
         add_test(NAME parser.unit COMMAND parser_tests)
     endif()
+
+    add_executable(codegen_schema_storage_test codegen/schema/test_storage.cpp)
+    target_link_libraries(codegen_schema_storage_test PRIVATE easypb_schema)
+    add_test(NAME codegen.schema.storage COMMAND codegen_schema_storage_test)
+
+    add_executable(codegen_schema_semantics_test codegen/schema/test_semantics.cpp)
+    target_link_libraries(codegen_schema_semantics_test PRIVATE easypb_schema)
+    add_test(NAME codegen.schema.semantics COMMAND codegen_schema_semantics_test)
 endif()
 
 if(EASYPB_BUILD_DIFFERENTIAL_TESTS)

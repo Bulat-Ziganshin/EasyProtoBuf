@@ -56,19 +56,25 @@ add_executable(easypb_codegen codegen/main.cpp codegen/cpp_names.cpp)
 set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
 target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl codegen)
 
+add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp)
+target_include_directories(easypb_schema
+    PUBLIC include codegen)
+
 if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
     add_library(easypb_proto_parser STATIC codegen/parser/proto_parser.cpp)
     target_include_directories(easypb_proto_parser
         PUBLIC include codegen codegen/parser)
+    target_link_libraries(easypb_proto_parser PUBLIC easypb_schema)
 
     target_sources(easypb_codegen PRIVATE
         codegen/parser/pretty_printer.cpp
         codegen/parser/parser_benchmark.cpp)
-    target_link_libraries(easypb_codegen PRIVATE easypb_proto_parser)
+    target_link_libraries(easypb_codegen PRIVATE easypb_proto_parser easypb_schema)
 
     target_compile_definitions(easypb_codegen PRIVATE
         EASYPB_CODEGEN_WITH_PROTO_PARSER=1)
 else()
+    target_link_libraries(easypb_codegen PRIVATE easypb_schema)
     target_compile_definitions(easypb_codegen PRIVATE
         EASYPB_CODEGEN_WITH_PROTO_PARSER=0)
 endif()

@@ -1,4 +1,5 @@
 #include "proto_parser.hpp"
+#include "schema_semantics.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -65,19 +66,25 @@
  *   scalar/custom type split                     -> set_type()
  *   descriptor representation of default values  -> apply_default()
  *   reserved/extension conflicts                 -> validate_message_constraints()
- *   symbol collection and lexical name lookup    -> collect_message_symbols(),
- *                                                    resolve_name()
- *   type-dependent default and packed checks     -> validate_default(),
- *                                                    resolve_message()
- *   complete post-parse descriptor fix-up        -> semantic_pass()
+ *   symbol indexing, lexical name lookup,        -> easypb_schema::index_file(),
+ *   type-dependent default and packed checks        easypb_schema::resolve_file()
+ *      (schema_semantics.hpp/.cpp, shared with the future linker)
+ *   source positions and deferred output         -> FieldSource,
+ *                                                    declaration_locations
  *
  * The parser intentionally constructs FileDescriptorProto directly rather
  * than building an intermediate AST.  Each parse_* method consumes one
  * grammar production from current_ and leaves current_ at the first token
- * following that production.
+ * following that production.  Declaration order defines descriptor indexes,
+ * so every parse_* method that appends to a repeated descriptor field knows
+ * the appended element's descriptor path (see schema.hpp) and records it in
+ * field_sources/declaration_locations immediately.
  */
 
 namespace easypb_proto {
+
+typedef easypb_schema::DescriptorPath DescriptorPath;
+typedef easypb_schema::FieldSource FieldSource;
 
 namespace {
 
@@ -87,55 +94,6 @@ std::string view_text(const str_view& value)
 }
 
 } // namespace
-
-StringPool::StringPool() {}
-
-StringPool::~StringPool()
-{
-    clear();
-}
-
-void StringPool::clear()
-{
-    for (std::size_t i = 0; i < blocks_.size(); ++i) delete[] blocks_[i];
-    blocks_.clear();
-    capacities_.clear();
-    used_.clear();
-}
-
-str_view StringPool::save(const std::string& value)
-{
-    return save(value.data(), value.size());
-}
-
-str_view StringPool::save(const char* data, std::size_t size)
-{
-    const std::size_t need = size + 1;
-    if (blocks_.empty() || capacities_.back() - used_.back() < need) {
-        std::size_t capacity = blocks_.empty() ? 4096u : capacities_.back() * 2u;
-        if (capacity > 1024u * 1024u) capacity = 1024u * 1024u;
-        if (capacity < need) capacity = need;
-        blocks_.push_back(new char[capacity]);
-        capacities_.push_back(capacity);
-        used_.push_back(0);
-    }
-
-    char* destination = blocks_.back() + used_.back();
-    if (size != 0) std::memcpy(destination, data, size);
-    destination[size] = '\0';
-    used_.back() += need;
-    return str_view(destination, size);
-}
-
-ParsedProto::ParsedProto() {}
-
-void ParsedProto::clear()
-{
-    file = FileDescriptorProto();
-    imports.clear();
-    warnings.clear();
-    strings.clear();
-}
 
 namespace {
 
@@ -482,97 +440,12 @@ private:
     }
 };
 
-bool parse_unsigned_integer(const std::string& text, std::uint64_t& result)
-{
-    if (text.empty()) return false;
-    unsigned base = 10;
-    std::size_t position = 0;
-    if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
-        base = 16;
-        position = 2;
-    } else if (text.size() > 1 && text[0] == '0') {
-        base = 8;
-        position = 1;
-    }
-
-    result = 0;
-    if (position == text.size()) return true;
-    for (; position < text.size(); ++position) {
-        const char c = text[position];
-        unsigned digit = 0;
-        if (c >= '0' && c <= '9') digit = static_cast<unsigned>(c - '0');
-        else if (c >= 'a' && c <= 'f') digit = static_cast<unsigned>(c - 'a' + 10);
-        else if (c >= 'A' && c <= 'F') digit = static_cast<unsigned>(c - 'A' + 10);
-        else return false;
-        if (digit >= base) return false;
-        if (result > (UINT64_MAX - digit) / base) return false;
-        result = result * base + digit;
-    }
-    return true;
-}
-
-bool parse_signed_32(const std::string& text, std::int32_t& result)
-{
-    if (text.empty()) return false;
-    bool negative = false;
-    std::size_t start = 0;
-    if (text[0] == '+' || text[0] == '-') {
-        negative = text[0] == '-';
-        start = 1;
-    }
-    if (start == text.size()) return false;
-    std::uint64_t magnitude = 0;
-    if (!parse_unsigned_integer(text.substr(start), magnitude)) return false;
-    const std::uint64_t limit = negative ? 2147483648ull : 2147483647ull;
-    if (magnitude > limit) return false;
-    if (negative && magnitude == 2147483648ull) result = INT32_MIN;
-    else result = negative ? -static_cast<std::int32_t>(magnitude)
-                           : static_cast<std::int32_t>(magnitude);
-    return true;
-}
-
-bool parse_signed_64(const std::string& text, std::int64_t& result)
-{
-    if (text.empty()) return false;
-    bool negative = false;
-    std::size_t start = 0;
-    if (text[0] == '+' || text[0] == '-') {
-        negative = text[0] == '-';
-        start = 1;
-    }
-    if (start == text.size()) return false;
-    std::uint64_t magnitude = 0;
-    if (!parse_unsigned_integer(text.substr(start), magnitude)) return false;
-    const std::uint64_t negative_limit = (static_cast<std::uint64_t>(INT64_MAX) + 1u);
-    const std::uint64_t limit = negative ? negative_limit : static_cast<std::uint64_t>(INT64_MAX);
-    if (magnitude > limit) return false;
-    if (negative && magnitude == negative_limit) result = INT64_MIN;
-    else result = negative ? -static_cast<std::int64_t>(magnitude)
-                           : static_cast<std::int64_t>(magnitude);
-    return true;
-}
-
-bool parse_unsigned_with_optional_plus(const std::string& text, std::uint64_t maximum)
-{
-    std::size_t start = 0;
-    if (!text.empty() && text[0] == '+') start = 1;
-    if (start == text.size() || (!text.empty() && text[0] == '-')) return false;
-    std::uint64_t value = 0;
-    return parse_unsigned_integer(text.substr(start), value) && value <= maximum;
-}
-
-bool is_float_text(const std::string& text)
-{
-    std::size_t start = 0;
-    if (!text.empty() && (text[0] == '+' || text[0] == '-')) start = 1;
-    const std::string body = text.substr(start);
-    if (body == "inf" || body == "nan") return true;
-    if (body.empty()) return false;
-    char* end = 0;
-    errno = 0;
-    (void)std::strtod(text.c_str(), &end);
-    return end != text.c_str() && *end == '\0' && errno != ERANGE;
-}
+// The shared helpers parse_unsigned_integer, parse_signed_32, is_float_text
+// and the scalar-type classifiers (builtin_type, packable_type,
+// valid_map_key_type) live in schema_semantics.hpp/.cpp so the parser and
+// the shared semantic passes classify types and validate scalar defaults
+// identically. The 64-bit default-range helpers stay private to the semantic
+// module: default range validation moved there with validate_default.
 
 // FileDescriptorProto stores floating defaults in the same canonical form as
 // protobuf's SimpleFtoa/SimpleDtoa: first try a non-over-precise decimal
@@ -683,50 +556,6 @@ std::string camel_case(const std::string& input)
     return output;
 }
 
-int builtin_type(const std::string& name)
-{
-    if (name == "double") return FieldDescriptorProto::TYPE_DOUBLE;
-    if (name == "float") return FieldDescriptorProto::TYPE_FLOAT;
-    if (name == "int64") return FieldDescriptorProto::TYPE_INT64;
-    if (name == "uint64") return FieldDescriptorProto::TYPE_UINT64;
-    if (name == "int32") return FieldDescriptorProto::TYPE_INT32;
-    if (name == "fixed64") return FieldDescriptorProto::TYPE_FIXED64;
-    if (name == "fixed32") return FieldDescriptorProto::TYPE_FIXED32;
-    if (name == "bool") return FieldDescriptorProto::TYPE_BOOL;
-    if (name == "string") return FieldDescriptorProto::TYPE_STRING;
-    if (name == "bytes") return FieldDescriptorProto::TYPE_BYTES;
-    if (name == "uint32") return FieldDescriptorProto::TYPE_UINT32;
-    if (name == "sfixed32") return FieldDescriptorProto::TYPE_SFIXED32;
-    if (name == "sfixed64") return FieldDescriptorProto::TYPE_SFIXED64;
-    if (name == "sint32") return FieldDescriptorProto::TYPE_SINT32;
-    if (name == "sint64") return FieldDescriptorProto::TYPE_SINT64;
-    return 0;
-}
-
-bool packable_type(int type)
-{
-    return type != FieldDescriptorProto::TYPE_STRING &&
-           type != FieldDescriptorProto::TYPE_BYTES &&
-           type != FieldDescriptorProto::TYPE_MESSAGE &&
-           type != FieldDescriptorProto::TYPE_GROUP && type != 0;
-}
-
-bool valid_map_key_type(int type)
-{
-    return type == FieldDescriptorProto::TYPE_INT32 ||
-           type == FieldDescriptorProto::TYPE_INT64 ||
-           type == FieldDescriptorProto::TYPE_UINT32 ||
-           type == FieldDescriptorProto::TYPE_UINT64 ||
-           type == FieldDescriptorProto::TYPE_SINT32 ||
-           type == FieldDescriptorProto::TYPE_SINT64 ||
-           type == FieldDescriptorProto::TYPE_FIXED32 ||
-           type == FieldDescriptorProto::TYPE_FIXED64 ||
-           type == FieldDescriptorProto::TYPE_SFIXED32 ||
-           type == FieldDescriptorProto::TYPE_SFIXED64 ||
-           type == FieldDescriptorProto::TYPE_BOOL ||
-           type == FieldDescriptorProto::TYPE_STRING;
-}
-
 struct Constant
 {
     enum Kind {
@@ -749,12 +578,29 @@ struct FieldOptionState
     Constant default_value;
     bool has_packed;
     bool packed;
+    SourceLocation packed_location;
     bool has_cpp_type;
     std::string cpp_type;
 
     FieldOptionState()
         : has_default(false), has_packed(false), packed(false),
           has_cpp_type(false) {}
+};
+
+// Source provenance captured while parsing one field. The caller records it
+// as a FieldSource once the field's descriptor index (and therefore its
+// descriptor path) is known.
+struct FieldProvenance
+{
+    std::string raw_type_name;
+    SourceLocation type_location;
+    SourceLocation name_location;
+    bool has_default;
+    SourceLocation default_location;
+    bool has_packed;
+    SourceLocation packed_location;
+
+    FieldProvenance() : has_default(false), has_packed(false) {}
 };
 
 struct NumberRange
@@ -780,20 +626,25 @@ class Parser
 {
 public:
     Parser(const std::string& file_name, const char* source, std::size_t source_size,
-           ParsedProto& result)
+           ParsedProto& result, const ParseOptions& options)
         : file_name_(file_name), lexer_(source, source_size), out_(result),
-          seen_syntax_(false), seen_package_(false), seen_statement_(false)
+          seen_syntax_(false), seen_package_(false), seen_statement_(false),
+          defer_type_resolution_(options.defer_type_resolution)
     {
         current_ = lexer_.next();
         next_ = lexer_.next();
     }
 
     // ProtoFile <- EmptyStatement* SyntaxStatement? TopLevel* !.
-    // Dispatches TopLevel alternatives and then runs semantic_pass().
+    // Dispatches TopLevel alternatives and then runs the shared semantic
+    // passes (easypb_schema::index_file for both modes, plus
+    // easypb_schema::resolve_file for validation).
     void parse()
     {
         out_.file.name = out_.strings.save(file_name_);
         out_.file.has_name = true;
+        out_.physical_name = file_name_;
+        out_.from_descriptor_set = false;
 
         while (current_.kind != TOKEN_END) {
             // EmptyStatement
@@ -814,14 +665,28 @@ public:
             if (accept_keyword("package")) parse_package();
             else if (accept_keyword("import")) parse_import();
             else if (accept_keyword("option")) parse_option_statement();
-            else if (accept_keyword("message")) out_.file.message_type.push_back(parse_message(std::vector<std::string>()));
-            else if (accept_keyword("enum")) out_.file.enum_type.push_back(parse_enum(std::vector<std::string>()));
-            else if (accept_keyword("extend")) parse_extend(std::vector<std::string>());
+            else if (accept_keyword("message")) {
+                const SourceLocation name_location = current_.location;
+                const DescriptorPath path = easypb_schema::file_message_path(
+                    static_cast<int>(out_.file.message_type.size()));
+                out_.file.message_type.push_back(
+                    parse_message(path));
+                out_.declaration_locations[path] = name_location;
+            }
+            else if (accept_keyword("enum")) {
+                const SourceLocation name_location = current_.location;
+                const DescriptorPath path = easypb_schema::file_enum_path(
+                    static_cast<int>(out_.file.enum_type.size()));
+                out_.file.enum_type.push_back(
+                    parse_enum(path));
+                out_.declaration_locations[path] = name_location;
+            }
+            else if (accept_keyword("extend")) parse_extend();
             else if (accept_keyword("service")) parse_service();
             else fail("expected a top-level .proto statement");
         }
 
-        semantic_pass();
+        run_semantic_passes();
     }
 
 private:
@@ -833,7 +698,7 @@ private:
     bool seen_syntax_;
     bool seen_package_;
     bool seen_statement_;
-    std::vector<std::string> service_names_;
+    bool defer_type_resolution_;
 
     void advance()
     {
@@ -938,15 +803,24 @@ private:
     void parse_package()
     {
         if (seen_package_) fail("duplicate package declaration");
+        const SourceLocation name_location = current_.location;
         const std::string name = full_identifier(false);
         expect_symbol(';');
         out_.file.package = out_.strings.save(name);
         out_.file.has_package = true;
+        // The package name lives at FileDescriptorProto field 2, a singular
+        // field addressed by the one-element path [2]. The position serves
+        // cross-file package-collision diagnostics during indexing.
+        DescriptorPath package_path;
+        package_path.push_back(2);
+        out_.declaration_locations[package_path] = name_location;
         seen_package_ = true;
     }
 
     // Import <- "import" ("public" / "weak")? StringSequence ";"
-    // Imports are retained in ParsedProto::imports; files are not loaded here.
+    // Imports are retained in both ParsedProto::imports (with positions) and
+    // the authoritative FileDescriptorProto dependency lists; files are not
+    // loaded here.
     void parse_import()
     {
         ImportInfo info;
@@ -956,6 +830,13 @@ private:
         info.path = string_sequence();
         expect_symbol(';');
         out_.imports.push_back(info);
+        out_.file.dependency.push_back(out_.strings.save(info.path));
+        const int index = static_cast<int>(out_.file.dependency.size() - 1);
+        if (info.modifier == ImportInfo::PUBLIC_IMPORT) {
+            out_.file.public_dependency.push_back(index);
+        } else if (info.modifier == ImportInfo::WEAK_IMPORT) {
+            out_.file.weak_dependency.push_back(index);
+        }
     }
 
     // OptionNamePart <- Identifier / "(" "."? FullIdentifier ")"
@@ -1098,12 +979,21 @@ private:
 
     // Service <- "service" Identifier "{" ServiceElement* "}"
     // ServiceElement <- EmptyStatement / OptionStatement / Rpc
-    // Services are accepted so message schemas can be consumed by Codegen,
-    // but only their names survive until package-scope validation because
-    // service descriptors are outside EasyProtoBuf's trimmed model.
+    // Services are accepted so message schemas can be consumed by Codegen.
+    // Only the service names are retained in the trimmed descriptor model
+    // because EasyProtoBuf generates message codecs rather than RPC APIs;
+    // the names still participate in package-scope collision validation.
     void parse_service()
     {
-        service_names_.push_back(identifier());
+        const SourceLocation name_location = current_.location;
+        const std::string name = identifier();
+        ServiceDescriptorProto service;
+        service.name = out_.strings.save(name);
+        service.has_name = true;
+        const DescriptorPath path = easypb_schema::file_service_path(
+            static_cast<int>(out_.file.service.size()));
+        out_.file.service.push_back(service);
+        out_.declaration_locations[path] = name_location;
         expect_symbol('{');
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated service body");
@@ -1144,6 +1034,7 @@ private:
                 }
                 state.has_packed = true;
                 state.packed = value.text == "true";
+                state.packed_location = value.location;
             } else if (name == "(easypb.cpp).type") {
                 if (state.has_cpp_type) {
                     throw ParseFailure(option_location,
@@ -1178,7 +1069,7 @@ private:
         if (current_.kind != TOKEN_INTEGER) fail("expected positive field number");
         const SourceLocation where = current_.location;
         std::uint64_t number = 0;
-        if (!parse_unsigned_integer(current_.text, number) || number == 0 || number > 536870911ull) {
+        if (!easypb_schema::parse_unsigned_integer(current_.text, number) || number == 0 || number > 536870911ull) {
             throw ParseFailure(where, "field number must be in range 1..536870911");
         }
         if (number >= 19000ull && number <= 19999ull) {
@@ -1195,7 +1086,7 @@ private:
         if (current_.kind != TOKEN_INTEGER) fail("expected positive field number");
         const SourceLocation where = current_.location;
         std::uint64_t number = 0;
-        if (!parse_unsigned_integer(current_.text, number) || number == 0 || number > 536870911ull) {
+        if (!easypb_schema::parse_unsigned_integer(current_.text, number) || number == 0 || number > 536870911ull) {
             throw ParseFailure(where, "field number must be in range 1..536870911");
         }
         advance();
@@ -1214,19 +1105,27 @@ private:
         if (current_.kind != TOKEN_INTEGER) fail("expected enum integer value");
         const std::string text = sign + current_.text;
         std::int32_t number = 0;
-        if (!parse_signed_32(text, number)) throw ParseFailure(where, "enum value does not fit int32");
+        if (!easypb_schema::parse_signed_32(text, number)) throw ParseFailure(where, "enum value does not fit int32");
         advance();
         return number;
     }
 
     // Converts the TypeName parsed by parse_field()/parse_map() into
-    // an immediate scalar type or a deferred custom type_name.
+    // an immediate scalar type or a deferred custom type_name. In deferred
+    // mode a named type is left unresolved (has_type == false) with its raw
+    // source spelling; standalone mode keeps the historical TYPE_MESSAGE
+    // compatibility placeholder until the shared resolution pass runs.
     void set_type(FieldDescriptorProto& field, const std::string& type_name)
     {
-        const int scalar = builtin_type(type_name);
+        const int scalar = easypb_schema::builtin_type(type_name);
         if (scalar != 0) {
             field.type = scalar;
             field.has_type = true;
+        } else if (defer_type_resolution_) {
+            field.type = 0;
+            field.has_type = false;
+            field.type_name = out_.strings.save(type_name);
+            field.has_type_name = true;
         } else {
             field.type = FieldDescriptorProto::TYPE_MESSAGE;
             field.has_type = true;
@@ -1268,7 +1167,7 @@ private:
             if (value.kind != Constant::INTEGER_VALUE && value.kind != Constant::FLOAT_VALUE) {
                 throw ParseFailure(value.location, "floating-point default must be numeric, inf, or nan");
             }
-            if (!is_float_text(value.text)) {
+            if (!easypb_schema::is_float_text(value.text)) {
                 throw ParseFailure(value.location, "invalid floating-point default");
             }
             stored = canonical_float_default(
@@ -1288,11 +1187,45 @@ private:
         field.has_default_value = true;
     }
 
+    // Records one parsed field's source provenance under its descriptor
+    // path. The caller invokes this right after appending the field, when
+    // the field index is known.
+    void record_field_source(const DescriptorPath& message_path,
+                             std::size_t field_index,
+                             const FieldProvenance& provenance)
+    {
+        FieldSource source;
+        source.path = easypb_schema::message_field_path(
+            message_path, static_cast<int>(field_index));
+        source.raw_type_name = provenance.raw_type_name;
+        source.type_location = provenance.type_location;
+        if (provenance.has_default) source.default_location = provenance.default_location;
+        else source.default_location = easypb_schema::unknown_location();
+        if (provenance.has_packed) source.packed_location = provenance.packed_location;
+        else source.packed_location = easypb_schema::unknown_location();
+        out_.field_sources.push_back(source);
+        out_.declaration_locations[source.path] = provenance.name_location;
+    }
+
+    // Parses one field production, appends it to message.field, and records
+    // its source provenance.
+    void push_field(DescriptorProto& message, const DescriptorPath& message_path,
+                    bool oneof_field, std::int32_t oneof_index)
+    {
+        FieldProvenance provenance;
+        message.field.push_back(parse_field(oneof_field, oneof_index, &provenance));
+        record_field_source(message_path, message.field.size() - 1, provenance);
+    }
+
     // Field      <- Label? TypeName Identifier "=" FieldNumber
     //               FieldOptions? ";"
     // OneofField <- TypeName Identifier "=" FieldNumber FieldOptions? ";"
     // oneof_field selects the second production and records oneof_index.
-    FieldDescriptorProto parse_field(bool oneof_field, std::int32_t oneof_index)
+    // Provenance (raw type spelling and option locations) is reported through
+    // the out-parameter; extend declarations pass null because their fields
+    // are validated but not retained.
+    FieldDescriptorProto parse_field(bool oneof_field, std::int32_t oneof_index,
+                                     FieldProvenance* provenance)
     {
         FieldDescriptorProto field;
 
@@ -1320,10 +1253,12 @@ private:
         }
 
         // TypeName Identifier "=" FieldNumber FieldOptions? ";"
+        const SourceLocation type_location = current_.location;
         const std::string type_name = full_identifier(true);
         if (type_name == "group") fail("group fields are not supported");
         set_type(field, type_name);
 
+        const SourceLocation name_location = current_.location;
         const std::string name = identifier();
         field.name = out_.strings.save(name);
         field.has_name = true;
@@ -1350,6 +1285,19 @@ private:
             field.options.has_cpp = true;
             field.has_options = true;
         }
+        if (provenance != 0) {
+            provenance->raw_type_name = type_name;
+            provenance->type_location = type_location;
+            provenance->name_location = name_location;
+            provenance->has_default = options.has_default;
+            if (options.has_default) {
+                provenance->default_location = options.default_value.location;
+            }
+            provenance->has_packed = options.has_packed;
+            if (options.has_packed) {
+                provenance->packed_location = options.packed_location;
+            }
+        }
         return field;
     }
 
@@ -1357,30 +1305,41 @@ private:
     //             Identifier "=" FieldNumber FieldOptions? ";"
     // parse_message() has already consumed the context-sensitive "map" token.
     // This method expands the source field into protoc-compatible descriptors:
-    // a synthetic nested XxxEntry message and a repeated message field.
-    void parse_map(DescriptorProto& message)
+    // a synthetic nested XxxEntry message and a repeated message field. The
+    // synthetic entry value keeps the source location of the map's value-type
+    // token while carrying its synthetic descriptor path.
+    void parse_map(DescriptorProto& message, const DescriptorPath& message_path,
+                   const SourceLocation& map_location)
     {
         expect_symbol('<');
         const SourceLocation key_location = current_.location;
         const std::string key_type_name = full_identifier(true);
-        const int key_type = builtin_type(key_type_name);
-        if (!valid_map_key_type(key_type)) {
+        const int key_type = easypb_schema::builtin_type(key_type_name);
+        if (!easypb_schema::valid_map_key_type(key_type)) {
             throw ParseFailure(key_location, "invalid map key type");
         }
         expect_symbol(',');
+        const SourceLocation value_location = current_.location;
         const std::string value_type_name = full_identifier(true);
         expect_symbol('>');
+        const SourceLocation field_name_location = current_.location;
         const std::string field_name = identifier();
         expect_symbol('=');
         const std::int32_t number = positive_field_number();
         const FieldOptionState options = field_options();
         expect_symbol(';');
         if (options.has_default || options.has_packed) {
-            throw ParseFailure(key_location, "map fields cannot have default or packed options");
+            // Point at the offending option value, not at the key type.
+            const SourceLocation option_location = options.has_default
+                ? options.default_value.location
+                : options.packed_location;
+            throw ParseFailure(option_location, "map fields cannot have default or packed options");
         }
 
         // Synthesize the nested map-entry descriptor expected by codegen.
         const std::string entry_name = camel_case(field_name) + "Entry";
+        const DescriptorPath entry_path = easypb_schema::message_nested_path(
+            message_path, static_cast<int>(message.nested_type.size()));
         DescriptorProto entry;
         entry.name = out_.strings.save(entry_name);
         entry.has_name = true;
@@ -1418,8 +1377,16 @@ private:
         field.has_number = true;
         field.label = FieldDescriptorProto::LABEL_REPEATED;
         field.has_label = true;
-        field.type = FieldDescriptorProto::TYPE_MESSAGE;
-        field.has_type = true;
+        // In deferred mode the synthetic entry reference stays unresolved
+        // like any other named type even though its entry is local; the
+        // loader/linker resolves it together with the imports.
+        if (defer_type_resolution_) {
+            field.type = 0;
+            field.has_type = false;
+        } else {
+            field.type = FieldDescriptorProto::TYPE_MESSAGE;
+            field.has_type = true;
+        }
         field.type_name = out_.strings.save(entry_name);
         field.has_type_name = true;
         if (options.has_cpp_type) {
@@ -1430,21 +1397,61 @@ private:
         }
 
         message.nested_type.push_back(entry);
+        out_.declaration_locations[entry_path] = map_location;
+        // The synthetic entry holds exactly two fields pushed above: key at
+        // index 0, value at index 1. A plain assert is avoided on purpose:
+        // it would vanish in Release builds.
+        const DescriptorPath key_path =
+            easypb_schema::message_field_path(entry_path, 0);
+        const DescriptorPath value_path =
+            easypb_schema::message_field_path(entry_path, 1);
+        out_.declaration_locations[key_path] = key_location;
+        out_.declaration_locations[value_path] = value_location;
+        {
+            FieldSource key_source;
+            key_source.path = key_path;
+            key_source.raw_type_name = key_type_name;
+            key_source.type_location = key_location;
+            key_source.default_location = easypb_schema::unknown_location();
+            key_source.packed_location = easypb_schema::unknown_location();
+            out_.field_sources.push_back(key_source);
+        }
+        {
+            FieldSource value_source;
+            value_source.path = value_path;
+            value_source.raw_type_name = value_type_name;
+            value_source.type_location = value_location;
+            value_source.default_location = easypb_schema::unknown_location();
+            value_source.packed_location = easypb_schema::unknown_location();
+            out_.field_sources.push_back(value_source);
+        }
         message.field.push_back(field);
+        {
+            FieldSource field_source;
+            field_source.path = easypb_schema::message_field_path(
+                message_path, static_cast<int>(message.field.size() - 1));
+            field_source.raw_type_name = entry_name;
+            field_source.type_location = map_location;
+            field_source.default_location = easypb_schema::unknown_location();
+            field_source.packed_location = easypb_schema::unknown_location();
+            out_.field_sources.push_back(field_source);
+            out_.declaration_locations[field_source.path] = field_name_location;
+        }
     }
 
     // Message <- "message" Identifier "{" MessageElement* "}"
     // The caller has consumed "message".  This method owns MessageElement
     // dispatch and validates reserved/extension constraints before returning.
-    DescriptorProto parse_message(const std::vector<std::string>& parent_scope)
+    // message_path is this message's own descriptor path; declaration order
+    // defines the appended elements' indexes, so every nested declaration
+    // and field records its descriptor path immediately.
+    DescriptorProto parse_message(const DescriptorPath& message_path)
     {
         const std::string name = identifier();
         DescriptorProto message;
         message.name = out_.strings.save(name);
         message.has_name = true;
 
-        std::vector<std::string> scope = parent_scope;
-        scope.push_back(name);
         std::vector<NumberRange> reserved_ranges;
         std::set<std::string> reserved_names;
         std::vector<NumberRange> extension_ranges;
@@ -1456,20 +1463,34 @@ private:
             // the called parse_* function starts at the first token after the
             // keyword.  A plain field has no leading keyword and is the fallback.
             if (accept_symbol(';')) continue;                                      // EmptyStatement
-            if (accept_keyword("message")) message.nested_type.push_back(parse_message(scope)); // Message
-
-            else if (accept_keyword("enum")) message.enum_type.push_back(parse_enum(scope));     // Enum
-            else if (accept_keyword("oneof")) parse_oneof(message, scope);                         // Oneof
+            if (accept_keyword("message")) {                                       // Message
+                const SourceLocation name_location = current_.location;
+                const DescriptorPath nested_path =
+                    easypb_schema::message_nested_path(
+                        message_path,
+                        static_cast<int>(message.nested_type.size()));
+                message.nested_type.push_back(parse_message(nested_path));
+                out_.declaration_locations[nested_path] = name_location;
+            }
+            else if (accept_keyword("enum")) {                                     // Enum
+                const SourceLocation name_location = current_.location;
+                const DescriptorPath enum_path = easypb_schema::message_enum_path(
+                    message_path, static_cast<int>(message.enum_type.size()));
+                message.enum_type.push_back(parse_enum(enum_path));
+                out_.declaration_locations[enum_path] = name_location;
+            }
+            else if (accept_keyword("oneof")) parse_oneof(message, message_path); // Oneof
             else if (is_keyword("map") && next_is_symbol('<')) {
+                const SourceLocation map_location = current_.location;
                 advance();
-                parse_map(message);                                                        // MapField
+                parse_map(message, message_path, map_location);              // MapField
             }
             else if (accept_keyword("option")) parse_option_statement();                          // OptionStatement
             else if (accept_keyword("reserved")) parse_reserved(false, reserved_ranges, reserved_names); // ReservedMessage
             else if (accept_keyword("extensions")) parse_extensions(extension_ranges);            // Extensions
-            else if (accept_keyword("extend")) parse_extend(scope);                               // Extend
+            else if (accept_keyword("extend")) parse_extend();                               // Extend
             else if (is_keyword("service")) fail("service declarations are not allowed inside messages");
-            else message.field.push_back(parse_field(false, 0));                                  // Field
+            else push_field(message, message_path, false, 0);                                    // Field
         }
         validate_message_constraints(message, reserved_ranges, reserved_names, extension_ranges);
         return message;
@@ -1479,9 +1500,10 @@ private:
     //          (EmptyStatement / OptionStatement / OneofField)* "}"
     // The caller has consumed "oneof".  Fields are appended to message.field
     // and linked to the newly appended declaration through oneof_index.
-    void parse_oneof(DescriptorProto& message, const std::vector<std::string>& scope)
+    // message_path is the owning message's descriptor path.
+    void parse_oneof(DescriptorProto& message,
+                     const DescriptorPath& message_path)
     {
-        (void)scope;
         const SourceLocation name_location = current_.location;
         const std::string oneof_name = identifier();
         for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
@@ -1494,6 +1516,8 @@ private:
         declaration.has_name = true;
         const std::int32_t index = static_cast<std::int32_t>(message.oneof_decl.size());
         message.oneof_decl.push_back(declaration);
+        out_.declaration_locations[easypb_schema::message_oneof_path(
+            message_path, index)] = name_location;
         expect_symbol('{');
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated oneof body");
@@ -1506,7 +1530,7 @@ private:
             else if (is_keyword("map") && next_is_symbol('<')) {
                 fail("map fields are not allowed in oneof");
             } else {
-                message.field.push_back(parse_field(true, index));
+                push_field(message, message_path, true, index);
             }
         }
     }
@@ -1514,9 +1538,10 @@ private:
     // Enum <- "enum" Identifier "{" EnumElement* "}"
     // EnumElement alternatives (empty, option, reserved, value) are dispatched
     // here; enum-specific alias and proto3-first-value rules are checked here.
-    EnumDescriptorProto parse_enum(const std::vector<std::string>& scope)
+    // enum_path is this enum's own descriptor path, used to record each
+    // value's declaration location.
+    EnumDescriptorProto parse_enum(const DescriptorPath& enum_path)
     {
-        (void)scope;
         const std::string name = identifier();
         EnumDescriptorProto result;
         result.name = out_.strings.save(name);
@@ -1581,6 +1606,8 @@ private:
                 }
             }
             expect_symbol(';');
+            out_.declaration_locations[easypb_schema::enum_value_path(
+                enum_path, static_cast<int>(result.value.size()))] = value_location;
             result.value.push_back(value);
         }
 
@@ -1731,9 +1758,8 @@ private:
     // Extend <- "extend" TypeName "{" (EmptyStatement / Field)* "}"
     // The syntax is validated, but fields are not retained because the trimmed
     // FileDescriptorProto has no extension collection.
-    void parse_extend(const std::vector<std::string>& scope)
+    void parse_extend()
     {
-        (void)scope;
         const SourceLocation where = current_.location;
         if ((out_.file.has_syntax && view_text(out_.file.syntax) != "proto2")) fail("extend declarations are allowed only in proto2");
         (void)full_identifier(true);
@@ -1741,7 +1767,7 @@ private:
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated extend body");
             if (accept_symbol(';')) continue;
-            (void)parse_field(false, 0);
+            (void)parse_field(false, 0, 0);
         }
         Diagnostic warning;
         warning.file = file_name_;
@@ -1751,298 +1777,33 @@ private:
         out_.warnings.push_back(warning);
     }
 
-    std::string package_prefix() const
+    // Semantic driver after ProtoFile has been consumed. Both modes index
+    // the file with the shared easypb_schema::index_file (scope validation
+    // plus symbol table). Standalone mode then resolves against local
+    // declarations with easypb_schema::resolve_file, keeping the unresolved
+    // warnings. Deferred mode instead runs easypb_schema::validate_deferred_file,
+    // which applies only checks that need no type resolution: a locally
+    // resolvable kind must not decide packed/default validity, because
+    // shadowing imports may change the resolved type after linking. Named
+    // types therefore stay raw with has_type == false, silently.
+    void run_semantic_passes()
     {
-        if (!out_.file.has_package || out_.file.package.empty()) return std::string();
-        return "." + view_text(out_.file.package);
-    }
-
-    void add_symbol(std::map<std::string, int>& symbols, const std::string& name,
-                    int kind, const SourceLocation& where)
-    {
-        if (!symbols.insert(std::make_pair(name, kind)).second) {
-            throw ParseFailure(where, "duplicate type name " + name);
+        easypb_schema::SymbolIndex symbols;
+        easypb_schema::Diagnostic semantic_error;
+        if (!easypb_schema::index_file(out_, symbols, semantic_error)) {
+            throw ParseFailure(semantic_error.location, semantic_error.message);
         }
-    }
-
-    // Add one declaration to a protobuf lexical scope.  Enum values use their
-    // containing scope rather than the enum type's scope, so all declaration
-    // categories must share this table.
-    void add_scope_name(std::map<std::string, std::string>& names,
-                        const std::string& name,
-                        const std::string& kind,
-                        const std::string& scope)
-    {
-        const std::pair<std::map<std::string, std::string>::iterator, bool> inserted =
-            names.insert(std::make_pair(name, kind));
-        if (!inserted.second) {
-            fail("name collision in " +
-                 (scope.empty() ? std::string("global scope") : scope) +
-                 ": " + kind + " " + name + " conflicts with " +
-                 inserted.first->second);
-        }
-    }
-
-    // Validate the file/package scope shared by top-level declarations.
-    void validate_file_scope_names(const std::string& scope)
-    {
-        std::map<std::string, std::string> names;
-        for (std::size_t i = 0; i < out_.file.enum_type.size(); ++i) {
-            add_scope_name(names, view_text(out_.file.enum_type[i].name),
-                           "enum type", scope);
-        }
-        for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
-            add_scope_name(names, view_text(out_.file.message_type[i].name),
-                           "message", scope);
-        }
-        for (std::size_t i = 0; i < service_names_.size(); ++i) {
-            add_scope_name(names, service_names_[i], "service", scope);
-        }
-        for (std::size_t i = 0; i < out_.file.enum_type.size(); ++i) {
-            for (std::size_t j = 0; j < out_.file.enum_type[i].value.size(); ++j) {
-                add_scope_name(names, view_text(out_.file.enum_type[i].value[j].name),
-                               "enum value", scope);
+        if (defer_type_resolution_) {
+            if (!easypb_schema::validate_deferred_file(out_, semantic_error)) {
+                throw ParseFailure(semantic_error.location, semantic_error.message);
             }
+            return;
         }
-    }
-
-    // Validate one message scope, then recurse into each nested message scope.
-    void validate_message_scope_names(const DescriptorProto& message,
-                                      const std::string& parent)
-    {
-        const std::string scope = parent + "." + view_text(message.name);
-        std::map<std::string, std::string> names;
-        for (std::size_t i = 0; i < message.field.size(); ++i) {
-            add_scope_name(names, view_text(message.field[i].name), "field", scope);
-        }
-        for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
-            add_scope_name(names, view_text(message.nested_type[i].name),
-                           "nested message", scope);
-        }
-        for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-            add_scope_name(names, view_text(message.enum_type[i].name),
-                           "nested enum type", scope);
-        }
-        for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
-            add_scope_name(names, view_text(message.oneof_decl[i].name),
-                           "oneof", scope);
-        }
-        for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-            for (std::size_t j = 0; j < message.enum_type[i].value.size(); ++j) {
-                add_scope_name(names, view_text(message.enum_type[i].value[j].name),
-                               "enum value", scope);
-            }
-        }
-        for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
-            validate_message_scope_names(message.nested_type[i], scope);
-        }
-    }
-
-    typedef std::map<std::string, const EnumDescriptorProto*> EnumByName;
-
-    // Recursively collects fully-qualified message and enum names for
-    // the semantic type-resolution pass.
-    void collect_message_symbols(const DescriptorProto& message, const std::string& parent,
-                                 std::map<std::string, int>& symbols,
-                                 EnumByName& enum_types)
-    {
-        const std::string name = parent + "." + view_text(message.name);
-        SourceLocation synthetic;
-        add_symbol(symbols, name, FieldDescriptorProto::TYPE_MESSAGE, synthetic);
-        for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-            const std::string enum_name =
-                name + "." + view_text(message.enum_type[i].name);
-            add_symbol(symbols, enum_name, FieldDescriptorProto::TYPE_ENUM, synthetic);
-            enum_types[enum_name] = &message.enum_type[i];
-        }
-        for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
-            collect_message_symbols(message.nested_type[i], name, symbols, enum_types);
-        }
-    }
-
-    // Implements protobuf lexical name lookup: an absolute name is
-    // checked directly; a relative name is tried from the innermost scope
-    // outward to the package/global scope.
-    std::string resolve_name(const std::string& raw, const std::string& scope,
-                             const std::map<std::string, int>& symbols) const
-    {
-        if (!raw.empty() && raw[0] == '.') {
-            return symbols.find(raw) != symbols.end() ? raw : std::string();
-        }
-        std::string current_scope = scope;
-        for (;;) {
-            const std::string candidate = current_scope.empty() ? "." + raw : current_scope + "." + raw;
-            if (symbols.find(candidate) != symbols.end()) return candidate;
-            if (current_scope.empty()) break;
-            const std::size_t dot = current_scope.rfind('.');
-            if (dot == std::string::npos || dot == 0) current_scope.clear();
-            else current_scope.erase(dot);
-        }
-        return std::string();
-    }
-
-    void warning(const std::string& message,
-                 DiagnosticCode code = DIAGNOSTIC_GENERIC)
-    {
-        Diagnostic diagnostic;
-        diagnostic.file = file_name_;
-        diagnostic.warning = true;
-        diagnostic.message = message;
-        diagnostic.code = code;
-        out_.warnings.push_back(diagnostic);
-    }
-
-    // Type-dependent semantic validation for the textual default_value
-    // previously stored by apply_default().
-    void validate_default(const FieldDescriptorProto& field, bool unresolved,
-                          const EnumByName& enum_types)
-    {
-        if (!field.has_default_value) return;
-        const std::string value = view_text(field.default_value);
-        std::int32_t signed32 = 0;
-        std::int64_t signed64 = 0;
-        switch (field.type) {
-            case FieldDescriptorProto::TYPE_STRING:
-            case FieldDescriptorProto::TYPE_BYTES:
-                return;
-            case FieldDescriptorProto::TYPE_BOOL:
-                if (value != "true" && value != "false") fail("bool default must be true or false");
-                return;
-            case FieldDescriptorProto::TYPE_FLOAT:
-            case FieldDescriptorProto::TYPE_DOUBLE:
-                if (!is_float_text(value)) fail("invalid floating-point default");
-                return;
-            case FieldDescriptorProto::TYPE_ENUM:
-                if (value.empty()) fail("enum default must name an enum value");
-                {
-                    const std::string enum_name = view_text(field.type_name);
-                    const EnumByName::const_iterator found = enum_types.find(enum_name);
-                    if (found == enum_types.end()) {
-                        fail("cannot validate default for unknown enum type " + enum_name);
-                    }
-                    for (std::size_t i = 0; i < found->second->value.size(); ++i) {
-                        if (view_text(found->second->value[i].name) == value) return;
-                    }
-                    fail("enum type " + enum_name + " has no value named " + value);
-                }
-                return;
-            case FieldDescriptorProto::TYPE_MESSAGE:
-                if (unresolved) {
-                    warning("cannot validate default for unresolved imported type " + view_text(field.type_name));
-                    return;
-                }
-                fail("message fields cannot have defaults");
-                return;
-            case FieldDescriptorProto::TYPE_INT32:
-            case FieldDescriptorProto::TYPE_SINT32:
-            case FieldDescriptorProto::TYPE_SFIXED32:
-                if (!parse_signed_32(value, signed32)) fail("default does not fit signed 32-bit field");
-                return;
-            case FieldDescriptorProto::TYPE_UINT32:
-            case FieldDescriptorProto::TYPE_FIXED32:
-                if (!parse_unsigned_with_optional_plus(value, UINT32_MAX)) fail("default does not fit unsigned 32-bit field");
-                return;
-            case FieldDescriptorProto::TYPE_INT64:
-            case FieldDescriptorProto::TYPE_SINT64:
-            case FieldDescriptorProto::TYPE_SFIXED64:
-                if (!parse_signed_64(value, signed64)) fail("default does not fit signed 64-bit field");
-                return;
-            case FieldDescriptorProto::TYPE_UINT64:
-            case FieldDescriptorProto::TYPE_FIXED64:
-                if (!parse_unsigned_with_optional_plus(value, UINT64_MAX)) fail("default does not fit unsigned 64-bit field");
-                return;
-            default:
-                fail("unsupported field type in default validation");
-                return;
-        }
-    }
-
-    // Resolves every custom field TypeName in one Message subtree and
-    // applies semantic rules that require the resolved type: packed legality,
-    // oneof_index bounds, and default-value validation.
-    void resolve_message(DescriptorProto& message, const std::string& parent,
-                         const std::map<std::string, int>& symbols,
-                         const EnumByName& enum_types)
-    {
-        const std::string scope = parent + "." + view_text(message.name);
-        std::set<std::string> names;
-        std::set<std::int32_t> numbers;
-        for (std::size_t i = 0; i < message.field.size(); ++i) {
-            FieldDescriptorProto& field = message.field[i];
-            if (!names.insert(view_text(field.name)).second) fail("duplicate field name " + view_text(field.name));
-            if (!numbers.insert(field.number).second) fail("duplicate field number in message " + scope);
-
-            bool unresolved = false;
-            if (field.has_type_name) {
-                const std::string raw = view_text(field.type_name);
-                const std::string resolved = resolve_name(raw, scope, symbols);
-                if (!resolved.empty()) {
-                    field.type = symbols.find(resolved)->second;
-                    field.has_type = true;
-                    field.type_name = out_.strings.save(resolved);
-                } else {
-                    unresolved = true;
-                    warning("unresolved type " + raw + " in " + scope +
-                            "; it is kept as TYPE_MESSAGE until imports are linked",
-                            DIAGNOSTIC_UNRESOLVED_TYPE);
-                }
-            }
-
-            if (field.options.has_packed) {
-                if (field.label != FieldDescriptorProto::LABEL_REPEATED || !packable_type(field.type)) {
-                    fail("packed option is valid only on repeated primitive or enum fields");
-                }
-            }
-            if (field.has_oneof_index &&
-                (field.oneof_index < 0 ||
-                 static_cast<std::size_t>(field.oneof_index) >= message.oneof_decl.size())) {
-                fail("invalid oneof_index in message " + scope);
-            }
-            validate_default(field, unresolved, enum_types);
-        }
-
-        std::set<std::string> nested_names;
-        for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-            if (!nested_names.insert(view_text(message.enum_type[i].name)).second) {
-                fail("duplicate nested type name in " + scope);
-            }
-        }
-        for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
-            if (!nested_names.insert(view_text(message.nested_type[i].name)).second) {
-                fail("duplicate nested type name in " + scope);
-            }
-            resolve_message(message.nested_type[i], scope, symbols, enum_types);
-        }
-    }
-
-    // Semantic pass after ProtoFile has been consumed:
-    // 1. collect all local message/enum symbols;
-    // 2. resolve field type names and finish descriptor validation.
-    void semantic_pass()
-    {
-        // Pass 1: build the complete table before resolving any field, so
-        // forward references and mutually-referential messages work.
-        std::map<std::string, int> symbols;
-        EnumByName enum_types;
-        const std::string prefix = package_prefix();
-        SourceLocation synthetic;
-        validate_file_scope_names(prefix);
-        for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
-            validate_message_scope_names(out_.file.message_type[i], prefix);
-        }
-        for (std::size_t i = 0; i < out_.file.enum_type.size(); ++i) {
-            const std::string enum_name =
-                prefix + "." + view_text(out_.file.enum_type[i].name);
-            add_symbol(symbols, enum_name, FieldDescriptorProto::TYPE_ENUM, synthetic);
-            enum_types[enum_name] = &out_.file.enum_type[i];
-        }
-        for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
-            collect_message_symbols(out_.file.message_type[i], prefix,
-                                    symbols, enum_types);
-        }
-        // Pass 2: resolve TypeName values and apply type-dependent checks.
-        for (std::size_t i = 0; i < out_.file.message_type.size(); ++i) {
-            resolve_message(out_.file.message_type[i], prefix, symbols, enum_types);
+        std::set<const easypb_schema::SchemaFile*> visible;
+        visible.insert(&out_);
+        if (!easypb_schema::resolve_file(out_, symbols, visible, true,
+                                         semantic_error)) {
+            throw ParseFailure(semantic_error.location, semantic_error.message);
         }
     }
 };
@@ -2054,7 +1815,8 @@ bool parse_proto(const std::string& file_name,
                  const char* source,
                  std::size_t source_size,
                  ParsedProto& result,
-                 Diagnostic& error)
+                 Diagnostic& error,
+                 const ParseOptions& options)
 {
     result.clear();
     error = Diagnostic();
@@ -2064,7 +1826,7 @@ bool parse_proto(const std::string& file_name,
         return false;
     }
     try {
-        Parser parser(file_name, source, source_size, result);
+        Parser parser(file_name, source, source_size, result, options);
         parser.parse();
         return true;
     } catch (const ParseFailure& failure) {
@@ -2077,6 +1839,16 @@ bool parse_proto(const std::string& file_name,
         error.warning = false;
         return false;
     }
+}
+
+bool parse_proto(const std::string& file_name,
+                 const char* source,
+                 std::size_t source_size,
+                 ParsedProto& result,
+                 Diagnostic& error)
+{
+    const ParseOptions options;
+    return parse_proto(file_name, source, source_size, result, error, options);
 }
 
 

@@ -38,10 +38,12 @@ descriptor.pb.hpp decoder|
 - [`main.cpp`](main.cpp) — command-line parser, input-mode selection, file I/O, descriptor decoding, parser diagnostics, and utility-mode dispatch.
 - [`codegen.cpp`](codegen.cpp) — translates `FileDescriptorProto` into C++ code.
 - [`cpp_names.hpp`](cpp_names.hpp) / [`cpp_names.cpp`](cpp_names.cpp) — validate package namespace names and convert absolute Protobuf identities to C++ spellings.
-- [`descriptor.pb.hpp`](descriptor.pb.hpp) — internal trimmed C++ representation and EasyProtoBuf decoders for [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto).
+- [`descriptor.pb.hpp`](descriptor.pb.hpp) — internal trimmed C++ representation and EasyProtoBuf decoders for [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto). Besides messages, enums, and fields it carries file dependency lists (`dependency`, `public_dependency`, `weak_dependency`) and minimal service names.
+- [`schema.hpp`](schema.hpp) / [`schema.cpp`](schema.cpp) — parser-independent schema storage: string pool, diagnostics, `SchemaFile`/`SchemaSet` ownership, descriptor paths, and source metadata. Builds without the source parser.
+- [`schema_semantics.hpp`](schema_semantics.hpp) / [`schema_semantics.cpp`](schema_semantics.cpp) — shared symbol indexing (`SymbolIndex`, `index_file`) and local/strict field resolution (`resolve_file`) used by the parser and the future linker. Builds without the source parser.
 - [`easypb/options.proto`](easypb/options.proto) — EasyProtoBuf's Protobuf custom-option schema, currently including the per-field C++ type template.
-- [`parser/`](parser/) — `.proto` lexer/parser, descriptor pretty-printer, and parser benchmark helper.
-- [`parser/README.md`](parser/README.md) — parser API, lifetime and unresolved-import behavior.
+- [`parser/`](parser/) — `.proto` lexer/parser, descriptor pretty-printer, and parser benchmark helper (see [parser/README.md](parser/README.md) for the frontend API and behavior).
+- [`parser/README.md`](parser/README.md) — parser API, lifetime, dependency metadata, and unresolved-import/deferred behavior.
 - [`parser/grammar/`](parser/grammar/) — formal grammar and semantic notes.
 - [`utils.cpp`](utils.cpp) — common utility functions used by the generator.
 
@@ -49,11 +51,11 @@ The committed `descriptor.pb.hpp` intentionally uses the conventional `EASYPB_DE
 
 ## Parser boundary
 
-Only [`parser/proto_parser.cpp`](parser/proto_parser.cpp) belongs to the reusable parser library. The pretty-printer and benchmark are optional helpers linked into the full `codegen` executable and are not dependencies of parser consumers.
+The reusable parser library consists of [`parser/proto_parser.cpp`](parser/proto_parser.cpp) on top of the `easypb_schema` core (`schema.cpp`, `schema_semantics.cpp`). The pretty-printer and benchmark are optional helpers linked into the full `codegen` executable and are not dependencies of parser consumers. The schema core itself has no source-parser dependency: descriptor-only builds link it without any parser object files.
 
-The parser returns the same trimmed descriptor structures that descriptor-set input decodes into, so generation after the frontend boundary does not depend on whether the original input was `.proto` or `.pbs`.
+The parser returns an owned `easypb_schema::SchemaFile` (aliased as `ParsedProto`): the same trimmed descriptor structures that descriptor-set input decodes into, plus source provenance (`field_sources`, `declaration_locations`, location-bearing `imports`). Generation after the frontend boundary does not depend on whether the original input was `.proto` or `.pbs`.
 
-Imports are parsed and recorded but are not loaded yet. Unresolved imported types are therefore a frontend diagnostic; `main.cpp` refuses to pass such source schemas to the generator. See [the parser documentation](parser/README.md) for the parser-level behavior.
+Imports are parsed and recorded — in both the `imports` vector and the authoritative `FileDescriptorProto` dependency lists — but are not loaded yet. Unresolved imported types are therefore a frontend diagnostic; `main.cpp` refuses to pass such source schemas to the generator. The deferred `parse_proto` overload additionally leaves every named type unresolved without warnings so the future loader can link a set of files. See [the parser documentation](parser/README.md) for the parser-level behavior.
 
 ## Protobuf and C++ names
 

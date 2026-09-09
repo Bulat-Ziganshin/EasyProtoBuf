@@ -17,17 +17,26 @@ target("tutorial")
     set_kind("binary")
     add_files("examples/tutorial/main.cpp")
 
+target("easypb_schema")
+    set_kind("static")
+    add_includedirs("codegen", {public = true})
+    add_files("codegen/schema.cpp", "codegen/schema_semantics.cpp")
+target_end()
+
 if has_config("codegen_parser") then
     target("easypb_proto_parser")
         set_kind("static")
         add_includedirs("codegen", "codegen/parser", {public = true})
         add_files("codegen/parser/proto_parser.cpp")
+        add_deps("easypb_schema")
+    target_end()
 end
 
 target("codegen")
     set_kind("binary")
     add_includedirs("3rd-party/popl", "codegen")
     add_files("codegen/main.cpp", "codegen/cpp_names.cpp")
+    add_deps("easypb_schema")
     if has_config("codegen_parser") then
         add_defines("EASYPB_CODEGEN_WITH_PROTO_PARSER=1")
         add_files("codegen/parser/pretty_printer.cpp",

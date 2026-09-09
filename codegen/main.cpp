@@ -106,6 +106,11 @@ std::string format_diagnostic(const easypb_proto::Diagnostic& diagnostic)
     return output.str();
 }
 
+// Gating on DIAGNOSTIC_UNRESOLVED_TYPE alone is sufficient: the companion
+// generic "cannot validate default for unresolved imported type" warning is
+// only reachable for a field already reported as unresolved (resolve_file
+// warns about the type before validating its default), so it never appears
+// without the unresolved-type warning alongside it.
 bool has_unresolved_types(const easypb_proto::ParsedProto& parsed)
 {
     for (std::size_t i = 0; i < parsed.warnings.size(); ++i) {

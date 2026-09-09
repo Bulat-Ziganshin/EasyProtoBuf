@@ -6,86 +6,44 @@
 #include <vector>
 
 #include "descriptor.pb.hpp"
+#include "schema.hpp"
 
 namespace easypb_proto {
 
-struct SourceLocation
-{
-    std::size_t offset;
-    std::size_t line;
-    std::size_t column;
+// Storage, diagnostics, and schema ownership live in easypb_schema so the
+// descriptor model and the semantic passes can be reused without the source
+// parser. The names below remain visible here for compatibility.
+typedef easypb_schema::SourceLocation SourceLocation;
+typedef easypb_schema::DiagnosticCode DiagnosticCode;
+using easypb_schema::DIAGNOSTIC_GENERIC;
+using easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE;
+typedef easypb_schema::Diagnostic Diagnostic;
+typedef easypb_schema::ImportInfo ImportInfo;
+typedef easypb_schema::StringPool StringPool;
+typedef easypb_schema::SchemaFile ParsedProto;
 
-    SourceLocation() : offset(0), line(1), column(1) {}
+struct ParseOptions {
+    // When true, parse syntax, record declarations/imports/source positions,
+    // and apply only checks that need no type resolution (duplicate
+    // declarations, field numbers, oneof bounds, packed labels, scalar
+    // packed/default rules), leaving every named field type unresolved
+    // (has_type == false with the raw spelling kept in type_name).
+    // Kind-dependent validation for named types (packed legality, enum
+    // defaults) is left for import linking: a locally resolvable kind must
+    // not decide the outcome, because shadowing imports may change the
+    // resolved type. No unresolved warnings are produced. When false (the
+    // default), keep the standalone behavior: resolve against local
+    // declarations and warn about imports.
+    bool defer_type_resolution;
+    ParseOptions() : defer_type_resolution(false) {}
 };
 
-enum DiagnosticCode
-{
-    DIAGNOSTIC_GENERIC,
-    DIAGNOSTIC_UNRESOLVED_TYPE
-};
-
-struct Diagnostic
-{
-    std::string file;
-    SourceLocation location;
-    std::string message;
-    bool warning;
-    DiagnosticCode code;
-
-    Diagnostic() : warning(false), code(DIAGNOSTIC_GENERIC) {}
-};
-
-struct ImportInfo
-{
-    enum Modifier {
-        NORMAL_IMPORT,
-        PUBLIC_IMPORT,
-        WEAK_IMPORT
-    };
-
-    std::string path;
-    Modifier modifier;
-    SourceLocation location;
-
-    ImportInfo() : modifier(NORMAL_IMPORT) {}
-};
-
-class StringPool
-{
-public:
-    StringPool();
-    ~StringPool();
-
-    str_view save(const std::string& value);
-    str_view save(const char* data, std::size_t size);
-    void clear();
-
-private:
-    std::vector<char*> blocks_;
-    std::vector<std::size_t> capacities_;
-    std::vector<std::size_t> used_;
-
-    StringPool(const StringPool&);
-    StringPool& operator=(const StringPool&);
-};
-
-// Owns the descriptor tree and every string referenced by it. The source
-// buffer passed to parse_proto() is borrowed only while parse_proto() runs.
-class ParsedProto
-{
-public:
-    StringPool strings;
-    FileDescriptorProto file;
-    std::vector<ImportInfo> imports;
-    std::vector<Diagnostic> warnings;
-
-    ParsedProto();
-    void clear();
-
-private:
-    ParsedProto(const ParsedProto&);
-    ParsedProto& operator=(const ParsedProto&);
-};
+bool parse_proto(const std::string& file_name,
+                 const char* source,
+                 std::size_t source_size,
+                 ParsedProto& result,
+                 Diagnostic& error,
+                 const ParseOptions& options);
 
 bool parse_proto(const std::string& file_name,
                  const char* source,
@@ -101,6 +59,16 @@ inline bool parse_proto(const std::string& file_name,
                         Diagnostic& error)
 {
     return parse_proto(file_name, source.data(), source.size(), result, error);
+}
+
+inline bool parse_proto(const std::string& file_name,
+                        const std::string& source,
+                        ParsedProto& result,
+                        Diagnostic& error,
+                        const ParseOptions& options)
+{
+    return parse_proto(file_name, source.data(), source.size(),
+                       result, error, options);
 }
 
 } // namespace easypb_proto

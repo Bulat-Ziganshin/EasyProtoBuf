@@ -144,6 +144,17 @@ struct DescriptorProto
 };
 
 
+// Single .proto service. Only the name is retained: EasyProtoBuf Codegen
+// generates message codecs rather than RPC client/server APIs, but service
+// names participate in package-scope collision validation.
+struct ServiceDescriptorProto
+{
+    str_view name;
+
+    bool has_name = false;
+};
+
+
 // Single .proto file
 struct FileDescriptorProto
 {
@@ -151,7 +162,11 @@ struct FileDescriptorProto
     str_view package;
     std::vector<DescriptorProto> message_type;
     std::vector<EnumDescriptorProto> enum_type;
+    std::vector<ServiceDescriptorProto> service;
     str_view syntax;
+    std::vector<str_view> dependency;
+    std::vector<int32_t> public_dependency;
+    std::vector<int32_t> weak_dependency;
 
     bool has_name = false;
     bool has_package = false;
@@ -294,6 +309,23 @@ inline void decode(easypb::Decoder pb, DescriptorProto &x)
 }
 
 
+inline void decode(easypb::Decoder pb, ServiceDescriptorProto &x)
+{
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 1: pb.get_string(&x.name, &x.has_name); break;
+            default: pb.skip_field();
+        }
+    }
+
+    if(! x.has_name) {
+        throw easypb::missing_required_field("Decoded protobuf has no required field ServiceDescriptorProto.name");
+    }
+}
+
+
 inline void decode(easypb::Decoder pb, FileDescriptorProto &x)
 {
     while(pb.get_next_field())
@@ -302,8 +334,12 @@ inline void decode(easypb::Decoder pb, FileDescriptorProto &x)
         {
             case 1: pb.get_string(&x.name, &x.has_name); break;
             case 2: pb.get_string(&x.package, &x.has_package); break;
+            case 3: pb.get_repeated_string(&x.dependency); break;
             case 4: pb.get_repeated_message(&x.message_type); break;
             case 5: pb.get_repeated_message(&x.enum_type); break;
+            case 6: pb.get_repeated_message(&x.service); break;
+            case 10: pb.get_repeated_int32(&x.public_dependency); break;
+            case 11: pb.get_repeated_int32(&x.weak_dependency); break;
             case 12: pb.get_string(&x.syntax, &x.has_syntax); break;
             default: pb.skip_field();
         }
