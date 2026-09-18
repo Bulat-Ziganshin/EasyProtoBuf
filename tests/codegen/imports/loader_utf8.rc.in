@@ -1,0 +1,2 @@
+#include <windows.h>
+1 RT_MANIFEST "@EASYPB_LOADER_UTF8_MANIFEST@"

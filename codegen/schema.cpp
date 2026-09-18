@@ -1,9 +1,87 @@
 #include "schema.hpp"
+#include "logical_paths.hpp"
 
+#include <cstdint>
 #include <cstring>
+#include <map>
+#include <set>
+#include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace easypb_schema {
+
+namespace {
+
+std::string view_text(const str_view& value)
+{
+    return std::string(value.data(), value.size());
+}
+
+std::string importing_name(const SchemaFile& file)
+{
+    if (file.file.has_name) return view_text(file.file.name);
+    return std::string();
+}
+
+// Source coordinates come from imports only. When the descriptor list
+// and the location-bearing list agree positionally the index is used
+// directly; otherwise the first matching path supplies the position so
+// hand-built descriptor fixtures still locate their declaration.
+SourceLocation import_location(const SchemaFile& file,
+                               std::size_t dependency_index,
+                               const std::string& dependency)
+{
+    if (dependency_index < file.imports.size() &&
+        file.imports[dependency_index].path == dependency) {
+        return file.imports[dependency_index].location;
+    }
+    for (std::size_t i = 0; i < file.imports.size(); ++i) {
+        if (file.imports[i].path == dependency) return file.imports[i].location;
+    }
+    return unknown_location();
+}
+
+std::string modifier_text(ImportInfo::Modifier modifier)
+{
+    switch (modifier) {
+        case ImportInfo::PUBLIC_IMPORT: return "public ";
+        case ImportInfo::WEAK_IMPORT: return "weak ";
+        default: return "";
+    }
+}
+
+void clear_all_edges(SchemaSet& files)
+{
+    const std::vector<std::unique_ptr<SchemaFile> >& owned = files.files();
+    for (std::size_t i = 0; i < owned.size(); ++i) owned[i]->edges.clear();
+}
+
+bool fail_import(SchemaSet& files, const SchemaFile& importer,
+                 const SourceLocation& location, DiagnosticCode code,
+                 const std::string& message, Diagnostic& error)
+{
+    clear_all_edges(files);
+    error.file = importing_name(importer);
+    error.location = location;
+    error.message = message;
+    error.warning = false;
+    error.code = code;
+    return false;
+}
+
+std::string cycle_text(const std::vector<SchemaFile*>& chain)
+{
+    std::ostringstream output;
+    output << "import cycle: ";
+    for (std::size_t i = 0; i < chain.size(); ++i) {
+        if (i != 0) output << " -> ";
+        output << importing_name(*chain[i]);
+    }
+    return output.str();
+}
+
+} // namespace
 
 StringPool::StringPool() {}
 
@@ -192,6 +270,240 @@ const FieldSource* find_field_source(const SchemaFile& file,
         if (file.field_sources[i].path == path) return &file.field_sources[i];
     }
     return 0;
+}
+
+bool bind_import_edges(SchemaSet& files, bool allow_missing,
+                       Diagnostic& error)
+{
+    error = Diagnostic();
+    clear_all_edges(files);
+
+    const std::vector<std::unique_ptr<SchemaFile> >& owned = files.files();
+
+    for (std::size_t file_index = 0; file_index < owned.size(); ++file_index) {
+        SchemaFile& importer = *owned[file_index];
+        const std::string importer_name = importing_name(importer);
+        const std::size_t dependency_count = importer.file.dependency.size();
+
+        // Repeated dependency names are rejected before index checks so
+        // the duplicate spelling is reported instead of an aliasing edge.
+        {
+            std::set<std::string> seen;
+            for (std::size_t i = 0; i < dependency_count; ++i) {
+                const std::string name = view_text(importer.file.dependency[i]);
+                if (!seen.insert(name).second) {
+                    std::ostringstream message;
+                    message << "file \"" << importer_name
+                            << "\": duplicate import \"" << name << "\"";
+                    return fail_import(files, importer,
+                                       import_location(importer, i, name),
+                                       DIAGNOSTIC_INVALID_IMPORT,
+                                       message.str(), error);
+                }
+            }
+        }
+
+        // Logical spelling is validated identically for source,
+        // descriptor-set, and future plugin input.
+        for (std::size_t i = 0; i < dependency_count; ++i) {
+            const std::string name = view_text(importer.file.dependency[i]);
+            std::string reason;
+            if (!validate_logical_path(name, reason)) {
+                std::ostringstream message;
+                message << "file \"" << importer_name << "\": invalid import \""
+                        << name << "\": " << reason;
+                return fail_import(files, importer,
+                                   import_location(importer, i, name),
+                                   DIAGNOSTIC_INVALID_IMPORT,
+                                   message.str(), error);
+            }
+        }
+
+        // Index/modifier validation. The descriptor lists are authoritative
+        // for graph meaning; imports supplies positions only.
+        std::set<std::int32_t> public_indexes;
+        std::set<std::int32_t> weak_indexes;
+        for (std::size_t i = 0; i < importer.file.public_dependency.size(); ++i) {
+            const std::int32_t index = importer.file.public_dependency[i];
+            if (index < 0 ||
+                static_cast<std::size_t>(index) >= dependency_count) {
+                std::ostringstream message;
+                message << "file \"" << importer_name
+                        << "\": invalid public dependency index " << index
+                        << " (dependency count " << dependency_count << ")";
+                return fail_import(files, importer, unknown_location(),
+                                   DIAGNOSTIC_INVALID_IMPORT,
+                                   message.str(), error);
+            }
+            if (!public_indexes.insert(index).second) {
+                // The index is range-checked above, so the dependency and
+                // its declaration site are known: keep the position.
+                const std::string name =
+                    view_text(importer.file.dependency[static_cast<std::size_t>(index)]);
+                std::ostringstream message;
+                message << "file \"" << importer_name
+                        << "\": duplicate public dependency index " << index;
+                return fail_import(files, importer,
+                                   import_location(importer,
+                                                   static_cast<std::size_t>(index),
+                                                   name),
+                                   DIAGNOSTIC_INVALID_IMPORT,
+                                   message.str(), error);
+            }
+        }
+        for (std::size_t i = 0; i < importer.file.weak_dependency.size(); ++i) {
+            const std::int32_t index = importer.file.weak_dependency[i];
+            if (index < 0 ||
+                static_cast<std::size_t>(index) >= dependency_count) {
+                std::ostringstream message;
+                message << "file \"" << importer_name
+                        << "\": invalid weak dependency index " << index
+                        << " (dependency count " << dependency_count << ")";
+                return fail_import(files, importer, unknown_location(),
+                                   DIAGNOSTIC_INVALID_IMPORT,
+                                   message.str(), error);
+            }
+            if (!weak_indexes.insert(index).second) {
+                // The index is range-checked above, so the dependency and
+                // its declaration site are known: keep the position.
+                const std::string name =
+                    view_text(importer.file.dependency[static_cast<std::size_t>(index)]);
+                std::ostringstream message;
+                message << "file \"" << importer_name
+                        << "\": duplicate weak dependency index " << index;
+                return fail_import(files, importer,
+                                   import_location(importer,
+                                                   static_cast<std::size_t>(index),
+                                                   name),
+                                   DIAGNOSTIC_INVALID_IMPORT,
+                                   message.str(), error);
+            }
+        }
+        for (std::set<std::int32_t>::const_iterator it = public_indexes.begin();
+             it != public_indexes.end(); ++it) {
+            if (weak_indexes.find(*it) != weak_indexes.end()) {
+                const std::string name =
+                    view_text(importer.file.dependency[static_cast<std::size_t>(*it)]);
+                std::ostringstream message;
+                message << "file \"" << importer_name << "\": dependency "
+                        << *it << " (\"" << name
+                        << "\") is both public and weak";
+                return fail_import(files, importer,
+                                   import_location(importer,
+                                                   static_cast<std::size_t>(*it),
+                                                   name),
+                                   DIAGNOSTIC_INVALID_IMPORT,
+                                   message.str(), error);
+            }
+        }
+
+        for (std::size_t i = 0; i < dependency_count; ++i) {
+            const std::string name = view_text(importer.file.dependency[i]);
+            ImportInfo::Modifier modifier = ImportInfo::NORMAL_IMPORT;
+            const std::int32_t index = static_cast<std::int32_t>(i);
+            if (public_indexes.find(index) != public_indexes.end()) {
+                modifier = ImportInfo::PUBLIC_IMPORT;
+            } else if (weak_indexes.find(index) != weak_indexes.end()) {
+                modifier = ImportInfo::WEAK_IMPORT;
+            }
+            SchemaFile* target = files.find_file(name);
+            if (target == 0) {
+                if (allow_missing) {
+                    ImportEdge edge;
+                    edge.target = 0;
+                    edge.dependency_index = i;
+                    edge.modifier = modifier;
+                    importer.edges.push_back(edge);
+                    continue;
+                }
+                std::ostringstream message;
+                message << "file \"" << importer_name << "\": missing "
+                        << modifier_text(modifier) << "import \"" << name
+                        << "\"";
+                return fail_import(files, importer,
+                                   import_location(importer, i, name),
+                                   DIAGNOSTIC_MISSING_IMPORT,
+                                   message.str(), error);
+            }
+            ImportEdge edge;
+            edge.target = target;
+            edge.dependency_index = i;
+            edge.modifier = modifier;
+            importer.edges.push_back(edge);
+        }
+    }
+
+    // Cycle detection over bound edges. Null targets from allow_missing
+    // mode are skipped; cycles among available files are still rejected.
+    // The discovery cache prevents infinite reads, but this common pass
+    // owns final graph-cycle validation for every frontend.
+    std::map<SchemaFile*, int> color;
+    for (std::size_t i = 0; i < owned.size(); ++i) color[owned[i].get()] = 0;
+    std::vector<SchemaFile*> stack;
+
+    for (std::size_t root = 0; root < owned.size(); ++root) {
+        if (color[owned[root].get()] != 0) continue;
+        // Iterative depth-first search keeps the active chain explicit so
+        // the reported cycle names every edge including the closure.
+        std::vector<std::pair<SchemaFile*, std::size_t> > work;
+        work.push_back(std::make_pair(owned[root].get(), 0));
+        color[owned[root].get()] = 1;
+        stack.push_back(owned[root].get());
+
+        while (!work.empty()) {
+            SchemaFile* current = work.back().first;
+            std::size_t& next = work.back().second;
+            // Skip null targets from compatibility mode.
+            while (next < current->edges.size() &&
+                   current->edges[next].target == 0) {
+                ++next;
+            }
+            if (next >= current->edges.size()) {
+                color[current] = 2;
+                stack.pop_back();
+                work.pop_back();
+                continue;
+            }
+            SchemaFile* target = current->edges[next].target;
+            const std::size_t edge_index = current->edges[next].dependency_index;
+            ++next;
+            const int target_color = color[target];
+            if (target_color == 0) {
+                color[target] = 1;
+                stack.push_back(target);
+                work.push_back(std::make_pair(target, 0));
+            } else if (target_color == 1) {
+                // Report the whole discovery chain from the DFS-tree root
+                // through the cycle instead of only the closed loop, so
+                // the diagnostic carries the root-to-failure path (for
+                // example "root.proto -> middle.proto -> a.proto ->
+                // b.proto -> a.proto").
+                std::vector<SchemaFile*> chain = stack;
+                chain.push_back(target);
+                const std::string edge_name =
+                    view_text(current->file.dependency[edge_index]);
+                std::ostringstream message;
+                message << cycle_text(chain) << " (import \"" << edge_name
+                        << "\" in \"" << importing_name(*current)
+                        << "\" closes the cycle)";
+                const SourceLocation where =
+                    import_location(*current, edge_index, edge_name);
+                // error.file is the file whose declaration closes the
+                // cycle; the message itself names the discovery chain
+                // from the DFS-tree root with the entry point repeated
+                // at the end (for example "a.proto -> a.proto").
+                error.file = importing_name(*current);
+                error.location = where;
+                error.message = message.str();
+                error.warning = false;
+                error.code = DIAGNOSTIC_IMPORT_CYCLE;
+                clear_all_edges(files);
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 } // namespace easypb_schema

@@ -1,0 +1,5 @@
+syntax = "proto2";
+package second;
+message Shared {
+  optional int32 from_b = 1;
+}

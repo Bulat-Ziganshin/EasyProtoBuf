@@ -466,6 +466,95 @@ if(BUILD_TESTING)
     add_executable(codegen_schema_semantics_test codegen/schema/test_semantics.cpp)
     target_link_libraries(codegen_schema_semantics_test PRIVATE easypb_schema)
     add_test(NAME codegen.schema.semantics COMMAND codegen_schema_semantics_test)
+
+    add_executable(codegen_imports_graph_test codegen/imports/test_graph.cpp)
+    target_link_libraries(codegen_imports_graph_test PRIVATE easypb_schema)
+    add_test(NAME codegen.imports.graph COMMAND codegen_imports_graph_test)
+
+    add_executable(codegen_imports_graph_exhaustive_test
+        codegen/imports/test_graph_exhaustive.cpp)
+    target_link_libraries(codegen_imports_graph_exhaustive_test PRIVATE easypb_schema)
+    add_test(NAME codegen.imports.graph.exhaustive
+        COMMAND codegen_imports_graph_exhaustive_test)
+    set_tests_properties(codegen.imports.graph.exhaustive PROPERTIES
+        LABELS "property")
+
+    if(EASYPB_EXTENDED_TESTS)
+        add_executable(codegen_imports_graph_extended_test
+            codegen/imports/test_graph_extended.cpp)
+        target_link_libraries(codegen_imports_graph_extended_test PRIVATE easypb_schema)
+        add_test(NAME codegen.imports.graph.extended
+            COMMAND codegen_imports_graph_extended_test)
+        set_tests_properties(codegen.imports.graph.extended PROPERTIES
+            LABELS "extended;property")
+    endif()
+
+    if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
+        add_executable(codegen_imports_loader_test codegen/imports/test_loader.cpp)
+        target_include_directories(codegen_imports_loader_test PRIVATE
+            ${easypb_test_include_dir}
+            ${PROJECT_SOURCE_DIR}/codegen
+            ${PROJECT_SOURCE_DIR}/codegen/parser)
+        target_link_libraries(codegen_imports_loader_test PRIVATE easypb_proto_loader)
+        add_test(NAME codegen.imports.loader
+            COMMAND codegen_imports_loader_test
+                ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/loader)
+        # Pin the scratch directory explicitly: the test creates
+        # imports-loader-work below its working directory.
+        set_tests_properties(codegen.imports.loader PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+        if(EASYPB_EXTENDED_TESTS)
+            find_package(Threads REQUIRED)
+            add_executable(codegen_imports_loader_extended_test
+                codegen/imports/test_loader.cpp)
+            target_compile_definitions(codegen_imports_loader_extended_test PRIVATE
+                EASYPB_EXTENDED_TESTS=1)
+            target_include_directories(codegen_imports_loader_extended_test PRIVATE
+                ${easypb_test_include_dir}
+                ${PROJECT_SOURCE_DIR}/codegen
+                ${PROJECT_SOURCE_DIR}/codegen/parser)
+            target_link_libraries(codegen_imports_loader_extended_test PRIVATE
+                easypb_proto_loader Threads::Threads)
+            add_test(NAME codegen.imports.loader.extended
+                COMMAND codegen_imports_loader_extended_test
+                    ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/loader
+                    ./imports-loader-work-extended)
+            set_tests_properties(codegen.imports.loader.extended PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+                LABELS "extended;filesystem;stress")
+        endif()
+
+        # Run the same Windows loader suite with an activeCodePage UTF-8
+        # manifest as a secondary guard against accidental use of Win32 A
+        # filesystem APIs. Production path handling is code-page independent:
+        # narrow Windows paths are UTF-8 and every filesystem call uses W APIs.
+        # Needs a resource compiler; every supported Windows toolchain ships
+        # one (windres alongside MinGW GCC/Clang, rc.exe with MSVC). xmake
+        # defines no test executables, so there is no mirror there.
+        if(WIN32)
+            enable_language(RC)
+            set(EASYPB_LOADER_UTF8_MANIFEST
+                "${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/loader_utf8.manifest")
+            configure_file(codegen/imports/loader_utf8.rc.in
+                           loader_utf8_manifest.rc @ONLY)
+            add_executable(codegen_imports_loader_utf8_test
+                codegen/imports/test_loader.cpp
+                "${CMAKE_CURRENT_BINARY_DIR}/loader_utf8_manifest.rc")
+            target_include_directories(codegen_imports_loader_utf8_test PRIVATE
+                ${easypb_test_include_dir}
+                ${PROJECT_SOURCE_DIR}/codegen
+                ${PROJECT_SOURCE_DIR}/codegen/parser)
+            target_link_libraries(codegen_imports_loader_utf8_test PRIVATE
+                easypb_proto_loader)
+            add_test(NAME codegen.imports.loader.utf8
+                COMMAND codegen_imports_loader_utf8_test
+                    ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/loader
+                    ./imports-loader-work-utf8)
+            set_tests_properties(codegen.imports.loader.utf8 PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+        endif()
+    endif()
 endif()
 
 if(EASYPB_BUILD_DIFFERENTIAL_TESTS)

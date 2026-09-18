@@ -15,6 +15,16 @@
 #include "popl.hpp"
 #include "codegen.cpp"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #if EASYPB_CODEGEN_WITH_PROTO_PARSER
 #include "parser/parser_benchmark.hpp"
 #include "parser/pretty_printer.hpp"
@@ -66,6 +76,9 @@ const char* usage_text()
 
 bool read_file(const std::string& filename, std::string& contents)
 {
+    // Native file calls truncate at an embedded NUL while the spelling
+    // keeps its full length: refuse instead of reading a prefix.
+    if (filename.find('\0') != std::string::npos) return false;
     std::ifstream input(filename.c_str(), std::ios::in | std::ios::binary);
     if (!input) return false;
     contents.assign(std::istreambuf_iterator<char>(input),
@@ -318,8 +331,36 @@ CommandLine parse_cmdline(int argc, char** argv)
 
 } // namespace
 
+#ifdef _WIN32
+// Switches console output to UTF-8 so diagnostic file names and
+// generated output (both UTF-8) render correctly, restoring the
+// previous page when the guard dies. The destructor runs on every
+// return and on every C++ exception unwinding through main, including
+// the catch(...) below; only abnormal termination (abort, _exit, kill,
+// crash) can skip it, exactly like a manual chcp left behind. When
+// output is redirected the switch is harmless: the bytes stay UTF-8.
+class ConsoleUtf8Output {
+public:
+    ConsoleUtf8Output() : previous_(GetConsoleOutputCP()) {
+        SetConsoleOutputCP(CP_UTF8);
+    }
+    ~ConsoleUtf8Output() {
+        if (previous_ != 0) SetConsoleOutputCP(previous_);
+    }
+
+private:
+    UINT previous_;
+
+    ConsoleUtf8Output(const ConsoleUtf8Output&);
+    ConsoleUtf8Output& operator=(const ConsoleUtf8Output&);
+};
+#endif
+
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    const ConsoleUtf8Output console_utf8;
+#endif
     try {
         const CommandLine command = parse_cmdline(argc, argv);
         if (command.exit_after_help) return 0;
@@ -383,6 +424,10 @@ int main(int argc, char** argv)
     }
     catch (const std::exception& error) {
         std::fprintf(stderr, "Exception: %s\n", error.what());
+        return 1;
+    }
+    catch (...) {
+        std::fprintf(stderr, "Exception: unknown error\n");
         return 1;
     }
 

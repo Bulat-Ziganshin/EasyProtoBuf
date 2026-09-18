@@ -36,7 +36,10 @@ inline SourceLocation unknown_location()
 enum DiagnosticCode
 {
     DIAGNOSTIC_GENERIC,
-    DIAGNOSTIC_UNRESOLVED_TYPE
+    DIAGNOSTIC_UNRESOLVED_TYPE,
+    DIAGNOSTIC_INVALID_IMPORT,
+    DIAGNOSTIC_MISSING_IMPORT,
+    DIAGNOSTIC_IMPORT_CYCLE
 };
 
 struct Diagnostic
@@ -116,7 +119,8 @@ struct ImportEdge
 // import list (imports). The descriptor dependency lists in file
 // (dependency, public_dependency, weak_dependency) are authoritative for
 // graph meaning; imports supplies positions, not a second import policy.
-// Import edges are resolved by the source loader; until then edges is empty.
+// Import edges are built by bind_import_edges for every frontend; until
+// then edges is empty.
 class SchemaFile
 {
 public:
@@ -251,6 +255,34 @@ const FieldDescriptorProto* find_field(const SchemaFile& file,
                                        const DescriptorPath& path);
 const FieldSource* find_field_source(const SchemaFile& file,
                                      const DescriptorPath& path);
+
+// Rebuilds every file's import edges from its authoritative descriptor
+// dependency lists (dependency, public_dependency, weak_dependency) in
+// dependency-list order. Source coordinates come from imports only and
+// are never used for graph meaning, so this also works for
+// descriptor-origin files with empty physical_name and no parser linked.
+//
+// Validation covers dependency spellings, dependency indexes/modifiers
+// (negative, out-of-range, duplicate, overlapping public/weak) and
+// repeated dependency names. Missing targets are errors when
+// allow_missing is false (complete source loading and complete linking);
+// when allow_missing is true a missing target yields an edge with a null
+// pointer that stays identifiable by its dependency index (the explicit
+// single-file descriptor compatibility path in a later plan). Cycles are
+// always rejected, including cycles among available files when some
+// edges are missing.
+//
+// The binder never opens files and never falls back to the source
+// loader: names resolve only inside the supplied SchemaSet. A missing
+// entry in a plugin-style closure is a request/graph error, not a
+// search-path problem.
+//
+// On success every edge is bound and the function returns true. On
+// failure it clears all edges, fills error (failed import, importing
+// logical file, source position where available, cycle chain) and
+// returns false.
+bool bind_import_edges(SchemaSet& files, bool allow_missing,
+                       Diagnostic& error);
 
 } // namespace easypb_schema
 

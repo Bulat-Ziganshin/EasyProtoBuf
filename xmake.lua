@@ -20,7 +20,7 @@ target("tutorial")
 target("easypb_schema")
     set_kind("static")
     add_includedirs("codegen", {public = true})
-    add_files("codegen/schema.cpp", "codegen/schema_semantics.cpp")
+    add_files("codegen/schema.cpp", "codegen/schema_semantics.cpp", "codegen/logical_paths.cpp")
 target_end()
 
 if has_config("codegen_parser") then
@@ -29,6 +29,13 @@ if has_config("codegen_parser") then
         add_includedirs("codegen", "codegen/parser", {public = true})
         add_files("codegen/parser/proto_parser.cpp")
         add_deps("easypb_schema")
+    target_end()
+
+    target("easypb_proto_loader")
+        set_kind("static")
+        add_includedirs("codegen", "codegen/parser", {public = true})
+        add_files("codegen/proto_loader.cpp", "codegen/file_paths.cpp")
+        add_deps("easypb_proto_parser", "easypb_schema")
     target_end()
 end
 

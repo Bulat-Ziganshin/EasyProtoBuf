@@ -1,0 +1,6 @@
+syntax = "proto2";
+package test;
+import "shared.proto";
+message Left {
+  optional Shared shared = 1;
+}

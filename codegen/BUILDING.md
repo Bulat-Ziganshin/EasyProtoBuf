@@ -63,6 +63,18 @@ The nested-message checks in [`codegen.modes`](../tests/codegen/parser/test_code
 
 The parser unit tests are in [`../tests/codegen/parser/test_parser.cpp`](../tests/codegen/parser/test_parser.cpp). The real-world differential corpus and comparison harness against `protoc` live under [`../tests/codegen/parser/differential/`](../tests/codegen/parser/differential/).
 
+`codegen.imports.graph.exhaustive` is part of the normal suite. It deterministically enumerates every directed import graph with one through four files (66,066 graphs total) and compares `bind_import_edges()` against an independent transitive-closure reference. The test is intentionally default because it is in-memory and cheap.
+
+Slower deterministic stress/property tests are available separately:
+
+```sh
+cmake -S . -B build-extended -DCMAKE_BUILD_TYPE=Release -DEASYPB_EXTENDED_TESTS=ON
+cmake --build build-extended --config Release
+ctest --test-dir build-extended -C Release -L extended --output-on-failure
+```
+
+The extended suite adds large deterministic random import graphs, `allow_missing` graph cases, search-root-order and filesystem-failure matrices, and concurrent read-only loader runs. These tests are not registered by default and CI runs them once per operating system (Linux, Windows, macOS) with the default toolchain rather than multiplying them across the compatibility matrix.
+
 To verify the descriptor-set-only build separately:
 
 ```sh

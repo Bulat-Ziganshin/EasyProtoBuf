@@ -39,8 +39,11 @@ descriptor.pb.hpp decoder|
 - [`codegen.cpp`](codegen.cpp) — translates `FileDescriptorProto` into C++ code.
 - [`cpp_names.hpp`](cpp_names.hpp) / [`cpp_names.cpp`](cpp_names.cpp) — validate package namespace names and convert absolute Protobuf identities to C++ spellings.
 - [`descriptor.pb.hpp`](descriptor.pb.hpp) — internal trimmed C++ representation and EasyProtoBuf decoders for [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto). Besides messages, enums, and fields it carries file dependency lists (`dependency`, `public_dependency`, `weak_dependency`) and minimal service names.
-- [`schema.hpp`](schema.hpp) / [`schema.cpp`](schema.cpp) — parser-independent schema storage: string pool, diagnostics, `SchemaFile`/`SchemaSet` ownership, descriptor paths, and source metadata. Builds without the source parser.
+- [`schema.hpp`](schema.hpp) / [`schema.cpp`](schema.cpp) — parser-independent schema storage: string pool, diagnostics, `SchemaFile`/`SchemaSet` ownership, descriptor paths, source metadata, and the common import-edge binder (`bind_import_edges`). Builds without the source parser.
 - [`schema_semantics.hpp`](schema_semantics.hpp) / [`schema_semantics.cpp`](schema_semantics.cpp) — shared symbol indexing (`SymbolIndex`, `index_file`) and local/strict field resolution (`resolve_file`) used by the parser and the future linker. Builds without the source parser.
+- [`logical_paths.hpp`](logical_paths.hpp) / [`logical_paths.cpp`](logical_paths.cpp) — pure logical import-name validation shared by every frontend. No filesystem calls or platform headers, so descriptor-set and future plugin input reuse the same spelling rules.
+- [`file_paths.hpp`](file_paths.hpp) / [`file_paths.cpp`](file_paths.cpp) — native physical-path and file-identity operations for standalone source input. Owns every filesystem call and Windows path rule; never linked into the common schema core.
+- [`proto_loader.hpp`](proto_loader.hpp) / [`proto_loader.cpp`](proto_loader.cpp) — source-only discovery, caching, deferred parsing, and root selection in `easypb_proto`. Built as `easypb_proto_loader` in full builds only; descriptor-only and future plugin targets never link it.
 - [`easypb/options.proto`](easypb/options.proto) — EasyProtoBuf's Protobuf custom-option schema, currently including the per-field C++ type template.
 - [`parser/`](parser/) — `.proto` lexer/parser, descriptor pretty-printer, and parser benchmark helper (see [parser/README.md](parser/README.md) for the frontend API and behavior).
 - [`parser/README.md`](parser/README.md) — parser API, lifetime, dependency metadata, and unresolved-import/deferred behavior.
@@ -51,11 +54,19 @@ The committed `descriptor.pb.hpp` intentionally uses the conventional `EASYPB_DE
 
 ## Parser boundary
 
-The reusable parser library consists of [`parser/proto_parser.cpp`](parser/proto_parser.cpp) on top of the `easypb_schema` core (`schema.cpp`, `schema_semantics.cpp`). The pretty-printer and benchmark are optional helpers linked into the full `codegen` executable and are not dependencies of parser consumers. The schema core itself has no source-parser dependency: descriptor-only builds link it without any parser object files.
+The reusable parser library consists of [`parser/proto_parser.cpp`](parser/proto_parser.cpp) on top of the `easypb_schema` core (`schema.cpp`, `schema_semantics.cpp`, `logical_paths.cpp`). The pretty-printer and benchmark are optional helpers linked into the full `codegen` executable and are not dependencies of parser consumers. The schema core itself has no source-parser dependency: descriptor-only builds link it without any parser object files.
 
 The parser returns an owned `easypb_schema::SchemaFile` (aliased as `ParsedProto`): the same trimmed descriptor structures that descriptor-set input decodes into, plus source provenance (`field_sources`, `declaration_locations`, location-bearing `imports`). Generation after the frontend boundary does not depend on whether the original input was `.proto` or `.pbs`.
 
-Imports are parsed and recorded — in both the `imports` vector and the authoritative `FileDescriptorProto` dependency lists — but are not loaded yet. Unresolved imported types are therefore a frontend diagnostic; `main.cpp` refuses to pass such source schemas to the generator. The deferred `parse_proto` overload additionally leaves every named type unresolved without warnings so the future loader can link a set of files. See [the parser documentation](parser/README.md) for the parser-level behavior.
+Imports are parsed and recorded — in both the `imports` vector and the authoritative `FileDescriptorProto` dependency lists — but are not loaded yet. Unresolved imported types are therefore a frontend diagnostic; `main.cpp` refuses to pass such source schemas to the generator. The deferred `parse_proto` overload additionally leaves every named type unresolved without warnings so the loader can link a set of files. See [the parser documentation](parser/README.md) for the parser-level behavior.
+
+## Loader and logical file identity
+
+Filesystem discovery lives in the source-only loader ([`proto_loader.cpp`](proto_loader.cpp) on top of `file_paths.cpp` and the deferred parser), while the common schema module owns the validated import graph (`bind_import_edges` plus [`logical_paths.cpp`](logical_paths.cpp)), so descriptor-set input and the future plugin reuse those checks without file I/O.
+
+A logical name is the case-sensitive relative `/` path stored in `FileDescriptorProto.name` and `dependency` and reused for generated include names — a strict, platform-independent UTF-8 namespace, validated identically for every frontend with absolute spellings, backslashes, empty components, `.`/`..`, quotes, control characters, and malformed UTF-8 rejected. A physical file is identified by native identity (`st_dev`/`st_ino` on POSIX, volume plus file index on Windows), never by textual absolute-path comparison or by lowercasing, and paths are never resolved through symlinks or reparse points merely to decide containment: search roots are used in caller order with first-match-wins precedence, only absence advances the search, and any lexical or fold-based match is a containment candidate that native identity must confirm. Each unique file is read once and parsed deferred with `file.name` holding its logical identity and `physical_name` the disk path, and the discovery cache is populated before imports are followed, so cycles can neither repeat parsing nor recurse forever — final cycle validation belongs to the binder. Import diagnostics name the failing file in `Diagnostic.file`, the declaration site in `location` when source coordinates exist, a machine-readable `DiagnosticCode` (`DIAGNOSTIC_INVALID/MISSING_IMPORT`, `DIAGNOSTIC_IMPORT_CYCLE`), and a chain in one of two conventional spellings: unquoted for the binder's discovery path, quoted for the loader's selected-root path.
+
+See [LOADER.md](LOADER.md) for the full explanation: the problem this change solves, a walkthrough of one `load_source_files` call, the invariants, the error classes, and the strictness that deliberately goes beyond the plan.
 
 ## Protobuf and C++ names
 
@@ -104,4 +115,4 @@ Recognized EasyProtoBuf field options are preserved in this common descriptor mo
 
 ## Tests
 
-Codegen tests live under [`../tests/codegen/`](../tests/codegen/), grouped by generated-code feature (`maps`, `enums`, `packages`, `nested`) and parser/input behavior (`parser`). See [BUILDING.md](BUILDING.md#testing) for the user-facing test commands and test-suite overview.
+Codegen tests live under [`../tests/codegen/`](../tests/codegen/), grouped by generated-code feature (`maps`, `enums`, `packages`, `nested`), parser/input behavior (`parser`), shared schema storage/semantics (`schema`), and package/import support (`imports` with `test_graph.cpp` for the common binder plus `test_loader.cpp` and `data/loader/` for filesystem discovery). See [BUILDING.md](BUILDING.md#testing) for the user-facing test commands and test-suite overview.

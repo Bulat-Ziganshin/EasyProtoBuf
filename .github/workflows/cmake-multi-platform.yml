@@ -983,3 +983,64 @@ jobs:
     - name: 'MinSizeRel: Test'
       working-directory: build
       run: ctest --build-config MinSizeRel --no-tests=error
+
+  #####################################################################################################################
+  # Run deterministic stress/property tests once per operating system with that OS's default toolchain instead of
+  # multiplying them across the compiler compatibility matrices. Default tests already include the cheap exhaustive
+  # N<=4 graph sweep; this job enables larger randomized graph checks plus loader filesystem/fault/concurrency
+  # stress. The loader stress legs matter per OS: the filesystem, file-identity and threading code paths they
+  # exercise are platform-specific, so a Linux-only run would never compile or execute the Windows/macOS branches.
+  #####################################################################################################################
+  extended-tests:
+    name: "Extended tests / ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    strategy:
+      # Run every OS leg independently even if another one fails.
+      fail-fast: false
+
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cxx_flags: "-std=c++11 -Wall -Wextra -Wpedantic"
+          - os: windows-latest
+            cxx_flags: "/W3"
+          - os: macos-latest
+            cxx_flags: "-std=c++11 -Wall -Wextra -Wpedantic"
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Show toolchain and platform (POSIX)
+      if: runner.os != 'Windows'
+      run: |
+        cmake --version
+        uname -a
+        uname -m
+        if [ -f /etc/os-release ]; then
+          cat /etc/os-release
+        elif command -v sw_vers >/dev/null 2>&1; then
+          sw_vers
+        fi
+
+    - name: Show toolchain and platform (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        cmake --version
+        Get-CimInstance Win32_OperatingSystem |
+          Select-Object Caption, Version, OSArchitecture
+
+    - name: Configure CMake
+      run: >-
+        cmake -S . -B build
+        "-DEASYPB_CXX_FLAGS=${{ matrix.cxx_flags }}"
+        -DEASYPB_EXTENDED_TESTS=ON
+        -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Run tests (full suite, including extended)
+      run: ctest --test-dir build --build-config Release --no-tests=error --output-on-failure

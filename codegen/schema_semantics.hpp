@@ -32,6 +32,11 @@ enum SymbolKind {
 struct SymbolEntry
 {
     int kind;
+    // Borrows its SchemaFile from the indexed SchemaSet: the set must
+    // outlive any index referencing it and must not be cleared or
+    // destroyed while referenced (same rule as the file-to-file
+    // references in schema.hpp). Growth is safe: files live on the heap,
+    // so their addresses stay stable while the owning vector grows.
     const SchemaFile* owner;
     DescriptorPath path;
 };

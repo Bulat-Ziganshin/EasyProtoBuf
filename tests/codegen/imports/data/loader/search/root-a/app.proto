@@ -1,0 +1,6 @@
+syntax = "proto2";
+package app;
+import "shared.proto";
+message App {
+  optional int32 marker = 1;
+}

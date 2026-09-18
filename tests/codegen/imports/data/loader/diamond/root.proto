@@ -1,0 +1,8 @@
+syntax = "proto2";
+package test;
+import "left.proto";
+import "right.proto";
+message Root {
+  optional Left left = 1;
+  optional Right right = 2;
+}

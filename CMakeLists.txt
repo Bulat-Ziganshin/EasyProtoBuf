@@ -19,6 +19,14 @@ option(EASYPB_CODEGEN_WITH_PROTO_PARSER
 option(EASYPB_BUILD_DIFFERENTIAL_TESTS
        "Build the optional parser comparator used with an external protoc"
        OFF)
+option(EASYPB_EXTENDED_TESTS
+       "Build slower deterministic stress/property tests"
+       OFF)
+
+if(EASYPB_EXTENDED_TESTS AND NOT BUILD_TESTING)
+    message(FATAL_ERROR
+            "EASYPB_EXTENDED_TESTS requires BUILD_TESTING=ON")
+endif()
 
 if(EASYPB_CXX_FLAGS)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EASYPB_CXX_FLAGS}")
@@ -56,7 +64,7 @@ add_executable(easypb_codegen codegen/main.cpp codegen/cpp_names.cpp)
 set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
 target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl codegen)
 
-add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp)
+add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp codegen/logical_paths.cpp)
 target_include_directories(easypb_schema
     PUBLIC include codegen)
 
@@ -65,6 +73,11 @@ if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
     target_include_directories(easypb_proto_parser
         PUBLIC include codegen codegen/parser)
     target_link_libraries(easypb_proto_parser PUBLIC easypb_schema)
+
+    add_library(easypb_proto_loader STATIC codegen/proto_loader.cpp codegen/file_paths.cpp)
+    target_include_directories(easypb_proto_loader
+        PUBLIC include codegen codegen/parser)
+    target_link_libraries(easypb_proto_loader PUBLIC easypb_proto_parser easypb_schema)
 
     target_sources(easypb_codegen PRIVATE
         codegen/parser/pretty_printer.cpp

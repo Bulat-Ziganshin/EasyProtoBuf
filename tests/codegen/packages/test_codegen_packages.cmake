@@ -67,6 +67,8 @@ require_contains("${names_out}" "namespace bar {" "Second package namespace")
 require_contains("${names_out}" "enum State : ::int32_t" "Qualified fixed-width enum base")
 require_contains("${names_out}" "::int32_t value = 0;" "Qualified fixed-width field type")
 require_contains("${names_out}" "::foo::bar::Outer::Inner child;" "Absolute nested message field")
+# names.proto spells the default explicitly; implicit first-value enum
+# defaults are covered by the codegen.enums "Implicit ... default" cases.
 require_contains("${names_out}" "::foo::bar::State state = ::foo::bar::State::READY;" "Absolute enum type/default")
 require_contains("${names_out}" "inline void encode(::easypb::Encoder &pb, const ::foo::bar::Outer &x)" "Packaged encoder ADL namespace")
 require_contains("${names_out}" "inline void decode(::easypb::Decoder pb, ::foo::bar::Outer::Inner &x)" "Nested packaged decoder")
