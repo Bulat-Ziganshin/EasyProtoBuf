@@ -317,10 +317,75 @@ bool file_exists(const std::string& path)
 
 // Deletes a file whose absence is a test precondition. Case directories
 // are reused across runs, so a stale file left by an interrupted run
-// must not flip an expected failure into a success.
+// must not flip an expected failure into a success. Windows deletes
+// through the wide API: the Deseret spellings the fold tests use are
+// UTF-8, and the ANSI std::remove would not resolve them.
 void remove_if_present(const std::string& path)
 {
+#ifdef _WIN32
+    std::vector<wchar_t> wide;
+    if (!wide_from_utf8(path, wide)) return;
+    DeleteFileW(&wide[0]);
+#else
     std::remove(path.c_str());
+#endif
+}
+
+// True when the live volume folds the U+10400/U+10428 spelling pair onto
+// one entry: creating the capital spelling while the small one exists
+// reports an existing entry. Asked of the filesystem itself, never derived
+// from a folding table, because this is a property of the volume in use:
+// NTFS keeps the supplementary-plane spellings apart while macOS APFS
+// merges them. The fold-pair scenarios need two distinct entries, so a
+// folding volume makes them inapplicable instead of failing. Probed once
+// per process and cached. A probe that cannot create its own scratch entry
+// answers "no folding", keeping a real failure loud.
+bool volume_folds_fold_pair()
+{
+    static int cached = -1;
+    if (cached >= 0) return cached == 1;
+    require_work_root();
+    const std::string small =
+        work_path(std::string("fold-probe-\xF0\x90\x90\xA8"));
+    const std::string capital =
+        work_path(std::string("fold-probe-\xF0\x90\x90\x80"));
+    bool folds = false;
+    bool probed = false;
+#ifdef _WIN32
+    std::vector<wchar_t> small_wide, capital_wide;
+    if (wide_from_utf8(small, small_wide) &&
+        wide_from_utf8(capital, capital_wide)) {
+        // Drop leftovers from an interrupted run, smallest first, so the
+        // probe starts from a confirmed-absent capital spelling.
+        RemoveDirectoryW(&capital_wide[0]);
+        RemoveDirectoryW(&small_wide[0]);
+        if (CreateDirectoryW(&small_wide[0], 0)) {
+            probed = true;
+            if (CreateDirectoryW(&capital_wide[0], 0)) {
+                RemoveDirectoryW(&capital_wide[0]);
+            } else {
+                folds = GetLastError() == ERROR_ALREADY_EXISTS;
+            }
+            RemoveDirectoryW(&small_wide[0]);
+        }
+    }
+#else
+    // A folding volume resolves the second rmdir to the entry the first
+    // one removed, so both leftovers are gone before the probe starts.
+    ::rmdir(capital.c_str());
+    ::rmdir(small.c_str());
+    if (::mkdir(small.c_str(), 0755) == 0) {
+        probed = true;
+        if (::mkdir(capital.c_str(), 0755) == 0) {
+            ::rmdir(capital.c_str());
+        } else {
+            folds = errno == EEXIST;
+        }
+        ::rmdir(small.c_str());
+    }
+#endif
+    cached = (probed && folds) ? 1 : 0;
+    return cached == 1;
 }
 
 // Encodes one BMP code point as UTF-8 for a Windows path spelling. The
@@ -604,6 +669,15 @@ void test_fold_hardlink_alias_names_fail()
         join_arg(dir, std::string("root-\xF0\x90\x90\xA8.proto"));
     const std::string capital =
         join_arg(dir, std::string("root-\xF0\x90\x90\x80.proto"));
+    // A folding volume gives both spellings one entry, so there is no
+    // second name to alias and make_link would delete the file under the
+    // small spelling before it could create one.
+    if (volume_folds_fold_pair()) {
+        std::cout << "SKIP fold hardlink alias: volume folds the two "
+                     "spellings into one entry\n";
+        ++skips;
+        return;
+    }
     CHECK(write_file(small,
                      "syntax = \"proto2\";\nmessage Fold {}\n"));
     if (!make_link(small, capital)) {
@@ -657,6 +731,15 @@ void test_fold_hardlink_file_stays_isolated()
         work_path(std::string("fold-link-small-\xF0\x90\x90\xA8"));
     const std::string capital_dir =
         work_path(std::string("fold-link-small-\xF0\x90\x90\x80"));
+    // As above: with the two directory spellings folded into one entry
+    // there is no distinct container for the aliased name, and the link
+    // would replace the one file both spellings address.
+    if (volume_folds_fold_pair()) {
+        std::cout << "SKIP fold hardlink isolated: volume folds the two "
+                     "spellings into one entry\n";
+        ++skips;
+        return;
+    }
     CHECK(write_file(join_arg(small_dir, "root.proto"),
                      "syntax = \"proto2\";\nmessage Small {}\n"));
     // Placeholder creates the capital directory; the link replaces it.
@@ -2529,6 +2612,18 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
     require_work_root();
+
+#if defined(EASYPB_LOADER_UTF8_MANIFEST_TEST) && defined(_WIN32)
+    // This variant exists only to run the whole suite with the manifest's
+    // activeCodePage set to UTF-8. Windows applies activeCodePage from
+    // Windows 10 1903 on, so an older system legitimately keeps its own
+    // code page; report the state either way, because a manifest that
+    // stopped reaching the binary would leave the guard testing nothing.
+    if (GetACP() != 65001) {
+        std::cerr << "NOTE activeCodePage UTF-8 is not in effect (ACP="
+                  << GetACP() << ")\n";
+    }
+#endif
 
     test_diamond_caching_and_counters();
     test_search_precedence_first_wins();

@@ -529,18 +529,39 @@ if(BUILD_TESTING)
         # manifest as a secondary guard against accidental use of Win32 A
         # filesystem APIs. Production path handling is code-page independent:
         # narrow Windows paths are UTF-8 and every filesystem call uses W APIs.
-        # Needs a resource compiler; every supported Windows toolchain ships
-        # one (windres alongside MinGW GCC/Clang, rc.exe with MSVC). xmake
-        # defines no test executables, so there is no mirror there.
+        # xmake defines no test executables, so there is no mirror there.
         if(WIN32)
-            enable_language(RC)
             set(EASYPB_LOADER_UTF8_MANIFEST
                 "${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/loader_utf8.manifest")
-            configure_file(codegen/imports/loader_utf8.rc.in
-                           loader_utf8_manifest.rc @ONLY)
-            add_executable(codegen_imports_loader_utf8_test
-                codegen/imports/test_loader.cpp
-                "${CMAKE_CURRENT_BINARY_DIR}/loader_utf8_manifest.rc")
+            if(MSVC)
+                # MSVC embeds the manifest through CMake's manifest support
+                # (CMake >= 3.4): a .manifest source is merged with the manifest
+                # link.exe generates for the C++ runtime and embedded as the
+                # single RT_MANIFEST id 1 resource. Embedding the manifest
+                # through a .rc file instead puts a second RT_MANIFEST id 1 next
+                # to the linker's own, and cvtres aborts the link with
+                # "CVT1100: duplicate resource. type:MANIFEST, name:1" followed
+                # by LNK1123.
+                add_executable(codegen_imports_loader_utf8_test
+                    codegen/imports/test_loader.cpp
+                    "${EASYPB_LOADER_UTF8_MANIFEST}")
+            else()
+                # Other Windows toolchains (MinGW GCC/Clang with windres) have
+                # no manifest merge step, so the manifest goes through a
+                # resource file: a resource compiler ships with every such
+                # toolchain.
+                enable_language(RC)
+                configure_file(codegen/imports/loader_utf8.rc.in
+                               loader_utf8_manifest.rc @ONLY)
+                add_executable(codegen_imports_loader_utf8_test
+                    codegen/imports/test_loader.cpp
+                    "${CMAKE_CURRENT_BINARY_DIR}/loader_utf8_manifest.rc")
+            endif()
+            # The variant only has a purpose while the manifest is in effect;
+            # the test reports a code page that is not UTF-8 so a manifest that
+            # stopped reaching the binary is visible instead of void.
+            target_compile_definitions(codegen_imports_loader_utf8_test PRIVATE
+                EASYPB_LOADER_UTF8_MANIFEST_TEST=1)
             target_include_directories(codegen_imports_loader_utf8_test PRIVATE
                 ${easypb_test_include_dir}
                 ${PROJECT_SOURCE_DIR}/codegen
