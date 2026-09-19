@@ -91,5 +91,5 @@ Continue with the topic-specific guides for generated-code semantics, input mode
 - [Generated C++ code](GENERATED_CODE.md) — generated types/codecs, nesting, enums, maps, defaults, packed fields, insertion points, and limitations.
 - [Command-line options](OPTIONS.md) — input modes, generated-code options, C++ container/type options, and parser utility modes.
 - [Internals](INTERNALS.md) — implementation layout and generation pipeline for contributors.
-- [Source loading and the import graph](LOADER.md) — how search roots, logical names, file identity, and the import graph fit together for contributors.
+- [Source loading and the import graph](LOADER.md) — how search roots, logical names, and the import graph fit together for contributors, and where the loader deliberately matches or exceeds the reference compiler.
 - [Embedded `.proto` parser](parser/README.md) — parser API, lifetime rules, unresolved-import behavior, and parser-specific internals.

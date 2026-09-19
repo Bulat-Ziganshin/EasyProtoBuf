@@ -5,6 +5,15 @@
 // the CTest working directory pinned in tests/CMakeLists.txt (the CMake
 // tests binary directory) and are rewritten on every run so repeated
 // runs never depend on stale data.
+//
+// The suite pins the contract of the loader against the reference
+// compiler (protoc): caller-ordered roots with the first match winning,
+// disk-path arguments mapped through a byte-wise (case-sensitive) root
+// prefix, shadowed inputs rejected, missing and cyclic imports reported,
+// one parse per logical name, and no identity or case folding anywhere.
+// A few tests deliberately document where this loader is stricter than
+// protoc (its own diagnostic codes and positions, and import spellings
+// protoc would treat as a missing file).
 
 #include <cstdio>
 #include <cstdlib>
@@ -14,12 +23,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
-#ifdef EASYPB_EXTENDED_TESTS
-#include <atomic>
-#include <functional>
-#include <thread>
-#endif
 
 #include "file_paths.hpp"
 #include "logical_paths.hpp"
@@ -34,7 +37,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#include <winioctl.h>
+#include <aclapi.h>
 #else
 #include <errno.h>
 #include <sys/stat.h>
@@ -47,98 +50,6 @@ namespace {
 int failures = 0;
 int skips = 0;
 
-int status_probe_root_a_calls = 0;
-int status_probe_root_b_calls = 0;
-int nested_status_error_probe_calls = 0;
-#ifdef _WIN32
-int case_query_error_probe_calls = 0;
-
-int forced_case_query_operational_error(const std::string& directory)
-{
-    (void)directory;
-    ++case_query_error_probe_calls;
-    return -2;
-}
-
-std::string confirm_error_marker;
-int confirm_error_probe_calls = 0;
-
-// Fails identity queries for the root-spelled containment candidate
-// while succeeding (with a dummy valid identity) everywhere else, so
-// the confirmation path meets "identity says error, status says file".
-// The marker matches the root spelling exactly; the fold-variant
-// argument spelling differs in case and passes through.
-bool failing_confirm_identity_probe(const std::string& path,
-                                    easypb_file::FileIdentity& identity,
-                                    std::string& error)
-{
-    if (!confirm_error_marker.empty() &&
-        path.find(confirm_error_marker) != std::string::npos) {
-        ++confirm_error_probe_calls;
-        error = "synthetic confirm identity failure";
-        return false;
-    }
-    identity.valid = true;
-    identity.key_a = 1;
-    identity.key_b = 2;
-    return true;
-}
-#endif
-
-easypb_file::FileStatus first_root_error_probe(const std::string& path,
-                                               std::string& error)
-{
-    if (path.find("probe-root-a") != std::string::npos) {
-        ++status_probe_root_a_calls;
-        error = "synthetic root-a metadata failure";
-        return easypb_file::FILE_STATUS_ERROR;
-    }
-    if (path.find("probe-root-b") != std::string::npos) {
-        ++status_probe_root_b_calls;
-        return easypb_file::FILE_STATUS_FILE;
-    }
-    return easypb_file::FILE_STATUS_ABSENT;
-}
-
-easypb_file::FileStatus nested_import_error_probe(const std::string& path,
-                                                  std::string& error)
-{
-    ++nested_status_error_probe_calls;
-    // The CLI root is a logical name. Do not make the initial disk-path
-    // convenience probe claim that a bare "root.proto" exists in CWD.
-    if (path == "root.proto") return easypb_file::FILE_STATUS_ABSENT;
-    if (path.find("leaf.proto") != std::string::npos) {
-        error = "synthetic leaf metadata failure";
-        return easypb_file::FILE_STATUS_ERROR;
-    }
-    return easypb_file::FILE_STATUS_FILE;
-}
-#ifdef EASYPB_EXTENDED_TESTS
-std::string extended_fault_marker;
-std::string extended_file_marker;
-int extended_fault_probe_calls = 0;
-int extended_file_probe_calls = 0;
-
-easypb_file::FileStatus extended_search_fault_probe(const std::string& path,
-                                                    std::string& error)
-{
-    // A bare logical root is first tested as a disk-path convenience.
-    if (path == "root.proto") return easypb_file::FILE_STATUS_ABSENT;
-    if (!extended_fault_marker.empty() &&
-        path.find(extended_fault_marker) != std::string::npos) {
-        ++extended_fault_probe_calls;
-        error = "synthetic extended search-root failure";
-        return easypb_file::FILE_STATUS_ERROR;
-    }
-    if (!extended_file_marker.empty() &&
-        path.find(extended_file_marker) != std::string::npos) {
-        ++extended_file_probe_calls;
-        return easypb_file::FILE_STATUS_FILE;
-    }
-    return easypb_file::FILE_STATUS_ABSENT;
-}
-#endif
-
 void check(bool condition, const char* expression, const char* file, int line)
 {
     if (!condition) {
@@ -149,26 +60,37 @@ void check(bool condition, const char* expression, const char* file, int line)
 
 #define CHECK(x) check((x), #x, __FILE__, __LINE__)
 
-#ifdef _WIN32
-// Converts a UTF-8 test spelling for a Win32 W call. Windows loader paths
-// use the same UTF-8 representation and never depend on the process ANSI
-// code page.
-bool wide_from_utf8(const std::string& text, std::vector<wchar_t>& wide);
-#endif
-
-// Creates 'link' as an alias of existing file 'target' (defined below).
-bool make_link(const std::string& target, const std::string& link);
-
-#ifdef _WIN32
-// Creates 'link' as an NTFS directory junction pointing at 'target'
-// (defined below). Unlike symlinks, junctions need no elevation.
-bool make_junction(const std::string& target, const std::string& link);
-#endif
+#define SKIP(reason)                                                    \
+    do {                                                                \
+        std::cout << "SKIP " << reason << '\n';                         \
+        ++skips;                                                        \
+        return;                                                         \
+    } while (0)
 
 std::string text(const str_view& value)
 {
     return std::string(value.data(), value.size());
 }
+
+#ifdef _WIN32
+// Converts a UTF-8 test spelling for a Win32 W call. Windows loader paths
+// use the same UTF-8 representation and never depend on the process ANSI
+// code page.
+bool wide_from_utf8(const std::string& text, std::vector<wchar_t>& wide);
+
+// Grants Everyone full control and leaves the DACL unprotected again, so
+// a file whose access was denied below can be rewritten and deleted.
+bool allow_full_access(const std::string& path);
+
+// Adds a deny ACE for Everyone covering GENERIC_READ and protects the
+// DACL, which makes a status query fail with ERROR_ACCESS_DENIED. This is
+// the Windows way to reproduce what EACCES means on POSIX: the file
+// exists and is not reachable, which is not the same as absence.
+bool deny_read_access(const std::string& path);
+#endif
+
+// Creates 'link' as an alias of existing file 'target' (defined below).
+bool make_link(const std::string& target, const std::string& link);
 
 std::string fixture_dir;
 std::string work_root = "./imports-loader-work";
@@ -310,16 +232,80 @@ bool wide_from_utf8(const std::string& text, std::vector<wchar_t>& wide)
 }
 #endif
 
-bool file_exists(const std::string& path)
+#ifdef _WIN32
+// Builds one explicit access entry for Everyone and applies it to path.
+// A failure means the filesystem cannot store the DACL (FAT/exFAT, some
+// network shares), which the caller reports as a skip rather than as a
+// loader failure.
+bool apply_everyone_entry(const std::string& path, ACCESS_MODE access_mode,
+                          DWORD permissions, DWORD inheritance,
+                          SECURITY_INFORMATION security_information)
 {
-    return easypb_file::disk_file_exists(path);
+    std::vector<wchar_t> wide;
+    if (!wide_from_utf8(path, wide)) return false;
+
+    BYTE everyone[SECURITY_MAX_SID_SIZE];
+    DWORD everyone_size = sizeof(everyone);
+    if (!CreateWellKnownSid(WinWorldSid, 0, everyone, &everyone_size)) {
+        return false;
+    }
+
+    EXPLICIT_ACCESS_W entry;
+    std::memset(&entry, 0, sizeof(entry));
+    entry.grfAccessPermissions = permissions;
+    entry.grfAccessMode = access_mode;
+    entry.grfInheritance = inheritance;
+    entry.Trustee.pMultipleTrustee = 0;
+    entry.Trustee.MultipleTrusteeOperation = NO_MULTIPLE_TRUSTEE;
+    entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entry.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    entry.Trustee.ptstrName = reinterpret_cast<LPWSTR>(everyone);
+
+    PACL acl = 0;
+    if (SetEntriesInAclW(1, &entry, 0, &acl) != ERROR_SUCCESS) return false;
+    const DWORD result =
+        SetNamedSecurityInfoW(&wide[0], SE_FILE_OBJECT,
+                              security_information, 0, 0, acl, 0);
+    LocalFree(acl);
+    return result == ERROR_SUCCESS;
 }
 
-// Deletes a file whose absence is a test precondition. Case directories
-// are reused across runs, so a stale file left by an interrupted run
-// must not flip an expected failure into a success. Windows deletes
-// through the wide API: the Deseret spellings the fold tests use are
-// UTF-8, and the ANSI std::remove would not resolve them.
+bool allow_full_access(const std::string& path)
+{
+    return apply_everyone_entry(path, GRANT_ACCESS, GENERIC_ALL,
+                                SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+                                DACL_SECURITY_INFORMATION |
+                                    UNPROTECTED_DACL_SECURITY_INFORMATION);
+}
+
+bool deny_read_access(const std::string& path)
+{
+    // PROTECTED drops inherited allowances, so the deny ACE is the whole
+    // DACL. Ownership still grants WRITE_DAC, which is what allows the
+    // cleanup below to restore access.
+    return apply_everyone_entry(path, DENY_ACCESS, GENERIC_READ,
+                                NO_INHERITANCE,
+                                DACL_SECURITY_INFORMATION |
+                                    PROTECTED_DACL_SECURITY_INFORMATION);
+}
+
+void remove_dir_if_present(const std::string& path)
+{
+    std::vector<wchar_t> wide;
+    if (!wide_from_utf8(path, wide)) return;
+    RemoveDirectoryW(&wide[0]);
+}
+#endif
+
+bool path_is_file(const std::string& path)
+{
+    std::string ignored;
+    return easypb_file::disk_file_status(path, ignored) ==
+           easypb_file::FILE_STATUS_FILE;
+}
+
+// Deletes a file whose absence is a test precondition: a stale file left
+// by an interrupted run must not flip an expected failure into a success.
 void remove_if_present(const std::string& path)
 {
 #ifdef _WIN32
@@ -331,65 +317,8 @@ void remove_if_present(const std::string& path)
 #endif
 }
 
-// True when the live volume folds the U+10400/U+10428 spelling pair onto
-// one entry: creating the capital spelling while the small one exists
-// reports an existing entry. Asked of the filesystem itself, never derived
-// from a folding table, because this is a property of the volume in use:
-// NTFS keeps the supplementary-plane spellings apart while macOS APFS
-// merges them. The fold-pair scenarios need two distinct entries, so a
-// folding volume makes them inapplicable instead of failing. Probed once
-// per process and cached. A probe that cannot create its own scratch entry
-// answers "no folding", keeping a real failure loud.
-bool volume_folds_fold_pair()
-{
-    static int cached = -1;
-    if (cached >= 0) return cached == 1;
-    require_work_root();
-    const std::string small =
-        work_path(std::string("fold-probe-\xF0\x90\x90\xA8"));
-    const std::string capital =
-        work_path(std::string("fold-probe-\xF0\x90\x90\x80"));
-    bool folds = false;
-    bool probed = false;
-#ifdef _WIN32
-    std::vector<wchar_t> small_wide, capital_wide;
-    if (wide_from_utf8(small, small_wide) &&
-        wide_from_utf8(capital, capital_wide)) {
-        // Drop leftovers from an interrupted run, smallest first, so the
-        // probe starts from a confirmed-absent capital spelling.
-        RemoveDirectoryW(&capital_wide[0]);
-        RemoveDirectoryW(&small_wide[0]);
-        if (CreateDirectoryW(&small_wide[0], 0)) {
-            probed = true;
-            if (CreateDirectoryW(&capital_wide[0], 0)) {
-                RemoveDirectoryW(&capital_wide[0]);
-            } else {
-                folds = GetLastError() == ERROR_ALREADY_EXISTS;
-            }
-            RemoveDirectoryW(&small_wide[0]);
-        }
-    }
-#else
-    // A folding volume resolves the second rmdir to the entry the first
-    // one removed, so both leftovers are gone before the probe starts.
-    ::rmdir(capital.c_str());
-    ::rmdir(small.c_str());
-    if (::mkdir(small.c_str(), 0755) == 0) {
-        probed = true;
-        if (::mkdir(capital.c_str(), 0755) == 0) {
-            ::rmdir(capital.c_str());
-        } else {
-            folds = errno == EEXIST;
-        }
-        ::rmdir(small.c_str());
-    }
-#endif
-    cached = (probed && folds) ? 1 : 0;
-    return cached == 1;
-}
-
-// Encodes one BMP code point as UTF-8 for a Windows path spelling. The
-// loader converts that spelling only at the W-API boundary.
+// Encodes one BMP code point as UTF-8 for a path spelling. The loader
+// converts that spelling only at the W-API boundary.
 std::string utf8_from_code_point(unsigned int code)
 {
     std::string result;
@@ -406,25 +335,21 @@ std::string utf8_from_code_point(unsigned int code)
     return result;
 }
 
-void test_diamond_caching_and_counters()
+void test_diamond_caching()
 {
     easypb_proto::SourceLoaderOptions options;
     options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
     std::vector<std::string> roots(1, "root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    easypb_proto::LoadStatistics statistics;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error,
-                                          &statistics));
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
     if (files.files().size() != 4) {
         CHECK(files.files().size() == 4);
         return;
     }
     CHECK(files.targets().size() == 1);
-    CHECK(statistics.files_read == 4);
-    CHECK(statistics.files_parsed == 4);
-    // Each unique physical/logical file was read once: shared.proto is
-    // reached through both left and right but parsed a single time.
+    // Each unique logical file was read once: shared.proto is reached
+    // through both left and right but parsed a single time.
     CHECK(files.find_file("root.proto") != 0);
     CHECK(files.find_file("left.proto") != 0);
     CHECK(files.find_file("right.proto") != 0);
@@ -486,52 +411,91 @@ void test_search_precedence_first_wins()
     std::vector<std::string> roots(1, "app.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
     easypb_schema::SchemaFile* shared = files.find_file("shared.proto");
     CHECK(shared != 0);
     if (shared != 0) CHECK(text(shared->file.package) == "first");
 }
 
-void test_search_precedence_error_stops_before_later_root()
+#ifndef _WIN32
+// Whether a denied directory is actually denied for this process.
+bool denial_effective(const std::string& denied_dir,
+                      const std::string& file_inside)
 {
-    status_probe_root_a_calls = 0;
-    status_probe_root_b_calls = 0;
-    easypb_file::set_file_status_probe(first_root_error_probe);
+    if (::chmod(denied_dir.c_str(), 0) != 0) return false;
+    std::string status_error;
+    const easypb_file::FileStatus status =
+        easypb_file::disk_file_status(file_inside, status_error);
+    const bool denied = status == easypb_file::FILE_STATUS_ERROR &&
+                        status_error.find("denied") != std::string::npos;
+    if (!denied) ::chmod(denied_dir.c_str(), 0755);
+    return denied;
+}
+
+// A denied access stops the search: only confirmed absence may advance
+// to the next root. The reference compiler draws the line in the same
+// place (it treats a denied access as fatal and every other failure as
+// absence), so a first-root denial must never silently select the file
+// of a later root.
+void test_denied_access_stops_search()
+{
+    require_work_root();
+    const std::string first = work_path("denied-first");
+    const std::string second = work_path("denied-second");
+    CHECK(write_file(join_arg(first, "shared.proto"),
+                     "syntax = \"proto2\";\nmessage First {}\n"));
+    CHECK(write_file(join_arg(second, "shared.proto"),
+                     "syntax = \"proto2\";\nmessage Second {}\n"));
+    if (!denial_effective(first, join_arg(first, "shared.proto"))) {
+        SKIP("denied access: the process reads through a denied directory");
+    }
 
     easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back("probe-root-a");
-    options.proto_paths.push_back("probe-root-b");
+    options.proto_paths.push_back(first);
+    options.proto_paths.push_back(second);
     std::vector<std::string> roots(1, "shared.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
     const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
+        easypb_proto::load_source_files(options, roots, files, error);
+    ::chmod(first.c_str(), 0755);
 
-    easypb_file::set_file_status_probe(0);
     CHECK(!ok);
-    CHECK(status_probe_root_a_calls == 1);
-    CHECK(status_probe_root_b_calls == 0);
-    CHECK(error.message.find("synthetic root-a metadata failure") !=
-          std::string::npos);
+    CHECK(error.message.find("read access is denied") != std::string::npos);
     CHECK(files.files().empty());
     CHECK(files.targets().empty());
+
+    // With the denial lifted the same search takes the first root.
+    easypb_schema::SchemaSet allowed;
+    CHECK(easypb_proto::load_source_files(options, roots, allowed, error));
+    easypb_schema::SchemaFile* shared = allowed.find_file("shared.proto");
+    CHECK(shared != 0);
+    if (shared != 0 && !shared->file.message_type.empty()) {
+        CHECK(text(shared->file.message_type[0].name) == "First");
+    }
 }
 
-void test_nested_operational_error_preserves_import_context()
+// The denial of a nested import keeps its import context: the failing
+// file, the declaration site and the discovery chain from the selected
+// root all survive into the diagnostic.
+void test_nested_denied_import_preserves_context()
 {
     require_work_root();
-    const std::string dir = work_path("nested-operational-error");
+    const std::string dir = work_path("nested-denied");
+    const std::string blocked = join_arg(dir, "blocked");
     CHECK(write_file(join_arg(dir, "root.proto"),
                      "syntax = \"proto2\";\n"
                      "import \"middle.proto\";\n"
                      "message Root {}\n"));
     CHECK(write_file(join_arg(dir, "middle.proto"),
                      "syntax = \"proto2\";\n"
-                     "import \"leaf.proto\";\n"
+                     "import \"blocked/leaf.proto\";\n"
                      "message Middle {}\n"));
-
-    nested_status_error_probe_calls = 0;
-    easypb_file::set_file_status_probe(nested_import_error_probe);
+    CHECK(write_file(join_arg(blocked, "leaf.proto"),
+                     "syntax = \"proto2\";\nmessage Leaf {}\n"));
+    if (!denial_effective(blocked, join_arg(blocked, "leaf.proto"))) {
+        SKIP("nested denied access: the process reads through a denied directory");
+    }
 
     easypb_proto::SourceLoaderOptions options;
     options.proto_paths.push_back(dir);
@@ -539,23 +503,23 @@ void test_nested_operational_error_preserves_import_context()
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
     const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
+        easypb_proto::load_source_files(options, roots, files, error);
+    ::chmod(blocked.c_str(), 0755);
 
-    easypb_file::set_file_status_probe(0);
     CHECK(!ok);
-    CHECK(nested_status_error_probe_calls >= 3);
     CHECK(error.file == "middle.proto");
     CHECK(error.location.line == 2);
-    CHECK(error.message.find("cannot resolve import \"leaf.proto\"") !=
+    CHECK(error.message.find("cannot resolve import \"blocked/leaf.proto\"") !=
           std::string::npos);
-    CHECK(error.message.find("synthetic leaf metadata failure") !=
-          std::string::npos);
+    CHECK(error.message.find("read access is denied") != std::string::npos);
     CHECK(error.message.find("searched") != std::string::npos);
-    CHECK(error.message.find("\"root.proto\" -> \"middle.proto\" -> \"leaf.proto\"") !=
-          std::string::npos);
+    CHECK(error.message.find(
+        "\"root.proto\" -> \"middle.proto\" -> \"blocked/leaf.proto\"") !=
+        std::string::npos);
     CHECK(files.files().empty());
     CHECK(files.targets().empty());
 }
+#endif
 
 void test_nul_byte_in_disk_path_fails_loudly()
 {
@@ -567,8 +531,6 @@ void test_nul_byte_in_disk_path_fails_loudly()
     // The file exists, but the requested spelling carries a NUL suffix
     // that native calls would truncate: the loader must fail loudly
     // instead of reporting a successful load under a confused name.
-    // This is the isolated-root shape (fully qualified, import-free),
-    // which previously accepted the truncated prefix as a success.
     const std::string tainted =
         easypb_file::lexical_absolute(join_arg(dir, "lonely.proto")) +
         std::string("\0ignored-suffix", 15);
@@ -582,7 +544,7 @@ void test_nul_byte_in_disk_path_fails_loudly()
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
     const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
+        easypb_proto::load_source_files(options, roots, files, error);
 
     CHECK(!ok);
     CHECK(error.message.find("NUL") != std::string::npos);
@@ -615,297 +577,13 @@ void test_nul_byte_in_import_fails()
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
     const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
+        easypb_proto::load_source_files(options, roots, files, error);
 
     CHECK(!ok);
     CHECK(error.message.find("control characters") != std::string::npos);
     CHECK(files.files().empty());
     CHECK(files.targets().empty());
 }
-
-void test_case_fold_mismatch_is_not_containment()
-{
-    require_work_root();
-    // U+10400 Deseret capital vs U+10428 small: folded equal by the
-    // locale-invariant uppercase table, different directory entries
-    // for the OS. A search root through one spelling must never claim
-    // the file under the other spelling as contained: the fully
-    // qualified import-free root loads as isolated instead of
-    // misreporting a shadow.
-    const std::string small_dir =
-        work_path(std::string("fold-dir-\xF0\x90\x90\xA8"));
-    const std::string capital_dir =
-        work_path(std::string("fold-dir-\xF0\x90\x90\x80"));
-    CHECK(write_file(join_arg(small_dir, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Small {}\n"));
-    CHECK(write_file(join_arg(capital_dir, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Capital {}\n"));
-
-    const std::string argument = easypb_file::absolute_disk_path(
-        join_arg(capital_dir, "root.proto"));
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(small_dir);
-    std::vector<std::string> roots(1, argument);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
-
-    CHECK(ok);
-    CHECK(files.files().size() == 1);
-    CHECK(files.targets().size() == 1);
-    CHECK(files.find_file(argument) != 0);
-}
-
-void test_fold_hardlink_alias_names_fail()
-{
-    // Same file under two Deseret-differing isolated names: folding
-    // says equivalent, the OS holds distinct entries. Two isolated
-    // roots must be a duplicate alias naming both spellings, never a
-    // silent merge into one target.
-    require_work_root();
-    const std::string dir = work_path("fold-hardlink-alias");
-    const std::string small =
-        join_arg(dir, std::string("root-\xF0\x90\x90\xA8.proto"));
-    const std::string capital =
-        join_arg(dir, std::string("root-\xF0\x90\x90\x80.proto"));
-    // A folding volume gives both spellings one entry, so there is no
-    // second name to alias and make_link would delete the file under the
-    // small spelling before it could create one.
-    if (volume_folds_fold_pair()) {
-        std::cout << "SKIP fold hardlink alias: volume folds the two "
-                     "spellings into one entry\n";
-        ++skips;
-        return;
-    }
-    CHECK(write_file(small,
-                     "syntax = \"proto2\";\nmessage Fold {}\n"));
-    if (!make_link(small, capital)) {
-        std::cout << "SKIP fold hardlink alias: cannot create link\n";
-        ++skips;
-        return;
-    }
-    const std::string absolute_small =
-        easypb_file::absolute_disk_path(small);
-    const std::string absolute_capital =
-        easypb_file::absolute_disk_path(capital);
-    // The scenario needs one physical file under two names; without a
-    // real link there is nothing to alias.
-    easypb_file::FileIdentity small_identity, capital_identity;
-    std::string identity_error;
-    if (!easypb_file::get_file_identity(absolute_small, small_identity,
-                                        identity_error) ||
-        !easypb_file::get_file_identity(absolute_capital,
-                                        capital_identity,
-                                        identity_error) ||
-        !easypb_file::same_identity(small_identity, capital_identity)) {
-        std::cout << "SKIP fold hardlink alias: links are distinct "
-                     "files\n";
-        ++skips;
-        return;
-    }
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
-    std::vector<std::string> roots;
-    roots.push_back(absolute_small);
-    roots.push_back(absolute_capital);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
-    CHECK(error.message.find("two logical names") != std::string::npos);
-    CHECK(error.message.find(absolute_small) != std::string::npos);
-    CHECK(error.message.find(absolute_capital) != std::string::npos);
-    CHECK(files.files().empty());
-    CHECK(files.targets().empty());
-}
-
-void test_fold_hardlink_file_stays_isolated()
-{
-    // Same file addressed through a fold-matching search root: entry
-    // comparison rejects the containment (distinct directory entries),
-    // so the fully qualified import-free root loads as isolated under
-    // its original absolute name instead of "root.proto".
-    require_work_root();
-    const std::string small_dir =
-        work_path(std::string("fold-link-small-\xF0\x90\x90\xA8"));
-    const std::string capital_dir =
-        work_path(std::string("fold-link-small-\xF0\x90\x90\x80"));
-    // As above: with the two directory spellings folded into one entry
-    // there is no distinct container for the aliased name, and the link
-    // would replace the one file both spellings address.
-    if (volume_folds_fold_pair()) {
-        std::cout << "SKIP fold hardlink isolated: volume folds the two "
-                     "spellings into one entry\n";
-        ++skips;
-        return;
-    }
-    CHECK(write_file(join_arg(small_dir, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Small {}\n"));
-    // Placeholder creates the capital directory; the link replaces it.
-    CHECK(write_file(join_arg(capital_dir, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Placeholder {}\n"));
-    if (!make_link(join_arg(small_dir, "root.proto"),
-                   join_arg(capital_dir, "root.proto"))) {
-        std::cout << "SKIP fold hardlink isolated: cannot create link\n";
-        ++skips;
-        return;
-    }
-    const std::string argument = easypb_file::absolute_disk_path(
-        join_arg(capital_dir, "root.proto"));
-    easypb_file::FileIdentity argument_identity, linked_identity;
-    std::string identity_error;
-    if (!easypb_file::get_file_identity(
-            argument, argument_identity, identity_error) ||
-        !easypb_file::get_file_identity(
-            easypb_file::absolute_disk_path(
-                join_arg(small_dir, "root.proto")),
-            linked_identity, identity_error) ||
-        !easypb_file::same_identity(argument_identity, linked_identity)) {
-        std::cout << "SKIP fold hardlink isolated: links are distinct "
-                     "files\n";
-        ++skips;
-        return;
-    }
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(small_dir);
-    std::vector<std::string> roots(1, argument);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
-
-    CHECK(ok);
-    CHECK(files.files().size() == 1);
-    CHECK(files.targets().size() == 1);
-    CHECK(files.find_file(argument) != 0);
-}
-
-#ifdef _WIN32
-void test_junction_fold_mismatch_is_not_containment()
-{
-    // Two Deseret-differing junction entries to one target directory:
-    // folding says equivalent, the entries are distinct. A search root
-    // through one must never claim the file under the other as
-    // contained: the fully qualified import-free root stays isolated
-    // under its original absolute name.
-    require_work_root();
-    const std::string real_dir = work_path("junction-target/real");
-    CHECK(write_file(join_arg(real_dir, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Real {}\n"));
-    const std::string absolute_real =
-        easypb_file::absolute_disk_path(real_dir);
-    const std::string small_link = work_path(
-        std::string("junction-\xF0\x90\x90\xA8"));
-    const std::string capital_link = work_path(
-        std::string("junction-\xF0\x90\x90\x80"));
-    if (!make_junction(absolute_real, small_link) ||
-        !make_junction(absolute_real, capital_link)) {
-        std::cout << "SKIP junction fold containment: "
-                     "cannot create links\n";
-        ++skips;
-        return;
-    }
-    CHECK(easypb_file::disk_file_exists(
-        join_arg(small_link, "root.proto")));
-    CHECK(easypb_file::disk_file_exists(
-        join_arg(capital_link, "root.proto")));
-
-    const std::string argument = easypb_file::absolute_disk_path(
-        join_arg(capital_link, "root.proto"));
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(small_link);
-    std::vector<std::string> roots(1, argument);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
-
-    CHECK(ok);
-    CHECK(files.files().size() == 1);
-    CHECK(files.targets().size() == 1);
-    CHECK(files.find_file(argument) != 0);
-}
-
-void test_junction_fold_alias_names_fail()
-{
-    // Same target file under two Deseret-differing junction names:
-    // distinct entries, one file. Two isolated roots must fail as a
-    // duplicate alias naming both spellings, never merge silently.
-    require_work_root();
-    const std::string real_dir = work_path("junction-alias/real");
-    CHECK(write_file(join_arg(real_dir, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Real {}\n"));
-    const std::string absolute_real =
-        easypb_file::absolute_disk_path(real_dir);
-    const std::string small_link = work_path(
-        std::string("junction-alias-\xF0\x90\x90\xA8"));
-    const std::string capital_link = work_path(
-        std::string("junction-alias-\xF0\x90\x90\x80"));
-    if (!make_junction(absolute_real, small_link) ||
-        !make_junction(absolute_real, capital_link)) {
-        std::cout << "SKIP junction fold alias: cannot create links\n";
-        ++skips;
-        return;
-    }
-    const std::string absolute_small = easypb_file::absolute_disk_path(
-        join_arg(small_link, "root.proto"));
-    const std::string absolute_capital = easypb_file::absolute_disk_path(
-        join_arg(capital_link, "root.proto"));
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
-    std::vector<std::string> roots;
-    roots.push_back(absolute_small);
-    roots.push_back(absolute_capital);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
-    CHECK(error.message.find("two logical names") != std::string::npos);
-    CHECK(error.message.find(absolute_small) != std::string::npos);
-    CHECK(error.message.find(absolute_capital) != std::string::npos);
-    CHECK(files.files().empty());
-    CHECK(files.targets().empty());
-}
-
-void test_junction_same_entry_case_alias()
-{
-    // Two ASCII case spellings of the SAME junction entry still
-    // confirm as one entry: ordinary case-alias behavior through
-    // junctions keeps working while distinct entries are rejected.
-    require_work_root();
-    const std::string real_dir = work_path("junction-case/real");
-    CHECK(write_file(join_arg(real_dir, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Real {}\n"));
-    const std::string absolute_real =
-        easypb_file::absolute_disk_path(real_dir);
-    const std::string link = work_path("junction-case-link");
-    if (!make_junction(absolute_real, link)) {
-        std::cout << "SKIP junction same entry: cannot create link\n";
-        ++skips;
-        return;
-    }
-    std::string search_root = link;
-    const std::string needle = "junction-case-link";
-    const std::size_t pos = search_root.rfind(needle);
-    CHECK(pos != std::string::npos);
-    if (pos == std::string::npos) return;
-    search_root.replace(pos, needle.size(), "JUNCTION-CASE-LINK");
-
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(search_root);
-    std::vector<std::string> roots(1, "root.proto");
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
-
-    CHECK(ok);
-    CHECK(files.files().size() == 1);
-    CHECK(files.targets().size() == 1);
-    CHECK(files.find_file("root.proto") != 0);
-}
-#endif
 
 void test_shadowed_root_reports_error()
 {
@@ -915,12 +593,14 @@ void test_shadowed_root_reports_error()
     std::vector<std::string> roots;
     roots.push_back("app.proto");
     // Explicitly naming the shadowed file must not silently rename it or
-    // switch the cached import to the second package.
+    // switch the cached import to the second package. The reference
+    // compiler reports the same state for a shadowed disk-path input.
     roots.push_back(join_arg(join_arg(fixture_dir, "search/root-b"),
                              "shared.proto"));
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
     CHECK(error.message.find("shadow") != std::string::npos);
     CHECK(files.files().empty());
     CHECK(files.targets().empty());
@@ -930,8 +610,7 @@ void test_disk_root_with_invalid_logical_name_fails()
 {
     // A disk-path root physically under a search root must map to a
     // valid logical name: quotes are forbidden in logical names, so the
-    // remainder below is invalid and the root must fail instead of
-    // falling through to the isolated absolute fallback.
+    // remainder below is invalid and the root must fail.
     require_work_root();
     const std::string dir = work_path("invalid-logical-root");
     const std::string leaf = "bad'name.proto";
@@ -942,7 +621,7 @@ void test_disk_root_with_invalid_logical_name_fails()
     std::vector<std::string> roots(1, join_arg(dir, leaf));
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
     CHECK(error.message.find("invalid logical name") != std::string::npos);
     CHECK(files.files().empty());
@@ -960,26 +639,204 @@ void test_disk_root_with_invalid_logical_name_fails()
     std::vector<std::string> ok_roots(1, join_arg(quoted, "ok.proto"));
     easypb_schema::SchemaSet ok_files;
     CHECK(easypb_proto::load_source_files(narrowed, ok_roots, ok_files,
-                                          error, 0));
+                                          error));
     CHECK(ok_files.files().size() == 1);
     CHECK(ok_files.targets().size() == 1);
 }
 
-void test_root_deduplication_preserves_order()
+void test_directory_argument_is_reported_as_directory()
 {
+    // protoc maps a directory argument like any other path and then
+    // fails to open it ("Input file is a directory"), while a directory
+    // under no search root gets the ordinary outside-roots failure.
+    // Neither case may surface as a plain "not found".
+    require_work_root();
+    const std::string dir = work_path("directory-argument");
+    CHECK(make_dirs(dir));
+
     easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(work_root);
+    std::vector<std::string> roots(1, dir);
+    easypb_schema::SchemaSet files;
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(error.message.find("is a directory") != std::string::npos);
+    CHECK(files.files().empty());
+    CHECK(files.targets().empty());
+
+    // Outside every search root the distinction disappears: this is the
+    // same failure as a file that lies outside all roots.
+    easypb_proto::SourceLoaderOptions elsewhere;
+    elsewhere.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
+    easypb_schema::SchemaSet outside_files;
+    CHECK(!easypb_proto::load_source_files(elsewhere, roots, outside_files,
+                                          error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(error.message.find("outside all search roots") !=
+          std::string::npos);
+    CHECK(outside_files.files().empty());
+
+    // A directory is not a search candidate either: a logical name that
+    // exists only as a directory advances the search and ends as a
+    // missing import, exactly like an absent file.
+    std::vector<std::string> logical_roots(1, "directory-argument");
+    easypb_schema::SchemaSet logical_files;
+    CHECK(!easypb_proto::load_source_files(options, logical_roots,
+                                          logical_files, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(error.message.find("not found") != std::string::npos);
+    CHECK(logical_files.files().empty());
+}
+
+void test_empty_input_argument_is_rejected()
+{
+    // An empty argument is invalid input, not a spelling to interpret:
+    // protoc refuses one outright, and the loader must fail with a
+    // message that names the problem. It must not be mistaken for an
+    // empty logical path, and it must not leave a partial result behind.
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
+    std::vector<std::string> empty_only(1, std::string());
+    easypb_schema::SchemaSet files;
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_proto::load_source_files(options, empty_only, files, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(error.message.find("is empty") != std::string::npos);
+    CHECK(error.message.find("empty import path") == std::string::npos);
+    CHECK(files.files().empty());
+    CHECK(files.targets().empty());
+
+    // A valid argument before it does not make the empty one acceptable,
+    // and the failed load still discards the files it had already read.
+    std::vector<std::string> mixed;
+    mixed.push_back("root.proto");
+    mixed.push_back(std::string());
+    easypb_schema::SchemaSet mixed_files;
+    CHECK(!easypb_proto::load_source_files(options, mixed, mixed_files,
+                                          error));
+    CHECK(error.message.find("is empty") != std::string::npos);
+    CHECK(mixed_files.files().empty());
+    CHECK(mixed_files.targets().empty());
+
+    // The contrast: an empty *search root entry* stays meaningful and
+    // means the working directory, so the search simply advances to the
+    // next root. Only the empty input argument is invalid.
+    easypb_proto::SourceLoaderOptions with_empty_root;
+    with_empty_root.proto_paths.push_back(std::string());
+    with_empty_root.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
+    std::vector<std::string> one_root(1, "root.proto");
+    easypb_schema::SchemaSet cwd_files;
+    easypb_schema::Diagnostic cwd_error;
+    CHECK(easypb_proto::load_source_files(with_empty_root, one_root, cwd_files,
+                                         cwd_error));
+    CHECK(cwd_files.files().size() == 4);
+    CHECK(cwd_files.targets().size() == 1);
+}
+
+#ifdef _WIN32
+void test_denied_access_stops_search()
+{
+    // Windows counterpart of the POSIX test with the same name. EACCES is
+    // reproduced with a deny ACE for Everyone, because the rule has to
+    // hold on the platform this loader is developed on.
+    //
+    // The layer that notices differs from POSIX: GetFileAttributesW
+    // answers from the directory entry without evaluating the file's
+    // DACL, so the status query still reports a present file and the
+    // denial surfaces when the file is read (protoc sees it earlier only
+    // because its search opens every candidate). The rule under test is
+    // the same either way: a denial fails the load loudly and never falls
+    // back to another root's file with the same logical name, even though
+    // a healthy candidate exists there.
+    require_work_root();
+    std::ostringstream unique;
+    unique << "denied-access-"
+           << static_cast<unsigned long>(GetCurrentProcessId());
+    const std::string denied_root = work_path(unique.str());
+    const std::string healthy_root = work_path("denied-access-fallback");
+    const std::string denied_file = join_arg(denied_root, "shared.proto");
+    const std::string fallback_file =
+        join_arg(healthy_root, "shared.proto");
+    const std::string importer_file =
+        join_arg(denied_root, "importer.proto");
+    CHECK(make_dirs(denied_root));
+    CHECK(make_dirs(healthy_root));
+    const std::string body = "syntax = \"proto2\";\nmessage Shared {}\n";
+    CHECK(write_file(denied_file, body));
+    CHECK(write_file(fallback_file, body));
+    CHECK(write_file(importer_file,
+                     "syntax = \"proto2\";\n"
+                     "import \"shared.proto\";\n"
+                     "message Importer {}\n"));
+
+    if (!deny_read_access(denied_file)) {
+        SKIP("deny ACE unsupported on this filesystem");
+    }
+
+    // Precondition of every assertion below: the denial must be real, so
+    // the negative results cannot be about something else (a missing file,
+    // a sharing conflict, or a typo in the fixture).
+    std::string contents;
+    std::string read_error;
+    CHECK(!easypb_file::read_disk_file(denied_file, contents, read_error));
+    CHECK(read_error.find("read access is denied") != std::string::npos);
+
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(denied_root);
+    options.proto_paths.push_back(healthy_root);
+
+    // 1. An input resolved through the first root fails there instead of
+    //    silently loading the second root's file with the same name.
+    std::vector<std::string> roots(1, "shared.proto");
+    easypb_schema::SchemaSet files;
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(error.message.find("read access is denied") != std::string::npos);
+    CHECK(files.files().empty());
+    CHECK(files.targets().empty());
+
+    // 2. The same rule for an import, with the importing file named in
+    //    the message.
+    std::vector<std::string> import_roots(1, "importer.proto");
+    easypb_schema::SchemaSet import_files;
+    easypb_schema::Diagnostic import_error;
+    CHECK(!easypb_proto::load_source_files(options, import_roots,
+                                          import_files, import_error));
+    CHECK(import_error.message.find("importer.proto") != std::string::npos);
+    CHECK(import_error.message.find("read access is denied") !=
+          std::string::npos);
+    CHECK(import_files.files().empty());
+    CHECK(import_files.targets().empty());
+
+    // Cleanup: restore access first, because the deny-only DACL also
+    // denies deletion. The directory name carries the process id, so a
+    // run that dies early cannot collide with the next one.
+    CHECK(allow_full_access(denied_file));
+    remove_if_present(denied_file);
+    remove_if_present(importer_file);
+    remove_if_present(fallback_file);
+    remove_dir_if_present(denied_root);
+    remove_dir_if_present(healthy_root);
+}
+#endif
+
+void test_root_deduplication_and_repeated_input()
+{
+    // A repeated search root and a repeated input are both accepted
+    // silently: the logical-name key loads each file once, like the
+    // descriptor pool of the reference compiler.
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
     options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
     std::vector<std::string> roots;
     roots.push_back("root.proto");
     roots.push_back("root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    easypb_proto::LoadStatistics statistics;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error,
-                                          &statistics));
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
     CHECK(files.files().size() == 4);
     CHECK(files.targets().size() == 1);
-    CHECK(statistics.files_read == 4);
 }
 
 void test_missing_unused_import_fails()
@@ -998,7 +855,7 @@ void test_missing_unused_import_fails()
     std::vector<std::string> roots(1, "root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
     CHECK(error.message.find("absent.proto") != std::string::npos);
     CHECK(error.message.find("root.proto") != std::string::npos);
@@ -1009,6 +866,9 @@ void test_missing_unused_import_fails()
 
 void test_missing_weak_import_fails()
 {
+    // The source frontend enforces weak dependencies, exactly like the
+    // reference compiler's Importer does: a weak import is an error, not
+    // an optional edge.
     require_work_root();
     const std::string dir = work_path("missing-weak");
     remove_if_present(join_arg(dir, "absent-weak.proto"));
@@ -1021,7 +881,7 @@ void test_missing_weak_import_fails()
     std::vector<std::string> roots(1, "root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
     CHECK(error.message.find("absent-weak.proto") != std::string::npos);
     CHECK(error.message.find("weak") != std::string::npos);
@@ -1042,7 +902,7 @@ void test_missing_public_import_fails()
     std::vector<std::string> roots(1, "root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
     CHECK(error.message.find("absent-public.proto") != std::string::npos);
     CHECK(error.message.find("public") != std::string::npos);
@@ -1064,11 +924,11 @@ void test_invalid_syntax_preserves_chain()
     std::vector<std::string> roots(1, "root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.message.find("broken.proto") != std::string::npos);
     CHECK(error.message.find("root.proto") != std::string::npos);
-    // The plan requires the original file/line/column to survive: the
-    // stray ";" is on line 2 of broken.proto and must appear verbatim.
+    // The original file/line/column must survive: the stray ";" is on
+    // line 2 of broken.proto and must appear verbatim.
     CHECK(error.location.line == 2);
     CHECK(error.location.column != 0);
     {
@@ -1093,7 +953,7 @@ void test_self_cycle_via_files()
     std::vector<std::string> roots(1, "a.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
     std::size_t occurrences = 0;
     std::size_t position = 0;
@@ -1123,15 +983,50 @@ void test_two_node_cycle_via_files()
     std::vector<std::string> roots(1, "a.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
     CHECK(error.message.find("a.proto") != std::string::npos);
     CHECK(error.message.find("b.proto") != std::string::npos);
     CHECK(files.files().empty());
 }
 
+void test_nested_cycle_reports_root_chain()
+{
+    require_work_root();
+    const std::string dir = work_path("nested-cycle");
+    CHECK(write_file(join_arg(dir, "root.proto"),
+                     "syntax = \"proto2\";\n"
+                     "import \"middle.proto\";\n"
+                     "message Root {}\n"));
+    CHECK(write_file(join_arg(dir, "middle.proto"),
+                     "syntax = \"proto2\";\n"
+                     "import \"a.proto\";\n"
+                     "message Middle {}\n"));
+    CHECK(write_file(join_arg(dir, "a.proto"),
+                     "syntax = \"proto2\";\n"
+                     "import \"b.proto\";\n"
+                     "message A {}\n"));
+    CHECK(write_file(join_arg(dir, "b.proto"),
+                     "syntax = \"proto2\";\n"
+                     "import \"a.proto\";\n"
+                     "message B {}\n"));
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(dir);
+    std::vector<std::string> roots(1, "root.proto");
+    easypb_schema::SchemaSet files;
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    CHECK(error.message.find(
+        "root.proto -> middle.proto -> a.proto -> b.proto -> a.proto") !=
+        std::string::npos);
+    CHECK(files.files().empty());
+}
+
 void test_invalid_import_spelling_is_rejected()
 {
+    // A ".." component is invalid in an import on every platform, like
+    // the virtual-path rule of the reference compiler.
     require_work_root();
     const std::string dir = work_path("invalid-spelling");
     CHECK(write_file(join_arg(dir, "root.proto"),
@@ -1143,7 +1038,7 @@ void test_invalid_import_spelling_is_rejected()
     std::vector<std::string> roots(1, "root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
     CHECK(error.message.find("outside.proto") != std::string::npos);
     CHECK(files.files().empty());
@@ -1152,10 +1047,9 @@ void test_invalid_import_spelling_is_rejected()
 void test_distinct_files_load_together()
 {
     // Distinct physical files under distinct logical names load together
-    // in requested target order. The same-physical/two-logical alias is
-    // covered by the symlink/hardlink and case-alias tests below.
+    // in requested target order.
     require_work_root();
-    const std::string dir = work_path("duplicate-alias");
+    const std::string dir = work_path("distinct-files");
     const std::string sub_a = join_arg(dir, "root-a");
     const std::string sub_b = join_arg(dir, "root-b");
     CHECK(write_file(join_arg(sub_a, "shared.proto"),
@@ -1170,7 +1064,7 @@ void test_distinct_files_load_together()
     roots.push_back("other.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
     CHECK(files.files().size() == 2);
     CHECK(files.targets().size() == 2);
     // Targets keep the first-requested CLI order.
@@ -1186,8 +1080,7 @@ void test_distinct_files_load_together()
 // SKIPs instead of failing. Removes any stale link first so repeated
 // runs never depend on leftover state. The symlink target is absolute:
 // a relative target would resolve from the link's directory and leave
-// a dangling link whose missing-file error would mask the alias check.
-// A successfully created link is verified to resolve for the same reason.
+// a dangling link whose missing-file error would mask the scenario.
 bool make_link(const std::string& target, const std::string& link)
 {
 #ifdef _WIN32
@@ -1200,113 +1093,31 @@ bool make_link(const std::string& target, const std::string& link)
     if (CreateHardLinkW(&wide_link[0], &wide_target[0], 0) == 0) {
         return false;
     }
-    return easypb_file::disk_file_exists(link);
+    return path_is_file(link);
 #else
     ::unlink(link.c_str());
     const std::string absolute_target =
-        easypb_file::absolute_disk_path(target);
+        easypb_file::lexical_absolute(target);
     if (::symlink(absolute_target.c_str(), link.c_str()) != 0) return false;
-    return easypb_file::disk_file_exists(link);
+    return path_is_file(link);
 #endif
 }
 
-#ifdef _WIN32
-// Mount-point reparse buffer layout (stable ABI), defined locally:
-// REPARSE_DATA_BUFFER coverage varies across lean/legacy SDK headers,
-// while FSCTL codes resolve fine. Only junction creation below needs it.
-struct JunctionReparseBuffer {
-    DWORD tag;               // IO_REPARSE_TAG_MOUNT_POINT
-    WORD data_length;        // bytes after this 8-byte header
-    WORD reserved;
-    WORD substitute_offset;  // bytes from path_start, no NUL counted
-    WORD substitute_length;
-    WORD print_offset;
-    WORD print_length;
-    wchar_t path_start[1];
-};
-
-bool make_junction(const std::string& target, const std::string& link)
+void test_two_names_of_one_file_load_twice()
 {
-    std::vector<wchar_t> wide_target, wide_link;
-    if (!wide_from_utf8(target, wide_target) ||
-        !wide_from_utf8(link, wide_link)) {
-        return false;
-    }
-    // NT substitute names require the \??\ prefix and backslashes.
-    // wide_from_utf8 NUL-terminates: strip the terminator first, or
-    // it becomes part of the substitute name and the junction resolves
-    // nowhere.
-    std::wstring print(&wide_target[0],
-                       &wide_target[0] + wide_target.size());
-    if (!print.empty() && print[print.size() - 1] == L'\0') {
-        print.erase(print.size() - 1);
-    }
-    for (std::size_t i = 0; i < print.size(); ++i) {
-        if (print[i] == L'/') print[i] = L'\\';
-    }
-    const std::wstring substitute = L"\\??\\" + print;
-    const DWORD sub_bytes =
-        static_cast<DWORD>(substitute.size() * sizeof(wchar_t));
-    const DWORD print_bytes =
-        static_cast<DWORD>(print.size() * sizeof(wchar_t));
-    std::vector<char> buffer(MAXIMUM_REPARSE_DATA_BUFFER_SIZE, 0);
-    JunctionReparseBuffer* reparse =
-        reinterpret_cast<JunctionReparseBuffer*>(&buffer[0]);
-    reparse->tag = IO_REPARSE_TAG_MOUNT_POINT;
-    reparse->data_length = static_cast<WORD>(
-        8 + sub_bytes + sizeof(wchar_t) + print_bytes + sizeof(wchar_t));
-    reparse->reserved = 0;
-    reparse->substitute_offset = 0;
-    reparse->substitute_length = static_cast<WORD>(sub_bytes);
-    reparse->print_offset = static_cast<WORD>(sub_bytes + sizeof(wchar_t));
-    reparse->print_length = static_cast<WORD>(print_bytes);
-    wchar_t* path_buffer = reparse->path_start;
-    std::memcpy(path_buffer, substitute.data(), sub_bytes);
-    path_buffer[substitute.size()] = L'\0';
-    std::memcpy(path_buffer + substitute.size() + 1, print.data(),
-                print_bytes);
-    path_buffer[substitute.size() + 1 + print.size()] = L'\0';
-    const DWORD total = 8 + reparse->data_length;
-
-    // Removing a junction never touches its target; a stale plain
-    // directory would fail removal when non-empty and bail out below.
-    RemoveDirectoryW(&wide_link[0]);
-    if (!CreateDirectoryW(&wide_link[0], 0)) return false;
-    HANDLE handle = CreateFileW(
-        &wide_link[0], GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        0, OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, 0);
-    if (handle == INVALID_HANDLE_VALUE) {
-        RemoveDirectoryW(&wide_link[0]);
-        return false;
-    }
-    DWORD returned = 0;
-    const BOOL set = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT,
-                                     &buffer[0], total, 0, 0, &returned, 0);
-    CloseHandle(handle);
-    if (!set) {
-        RemoveDirectoryW(&wide_link[0]);
-        return false;
-    }
-    const DWORD attributes = GetFileAttributesW(&wide_link[0]);
-    return attributes != INVALID_FILE_ATTRIBUTES &&
-           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-}
-#endif
-
-void test_symlink_alias_detection()
-{
+    // The loader keys files by logical name only and never compares file
+    // identity, exactly like the descriptor pool of the reference
+    // compiler: one physical file reached under two names (hardlink,
+    // symlink, or any other alias) loads twice. The duplicate symbols
+    // that follow from that are reported by the linking step, not here.
     require_work_root();
-    const std::string dir = work_path("symlink-alias");
+    const std::string dir = work_path("alias-pair");
     const std::string target = join_arg(dir, "real.proto");
     const std::string link = join_arg(dir, "alias.proto");
     CHECK(write_file(target,
                      "syntax = \"proto2\";\nmessage Real {}\n"));
     if (!make_link(target, link)) {
-        std::cout << "SKIP symlink/hardlink alias: cannot create link\n";
-        ++skips;
-        return;
+        SKIP("alias pair: cannot create a link");
     }
     easypb_proto::SourceLoaderOptions options;
     options.proto_paths.push_back(dir);
@@ -1315,90 +1126,11 @@ void test_symlink_alias_detection()
     roots.push_back("alias.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    // One physical source under two logical names must fail and name
-    // both spellings.
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
-    if (error.message.find("real.proto") == std::string::npos ||
-        error.message.find("alias.proto") == std::string::npos) {
-        CHECK(error.message.find("real.proto") != std::string::npos);
-        CHECK(error.message.find("alias.proto") != std::string::npos);
-    }
-    CHECK(files.files().empty());
-}
-
-void test_nested_alias_reports_importer_context()
-{
-    // root.proto -> middle.proto, where middle.proto imports real.proto
-    // and then its hardlink alias.proto on line 3: the alias conflict
-    // must name the importing file, the declaration site, and the path
-    // from the selected root.
-    require_work_root();
-    const std::string dir = work_path("nested-alias");
-    CHECK(write_file(join_arg(dir, "root.proto"),
-                     "syntax = \"proto2\";\n"
-                     "import \"middle.proto\";\n"
-                     "message Root {}\n"));
-    CHECK(write_file(join_arg(dir, "middle.proto"),
-                     "syntax = \"proto2\";\n"
-                     "import \"real.proto\";\n"
-                     "import \"alias.proto\";\n"
-                     "message Middle {}\n"));
-    CHECK(write_file(join_arg(dir, "real.proto"),
-                     "syntax = \"proto2\";\nmessage Real {}\n"));
-    if (!make_link(join_arg(dir, "real.proto"), join_arg(dir, "alias.proto"))) {
-        std::cout << "SKIP nested alias: cannot create link\n";
-        ++skips;
-        return;
-    }
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(dir);
-    std::vector<std::string> roots(1, "root.proto");
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
-    CHECK(error.file == "middle.proto");
-    CHECK(error.location.line == 3);
-    CHECK(error.message.find("real.proto") != std::string::npos);
-    CHECK(error.message.find("alias.proto") != std::string::npos);
-    CHECK(error.message.find(
-        "\"root.proto\" -> \"middle.proto\" -> \"alias.proto\"") !=
-        std::string::npos);
-    CHECK(files.files().empty());
-}
-
-void test_soft_hyphen_directories_stay_distinct()
-{
-    // U+00AD SOFT HYPHEN is significant in file names but invisible to
-    // linguistic comparison: "a<AD>b" and "<AD>ab" are different
-    // directories holding different files. A search root in the first
-    // must not swallow an absolute root from the second as shadowed;
-    // the second file loads as an isolated root instead. The character
-    // is UTF-8 encoded like every test spelling, so the test never
-    // depends on the source file encoding; the check is portable
-    // because POSIX stays byte-exact and Windows must not merge what
-    // the filesystem keeps apart.
-    require_work_root();
-    const std::string soft_hyphen = utf8_from_code_point(0x00ADu);
-    const std::string dir_a = work_path(std::string("a") + soft_hyphen + "b");
-    const std::string dir_b = work_path(soft_hyphen + "ab");
-    CHECK(write_file(join_arg(dir_a, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Root {}\n"));
-    CHECK(write_file(join_arg(dir_b, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Root {}\n"));
-    const std::string file_b =
-        easypb_file::absolute_disk_path(join_arg(dir_b, "root.proto"));
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(dir_a);
-    std::vector<std::string> roots(1, file_b);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(files.files().size() == 1);
-    CHECK(files.targets().size() == 1);
-    if (!files.targets().empty()) {
-        CHECK(text(files.targets()[0]->file.name) == file_b);
-    }
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(files.files().size() == 2);
+    CHECK(files.targets().size() == 2);
+    CHECK(files.find_file("real.proto") != 0);
+    CHECK(files.find_file("alias.proto") != 0);
 }
 
 void test_spaces_in_paths()
@@ -1416,7 +1148,7 @@ void test_spaces_in_paths()
     std::vector<std::string> roots(1, "root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
     CHECK(files.files().size() == 2);
 }
 
@@ -1426,9 +1158,7 @@ void test_empty_search_roots_mean_working_directory()
     // ["."]: the logical root below resolves against the process
     // working directory in both configurations.
     if (work_root.empty() || work_root[0] != '.') {
-        std::cout << "SKIP cwd default: custom work directory\n";
-        ++skips;
-        return;
+        SKIP("cwd default: custom work directory");
     }
     require_work_root();
     std::string base = work_root;
@@ -1449,7 +1179,7 @@ void test_empty_search_roots_mean_working_directory()
     easypb_schema::SchemaSet implicit_files;
     easypb_schema::Diagnostic implicit_error;
     CHECK(easypb_proto::load_source_files(implicit, roots, implicit_files,
-                                          implicit_error, 0));
+                                          implicit_error));
     CHECK(implicit_files.files().size() == 2);
     CHECK(implicit_files.targets().size() == 1);
 
@@ -1458,7 +1188,7 @@ void test_empty_search_roots_mean_working_directory()
     easypb_schema::SchemaSet explicit_files;
     easypb_schema::Diagnostic explicit_error;
     CHECK(easypb_proto::load_source_files(explicit_dot, roots, explicit_files,
-                                          explicit_error, 0));
+                                          explicit_error));
     CHECK(explicit_files.files().size() ==
           implicit_files.files().size());
     CHECK(explicit_files.targets().size() ==
@@ -1471,16 +1201,16 @@ void test_empty_search_roots_mean_working_directory()
     easypb_schema::SchemaSet empty_files;
     easypb_schema::Diagnostic empty_error;
     CHECK(easypb_proto::load_source_files(empty_entry, roots, empty_files,
-                                          empty_error, 0));
+                                          empty_error));
     CHECK(empty_files.files().size() ==
           implicit_files.files().size());
     CHECK(empty_files.targets().size() ==
           implicit_files.targets().size());
 }
 
+#ifdef _WIN32
 void test_windows_separators_in_disk_roots()
 {
-#ifdef _WIN32
     easypb_proto::SourceLoaderOptions options;
     options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
     // CLI disk paths may use backslashes; the loader must accept them.
@@ -1492,104 +1222,52 @@ void test_windows_separators_in_disk_roots()
     std::vector<std::string> roots(1, disk_root);
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
     CHECK(files.files().size() == 4);
-#else
-    std::cout << "SKIP windows separators: POSIX platform\n";
-    ++skips;
-#endif
 }
 
-void test_case_alias_and_distinct_files()
+void test_case_variant_root_spelling_is_outside_roots()
 {
+    // The prefix mapping is byte-wise, exactly like the reference
+    // compiler's: a search root spelled with a different case does not
+    // contain the file, even where the filesystem itself would open it,
+    // and naming that file as an argument fails instead of being
+    // silently renamed.
     require_work_root();
-    const std::string dir = work_path("case-names");
-    CHECK(write_file(join_arg(dir, "shared.proto"),
-                     "syntax = \"proto2\";\npackage lower;\nmessage Shared {}\n"));
-    const std::string upper = join_arg(dir, "Shared.proto");
-    // Try to create a distinct upper-case file. On case-insensitive
-    // filesystems this overwrites the same physical file.
-    const bool upper_written =
-        write_file(upper, "syntax = \"proto2\";\npackage upper;\nmessage Shared {}\n");
-    CHECK(upper_written);
-    easypb_file::FileIdentity lower_identity;
-    easypb_file::FileIdentity upper_identity;
-    std::string identity_error;
-    const bool lower_ok = easypb_file::get_file_identity(
-        join_arg(dir, "shared.proto"), lower_identity, identity_error);
-    const bool upper_ok =
-        easypb_file::get_file_identity(upper, upper_identity, identity_error);
-    CHECK(lower_ok && upper_ok);
-    if (!lower_ok || !upper_ok) return;
-    if (easypb_file::same_identity(lower_identity, upper_identity)) {
-        // Case-insensitive filesystem: the two spellings alias one file
-        // and must be rejected with both names explained.
-        easypb_proto::SourceLoaderOptions options;
-        options.proto_paths.push_back(dir);
-        std::vector<std::string> roots;
-        roots.push_back("shared.proto");
-        roots.push_back("Shared.proto");
-        easypb_schema::SchemaSet files;
-        easypb_schema::Diagnostic error;
-        CHECK(!easypb_proto::load_source_files(options, roots, files, error,
-                                               0));
-        CHECK(error.message.find("shared.proto") != std::string::npos);
-        CHECK(error.message.find("Shared.proto") != std::string::npos);
-    } else {
-        // Case-sensitive filesystem: the two files are distinct and both
-        // load together.
-        easypb_proto::SourceLoaderOptions options;
-        options.proto_paths.push_back(dir);
-        std::vector<std::string> roots;
-        roots.push_back("shared.proto");
-        roots.push_back("Shared.proto");
-        easypb_schema::SchemaSet files;
-        easypb_schema::Diagnostic error;
-        CHECK(easypb_proto::load_source_files(options, roots, files, error,
-                                              0));
-        CHECK(files.files().size() == 2);
-    }
-}
+    const std::string dir = work_path("case-root/CaseRoot");
+    CHECK(write_file(join_arg(dir, "root.proto"),
+                     "syntax = \"proto2\";\nmessage Root {}\n"));
+    std::string variant = dir;
+    const std::string needle = "CaseRoot";
+    const std::size_t pos = variant.rfind(needle);
+    CHECK(pos != std::string::npos);
+    if (pos == std::string::npos) return;
+    variant.replace(pos, needle.size(), "caseroot");
 
-void test_isolated_absolute_root()
-{
-    require_work_root();
-    const std::string outside = work_path("isolated-outside");
-    const std::string absolute_file = join_arg(outside, "lonely.proto");
-    CHECK(write_file(absolute_file,
-                     "syntax = \"proto2\";\nmessage Lonely {}\n"));
-    const std::string absolute =
-        easypb_file::absolute_disk_path(absolute_file);
     easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
-    std::vector<std::string> roots(1, absolute);
+    options.proto_paths.push_back(variant);
+    std::vector<std::string> roots(
+        1, easypb_file::lexical_absolute(join_arg(dir, "root.proto")));
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(files.files().size() == 1);
-    CHECK(files.targets().size() == 1);
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(error.message.find("outside all search roots") !=
+          std::string::npos);
+    CHECK(files.files().empty());
+    CHECK(files.targets().empty());
 
-    // The same isolated file with an import requires an explicit -I:
-    // the helper lives next to the isolated file but outside the
-    // configured search roots, so the diamond root alone cannot cover it.
-    CHECK(write_file(join_arg(outside, "isolated-helper.proto"),
-                     "syntax = \"proto2\";\nmessage Helper {}\n"));
-    CHECK(write_file(absolute_file,
-                     "syntax = \"proto2\";\n"
-                     "import \"isolated-helper.proto\";\n"
-                     "message Lonely { optional int32 x = 1; }\n"));
-    easypb_schema::SchemaSet second;
-    CHECK(!easypb_proto::load_source_files(options, roots, second, error, 0));
-    CHECK(error.message.find("-I") != std::string::npos);
-    CHECK(second.files().empty());
-    // Adding the isolated directory with -I covers the helper.
-    easypb_proto::SourceLoaderOptions with_helper = options;
-    with_helper.proto_paths.push_back(outside);
-    easypb_schema::SchemaSet third;
-    CHECK(easypb_proto::load_source_files(with_helper, roots, third, error,
-                                          0));
-    CHECK(third.files().size() == 2);
+    // The same file under the correctly spelled root resolves, so the
+    // failure above is the spelling, not a broken fixture.
+    easypb_proto::SourceLoaderOptions correct;
+    correct.proto_paths.push_back(dir);
+    std::vector<std::string> logical_roots(1, "root.proto");
+    easypb_schema::SchemaSet resolved;
+    CHECK(easypb_proto::load_source_files(correct, logical_roots, resolved,
+                                          error));
+    CHECK(resolved.files().size() == 1);
 }
+#endif
 
 void test_failed_load_leaves_empty_result()
 {
@@ -1610,7 +1288,7 @@ void test_failed_load_leaves_empty_result()
     } catch (...) {
     }
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(files.files().empty());
     CHECK(files.targets().empty());
 }
@@ -1630,8 +1308,7 @@ void test_join_preserves_root_separator()
     // A root ending in a multibyte character valid in the active page
     // still gains its separator: the trailing bytes are data, never a
     // separator check shortcut.
-    const std::string multibyte_root =
-        std::string("root-\xC3\xA9");
+    const std::string multibyte_root = std::string("root-\xC3\xA9");
     CHECK(easypb_file::join_disk_path(multibyte_root, "shared.proto") ==
           multibyte_root + "/shared.proto");
 }
@@ -1672,77 +1349,40 @@ void test_strip_search_root_prefix()
                                                  relative));
     // U+00AD SOFT HYPHEN is significant in file names: "a<AD>b" and
     // "<AD>ab" are different directories on every platform, so neither
-    // may map under the other even where linguistic comparison would
-    // equate them. These spellings stay byte-level on purpose: they
-    // exercise the comparison itself without any filesystem encoding.
+    // may map under the other. These spellings stay byte-level on
+    // purpose: they exercise the comparison itself.
     CHECK(!easypb_file::strip_search_root_prefix("/r/a\xAD" "b/f.proto",
                                                  "/r/\xAD" "ab", relative));
     CHECK(!easypb_file::strip_search_root_prefix("/r/\xAD" "ab/f.proto",
                                                  "/r/a\xAD" "b", relative));
 #ifdef _WIN32
-    CHECK(easypb_file::strip_search_root_prefix("C:/Dir/File.proto",
-                                                "c:/dir", relative));
+    // Case variants of a root spelling do not map, exactly like the
+    // byte-wise ApplyMapping of the reference compiler: the filesystem
+    // may well open the same file, but the mapping is textual.
+    CHECK(!easypb_file::strip_search_root_prefix("C:/Dir/File.proto",
+                                                 "c:/dir", relative));
+    CHECK(easypb_file::strip_search_root_prefix("C:/dir/File.proto",
+                                                "C:/dir", relative));
     CHECK(relative == "File.proto");
-    // Case-equivalent spellings with different byte lengths (U+0250 is
-    // two bytes in UTF-8, its uppercase U+2C6F three) must still map:
-    // the prefix boundary is computed in wide space, never by cutting
-    // the file at the root's byte length. The remainder keeps the
-    // file's own bytes verbatim. The containing directory is real, so
-    // the sensitivity probe answers instead of failing inconclusively.
-    {
-        const std::string lower_mark = utf8_from_code_point(0x0250u);
-        const std::string upper_mark = utf8_from_code_point(0x2C6Fu);
-        if (lower_mark.empty() || upper_mark.empty()) {
-            std::cout << "SKIP unicode prefix: UTF-8 helper failed\n";
-            ++skips;
-        } else {
-            require_work_root();
-            const std::string parent = work_path("unicode-prefix");
-            CHECK(make_dirs(parent));
-            const std::string lower_root =
-                join_arg(parent, std::string("dir-") + lower_mark);
-            const std::string upper_root =
-                join_arg(parent, std::string("dir-") + upper_mark);
-            const int parent_probe =
-                easypb_file::directory_case_sensitive(parent);
-            const bool alias_ok =
-                parent_probe != 1 && parent_probe != -2;
-            const bool first_mapped =
-                easypb_file::strip_search_root_prefix(
-                    join_arg(upper_root, "f.proto"), lower_root, relative);
-            const bool first_ok = first_mapped && relative == "f.proto";
-            const bool second_mapped =
-                easypb_file::strip_search_root_prefix(
-                    join_arg(lower_root, "f.proto"), upper_root, relative);
-            const bool second_ok = second_mapped && relative == "f.proto";
-            if (alias_ok) {
-                CHECK(first_ok);
-                CHECK(second_ok);
-            } else {
-                CHECK(!first_mapped);
-                CHECK(!second_mapped);
-            }
-        }
-    }
 #endif
 }
 
 #ifdef _WIN32
-void test_absolute_path_normalizes_partial_forms()
+void test_absolute_forms_resolve_lexically()
 {
     // Drive-relative ("C:x") and rooted ("\x") spellings must resolve to
-    // fully qualified paths so equivalent roots map to one logical name
-    // instead of aliasing.
+    // fully qualified paths so equivalent spellings compare equal during
+    // logical mapping instead of producing a false "outside" answer.
     const std::string drive = fixture_dir.substr(0, 2);
     const std::string drive_relative = drive + "win-drive-relative-probe.proto";
     const std::string drive_full =
-        easypb_file::absolute_disk_path(drive_relative);
+        easypb_file::lexical_absolute(drive_relative);
     CHECK(drive_full != drive_relative);
     CHECK(drive_full.size() >= 3);
     CHECK(drive_full[1] == ':');
     CHECK(drive_full[2] == '/' || drive_full[2] == '\\');
     const std::string rooted = "\\win-rooted-probe.proto";
-    const std::string rooted_full = easypb_file::absolute_disk_path(rooted);
+    const std::string rooted_full = easypb_file::lexical_absolute(rooted);
     CHECK(rooted_full != rooted);
     CHECK(rooted_full.size() >= 3);
     CHECK(rooted_full[1] == ':');
@@ -1756,15 +1396,11 @@ void test_absolute_path_normalizes_partial_forms()
     // per-drive current directory.
     CHECK(easypb_file::lexical_absolute("C:/") == "C:/");
     CHECK(easypb_file::lexical_absolute("C:/dir/..") == "C:/");
-    CHECK(easypb_file::is_fully_qualified_disk_path(
-        easypb_file::lexical_absolute("C:/")));
     CHECK(easypb_file::join_disk_path(
         easypb_file::lexical_absolute("C:/"), "leaf.proto") ==
         "C:/leaf.proto");
 }
-#endif
 
-#ifdef _WIN32
 void test_separator_normalization_preserves_multibyte()
 {
     // UTF-8 continuation bytes can never equal ASCII backslash, so
@@ -1778,484 +1414,12 @@ void test_separator_normalization_preserves_multibyte()
         std::string("C:\\dir\\") + leaf + "\\") ==
         std::string("C:/dir/") + leaf);
 }
-#endif
 
-void test_utf8_logical_spelling_rules()
-{
-    // Logical names are strict UTF-8. Structural checks stay byte-exact
-    // because UTF-8 continuation bytes never collide with ASCII separators.
-    std::string reason;
-    CHECK(easypb_schema::validate_logical_path("a/b.proto", reason));
-    CHECK(!easypb_schema::validate_logical_path("a\\b.proto", reason));
-    CHECK(!easypb_schema::validate_logical_path("C:/b.proto", reason));
-    CHECK(!easypb_schema::validate_logical_path("bad'name.proto", reason));
-    CHECK(!easypb_schema::validate_logical_path("", reason));
-    const std::string leaf = std::string("na\xC3\xAFve.proto");
-    CHECK(easypb_schema::validate_logical_path(leaf, reason));
-    CHECK(!easypb_schema::validate_logical_path(
-        std::string("bad-") + char(0xFF) + ".proto", reason));
-    CHECK(reason.find("UTF-8") != std::string::npos);
-    CHECK(!easypb_schema::validate_logical_path(
-        std::string("bad-") + char(0xC0) + char(0xAF) + ".proto", reason));
-    CHECK(!easypb_schema::validate_logical_path(
-        std::string("bad-") + char(0xED) + char(0xA0) + char(0x80) +
-            ".proto",
-        reason));
-}
-
-#ifdef _WIN32
-void test_drive_relative_root_is_not_isolated()
-{
-    // "C:dir\file.proto" is drive-relative (resolved against the
-    // per-drive current directory), not absolute: it must not get the
-    // fully qualified isolated-root convenience even when it names an
-    // existing file outside all search roots.
-    require_work_root();
-    const std::string dir = work_path("drive-relative");
-    CHECK(write_file(join_arg(dir, "lonely.proto"),
-                     "syntax = \"proto2\";\nmessage Lonely {}\n"));
-    const std::string absolute =
-        easypb_file::lexical_absolute(join_arg(dir, "lonely.proto"));
-    const std::string cwd = easypb_file::lexical_absolute(".");
-    // The scenario needs the file on the process drive under the
-    // working directory; otherwise no drive-relative spelling exists.
-    if (absolute.size() <= cwd.size() + 1 ||
-        absolute.compare(0, cwd.size(), cwd) != 0 ||
-        (absolute[cwd.size()] != '/' && absolute[cwd.size()] != '\\') ||
-        cwd.size() < 2 || cwd[1] != ':') {
-        std::cout << "SKIP drive-relative root: file outside working "
-                     "directory\n";
-        ++skips;
-        return;
-    }
-    const std::string drive_relative =
-        cwd.substr(0, 2) + absolute.substr(cwd.size() + 1);
-    CHECK(easypb_file::disk_file_exists(drive_relative));
-    CHECK(!easypb_file::is_fully_qualified_disk_path(drive_relative));
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
-    std::vector<std::string> roots(1, drive_relative);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
-    CHECK(error.message.find("outside all search roots") !=
-          std::string::npos);
-    CHECK(files.files().empty());
-    CHECK(files.targets().empty());
-}
-#endif
-
-void test_isolated_root_with_resolvable_imports_fails()
-{
-    // Plan 3 allows the absolute-name convenience for import-free roots
-    // only: an isolated root that declares imports needs an explicit -I
-    // even when the imports would resolve through another search root.
-    require_work_root();
-    const std::string outside = work_path("isolated-resolvable");
-    CHECK(write_file(join_arg(outside, "lonely.proto"),
-                     "syntax = \"proto2\";\n"
-                     "import \"shared.proto\";\n"
-                     "message Lonely { optional int32 x = 1; }\n"));
-    const std::string absolute =
-        easypb_file::absolute_disk_path(join_arg(outside, "lonely.proto"));
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
-    std::vector<std::string> roots(1, absolute);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
-    CHECK(error.message.find("-I") != std::string::npos);
-    CHECK(error.message.find("shared.proto") != std::string::npos);
-    // The offending import declaration site survives: "shared.proto" is
-    // imported on line 2 of the isolated root.
-    CHECK(error.location.line == 2);
-    CHECK(error.location.column != 0);
-    CHECK(files.files().empty());
-    CHECK(files.targets().empty());
-}
-
-void test_non_ascii_filenames_round_trip()
-{
-    // Test spellings are UTF-8 on every platform and files are created
-    // through the same spelling the loader resolves, so a write/read
-    // round trip with identical bytes must work everywhere.
-    // "na\xc3\xafve.proto" is naïve.proto in UTF-8.
-    require_work_root();
-    const std::string dir = work_path("encoding");
-    const std::string leaf_name = std::string("na\xc3\xafve.proto");
-    const std::string root_name = std::string("caf\xc3\xa9.proto");
-    CHECK(write_file(join_arg(dir, leaf_name),
-                     "syntax = \"proto2\";\nmessage Leaf {}\n"));
-    CHECK(write_file(join_arg(dir, root_name),
-                     std::string("syntax = \"proto2\";\nimport \"") +
-                     leaf_name + "\";\nmessage Root {}\n"));
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(dir);
-    std::vector<std::string> roots(1, root_name);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(files.files().size() == 2);
-    CHECK(files.targets().size() == 1);
-    if (!files.targets().empty()) {
-        CHECK(text(files.targets()[0]->file.name) == root_name);
-    }
-    CHECK(files.find_file(leaf_name) != 0);
-}
-
-void test_utf8_import_finds_unicode_file()
-{
-    // One logical namespace: a file created for its Unicode name must
-    // resolve through a UTF-8 import spelling on every process code
-    // page, and the SchemaSet key must be the UTF-8 spelling. (On
-    // Windows the fixture goes through the W API and is read back
-    // through it; POSIX is UTF-8 natively.)
-    require_work_root();
-    const std::string dir = work_path("unicode-import");
-    const std::string leaf_name =
-        std::string("caf") + utf8_from_code_point(0x00E9u) + ".proto";
-    const std::string root_name = "root.proto";
-    CHECK(write_file(join_arg(dir, leaf_name),
-                     "syntax = \"proto2\";\nmessage Caf {}\n"));
-    CHECK(write_file(join_arg(dir, root_name),
-                     std::string("syntax = \"proto2\";\nimport \"") +
-                     leaf_name + "\";\nmessage Root {}\n"));
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(dir);
-    std::vector<std::string> roots(1, root_name);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(files.files().size() == 2);
-    CHECK(files.targets().size() == 1);
-    CHECK(files.find_file(leaf_name) != 0);
-    CHECK(files.find_file(root_name) != 0);
-}
-
-void test_equivalent_isolated_roots_deduplicate()
-{
-    // Equivalent spellings of one isolated file ("abs/f.proto" versus
-    // "abs/./f.proto") share one canonical identity; the first spelling
-    // wins as the logical name instead of aliasing.
-    require_work_root();
-    const std::string outside = work_path("isolated-duplicate");
-    CHECK(write_file(join_arg(outside, "lonely.proto"),
-                     "syntax = \"proto2\";\nmessage Lonely {}\n"));
-    const std::string directory =
-        easypb_file::absolute_disk_path(outside);
-    const std::string first = join_arg(directory, "lonely.proto");
-    const std::string second = directory + "/./lonely.proto";
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
-    std::vector<std::string> roots;
-    roots.push_back(first);
-    roots.push_back(second);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(files.files().size() == 1);
-    CHECK(files.targets().size() == 1);
-    if (!files.targets().empty()) {
-        CHECK(text(files.targets()[0]->file.name) == first);
-    }
-#ifdef _WIN32
-    // The same file through "/" and "\" separators deduplicates as well.
-    std::string slashed = second;
-    for (std::size_t i = 0; i < slashed.size(); ++i) {
-        if (slashed[i] == '/') slashed[i] = '\\';
-    }
-    std::vector<std::string> mixed_roots;
-    mixed_roots.push_back(first);
-    mixed_roots.push_back(slashed);
-    easypb_schema::SchemaSet mixed;
-    CHECK(easypb_proto::load_source_files(options, mixed_roots, mixed,
-                                          error, 0));
-    CHECK(mixed.files().size() == 1);
-    CHECK(mixed.targets().size() == 1);
-    // Windows disk paths are case-insensitive: a differently-cased drive
-    // letter and directory name address the same physical file and must
-    // deduplicate with the first spelling kept, not alias. Inside a
-    // case-sensitive directory the recased spelling is a different
-    // logical name of one file instead, and must alias-fail.
-    std::string recased = first;
-    for (std::size_t i = 0; i < recased.size(); ++i) {
-        if (recased[i] >= 'a' && recased[i] <= 'z') {
-            recased[i] = static_cast<char>(recased[i] - 'a' + 'A');
-        } else if (recased[i] >= 'A' && recased[i] <= 'Z') {
-            recased[i] = static_cast<char>(recased[i] - 'A' + 'a');
-        }
-    }
-    if (recased != first) {
-        // A positively sensitive directory (or an inconclusive query
-        // on a capable system) turns the recased spelling into a
-        // different logical name of one file, which must alias-fail;
-        // anywhere else the spellings deduplicate to the first name.
-        const int probe = easypb_file::directory_case_sensitive(directory);
-        const bool alias_ok = probe != 1 && probe != -2;
-        if (!alias_ok) {
-            std::vector<std::string> case_roots;
-            case_roots.push_back(first);
-            case_roots.push_back(recased);
-            easypb_schema::SchemaSet cased;
-            CHECK(!easypb_proto::load_source_files(options, case_roots,
-                                                   cased, error, 0));
-            CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
-            CHECK(error.message.find("two logical names") !=
-                  std::string::npos);
-            CHECK(cased.files().empty());
-        } else {
-            std::vector<std::string> case_roots;
-            case_roots.push_back(first);
-            case_roots.push_back(recased);
-            easypb_schema::SchemaSet cased;
-            CHECK(easypb_proto::load_source_files(options, case_roots, cased,
-                                                  error, 0));
-            CHECK(cased.files().size() == 1);
-            CHECK(cased.targets().size() == 1);
-            if (!cased.targets().empty()) {
-                CHECK(text(cased.targets()[0]->file.name) == first);
-            }
-        }
-    }
-#endif
-}
-
-void test_distinct_isolated_hardlink_names_fail()
-{
-    // Two isolated absolute roots naming one physical file through
-    // different hardlink/symlink spellings are a duplicate alias, not a
-    // silent deduplication: both names must be reported and nothing may
-    // load. Lexically equivalent spellings (covered above) still share
-    // the first name.
-    require_work_root();
-    const std::string dir = work_path("isolated-hardlink-alias");
-    const std::string target = join_arg(dir, "real.proto");
-    const std::string link = join_arg(dir, "alias.proto");
-    CHECK(write_file(target,
-                     "syntax = \"proto2\";\nmessage Real {}\n"));
-    if (!make_link(target, link)) {
-        std::cout << "SKIP isolated hardlink alias: cannot create link\n";
-        ++skips;
-        return;
-    }
-    const std::string absolute_target =
-        easypb_file::absolute_disk_path(target);
-    const std::string absolute_link =
-        easypb_file::absolute_disk_path(link);
-    // The scenario needs one physical file under two names; without a
-    // real link there is nothing to alias.
-    easypb_file::FileIdentity target_identity, link_identity;
-    std::string identity_error;
-    if (!easypb_file::get_file_identity(absolute_target, target_identity,
-                                        identity_error) ||
-        !easypb_file::get_file_identity(absolute_link, link_identity,
-                                        identity_error) ||
-        !easypb_file::same_identity(target_identity, link_identity)) {
-        std::cout << "SKIP isolated hardlink alias: links are distinct "
-                     "files\n";
-        ++skips;
-        return;
-    }
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(join_arg(fixture_dir, "diamond"));
-    std::vector<std::string> roots;
-    roots.push_back(absolute_target);
-    roots.push_back(absolute_link);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
-    CHECK(error.message.find("real.proto") != std::string::npos);
-    CHECK(error.message.find("alias.proto") != std::string::npos);
-    CHECK(files.files().empty());
-    CHECK(files.targets().empty());
-}
-
-void test_nested_cycle_reports_root_chain()
-{
-    require_work_root();
-    const std::string dir = work_path("nested-cycle");
-    CHECK(write_file(join_arg(dir, "root.proto"),
-                     "syntax = \"proto2\";\n"
-                     "import \"middle.proto\";\n"
-                     "message Root {}\n"));
-    CHECK(write_file(join_arg(dir, "middle.proto"),
-                     "syntax = \"proto2\";\n"
-                     "import \"a.proto\";\n"
-                     "message Middle {}\n"));
-    CHECK(write_file(join_arg(dir, "a.proto"),
-                     "syntax = \"proto2\";\n"
-                     "import \"b.proto\";\n"
-                     "message A {}\n"));
-    CHECK(write_file(join_arg(dir, "b.proto"),
-                     "syntax = \"proto2\";\n"
-                     "import \"a.proto\";\n"
-                     "message B {}\n"));
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(dir);
-    std::vector<std::string> roots(1, "root.proto");
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
-    CHECK(error.message.find(
-        "root.proto -> middle.proto -> a.proto -> b.proto -> a.proto") !=
-        std::string::npos);
-    CHECK(files.files().empty());
-}
-
-#ifdef _WIN32
-void test_non_ascii_case_alias_matches_search_root()
-{
-    // Search root ".../accent-é" with an absolute root spelling
-    // ".../accent-É/...": Windows opens the same physical file with the
-    // same native identity, so the recased root must map instead of
-    // falling out to the isolated error. Both spellings are UTF-8 like
-    // every test path, so the test never depends on the source file
-    // encoding.
-    require_work_root();
-    const std::string lower_mark = utf8_from_code_point(0x00E9u);
-    const std::string upper_mark = utf8_from_code_point(0x00C9u);
-    if (lower_mark.empty() || upper_mark.empty()) {
-        std::cout << "SKIP non-ASCII case alias: UTF-8 helper failed\n";
-        ++skips;
-        return;
-    }
-    const std::string lower_dir =
-        work_path(std::string("accent-") + lower_mark);
-    CHECK(write_file(join_arg(lower_dir, "leaf.proto"),
-                     "syntax = \"proto2\";\nmessage Leaf {}\n"));
-    CHECK(write_file(join_arg(lower_dir, "root.proto"),
-                     "syntax = \"proto2\";\n"
-                     "import \"leaf.proto\";\n"
-                     "message Root {}\n"));
-    const std::string lower_root =
-        easypb_file::absolute_disk_path(lower_dir);
-    // Recase only the trailing directory component: the encoded marks
-    // must not collide with parent-directory bytes.
-    std::string upper_root = lower_root;
-    const std::size_t last_separator =
-        upper_root.find_last_of("/\\");
-    const std::size_t component_start =
-        last_separator == std::string::npos ? 0 : last_separator + 1;
-    const std::size_t mark_at =
-        upper_root.find(lower_mark, component_start);
-    if (mark_at == std::string::npos) {
-        std::cout << "SKIP non-ASCII case alias: unexpected root spelling\n";
-        ++skips;
-        return;
-    }
-    upper_root.replace(mark_at, lower_mark.size(), upper_mark);
-    const std::string upper_file = join_arg(upper_root, "root.proto");
-    // The recased spelling must address the same physical file for this
-    // scenario to apply; otherwise there is nothing to deduplicate.
-    easypb_file::FileIdentity lower_identity, upper_identity;
-    std::string identity_error;
-    if (!easypb_file::get_file_identity(join_arg(lower_root, "root.proto"),
-                                        lower_identity, identity_error) ||
-        !easypb_file::get_file_identity(upper_file, upper_identity,
-                                        identity_error) ||
-        !easypb_file::same_identity(lower_identity, upper_identity)) {
-        std::cout << "SKIP non-ASCII case alias: case-sensitive setup\n";
-        ++skips;
-        return;
-    }
-    // Same file, so the search-root prefix comparison must fold the case
-    // variants instead of falling out to the isolated error.
-    std::string probed;
-    CHECK(easypb_file::strip_search_root_prefix(upper_file, lower_root,
-                                                probed));
-    CHECK(probed == "root.proto");
-    easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(lower_dir);
-    std::vector<std::string> roots(1, upper_file);
-    easypb_schema::SchemaSet files;
-    easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
-    CHECK(files.files().size() == 2);
-    CHECK(files.targets().size() == 1);
-    if (!files.targets().empty()) {
-        CHECK(text(files.targets()[0]->file.name) == "root.proto");
-    }
-}
-#endif
-
-#ifdef _WIN32
-void test_case_sensitive_directory_semantics()
-{
-    // Case-only differences are equivalent spellings inside ordinary
-    // directories but different names inside a case-sensitive one.
-    // The branch taken follows the live probe, so the test holds on
-    // both kinds of volumes; hosts without sensitive directories
-    // exercise the insensitive branch (sensitivity cannot be enabled
-    // without elevation).
-    require_work_root();
-    const std::string dir = work_path("case-sensitivity");
-    CHECK(write_file(join_arg(join_arg(dir, "inc"), "f.proto"),
-                     "syntax = \"proto2\";\nmessage F {}\n"));
-    CHECK(easypb_file::directory_case_sensitive(
-        join_arg(dir, "definitely-missing-dir")) != 1);
-    // The "inc" versus "INC" child-name comparison is governed by the
-    // parent directory; the file-name comparison below by "inc" itself.
-    // A failed query on a capable system (-2) is handled conservatively
-    // like a sensitive answer; only -1 (no query API) keeps history.
-    const int parent_probe = easypb_file::directory_case_sensitive(dir);
-    CHECK(parent_probe >= -2 && parent_probe <= 1);
-    const int child_probe = easypb_file::directory_case_sensitive(
-        join_arg(dir, "inc"));
-    CHECK(child_probe >= -2 && child_probe <= 1);
-    const std::string child = join_arg(dir, "inc");
-    const std::string root = easypb_file::absolute_disk_path(child);
-    const std::size_t last_separator = root.find_last_of("/\\");
-    std::string upper = root;
-    bool recased = false;
-    for (std::size_t i = last_separator == std::string::npos
-                             ? 0 : last_separator + 1;
-         i < upper.size(); ++i) {
-        if (upper[i] >= 'a' && upper[i] <= 'z') {
-            upper[i] = static_cast<char>(upper[i] - 'a' + 'A');
-            recased = true;
-        }
-    }
-    if (!recased) {
-        std::cout << "SKIP case sensitivity: nothing to recase\n";
-        ++skips;
-        return;
-    }
-    std::string relative;
-    const bool mapped = easypb_file::strip_search_root_prefix(
-        join_arg(upper, "f.proto"), root, relative);
-    if (parent_probe == 1 || parent_probe == -2) {
-        // Different cases name different directories here: the
-        // recased spelling is outside the root instead of matching.
-        CHECK(!mapped);
-    } else {
-        CHECK(mapped);
-        CHECK(relative == "f.proto");
-    }
-    // Spelling equivalence follows the same rule for the file name:
-    // hardlink-style case variants of one file deduplicate only where
-    // the parent directory is not case-sensitive.
-    const bool names_equivalent =
-        easypb_file::equivalent_disk_spelling(join_arg(root, "F.proto"),
-                                              join_arg(root, "f.proto"));
-    if (child_probe == 1 || child_probe == -2) {
-        CHECK(!names_equivalent);
-    } else {
-        CHECK(names_equivalent);
-    }
-}
-#endif
-
-#ifdef _WIN32
 void test_wide_cli_conversion_is_unambiguous()
 {
-    // The old ACP/UTF-8 heuristic confused CP1252 bytes C3 A9 for the
-    // filename "A�Ac" with UTF-8 C3 A9 for "Ac". Starting from wchar_t argv
-    // makes the mapping deterministic: the two Unicode strings remain
-    // distinct UTF-8 spellings before any loader/path code sees them.
+    // Starting from wchar_t argv makes the mapping deterministic: two
+    // distinct Unicode strings must stay two distinct UTF-8 spellings
+    // before any loader/path code sees them.
     const wchar_t e_acute[] = { static_cast<wchar_t>(0x00E9u), L'\0' };
     const wchar_t mojibake[] = { static_cast<wchar_t>(0x00C3u),
                                  static_cast<wchar_t>(0x00A9u), L'\0' };
@@ -2291,106 +1455,89 @@ void test_wide_cli_conversion_is_unambiguous()
     CHECK(easypb_file::utf8_from_wide(supplementary, supplementary_utf8));
     CHECK(supplementary_utf8 == "\xF0\x9F\x98\x80");
 }
+#endif
 
-void test_case_query_operational_error_propagates()
+void test_utf8_logical_spelling_rules()
 {
-    // Exercise the exact state that used to be collapsed into an ordinary
-    // prefix mismatch. No real filesystem ACL/case-sensitive directory is
-    // required: the injected query returns the operational-error state.
-    case_query_error_probe_calls = 0;
-    easypb_file::set_directory_case_sensitivity_probe(
-        forced_case_query_operational_error);
-
-    std::string relative;
-    bool operational_error = false;
-    const bool mapped = easypb_file::strip_search_root_prefix(
-        "C:/Temp/Root/file.proto", "C:/Temp/root", relative,
-        &operational_error);
-
-    easypb_file::set_directory_case_sensitivity_probe(0);
-    CHECK(!mapped);
-    CHECK(operational_error);
-    CHECK(case_query_error_probe_calls == 1);
-    CHECK(relative.empty());
+    // Logical names are strict UTF-8. Structural checks stay byte-exact
+    // because UTF-8 continuation bytes never collide with ASCII separators.
+    // This is the deliberate strictness beyond the reference compiler,
+    // which applies its virtual-path rules only when opening a file.
+    std::string reason;
+    CHECK(easypb_schema::validate_logical_path("a/b.proto", reason));
+    CHECK(!easypb_schema::validate_logical_path("a\\b.proto", reason));
+    CHECK(!easypb_schema::validate_logical_path("C:/b.proto", reason));
+    CHECK(!easypb_schema::validate_logical_path("bad'name.proto", reason));
+    CHECK(!easypb_schema::validate_logical_path("", reason));
+    const std::string leaf = std::string("na\xC3\xAFve.proto");
+    CHECK(easypb_schema::validate_logical_path(leaf, reason));
+    CHECK(!easypb_schema::validate_logical_path(
+        std::string("bad-") + char(0xFF) + ".proto", reason));
+    CHECK(reason.find("UTF-8") != std::string::npos);
+    CHECK(!easypb_schema::validate_logical_path(
+        std::string("bad-") + char(0xC0) + char(0xAF) + ".proto", reason));
+    CHECK(!easypb_schema::validate_logical_path(
+        std::string("bad-") + char(0xED) + char(0xA0) + char(0x80) +
+            ".proto",
+        reason));
 }
 
-void test_case_query_operational_error_reaches_loader()
+void test_non_ascii_filenames_round_trip()
 {
+    // Test spellings are UTF-8 on every platform and files are created
+    // through the same spelling the loader resolves, so a write/read
+    // round trip with identical bytes must work everywhere.
+    // "na\xc3\xafve.proto" is naive-with-diaeresis.proto in UTF-8.
     require_work_root();
-    const std::string actual_dir = work_path("case-query-loader/CaseRoot");
-    CHECK(write_file(join_arg(actual_dir, "root.proto"),
-                     "syntax = \"proto2\";\nmessage Root {}\n"));
-
-    std::string search_root = actual_dir;
-    const std::string needle = "CaseRoot";
-    const std::size_t pos = search_root.rfind(needle);
-    CHECK(pos != std::string::npos);
-    if (pos == std::string::npos) return;
-    search_root.replace(pos, needle.size(), "caseroot");
-
-    case_query_error_probe_calls = 0;
-    easypb_file::set_directory_case_sensitivity_probe(
-        forced_case_query_operational_error);
-
+    const std::string dir = work_path("encoding");
+    const std::string leaf_name = std::string("na\xC3\xAFve.proto");
+    const std::string root_name = std::string("caf\xC3\xA9.proto");
+    CHECK(write_file(join_arg(dir, leaf_name),
+                     "syntax = \"proto2\";\nmessage Leaf {}\n"));
+    CHECK(write_file(join_arg(dir, root_name),
+                     std::string("syntax = \"proto2\";\nimport \"") +
+                     leaf_name + "\";\nmessage Root {}\n"));
     easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(search_root);
-    std::vector<std::string> roots(1, join_arg(actual_dir, "root.proto"));
+    options.proto_paths.push_back(dir);
+    std::vector<std::string> roots(1, root_name);
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
-
-    easypb_file::set_directory_case_sensitivity_probe(0);
-    CHECK(!ok);
-    CHECK(case_query_error_probe_calls == 1);
-    CHECK(error.message.find("cannot query case sensitivity") !=
-          std::string::npos);
-    CHECK(error.message.find(search_root) != std::string::npos);
-    CHECK(files.files().empty());
-    CHECK(files.targets().empty());
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(files.files().size() == 2);
+    CHECK(files.targets().size() == 1);
+    if (!files.targets().empty()) {
+        CHECK(text(files.targets()[0]->file.name) == root_name);
+    }
+    CHECK(files.find_file(leaf_name) != 0);
 }
 
-void test_confirm_identity_error_is_operational()
+void test_utf8_import_finds_unicode_file()
 {
-    // An identity failure during fold containment confirmation must
-    // stay operational even when the existence probe still reports
-    // the file as present: degrading into an isolated success would
-    // lose the error. The identity seam fails the root-spelled
-    // candidate only; real filesystem status answers the rest.
+    // One logical namespace: a file created for its Unicode name must
+    // resolve through a UTF-8 import spelling on every process code
+    // page, and the SchemaSet key must be the UTF-8 spelling. (On
+    // Windows the fixture goes through the W API and is read back
+    // through it; POSIX is UTF-8 natively.)
     require_work_root();
-    const std::string actual_dir = work_path("confirm-probe/ConfirmRoot");
-    CHECK(write_file(join_arg(actual_dir, "x.proto"),
-                     "syntax = \"proto2\";\nmessage X {}\n"));
-
-    std::string folded_dir = actual_dir;
-    const std::string needle = "ConfirmRoot";
-    const std::size_t pos = folded_dir.rfind(needle);
-    CHECK(pos != std::string::npos);
-    if (pos == std::string::npos) return;
-    folded_dir.replace(pos, needle.size(), "confirmroot");
-    const std::string argument = easypb_file::absolute_disk_path(
-        join_arg(folded_dir, "x.proto"));
-
-    confirm_error_marker = needle;
-    confirm_error_probe_calls = 0;
-    easypb_file::set_file_identity_probe(failing_confirm_identity_probe);
-
+    const std::string dir = work_path("unicode-import");
+    const std::string leaf_name =
+        std::string("caf") + utf8_from_code_point(0x00E9u) + ".proto";
+    const std::string root_name = "root.proto";
+    CHECK(write_file(join_arg(dir, leaf_name),
+                     "syntax = \"proto2\";\nmessage Caf {}\n"));
+    CHECK(write_file(join_arg(dir, root_name),
+                     std::string("syntax = \"proto2\";\nimport \"") +
+                     leaf_name + "\";\nmessage Root {}\n"));
     easypb_proto::SourceLoaderOptions options;
-    options.proto_paths.push_back(actual_dir);
-    std::vector<std::string> roots(1, argument);
+    options.proto_paths.push_back(dir);
+    std::vector<std::string> roots(1, root_name);
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    const bool ok =
-        easypb_proto::load_source_files(options, roots, files, error, 0);
-
-    easypb_file::set_file_identity_probe(0);
-    confirm_error_marker.clear();
-    CHECK(!ok);
-    CHECK(confirm_error_probe_calls == 1);
-    CHECK(error.message.find("cannot confirm containment") !=
-          std::string::npos);
-    CHECK(files.files().empty());
-    CHECK(files.targets().empty());
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(files.files().size() == 2);
+    CHECK(files.targets().size() == 1);
+    CHECK(files.find_file(leaf_name) != 0);
+    CHECK(files.find_file(root_name) != 0);
 }
 
 void test_unicode_search_root_uses_wide_filesystem_boundary()
@@ -2405,167 +1552,32 @@ void test_unicode_search_root_uses_wide_filesystem_boundary()
     std::vector<std::string> roots(1, "root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
     CHECK(files.find_file("root.proto") != 0);
 }
 
-void test_historical_dbcs_trail_character_is_plain_unicode()
+void test_non_ascii_trail_character_path()
 {
     // U+2015 historically encodes as CP932 81 5C, but no CP932 bytes ever
     // enter production now. The UTF-8 spelling must survive separator
-    // normalization, joining and W-API file access as an ordinary character.
+    // normalization, joining and W-API file access as an ordinary
+    // character.
     require_work_root();
     const std::string mark = utf8_from_code_point(0x2015u);
     const std::string dir = work_path(std::string("trail-") + mark);
     const std::string file = join_arg(dir, "root.proto");
     CHECK(write_file(file, "syntax = \"proto2\";\nmessage Root {}\n"));
     const std::string absolute = easypb_file::lexical_absolute(dir + "/./");
-    CHECK(easypb_file::disk_file_exists(
-        easypb_file::join_disk_path(absolute, "root.proto")));
+    CHECK(path_is_file(easypb_file::join_disk_path(absolute, "root.proto")));
 }
 
-void test_case_query_error_classification()
+void test_nested_duplicate_is_rejected()
 {
-    CHECK(easypb_file::is_directory_case_query_unsupported_error(
-        ERROR_INVALID_PARAMETER));
-    CHECK(easypb_file::is_directory_case_query_unsupported_error(
-        ERROR_NOT_SUPPORTED));
-    CHECK(easypb_file::is_directory_case_query_unsupported_error(
-        ERROR_CALL_NOT_IMPLEMENTED));
-    CHECK(!easypb_file::is_directory_case_query_unsupported_error(
-        ERROR_ACCESS_DENIED));
-    CHECK(!easypb_file::is_directory_case_query_unsupported_error(
-        ERROR_IO_DEVICE));
-}
-#endif
-
-#ifdef EASYPB_EXTENDED_TESTS
-void test_extended_search_root_order_matrix()
-{
-    const std::string base = work_path("extended-root-order");
-    const std::size_t root_count = 24;
-    std::vector<std::string> paths;
-    for (std::size_t i = 0; i < root_count; ++i) {
-        std::ostringstream name;
-        name << base << "/root-" << i;
-        paths.push_back(name.str());
-        std::ostringstream body;
-        body << "syntax = \"proto2\";\nmessage Pick" << i << " {}\n";
-        CHECK(write_file(join_arg(paths.back(), "root.proto"), body.str()));
-    }
-
-    // Rotate the ordered root list. The first entry must win every time,
-    // even though every later root contains the same logical name.
-    for (std::size_t rotation = 0; rotation < root_count; ++rotation) {
-        easypb_proto::SourceLoaderOptions options;
-        for (std::size_t offset = 0; offset < root_count; ++offset) {
-            options.proto_paths.push_back(paths[(rotation + offset) % root_count]);
-        }
-        std::vector<std::string> roots(1, "root.proto");
-        easypb_schema::SchemaSet files;
-        easypb_schema::Diagnostic error;
-        easypb_proto::LoadStatistics stats;
-        CHECK(easypb_proto::load_source_files(options, roots, files, error, &stats));
-        CHECK(files.files().size() == 1);
-        CHECK(stats.files_read == 1);
-        CHECK(stats.files_parsed == 1);
-        easypb_schema::SchemaFile* root = files.find_file("root.proto");
-        CHECK(root != 0);
-        if (root != 0) {
-            CHECK(root->file.message_type.size() == 1);
-            if (root->file.message_type.size() == 1) {
-                std::ostringstream expected;
-                expected << "Pick" << rotation;
-                CHECK(text(root->file.message_type[0].name) == expected.str());
-            }
-        }
-    }
-}
-
-void test_extended_fault_injection_matrix()
-{
-    const std::string base = work_path("extended-fault-matrix");
-    const std::size_t root_count = 24;
-    std::vector<std::string> paths;
-    for (std::size_t i = 0; i < root_count; ++i) {
-        std::ostringstream name;
-        name << base << "/fault-root-" << i;
-        paths.push_back(name.str());
-        CHECK(write_file(join_arg(paths.back(), "root.proto"),
-                         "syntax = \"proto2\";\nmessage Root {}\n"));
-    }
-
-    for (std::size_t failing = 0; failing + 1 < root_count; ++failing) {
-        easypb_proto::SourceLoaderOptions options;
-        options.proto_paths = paths;
-        std::vector<std::string> roots(1, "root.proto");
-        easypb_schema::SchemaSet files;
-        easypb_schema::Diagnostic error;
-
-        extended_fault_marker = paths[failing];
-        extended_file_marker = paths[failing + 1];
-        extended_fault_probe_calls = 0;
-        extended_file_probe_calls = 0;
-        easypb_file::set_file_status_probe(extended_search_fault_probe);
-        const bool ok = easypb_proto::load_source_files(options, roots, files, error, 0);
-        easypb_file::set_file_status_probe(0);
-
-        CHECK(!ok);
-        CHECK(files.files().empty());
-        CHECK(extended_fault_probe_calls == 1);
-        CHECK(extended_file_probe_calls == 0);
-        CHECK(error.message.find("synthetic extended search-root failure") !=
-              std::string::npos);
-    }
-
-    extended_fault_marker.clear();
-    extended_file_marker.clear();
-}
-
-void extended_concurrent_loader_worker(const std::string& dir,
-                                       std::atomic<int>& errors)
-{
-    for (int iteration = 0; iteration < 100; ++iteration) {
-        easypb_proto::SourceLoaderOptions options;
-        options.proto_paths.push_back(dir);
-        std::vector<std::string> roots(1, "root.proto");
-        easypb_schema::SchemaSet files;
-        easypb_schema::Diagnostic error;
-        easypb_proto::LoadStatistics stats;
-        if (!easypb_proto::load_source_files(options, roots, files, error, &stats) ||
-            files.files().size() != 3 || stats.files_read != 3 ||
-            stats.files_parsed != 3) {
-            ++errors;
-        }
-    }
-}
-
-void test_extended_concurrent_read_only_loads()
-{
-    const std::string dir = work_path("extended-concurrency");
-    CHECK(write_file(join_arg(dir, "root.proto"),
-                     "syntax = \"proto2\";\n"
-                     "import \"left.proto\";\n"
-                     "import \"right.proto\";\n"
-                     "message Root {}\n"));
-    CHECK(write_file(join_arg(dir, "left.proto"),
-                     "syntax = \"proto2\";\nmessage Left {}\n"));
-    CHECK(write_file(join_arg(dir, "right.proto"),
-                     "syntax = \"proto2\";\nmessage Right {}\n"));
-
-    std::atomic<int> errors(0);
-    std::vector<std::thread> workers;
-    for (int i = 0; i < 8; ++i) {
-        workers.push_back(std::thread(extended_concurrent_loader_worker,
-                                      dir, std::ref(errors)));
-    }
-    for (std::size_t i = 0; i < workers.size(); ++i) workers[i].join();
-    CHECK(errors.load() == 0);
-}
-#endif
-
-void test_nested_duplicate_reports_root_chain()
-{
+    // A repeated name in one dependency list is rejected by the shared
+    // graph binder. The loader no longer decorates binder errors with the
+    // discovery chain (that decoration was part of the removed
+    // identity-era diagnostics); loader-level errors, such as a missing
+    // import or a denied access, still carry the chain.
     require_work_root();
     const std::string dir = work_path("nested-duplicate");
     CHECK(write_file(join_arg(dir, "root.proto"),
@@ -2584,11 +1596,10 @@ void test_nested_duplicate_reports_root_chain()
     std::vector<std::string> roots(1, "root.proto");
     easypb_schema::SchemaSet files;
     easypb_schema::Diagnostic error;
-    CHECK(!easypb_proto::load_source_files(options, roots, files, error, 0));
+    CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(error.file == "child.proto");
     CHECK(error.message.find("duplicate import") != std::string::npos);
-    CHECK(error.message.find("\"root.proto\" -> \"child.proto\"") !=
-          std::string::npos);
     CHECK(files.files().empty());
 }
 
@@ -2600,94 +1611,65 @@ int main(int argc, char** argv)
         std::cerr << "usage: test_loader <fixture-data-dir> [work-dir]\n"
                   << "When work-dir is omitted, ./imports-loader-work under\n"
                   << "the current working directory is used. Run via ctest\n"
-                  << "so scratch stays under build/package-imports/; for\n"
-                  << "manual runs pass an explicit work-dir under build/.\n";
+                  << "so scratch stays under the build tree; for manual\n"
+                  << "runs pass an explicit work-dir under build/.\n";
         return EXIT_FAILURE;
     }
     fixture_dir = argv[1];
     if (argc >= 3 && argv[2][0] != '\0') work_root = argv[2];
-    if (!file_exists(join_arg(fixture_dir, "diamond/root.proto"))) {
+    if (!path_is_file(join_arg(fixture_dir, "diamond/root.proto"))) {
         std::cerr << "fixture directory lacks diamond/root.proto: "
                   << fixture_dir << '\n';
         return EXIT_FAILURE;
     }
     require_work_root();
 
-#if defined(EASYPB_LOADER_UTF8_MANIFEST_TEST) && defined(_WIN32)
-    // This variant exists only to run the whole suite with the manifest's
-    // activeCodePage set to UTF-8. Windows applies activeCodePage from
-    // Windows 10 1903 on, so an older system legitimately keeps its own
-    // code page; report the state either way, because a manifest that
-    // stopped reaching the binary would leave the guard testing nothing.
-    if (GetACP() != 65001) {
-        std::cerr << "NOTE activeCodePage UTF-8 is not in effect (ACP="
-                  << GetACP() << ")\n";
-    }
-#endif
-
-    test_diamond_caching_and_counters();
+    test_diamond_caching();
     test_search_precedence_first_wins();
-    test_search_precedence_error_stops_before_later_root();
-    test_nested_operational_error_preserves_import_context();
+#ifndef _WIN32
+    test_denied_access_stops_search();
+    test_nested_denied_import_preserves_context();
+#endif
     test_nul_byte_in_disk_path_fails_loudly();
     test_nul_byte_in_import_fails();
-    test_case_fold_mismatch_is_not_containment();
-    test_fold_hardlink_alias_names_fail();
-    test_fold_hardlink_file_stays_isolated();
     test_shadowed_root_reports_error();
     test_disk_root_with_invalid_logical_name_fails();
-    test_root_deduplication_preserves_order();
+    test_directory_argument_is_reported_as_directory();
+    test_empty_input_argument_is_rejected();
+    test_root_deduplication_and_repeated_input();
+#ifdef _WIN32
+    // The POSIX denial test below relies on chmod, so Windows needs its
+    // own ACL-based counterpart to cover the same rule.
+    test_denied_access_stops_search();
+#endif
     test_missing_unused_import_fails();
     test_missing_weak_import_fails();
     test_missing_public_import_fails();
     test_invalid_syntax_preserves_chain();
     test_self_cycle_via_files();
     test_two_node_cycle_via_files();
+    test_nested_cycle_reports_root_chain();
     test_invalid_import_spelling_is_rejected();
     test_distinct_files_load_together();
-    test_symlink_alias_detection();
-    test_nested_alias_reports_importer_context();
-    test_soft_hyphen_directories_stay_distinct();
+    test_two_names_of_one_file_load_twice();
     test_spaces_in_paths();
-    test_non_ascii_filenames_round_trip();
-    test_utf8_import_finds_unicode_file();
     test_empty_search_roots_mean_working_directory();
-    test_windows_separators_in_disk_roots();
-    test_case_alias_and_distinct_files();
-    test_isolated_absolute_root();
+    test_failed_load_leaves_empty_result();
     test_join_preserves_root_separator();
     test_strip_search_root_prefix();
-#ifdef _WIN32
-    test_join_preserves_bare_drive_semantics();
-    test_non_ascii_case_alias_matches_search_root();
-    test_case_sensitive_directory_semantics();
-    test_wide_cli_conversion_is_unambiguous();
-    test_case_query_operational_error_propagates();
-    test_case_query_operational_error_reaches_loader();
-    test_confirm_identity_error_is_operational();
-    test_junction_fold_mismatch_is_not_containment();
-    test_junction_fold_alias_names_fail();
-    test_junction_same_entry_case_alias();
-    test_unicode_search_root_uses_wide_filesystem_boundary();
-    test_historical_dbcs_trail_character_is_plain_unicode();
-    test_case_query_error_classification();
-#endif
-#ifdef _WIN32
-    test_absolute_path_normalizes_partial_forms();
-    test_drive_relative_root_is_not_isolated();
-    test_separator_normalization_preserves_multibyte();
-#endif
     test_utf8_logical_spelling_rules();
-    test_isolated_root_with_resolvable_imports_fails();
-    test_equivalent_isolated_roots_deduplicate();
-    test_distinct_isolated_hardlink_names_fail();
-    test_nested_cycle_reports_root_chain();
-    test_nested_duplicate_reports_root_chain();
-    test_failed_load_leaves_empty_result();
-#ifdef EASYPB_EXTENDED_TESTS
-    test_extended_search_root_order_matrix();
-    test_extended_fault_injection_matrix();
-    test_extended_concurrent_read_only_loads();
+    test_non_ascii_filenames_round_trip();
+    test_utf8_import_finds_unicode_file();
+    test_unicode_search_root_uses_wide_filesystem_boundary();
+    test_non_ascii_trail_character_path();
+    test_nested_duplicate_is_rejected();
+#ifdef _WIN32
+    test_windows_separators_in_disk_roots();
+    test_case_variant_root_spelling_is_outside_roots();
+    test_join_preserves_bare_drive_semantics();
+    test_absolute_forms_resolve_lexically();
+    test_separator_normalization_preserves_multibyte();
+    test_wide_cli_conversion_is_unambiguous();
 #endif
 
     if (failures != 0) {

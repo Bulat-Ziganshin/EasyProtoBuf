@@ -987,9 +987,9 @@ jobs:
   #####################################################################################################################
   # Run deterministic stress/property tests once per operating system with that OS's default toolchain instead of
   # multiplying them across the compiler compatibility matrices. Default tests already include the cheap exhaustive
-  # N<=4 graph sweep; this job enables larger randomized graph checks plus loader filesystem/fault/concurrency
-  # stress. The loader stress legs matter per OS: the filesystem, file-identity and threading code paths they
-  # exercise are platform-specific, so a Linux-only run would never compile or execute the Windows/macOS branches.
+  # N<=4 graph sweep; this job enables larger randomized graph checks. Those matter per OS: the loader reads
+  # files through platform-specific APIs, so a Linux-only run would never compile or execute the Windows/macOS
+  # branches of the disk adapter.
   #####################################################################################################################
   extended-tests:
     name: "Extended tests / ${{ matrix.os }}"

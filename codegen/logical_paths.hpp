@@ -22,6 +22,12 @@ namespace easypb_schema {
 //     (bytes below 0x20 and 0x7F);
 //   - is well-formed UTF-8 (no overlong encodings, surrogate code points,
 //     truncated sequences, or values above U+10FFFF).
+// The separator, empty-component, '.' and '..' rules are the same ones the
+// reference compiler applies when it opens a virtual path. The remaining
+// rules (absolute spellings, drive prefixes, quotes, control bytes,
+// malformed UTF-8) are this project's deliberate strictness: protoc would
+// report such a name as a missing file, while every EasyProtoBuf frontend
+// rejects it with a reason.
 // Separator checks are byte-exact by design: UTF-8 trail bytes never
 // collide with ASCII separators, so every 0x5C byte is a backslash.
 // Physical paths are a separate concern: Windows uses UTF-8 internally and

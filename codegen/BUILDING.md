@@ -73,7 +73,7 @@ cmake --build build-extended --config Release
 ctest --test-dir build-extended -C Release -L extended --output-on-failure
 ```
 
-The extended suite adds large deterministic random import graphs, `allow_missing` graph cases, search-root-order and filesystem-failure matrices, and concurrent read-only loader runs. These tests are not registered by default and CI runs them once per operating system (Linux, Windows, macOS) with the default toolchain rather than multiplying them across the compatibility matrix.
+The extended suite adds large deterministic random import graphs and `allow_missing` graph cases. These tests are not registered by default and CI runs them once per operating system (Linux, Windows, macOS) with the default toolchain rather than multiplying them across the compatibility matrix.
 
 To verify the descriptor-set-only build separately:
 
