@@ -254,7 +254,11 @@ with a consequence, not an oversight.
 - **Statistics, test seams and fault-injection matrices.** There is no `LoadStatistics`, no
   status/case/identity probe hooks, no filesystem-failure or concurrency matrix, and no Windows
   `activeCodePage` manifest twin. The loader reports through its `Diagnostic` and is otherwise silent;
-  `EASYPB_EXTENDED_TESTS` exists for the randomized graph stress test, which needs none of that.
+  `EASYPB_EXTENDED_TESTS` exists for the randomized graph stress test, which needs none of that. The
+  encoding contract stated in `file_paths.hpp` — UTF-8 spellings converted to UTF-16 only at the W-API
+  calls — is covered by a test that creates non-ASCII fixtures under the code page of the machine
+  itself, asks that page, and uses the narrow spelling as a control; a run under a UTF-8 code page says
+  so, so weaker evidence is visible instead of silent.
 
 ## Reading order
 

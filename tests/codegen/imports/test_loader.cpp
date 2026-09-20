@@ -1455,6 +1455,151 @@ void test_wide_cli_conversion_is_unambiguous()
     CHECK(easypb_file::utf8_from_wide(supplementary, supplementary_utf8));
     CHECK(supplementary_utf8 == "\xF0\x9F\x98\x80");
 }
+
+// True when the process ANSI code page cannot represent this UTF-8 spelling,
+// so a narrow (A-API) call would name a different entry. The conversion uses
+// WC_NO_BEST_FIT_CHARS, which substitutes '?' for every character the code
+// page lacks instead of guessing a lookalike, and the bytes are converted
+// back to compare them with the original text.
+bool ansi_spelling_loses_information(const std::string& utf8_text)
+{
+    std::vector<wchar_t> wide;
+    if (!wide_from_utf8(utf8_text, wide)) return true;
+    const int length = static_cast<int>(wide.size()) - 1;
+    if (length <= 0) return false;
+    const int needed =
+        WideCharToMultiByte(CP_ACP, 0, &wide[0], length, 0, 0, 0, 0);
+    if (needed <= 0) return true;
+    std::string narrow(static_cast<std::size_t>(needed), '\0');
+    BOOL used_default = FALSE;
+    const int written =
+        WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, &wide[0], length,
+                            &narrow[0], needed, 0, &used_default);
+    if (used_default != FALSE) return true;
+    if (written <= 0 || written > needed) return true;
+    narrow.resize(static_cast<std::size_t>(written));
+    // Round trip through the code page: bytes that come back as the same
+    // Unicode text mean the page can express the name after all.
+    const int back =
+        MultiByteToWideChar(CP_ACP, 0, narrow.c_str(), written, 0, 0);
+    if (back != length) return true;
+    std::vector<wchar_t> restored(static_cast<std::size_t>(back));
+    if (MultiByteToWideChar(CP_ACP, 0, narrow.c_str(), written, &restored[0],
+                            back) != back) {
+        return true;
+    }
+    for (int i = 0; i < back; ++i) {
+        if (restored[static_cast<std::size_t>(i)] !=
+            wide[static_cast<std::size_t>(i)]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// True when the ANSI (narrow) spelling of this UTF-8 path reaches an entry.
+// Used only as a control for the test below: where the code page cannot
+// express the spelling, this must answer false while the loader, which
+// converts to UTF-16 at the W-API boundary, still opens the real file.
+bool ansi_spelling_resolves(const std::string& utf8_path)
+{
+    std::vector<wchar_t> wide;
+    if (!wide_from_utf8(utf8_path, wide)) return false;
+    const int length = static_cast<int>(wide.size()) - 1;
+    if (length <= 0) return false;
+    const int needed =
+        WideCharToMultiByte(CP_ACP, 0, &wide[0], length, 0, 0, 0, 0);
+    if (needed <= 0) return false;
+    std::string narrow(static_cast<std::size_t>(needed), '\0');
+    BOOL used_default = FALSE;
+    const int written =
+        WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, &wide[0], length,
+                            &narrow[0], needed, 0, &used_default);
+    if (used_default != FALSE || written <= 0) return false;
+    narrow.resize(static_cast<std::size_t>(written));
+    return GetFileAttributesA(narrow.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+void test_non_ascii_paths_do_not_depend_on_the_process_code_page()
+{
+    // The Windows guarantee of this loader is that a UTF-8 spelling becomes
+    // UTF-16 exactly at the W-API calls (the io_win32 layer of the reference
+    // compiler), so a non-ASCII path opens under any process code page. The
+    // suite exercises non-ASCII names elsewhere; what this test adds is the
+    // premise. It asks the system which ANSI code page is in effect and, when
+    // that page cannot even spell the fixture, uses the narrow spelling as a
+    // control that must stay unreachable: where the file is visible to the
+    // wide API and invisible to the narrow one, a successful load cannot have
+    // gone through the A-API. No manifest is involved, so the binary runs
+    // under the same code page a user's codegen.exe does.
+    require_work_root();
+    const UINT code_page = GetACP();
+    const std::string greek = utf8_from_code_point(0x03C0u);    // pi
+    const std::string cyrillic = utf8_from_code_point(0x0416u); // Zhe
+    const std::string dir =
+        work_path(std::string("codepage-") + greek + cyrillic);
+    const std::string leaf_name =
+        std::string("caf") + utf8_from_code_point(0x00E9u) + ".proto";
+    const std::string root_name = "root.proto";
+    const std::string leaf_disk = join_arg(dir, leaf_name);
+    CHECK(write_file(leaf_disk,
+                     "syntax = \"proto2\";\nmessage Leaf {}\n"));
+    CHECK(write_file(join_arg(dir, root_name),
+                     std::string("syntax = \"proto2\";\nimport \"") +
+                         leaf_name + "\";\nmessage Root {}\n"));
+    std::cout << "NOTE active ANSI code page " << code_page
+              << " for the non-ASCII loader test\n";
+
+    // The predicates have to distinguish a representable spelling from an
+    // unrepresentable one, otherwise the checks below are a tautology. A pure
+    // ASCII name always survives the code page, whatever page is in effect,
+    // and for a path the page can express the narrow probe must agree with the
+    // filesystem; the condition keeps that check honest where even the scratch
+    // directory lies outside the code page.
+    CHECK(!ansi_spelling_loses_information("root.proto"));
+    const std::string ascii_disk = work_path("codepage-ascii.proto");
+    CHECK(write_file(ascii_disk, "syntax = \"proto2\";\nmessage Probe {}\n"));
+    if (!ansi_spelling_loses_information(ascii_disk)) {
+        CHECK(ansi_spelling_resolves(ascii_disk));
+    }
+    const bool outside_code_page =
+        ansi_spelling_loses_information(dir) ||
+        ansi_spelling_loses_information(leaf_disk);
+    if (outside_code_page) {
+        // The file is there for the wide API and out of reach for the narrow
+        // one. Flip either line and the load below proves nothing.
+        CHECK(path_is_file(leaf_disk));
+        CHECK(!ansi_spelling_resolves(leaf_disk));
+        CHECK(!ansi_spelling_resolves(dir));
+    } else {
+        std::cout << "NOTE code page " << code_page
+                  << " can spell the fixture, so the narrow control does not "
+                     "apply and this run is weaker evidence\n";
+    }
+
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(dir);
+    std::vector<std::string> roots(1, root_name);
+    easypb_schema::SchemaSet files;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(files.files().size() == 2);
+    CHECK(files.targets().size() == 1);
+    CHECK(files.find_file(leaf_name) != 0);
+    if (files.find_file(leaf_name) != 0) {
+        CHECK(files.find_file(leaf_name)->physical_name == leaf_disk);
+    }
+
+    // The same tree reached through a disk-path argument, which is the shape a
+    // CLI passes: it must map to the logical name under the non-ASCII root.
+    easypb_schema::SchemaSet direct;
+    easypb_schema::Diagnostic direct_error;
+    std::vector<std::string> direct_roots(1, join_arg(dir, root_name));
+    CHECK(easypb_proto::load_source_files(options, direct_roots, direct,
+                                          direct_error));
+    CHECK(direct.files().size() == 2);
+    CHECK(direct.find_file(leaf_name) != 0);
+}
 #endif
 
 void test_utf8_logical_spelling_rules()
@@ -1670,6 +1815,7 @@ int main(int argc, char** argv)
     test_absolute_forms_resolve_lexically();
     test_separator_normalization_preserves_multibyte();
     test_wide_cli_conversion_is_unambiguous();
+    test_non_ascii_paths_do_not_depend_on_the_process_code_page();
 #endif
 
     if (failures != 0) {
