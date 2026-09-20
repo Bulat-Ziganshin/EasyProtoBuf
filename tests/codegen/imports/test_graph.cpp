@@ -74,12 +74,19 @@ std::size_t count_occurrences(const std::string& haystack, const std::string& ne
 
 void test_logical_paths_valid()
 {
-    CHECK(easypb_schema::is_valid_logical_path("a.proto"));
-    CHECK(easypb_schema::is_valid_logical_path("a/b.proto"));
-    CHECK(easypb_schema::is_valid_logical_path("common/state.proto"));
-    CHECK(easypb_schema::is_valid_logical_path("a-b_c.proto"));
-    CHECK(easypb_schema::is_valid_logical_path("a/b-c_d.proto"));
-    CHECK(easypb_schema::is_valid_logical_path("x"));
+    const char* valid[] = {
+        "a.proto",
+        "a/b.proto",
+        "common/state.proto",
+        "a-b_c.proto",
+        "a/b-c_d.proto",
+        "x"
+    };
+    for (std::size_t i = 0; i < sizeof(valid) / sizeof(valid[0]); ++i) {
+        std::string reason;
+        CHECK(easypb_schema::validate_logical_path(valid[i], reason));
+        CHECK(reason.empty());
+    }
 }
 
 void test_logical_paths_invalid()
@@ -105,17 +112,20 @@ void test_logical_paths_invalid()
     };
     for (std::size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
         std::string reason;
-        CHECK(!easypb_schema::is_valid_logical_path(invalid[i]));
         CHECK(!easypb_schema::validate_logical_path(invalid[i], reason));
         CHECK(!reason.empty());
     }
     {
         std::string with_control = std::string("a/b") + char(1) + ".proto";
-        CHECK(!easypb_schema::is_valid_logical_path(with_control));
+        std::string reason;
+        CHECK(!easypb_schema::validate_logical_path(with_control, reason));
+        CHECK(!reason.empty());
     }
     {
         std::string with_del = std::string("a/b") + char(0x7f) + ".proto";
-        CHECK(!easypb_schema::is_valid_logical_path(with_del));
+        std::string reason;
+        CHECK(!easypb_schema::validate_logical_path(with_del, reason));
+        CHECK(!reason.empty());
     }
 }
 

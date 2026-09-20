@@ -47,8 +47,9 @@ struct SourceLoaderOptions {
 // and the filesystem decides which spellings name which entry: a
 // differently-spelled search root does not map, exactly like protoc's
 // mapping. Windows physical paths supplied to this API are UTF-8 and are
-// converted to UTF-16 only at W-API calls, as protoc's io_win32 layer
-// does; POSIX physical paths remain opaque native bytes, and only a
+// converted to UTF-16 only at W-API calls, where they also carry the
+// long-path prefix described in file_paths.hpp, as protoc's io_win32
+// layer does; POSIX physical paths remain opaque native bytes, and only a
 // disk-derived suffix that becomes a logical name must pass the UTF-8
 // validator. Translating native CLI arguments into this API contract
 // belongs to the later CLI step.

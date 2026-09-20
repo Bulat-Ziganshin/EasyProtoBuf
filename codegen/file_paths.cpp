@@ -90,6 +90,23 @@ bool is_fully_qualified_disk_path(const std::string& path)
     }
     return false;
 }
+
+// Long-path prefixes, spelled as the reference compiler's io_win32
+// layer spells them: "\\?\" states that the rest of the string
+// is a path for the object manager, which skips the Win32 parsing that
+// both enforces MAX_PATH and "helpfully" trims trailing dots and
+// spaces; a network path needs the "\\?\UNC\" variant instead.
+const char kLongPathPrefix[] = "\\\\?\\";
+const char kLongUncPrefix[] = "\\\\?\\UNC\\";
+
+// Byte-wise test for the prefix. ASCII cannot occur inside a UTF-8
+// continuation byte, so the comparison stays exact.
+bool has_long_path_prefix(const std::string& path)
+{
+    const std::size_t length = sizeof(kLongPathPrefix) - 1;
+    return path.size() >= length &&
+           path.compare(0, length, kLongPathPrefix) == 0;
+}
 #endif
 
 std::string current_working_directory()
@@ -106,8 +123,11 @@ std::string current_working_directory()
     if (!wide_to_utf8(&buffer[0], static_cast<int>(length), result)) {
         return std::string(".");
     }
-    // Deep checkouts beyond MAX_PATH must not fall back to a wrong
-    // directory silently; an empty conversion means exactly that.
+    // A query that cannot answer must not silently become a different
+    // directory: an empty conversion means exactly that. Win32 caps the
+    // working directory at MAX_PATH in any case - SetCurrentDirectoryW
+    // refuses a spelling longer than 258 characters, the prefix included -
+    // so this is defence in depth rather than a live case.
     if (result.empty()) return std::string(".");
     return result;
 #else
@@ -142,16 +162,30 @@ std::string trim_trailing_separators(const std::string& path)
 }
 
 // Absolute spelling of a disk path without any filesystem query. On
-// Windows every non-fully-qualified form (relative, drive-relative
-// "C:x", rooted "\x") is resolved through the platform path API so
-// equivalent spellings compare equal; POSIX prepends the working
-// directory. Textual normalization only: it never proves that two
-// spellings name the same entry, and no case folding is involved.
+// Windows a relative spelling is joined with the working directory and the
+// other non-fully-qualified forms (drive-relative "C:x", rooted "\x") are
+// resolved through the platform path API, so equivalent spellings compare
+// equal; POSIX prepends the working directory. Textual normalization only:
+// it never proves that two spellings name the same entry, and no case
+// folding is involved.
 std::string resolve_absolute(const std::string& path)
 {
     if (path.empty()) return path;
 #ifdef _WIN32
     if (is_fully_qualified_disk_path(path)) return path;
+    // A relative spelling is joined textually, the way the reference layer
+    // builds its absolute paths. The platform resolver is deliberately not
+    // asked here: it trims trailing dots and spaces off the last component,
+    // so "dir/leaf.proto." would become "dir/leaf.proto" before the
+    // long-path prefix is applied, and one name would silently be answered
+    // by a different file. Its own normalization of '.' and '..' is not
+    // needed either, because lexical_absolute performs it on every branch.
+    if (path[0] != '/' && path[0] != '\\' &&
+        !(path.size() >= 2 && is_alpha(path[0]) && path[1] == ':')) {
+        return join_disk_path(current_working_directory(), path);
+    }
+    // Drive-relative and rooted spellings need the current drive and its
+    // per-drive directory, which only the platform resolver knows.
     std::vector<wchar_t> wide;
     if (!to_wide_text(path, wide) || wide.empty()) {
         return join_disk_path(current_working_directory(), path);
@@ -223,11 +257,14 @@ FileStatus disk_file_status(const std::string& path, std::string& error)
     }
 #ifdef _WIN32
     std::vector<wchar_t> wide;
-    if (!to_wide_text(path, wide) || wide.empty()) {
-        // Undecodable bytes cannot name a file. The reference compiler's
-        // Windows layer reports ENOENT for them, so the search advances;
-        // the spelling is rejected later if it also fails the logical
-        // name rules.
+    // Long-path-aware conversion: a candidate below a deep root is
+    // queried under its "\\?\" spelling, so the query itself never
+    // fails merely because the tree is longer than MAX_PATH. A spelling
+    // that cannot be converted (undecodable bytes, embedded NUL) cannot
+    // name a file: the reference compiler's Windows layer reports ENOENT
+    // for it, so the search advances, and the spelling is rejected later
+    // if it also fails the logical name rules.
+    if (!wide_win32_path(path, wide) || wide.empty()) {
         return FILE_STATUS_ABSENT;
     }
     nul_terminate(wide);
@@ -277,11 +314,11 @@ bool read_disk_file(const std::string& path, std::string& contents,
         return false;
     }
 #ifdef _WIN32
-    // Wide open of the UTF-8 spelling: files outside the process code
-    // page stay addressable, exactly like the reference compiler's
-    // io_win32 layer does it.
+    // Wide, long-path-aware open of the UTF-8 spelling: files outside the
+    // process code page or below a path longer than MAX_PATH stay
+    // addressable, exactly like the reference compiler's io_win32 layer.
     std::vector<wchar_t> wide;
-    if (!to_wide_text(path, wide) || wide.empty()) {
+    if (!wide_win32_path(path, wide) || wide.empty()) {
         error = path + ": cannot read file";
         return false;
     }
@@ -406,6 +443,63 @@ std::string lexical_absolute(const std::string& path)
 #endif
     return result;
 }
+
+#ifdef _WIN32
+bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide)
+{
+    wide.clear();
+    if (path.empty()) return true;
+    // A spelling that already carries the prefix is exactly what the object
+    // manager expects; adding a second one would address an entry literally
+    // named "\\?\...".
+    if (has_long_path_prefix(path)) return to_wide_text(path, wide);
+
+    // The prefix bypasses Win32 path parsing, so nothing may be left for
+    // that parsing to do: a relative, drive-relative or rooted spelling is
+    // resolved to a fully qualified one first, and '.' and '..' are removed
+    // lexically because the API no longer interprets them.
+    const std::string absolute = lexical_absolute(path);
+    if (absolute.empty() || has_long_path_prefix(absolute)) {
+        return to_wide_text(absolute.empty() ? path : absolute, wide);
+    }
+
+    const bool unc =
+        absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/';
+    const bool drive_absolute =
+        absolute.size() >= 3 && is_alpha(absolute[0]) &&
+        absolute[1] == ':' && absolute[2] == '/';
+    if (!unc && !drive_absolute) {
+        // Neither form is prefixable (a bare drive, or a working directory
+        // that could not be queried): keep the plain conversion rather
+        // than hand Win32 a prefix it would reject.
+        return to_wide_text(path, wide);
+    }
+
+    // The prefix is applied to every path, not only to long ones: it is
+    // also what stops Win32 from "helpfully" trimming trailing dots and
+    // spaces before the entry is looked up, which is why the reference
+    // compiler's io_win32 layer is unconditional about it as well
+    // (bazelbuild/bazel#2935). The one form that layer cannot express is a
+    // network path, whose leading "\\" its normalization drops: a UNC
+    // spelling takes the "\\?\UNC\" variant here, the only spelling that
+    // keeps it reachable with a prefix.
+    std::string body = absolute;
+    std::string prefixed;
+    if (unc) {
+        prefixed.assign(kLongUncPrefix);
+        body.erase(0, 2);
+    } else {
+        prefixed.assign(kLongPathPrefix);
+    }
+    // Separators become '\' because the object manager does not accept '/'
+    // after the prefix. UTF-8 continuation bytes can never equal ASCII '/',
+    // so the pass stays byte-wise and no multibyte name changes.
+    for (std::size_t i = 0; i < body.size(); ++i) {
+        prefixed += body[i] == '/' ? '\\' : body[i];
+    }
+    return to_wide_text(prefixed, wide);
+}
+#endif
 
 bool strip_search_root_prefix(const std::string& file_absolute,
                               const std::string& root_absolute,

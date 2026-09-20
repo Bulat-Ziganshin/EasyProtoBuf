@@ -129,10 +129,4 @@ bool validate_logical_path(const std::string& path, std::string& reason)
     return true;
 }
 
-bool is_valid_logical_path(const std::string& path)
-{
-    std::string reason;
-    return validate_logical_path(path, reason);
-}
-
 } // namespace easypb_schema

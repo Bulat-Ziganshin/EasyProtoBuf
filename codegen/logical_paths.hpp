@@ -33,11 +33,11 @@ namespace easypb_schema {
 // Physical paths are a separate concern: Windows uses UTF-8 internally and
 // UTF-16 only at W API boundaries, while POSIX keeps native path bytes until
 // a disk-derived suffix is promoted into this logical UTF-8 namespace.
-bool is_valid_logical_path(const std::string& path);
-
-// Same check with a human-readable reason for diagnostics. Returns true
-// when the path is valid; otherwise returns false and stores the reason
-// (for example "empty import path" or "import path must not contain '..'").
+// Validates the rules above and reports the first violation in reason.
+// Returns true when the path is valid, leaving reason untouched; otherwise
+// returns false and stores the reason (for example "empty import path" or
+// "import path must not contain '..'"). Every caller reports that reason
+// in a Diagnostic, which is why there is no result-only form.
 bool validate_logical_path(const std::string& path, std::string& reason);
 
 } // namespace easypb_schema

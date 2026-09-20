@@ -1600,6 +1600,537 @@ void test_non_ascii_paths_do_not_depend_on_the_process_code_page()
     CHECK(direct.files().size() == 2);
     CHECK(direct.find_file(leaf_name) != 0);
 }
+
+// Long-path fixture helpers. Every other fixture in this file is written
+// through the plain wide spelling, which Win32 caps at MAX_PATH, and these
+// calls are the exception because the tree they address is longer than that
+// cap by construction. They use the loader's own conversion
+// (easypb_file::wide_win32_path) rather than the plain one, so the file
+// write and every query below are proof that the prefixed spelling works,
+// and no other helper in this file has to know about it. Directory creation
+// is the one call that would tolerate the long path anyway, which is why
+// nothing here treats a created directory as evidence on its own.
+bool long_path_mkdir(const std::string& disk_path)
+{
+    std::vector<wchar_t> wide;
+    if (!easypb_file::wide_win32_path(disk_path, wide) || wide.empty()) {
+        return false;
+    }
+    wide.push_back(L'\0');
+    if (CreateDirectoryW(&wide[0], 0)) return true;
+    return GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+bool long_path_write(const std::string& disk_path,
+                     const std::string& contents)
+{
+    std::vector<wchar_t> wide;
+    if (!easypb_file::wide_win32_path(disk_path, wide) || wide.empty()) {
+        return false;
+    }
+    wide.push_back(L'\0');
+    HANDLE handle = CreateFileW(&wide[0], GENERIC_WRITE, 0, 0, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, 0);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const BOOL ok =
+        WriteFile(handle, contents.data(),
+                  static_cast<DWORD>(contents.size()), &written, 0) &&
+        written == static_cast<DWORD>(contents.size());
+    CloseHandle(handle);
+    return ok != FALSE;
+}
+
+bool long_path_exists(const std::string& disk_path)
+{
+    std::vector<wchar_t> wide;
+    if (!easypb_file::wide_win32_path(disk_path, wide) || wide.empty()) {
+        return false;
+    }
+    wide.push_back(L'\0');
+    return GetFileAttributesW(&wide[0]) != INVALID_FILE_ATTRIBUTES;
+}
+
+// The control: the same spelling with no prefix anywhere, which is what a
+// filesystem call saw before long-path support. Past MAX_PATH it must fail
+// to reach the entry; where it does not, the load below is weaker evidence
+// and says so instead of passing silently.
+bool long_path_exists_without_prefix(const std::string& disk_path)
+{
+    std::vector<wchar_t> wide;
+    if (!wide_from_utf8(disk_path, wide)) return false;
+    return GetFileAttributesW(&wide[0]) != INVALID_FILE_ATTRIBUTES;
+}
+
+// Code units the plain (unprefixed) wide spelling occupies without its
+// terminator. MAX_PATH is exactly the cap that spelling runs into.
+std::size_t plain_wide_length(const std::string& disk_path)
+{
+    std::vector<wchar_t> wide;
+    if (!wide_from_utf8(disk_path, wide) || wide.empty()) return 0;
+    return wide.size() - 1;
+}
+
+void long_path_remove_file(const std::string& disk_path)
+{
+    std::vector<wchar_t> wide;
+    if (!easypb_file::wide_win32_path(disk_path, wide) || wide.empty()) {
+        return;
+    }
+    wide.push_back(L'\0');
+    DeleteFileW(&wide[0]);
+}
+
+void long_path_remove_dir(const std::string& disk_path)
+{
+    std::vector<wchar_t> wide;
+    if (!easypb_file::wide_win32_path(disk_path, wide) || wide.empty()) {
+        return;
+    }
+    wide.push_back(L'\0');
+    RemoveDirectoryW(&wide[0]);
+}
+
+// Working-directory helpers for the test below. Setting it moves the whole
+// process, and every other test resolves its fixtures relative to the CTest
+// working directory, so a caller must put it back before returning.
+bool set_working_directory(const std::string& disk_path)
+{
+    std::vector<wchar_t> wide;
+    if (!wide_from_utf8(disk_path, wide)) return false;
+    return SetCurrentDirectoryW(&wide[0]) != FALSE;
+}
+
+// The working directory as the platform reports it, UTF-8, without a trailing
+// separator. Empty means the query could not answer.
+std::string current_working_directory_text()
+{
+    const DWORD needed = GetCurrentDirectoryW(0, 0);
+    if (needed == 0) return std::string();
+    std::vector<wchar_t> buffer(needed);
+    const DWORD length = GetCurrentDirectoryW(needed, &buffer[0]);
+    if (length == 0 || length >= needed) return std::string();
+    std::string text;
+    if (!easypb_file::utf8_from_wide(&buffer[0], text)) return std::string();
+    return text;
+}
+
+// Disk spelling of the first `count` components of a fixture chain below the
+// work directory.
+std::string chain_path(const std::vector<std::string>& parts, std::size_t count)
+{
+    std::string result = work_root;
+    for (std::size_t i = 0; i < count; ++i) {
+        result = join_arg(result, parts[i]);
+    }
+    return result;
+}
+
+// Logical spelling of the same chain, the way an import below the work
+// directory names it.
+std::string chain_logical(const std::vector<std::string>& parts)
+{
+    std::string result;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        if (i != 0) result += "/";
+        result += parts[i];
+    }
+    return result;
+}
+
+void test_wide_conversion_applies_the_long_path_prefix()
+{
+    // The conversion contract of codegen/file_paths.hpp, checked without
+    // touching the filesystem: a drive spelling gets the prefix, a network
+    // spelling gets the UNC variant (the form the reference layer loses
+    // while normalizing), and a spelling that already carries the prefix is
+    // passed through instead of being prefixed twice. No loader run can
+    // cover the network form, because a share is not available to tests.
+    std::vector<wchar_t> wide;
+    CHECK(easypb_file::wide_win32_path("C:/deep/dir/leaf.proto", wide));
+    CHECK(std::wstring(&wide[0], wide.size()) ==
+          L"\\\\?\\C:\\deep\\dir\\leaf.proto");
+    CHECK(easypb_file::wide_win32_path("//host/share/leaf.proto", wide));
+    CHECK(std::wstring(&wide[0], wide.size()) ==
+          L"\\\\?\\UNC\\host\\share\\leaf.proto");
+    CHECK(easypb_file::wide_win32_path("\\\\?\\C:/mixed\\path.proto", wide));
+    CHECK(std::wstring(&wide[0], wide.size()) ==
+          L"\\\\?\\C:/mixed\\path.proto");
+    // Backslashes come in and come out normalized.
+    CHECK(easypb_file::wide_win32_path("C:\\deep\\leaf.proto", wide));
+    CHECK(std::wstring(&wide[0], wide.size()) ==
+          L"\\\\?\\C:\\deep\\leaf.proto");
+    // An empty spelling stays empty, and invalid input is refused rather
+    // than converted to something that names a different entry.
+    CHECK(easypb_file::wide_win32_path("", wide));
+    CHECK(wide.empty());
+    CHECK(!easypb_file::wide_win32_path(std::string("bad-") + char(0xFF) +
+                                           ".proto",
+                                       wide));
+    CHECK(!easypb_file::wide_win32_path(
+        std::string("nul") + char(0) + "x.proto", wide));
+}
+
+void test_non_ascii_paths_beyond_max_path()
+{
+    // Win32 only hands a path to the object manager when it carries the
+    // long-path prefix documented in codegen/file_paths.hpp; without it
+    // every filesystem call is capped at MAX_PATH. This test loads a tree
+    // whose leaf lies past that cap and whose spelling is non-ASCII in
+    // every component the loader has to touch, first through a search root
+    // by logical name and then by disk-path argument. Both runs go through
+    // the same conversion, so a single dropped prefix fails them.
+    require_work_root();
+    const std::string greek = utf8_from_code_point(0x03C0u);    // pi
+    const std::string cyrillic = utf8_from_code_point(0x0416u); // Zhe
+    const std::string leaf_name = "na" + utf8_from_code_point(0x00EFu) +
+                                  "ve-caf" +
+                                  utf8_from_code_point(0x00E9u) + ".proto";
+
+    // Grow the chain until the leaf's plain spelling passes the cap. The
+    // loop rather than a fixed depth keeps that premise true whatever the
+    // checkout and the build directory are called; a handful of parts is
+    // enough from a path like this one.
+    std::vector<std::string> parts(1, "longpath-" + greek + cyrillic);
+    for (int index = 1; index <= 40; ++index) {
+        const std::string probe =
+            join_arg(chain_path(parts, parts.size()), leaf_name);
+        if (plain_wide_length(easypb_file::lexical_absolute(probe)) >=
+            MAX_PATH) {
+            break;
+        }
+        char number[32];
+#if defined(_MSC_VER)
+        _snprintf(number, sizeof(number), "%d", index);
+#else
+        std::snprintf(number, sizeof(number), "%d", index);
+#endif
+        parts.push_back(std::string("deep-") + number + "-" +
+                        std::string(30, 'x'));
+    }
+
+    const std::string deepest = chain_path(parts, parts.size());
+    const std::string leaf_disk = join_arg(deepest, leaf_name);
+    const std::string leaf_absolute = easypb_file::lexical_absolute(leaf_disk);
+    const std::size_t leaf_length = plain_wide_length(leaf_absolute);
+    std::cout << "NOTE deep fixture: leaf is " << leaf_length
+              << " code units below " << parts.size()
+              << " directories, MAX_PATH is " << MAX_PATH << '\n';
+    CHECK(leaf_length >= MAX_PATH);
+
+    for (std::size_t i = 1; i <= parts.size(); ++i) {
+        CHECK(long_path_mkdir(chain_path(parts, i)));
+    }
+    CHECK(long_path_write(leaf_disk,
+                          "syntax = \"proto2\";\nmessage Deep {}\n"));
+    CHECK(long_path_exists(leaf_disk));
+
+    // The control. Where the unprefixed spelling still reaches the leaf, the
+    // machine accepts long paths regardless of the prefix and this run only
+    // shows the tree is loadable.
+    const bool plain_reaches = long_path_exists_without_prefix(leaf_absolute);
+    if (plain_reaches) {
+        std::cout << "NOTE the unprefixed spelling is reachable here, so this "
+                     "run is weaker evidence\n";
+    } else {
+        CHECK(!plain_reaches);
+    }
+    std::string status_error;
+    CHECK(easypb_file::disk_file_status(leaf_disk, status_error) ==
+          easypb_file::FILE_STATUS_FILE);
+
+    // A short root importing the deep file by its long logical name: the
+    // deep spelling is composed by the loader, not handed to it.
+    const std::string logical_import =
+        chain_logical(parts) + "/" + leaf_name;
+    const std::string root_disk = work_path("longpath-root.proto");
+    CHECK(write_file(root_disk, std::string("syntax = \"proto2\";\nimport \"") +
+                                   logical_import + "\";\nmessage Root {}\n"));
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(work_root);
+    std::vector<std::string> roots(1, "longpath-root.proto");
+    easypb_schema::SchemaSet files;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(files.files().size() == 2);
+    CHECK(files.targets().size() == 1);
+    CHECK(files.find_file(logical_import) != 0);
+    if (files.find_file(logical_import) != 0) {
+        // physical_name keeps the UTF-8 spelling of the deep disk path.
+        CHECK(files.find_file(logical_import)->physical_name == leaf_disk);
+    }
+
+    // The same leaf as a disk-path argument under the deepest directory as
+    // its root, which is the shape a CLI passes for a single file.
+    easypb_proto::SourceLoaderOptions deep_options;
+    deep_options.proto_paths.push_back(deepest);
+    std::vector<std::string> deep_roots(1, leaf_disk);
+    easypb_schema::SchemaSet deep_files;
+    easypb_schema::Diagnostic deep_error;
+    CHECK(easypb_proto::load_source_files(deep_options, deep_roots, deep_files,
+                                          deep_error));
+    CHECK(deep_files.files().size() == 1);
+    CHECK(deep_files.targets().size() == 1);
+    CHECK(deep_files.find_file(leaf_name) != 0);
+
+    // Cleanup runs deepest first: a directory cannot go while it still
+    // holds the entry below it, and the deep parts only answer to the
+    // prefixed spelling either.
+    long_path_remove_file(leaf_disk);
+    CHECK(!long_path_exists(leaf_disk));
+    for (std::size_t i = parts.size(); i > 0; --i) {
+        long_path_remove_dir(chain_path(parts, i));
+    }
+    CHECK(!long_path_exists(deepest));
+    remove_if_present(root_disk);
+}
+
+void test_trailing_dot_and_space_names_stay_literal()
+{
+    // Win32 trims trailing dots and spaces before it looks a name up, so a
+    // spelling such as "dot.proto." used to resolve to the differently named
+    // "dot.proto", or to nothing at all. The long-path prefix switches that
+    // trimming off, which is why the reference compiler applies the prefix to
+    // every path and not only to long ones (bazelbuild/bazel#2935). The rule
+    // this test pins is the one the prefix leaves behind: a trailing dot or
+    // space is part of the name, so the literal spelling is a schema file and
+    // the trimmed spelling is simply absent. protoc 30.1 answers the same way
+    // on the same fixture: the literal spellings compile, the trimmed ones
+    // fail with "No such file or directory".
+    require_work_root();
+    const std::string dir = work_path("trailing-names");
+    CHECK(long_path_mkdir(dir));
+    const std::string dot_literal = join_arg(dir, "dot.proto.");
+    const std::string dot_trimmed = join_arg(dir, "dot.proto");
+    const std::string space_literal = join_arg(dir, "space.proto ");
+    const std::string space_trimmed = join_arg(dir, "space.proto");
+    // Only the prefixed spelling can create these: the plain call trims the
+    // name on the way to the filesystem and would create a different entry.
+    CHECK(long_path_write(dot_literal,
+                          "syntax = \"proto2\";\nmessage Dot {}\n"));
+    CHECK(long_path_write(space_literal,
+                          "syntax = \"proto2\";\nmessage Space {}\n"));
+    CHECK(long_path_exists(dot_literal));
+    CHECK(long_path_exists(space_literal));
+
+    // The control, and the premise of the checks below: the unprefixed
+    // spelling cannot reach either literal entry. Where it can, the machine
+    // does not trim at all and this run is weaker evidence rather than a
+    // silent pass.
+    const std::string dot_absolute = easypb_file::lexical_absolute(dot_literal);
+    const std::string space_absolute =
+        easypb_file::lexical_absolute(space_literal);
+    const bool plain_reaches =
+        long_path_exists_without_prefix(dot_absolute) ||
+        long_path_exists_without_prefix(space_absolute);
+    if (plain_reaches) {
+        std::cout << "NOTE the unprefixed spelling reaches the literal names "
+                     "here, so this run is weaker evidence\n";
+    } else {
+        CHECK(!long_path_exists_without_prefix(dot_absolute));
+        CHECK(!long_path_exists_without_prefix(space_absolute));
+    }
+
+    // The status layer answers for the literal names and never invents the
+    // trimmed ones, which is where the wrong-file risk used to sit.
+    std::string status_error;
+    CHECK(easypb_file::disk_file_status(dot_literal, status_error) ==
+          easypb_file::FILE_STATUS_FILE);
+    CHECK(easypb_file::disk_file_status(space_literal, status_error) ==
+          easypb_file::FILE_STATUS_FILE);
+    CHECK(easypb_file::disk_file_status(dot_trimmed, status_error) ==
+          easypb_file::FILE_STATUS_ABSENT);
+    CHECK(easypb_file::disk_file_status(space_trimmed, status_error) ==
+          easypb_file::FILE_STATUS_ABSENT);
+
+    // A short root reaches both literal names, by logical name and by
+    // disk-path argument, exactly as it reaches an ordinary file.
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(work_root);
+    const std::string dot_logical = std::string("trailing-names/") +
+                                    "dot.proto.";
+    std::vector<std::string> dot_roots(1, dot_logical);
+    easypb_schema::SchemaSet dot_files;
+    easypb_schema::Diagnostic dot_error;
+    CHECK(easypb_proto::load_source_files(options, dot_roots, dot_files,
+                                          dot_error));
+    CHECK(dot_files.files().size() == 1);
+    CHECK(dot_files.targets().size() == 1);
+    if (!dot_files.targets().empty()) {
+        CHECK(text(dot_files.targets()[0]->file.name) == dot_logical);
+    }
+
+    const std::string space_logical = std::string("trailing-names/") +
+                                      "space.proto ";
+    easypb_proto::SourceLoaderOptions space_options;
+    space_options.proto_paths.push_back(dir);
+    std::vector<std::string> space_roots(1, space_literal);
+    easypb_schema::SchemaSet space_files;
+    easypb_schema::Diagnostic space_error;
+    CHECK(easypb_proto::load_source_files(space_options, space_roots,
+                                          space_files, space_error));
+    CHECK(space_files.files().size() == 1);
+    CHECK(space_files.find_file("space.proto ") != 0);
+
+    // An import spelled with the literal name reaches it through the parser,
+    // and the trimmed spelling fails instead of resolving to another file.
+    // Imports are resolved against the search roots rather than against the
+    // importing file's directory, so the import names the full logical path.
+    const std::string ok_root = join_arg(dir, "literal-root.proto");
+    CHECK(write_file(ok_root,
+                     "syntax = \"proto2\";\nimport "
+                     "\"trailing-names/dot.proto.\";\n"
+                     "message LiteralRoot {}\n"));
+    std::vector<std::string> ok_inputs(1, "trailing-names/literal-root.proto");
+    easypb_schema::SchemaSet chained;
+    easypb_schema::Diagnostic chained_error;
+    const bool chained_ok =
+        easypb_proto::load_source_files(options, ok_inputs, chained,
+                                        chained_error);
+    if (!chained_ok) {
+        // The literal import is the point of this test, so a failure must
+        // say what the loader objected to instead of only that it failed.
+        std::cerr << "literal-name import failed: " << chained_error.file
+                  << ':' << chained_error.location.line << ": "
+                  << chained_error.message << '\n';
+    }
+    CHECK(chained_ok);
+    CHECK(chained.files().size() == 2);
+    CHECK(chained.targets().size() == 1);
+    CHECK(chained.find_file(dot_logical) != 0);
+
+    const std::string trimmed_root = join_arg(dir, "trimmed-root.proto");
+    CHECK(write_file(trimmed_root,
+                     "syntax = \"proto2\";\nimport "
+                     "\"trailing-names/dot.proto\";\n"
+                     "message TrimmedRoot {}\n"));
+    std::vector<std::string> trimmed_inputs(1,
+                                            "trailing-names/trimmed-root.proto");
+    easypb_schema::SchemaSet trimmed_files;
+    easypb_schema::Diagnostic trimmed_error;
+    CHECK(!easypb_proto::load_source_files(options, trimmed_inputs,
+                                           trimmed_files, trimmed_error));
+    CHECK(trimmed_files.files().empty());
+
+    // Cleanup, and with it the proof that the prefix also deletes what it
+    // created: the plain call would leave both entries behind.
+    long_path_remove_file(dot_literal);
+    long_path_remove_file(space_literal);
+    remove_if_present(ok_root);
+    remove_if_present(trimmed_root);
+    long_path_remove_dir(dir);
+    CHECK(!long_path_exists(dot_literal));
+    CHECK(!long_path_exists(space_literal));
+}
+
+void test_relative_spelling_follows_the_working_directory()
+{
+    // A relative spelling is made absolute by joining the working directory, so
+    // that join has to survive a directory name the ANSI code page cannot spell
+    // and it has to stop where the platform stops. Win32 refuses to make the
+    // working directory longer than MAX_PATH at all - measured below rather
+    // than assumed - which is why the long-directory variant of this branch is
+    // exercised through a long *relative* spelling in the deep-path test
+    // instead. Everything here that moves the directory moves it back before
+    // the next check, because the rest of the suite resolves its fixtures
+    // relative to the CTest working directory.
+    require_work_root();
+    const std::string saved = current_working_directory_text();
+    if (saved.empty()) {
+        std::cout << "NOTE the working directory could not be read, so the "
+                     "relative-resolution checks are skipped\n";
+        return;
+    }
+    const std::string greek = utf8_from_code_point(0x03C0u);    // pi
+    const std::string cyrillic = utf8_from_code_point(0x0416u); // Zhe
+    const std::string dir = work_path(std::string("cwd-") + greek + cyrillic);
+    const std::string leaf_name = "na" + utf8_from_code_point(0x00EFu) +
+                                  "ve.proto";
+    const std::string leaf_disk = join_arg(dir, leaf_name);
+    const std::string root_disk = join_arg(dir, "root.proto");
+    CHECK(write_file(leaf_disk,
+                     "syntax = \"proto2\";\nmessage Leaf {}\n"));
+    CHECK(write_file(root_disk, std::string("syntax = \"proto2\";\nimport \"") +
+                                   leaf_name + "\";\nmessage Root {}\n"));
+
+    // Expectations captured before the move: both names resolve against the
+    // working directory that is about to change.
+    const std::string dir_absolute = easypb_file::lexical_absolute(dir);
+    const std::string leaf_absolute = easypb_file::lexical_absolute(leaf_disk);
+
+    CHECK(set_working_directory(dir));
+    // The wide query has to report the non-ASCII directory, converted to UTF-8.
+    const std::string moved_to = current_working_directory_text();
+    CHECK(!moved_to.empty());
+    CHECK(easypb_file::lexical_absolute(moved_to) == dir_absolute);
+    // The join itself, twice: the current directory and a bare relative name
+    // both have to come out as the absolute spellings captured above. Decoding
+    // the working directory through the code page instead of UTF-8 fails both,
+    // which is what makes the non-ASCII fixture directory worth having.
+    CHECK(easypb_file::lexical_absolute(".") == dir_absolute);
+    CHECK(easypb_file::lexical_absolute(leaf_name) == leaf_absolute);
+    std::string entry_error;
+    CHECK(easypb_file::disk_file_status(leaf_name, entry_error) ==
+          easypb_file::FILE_STATUS_FILE);
+
+    // The loader, driven the two ways a relative spelling reaches it: an empty
+    // search root, which means the working directory, and a relative disk-path
+    // argument.
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back("");
+    std::vector<std::string> chain_roots(1, "root.proto");
+    easypb_schema::SchemaSet chain;
+    easypb_schema::Diagnostic chain_error;
+    CHECK(easypb_proto::load_source_files(options, chain_roots, chain,
+                                          chain_error));
+    CHECK(chain.files().size() == 2);
+    CHECK(chain.targets().size() == 1);
+    CHECK(chain.find_file(leaf_name) != 0);
+
+    std::vector<std::string> leaf_roots(1, leaf_name);
+    easypb_schema::SchemaSet only;
+    easypb_schema::Diagnostic only_error;
+    CHECK(easypb_proto::load_source_files(options, leaf_roots, only,
+                                          only_error));
+    CHECK(only.files().size() == 1);
+    CHECK(only.targets().size() == 1);
+    if (!only.targets().empty()) {
+        CHECK(text(only.targets()[0]->file.name) == leaf_name);
+    }
+
+    // Back before anything else, so that a failure above cannot leave the rest
+    // of the suite resolving its fixtures somewhere else.
+    CHECK(set_working_directory(saved));
+    CHECK(current_working_directory_text() == saved);
+
+    // The platform limit, measured here so the suite does not assume it. One
+    // directory with a very long name is enough to cross it, and the prefixed
+    // spelling is not accepted for a working directory at all, which is why
+    // this uses SetCurrentDirectoryW directly.
+    const std::string deep = work_path(std::string(240, 'd'));
+    CHECK(long_path_mkdir(deep));
+    const std::size_t deep_length =
+        plain_wide_length(easypb_file::lexical_absolute(deep));
+    const bool deep_accepted = set_working_directory(deep);
+    std::cout << "NOTE a working directory of " << deep_length
+              << " code units is " << (deep_accepted ? "accepted" : "refused")
+              << " (MAX_PATH is " << MAX_PATH << ")\n";
+    if (deep_accepted) {
+        // A platform that allows this makes the branch testable, so take it.
+        CHECK(easypb_file::lexical_absolute("leaf.proto") ==
+              join_arg(easypb_file::lexical_absolute(deep), "leaf.proto"));
+        CHECK(set_working_directory(saved));
+    } else {
+        // A refused move must leave the process where it was, or every later
+        // relative fixture path in this suite would resolve differently.
+        CHECK(current_working_directory_text() == saved);
+    }
+
+    long_path_remove_dir(deep);
+    remove_if_present(root_disk);
+    remove_if_present(leaf_disk);
+    remove_dir_if_present(dir);
+}
 #endif
 
 void test_utf8_logical_spelling_rules()
@@ -1816,6 +2347,10 @@ int main(int argc, char** argv)
     test_separator_normalization_preserves_multibyte();
     test_wide_cli_conversion_is_unambiguous();
     test_non_ascii_paths_do_not_depend_on_the_process_code_page();
+    test_wide_conversion_applies_the_long_path_prefix();
+    test_non_ascii_paths_beyond_max_path();
+    test_trailing_dot_and_space_names_stay_literal();
+    test_relative_spelling_follows_the_working_directory();
 #endif
 
     if (failures != 0) {

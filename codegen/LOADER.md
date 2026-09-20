@@ -40,6 +40,25 @@ Every rule below is observable behavior, and each one has a counterpart in the r
   different file under the ordered roots, the load stops. protoc's `DiskFileToVirtualFile` returns
   `SHADOWED` for the same state and prints an "Input is shadowed in the --proto_path by ..."
   diagnostic.
+- **Windows disk access is long-path aware.** Every filesystem call converts the stored UTF-8
+  spelling to the prefixed wide form (`\\?\` for a drive path, `\\?\UNC\` for a network path) that the
+  reference compiler's io_win32 layer also uses. The prefix is what makes a tree deeper than `MAX_PATH`
+  reachable without a manifest and without a registry setting, and both compilers apply it to every
+  path rather than only to long ones, because it is also what stops Win32 from trimming trailing dots
+  and spaces. Because the prefix disables that parsing, `.` and `..` have to be resolved lexically
+  before the call — which they are, in the same normalization the root mapping uses. A relative
+  spelling is therefore joined with the working directory textually instead of through the platform
+  resolver, which would trim a trailing dot or space off the last component *before* the prefix could
+  protect it and answer one name with a different file; `leaf.proto.` and `leaf.proto` are two names
+  here, as they are for the reference compiler (probed: the literal spelling compiles, the trimmed one
+  reports `File not found`). Drive-relative and rooted spellings still go through the platform
+  resolver, whose normalization of their last component is the one corner this rule does not cover.
+  The working directory that a relative spelling is joined with is capped by Win32 itself:
+  `SetCurrentDirectoryW` accepts a spelling of at most 258 characters and refuses longer ones with
+  `ERROR_FILENAME_EXCED_RANGE`, and the prefix, being four characters of that same budget, cannot
+  lift the limit — so no process can be *in* a directory beyond `MAX_PATH`. A long absolute path therefore only ever comes from a long relative spelling under a
+  shorter directory — exactly what the deep-path test builds — and the suite measures the limit
+  instead of assuming it, taking the branch if a platform ever lifts it.
 - **Absence advances the search, a denial stops it.** protoc stops on `EACCES` (with
   "Read access is denied for file: ...") and treats every other failure as absence. The loader keeps
   that split and adds no identity probe of its own. On Windows the layer that notices differs: an
@@ -64,10 +83,10 @@ parser (descriptor sets only), and a plugin mode is planned; neither should pull
 
 | Role | Where | Lines | Who links it |
 |---|---|---|---|
-| Logical name rules | `logical_paths.{hpp,cpp}` | 45 + 138 | every profile, including descriptor-only and plugin |
+| Logical name rules | `logical_paths.{hpp,cpp}` | 45 + 132 | every profile, including descriptor-only and plugin |
 | Storage and graph ownership | `bind_import_edges` and helpers in `schema.{hpp,cpp}` | 289 + 509 | every profile |
-| Disk adapter | `file_paths.{hpp,cpp}` | 102 + 526 | full builds only |
-| Source loader | `proto_loader.{hpp,cpp}` | 78 + 598 | full builds only |
+| Disk adapter | `file_paths.{hpp,cpp}` | 129 + 620 | full builds only |
+| Source loader | `proto_loader.{hpp,cpp}` | 79 + 598 | full builds only |
 
 In CMake terms:
 
@@ -196,8 +215,8 @@ discovery path — not an inconsistency.
 ## Deliberate differences from the reference compiler
 
 Everything here is diagnostic quality, spelling strictness, or a more forgiving reading of a spelling.
-Only the first bullet accepts something the reference compiler refuses, and even there the result is
-always the same file it would have selected.
+Two bullets accept a spelling the reference compiler cannot resolve — parent references, and a network
+path past the path cap — and neither can select a different file than the caller named.
 
 - **`..` and Windows drive-relative spellings are resolved.** `lexical_absolute` turns roots and
   arguments into an absolute form before the prefix comparison: it resolves relative spellings against
@@ -205,10 +224,9 @@ always the same file it would have selected.
   (`C:x`) and rooted (`\x`) Windows forms. protoc's `CanonicalizePath` only converts backslashes,
   drops `.` components and collapses slashes — its own comment says handling `..` is "punted" — and
   `ApplyMapping` then rejects any part still containing a parent reference. Consequence: a spelling
-  such as `-I foo foo/../foo/x.proto` maps here and is an error there. This is the one place where the
-  loader accepts more than the reference compiler, and it can never select a different file: the
-  mapping still has to pass the shadow check and the logical-name rules. Matching protoc exactly would
-  mean rejecting such spellings.
+  such as `-I foo foo/../foo/x.proto` maps here and is an error there. It can never select a different
+  file: the mapping still has to pass the shadow check and the logical-name rules. Matching protoc
+  exactly would mean rejecting such spellings.
 - **Only the `-I dir` shape of a search root exists here.** `SourceLoaderOptions.proto_paths` holds
   disk directories, so the mapping is the empty-virtual-prefix form of `ApplyMapping`; protoc also
   accepts `--proto_path=VIRTUAL=DISK`, which pairs a virtual prefix with a disk directory. Nothing in
@@ -227,9 +245,10 @@ always the same file it would have selected.
 - **A NUL guard.** A spelling with an embedded NUL fails loudly instead of addressing a truncated
   prefix, both for CLI roots (`disk_file_status`) and for file reads (`main.cpp`). protoc's narrow
   calls simply truncate at the NUL and report a missing file.
-- **No long-path prefix.** protoc's Windows layer prepends `\\?\` and therefore addresses paths beyond
-  `MAX_PATH`; this loader does not. That is the one place where the loader is behind the reference
-  compiler rather than ahead of it.
+- **A network path beyond the path cap.** protoc's long-path layer drops the leading separator pair of
+  a UNC spelling while normalizing, so its prefixed result no longer addresses the share; this loader
+  keeps the share in the `\\?\UNC\` form, the only prefixed spelling that can name it. A drive-absolute
+  path is prefixed exactly as the reference compiler does it.
 
 ## What is deliberately absent
 
@@ -258,7 +277,10 @@ with a consequence, not an oversight.
   encoding contract stated in `file_paths.hpp` — UTF-8 spellings converted to UTF-16 only at the W-API
   calls — is covered by a test that creates non-ASCII fixtures under the code page of the machine
   itself, asks that page, and uses the narrow spelling as a control; a run under a UTF-8 code page says
-  so, so weaker evidence is visible instead of silent.
+  so, so weaker evidence is visible instead of silent. The long-path contract next to it is covered by
+  a test that builds a tree past `MAX_PATH` out of non-ASCII components, checks that the unprefixed
+  spelling cannot reach the leaf there, and then loads it both through a search root and as a
+  disk-path argument.
 
 ## Reading order
 
@@ -266,8 +288,8 @@ with a consequence, not an oversight.
 2. `bind_import_edges` in `schema.cpp` — the graph core.
 3. `load_source_files` in `proto_loader.cpp` — the whole outer contour, short enough to read first.
 4. `resolve_root` and `map_disk_to_logical` — the root logic.
-5. `join_disk_path`, `lexical_absolute`, `strip_search_root_prefix`, `disk_file_status` in
-   `file_paths.cpp` — read on demand, not front to back.
+5. `join_disk_path`, `lexical_absolute`, `strip_search_root_prefix`, `wide_win32_path`,
+   `disk_file_status` in `file_paths.cpp` — read on demand, not front to back.
 
 ## Appendix A: Glossary
 
@@ -298,19 +320,19 @@ implemented yet.
 
 | Module | Lines |
 |---|---|
-| `logical_paths.cpp` / `.hpp` | 138 / 45 |
+| `logical_paths.cpp` / `.hpp` | 132 / 45 |
 | `schema.cpp` / `.hpp` (storage plus the binder) | 509 / 289 |
-| `file_paths.cpp` / `.hpp` | 526 / 102 |
-| `proto_loader.cpp` / `.hpp` | 598 / 78 |
+| `file_paths.cpp` / `.hpp` | 620 / 129 |
+| `proto_loader.cpp` / `.hpp` | 598 / 79 |
 
 Tests and fixtures:
 
 | What | Where | Size |
 |---|---|---|
-| Binder and logical names, linked against `easypb_schema` only | `tests/codegen/imports/test_graph.cpp` | 649 lines |
+| Binder and logical names, linked against `easypb_schema` only | `tests/codegen/imports/test_graph.cpp` | 659 lines |
 | Exhaustive enumeration of all graphs up to four files (66,066 graphs) | `test_graph_exhaustive.cpp` | 190 lines |
 | Larger randomized graphs (`EASYPB_EXTENDED_TESTS` only) | `test_graph_extended.cpp` | 286 lines |
-| Loader: 39 functions, fixtures, denial and Unicode cases | `test_loader.cpp` | 1683 lines |
+| Loader: 44 functions, fixtures, denial, Unicode, deep-path and name-edge cases | `test_loader.cpp` | 2364 lines |
 | Diamond and search-precedence fixtures | `tests/codegen/imports/data/loader/` | 7 `.proto` files |
 
 Registered CTest names: `codegen.imports.graph`, `codegen.imports.graph.exhaustive` (label
@@ -322,7 +344,11 @@ Loader test functions worth knowing: `test_diamond_caching`, `test_search_preced
 `test_directory_argument_is_reported_as_directory`, `test_empty_input_argument_is_rejected`,
 `test_missing_unused_import_fails`, `test_missing_weak_import_fails`,
 `test_nested_cycle_reports_root_chain`, `test_two_names_of_one_file_load_twice`,
-`test_case_variant_root_spelling_is_outside_roots`, `test_failed_load_leaves_empty_result`.
+`test_case_variant_root_spelling_is_outside_roots`, `test_failed_load_leaves_empty_result`,
+`test_non_ascii_paths_do_not_depend_on_the_process_code_page`,
+`test_wide_conversion_applies_the_long_path_prefix`, `test_non_ascii_paths_beyond_max_path`,
+`test_trailing_dot_and_space_names_stay_literal`,
+`test_relative_spelling_follows_the_working_directory`.
 
 ## Appendix C: Running the checks
 
@@ -346,7 +372,7 @@ Run the loader suite through CTest only: it creates working directories under th
 
 The loader does one thing — find the files and prove that the import graph makes sense — and it does it
 the way the reference compiler does: a textual root mapping, a shadow report for disk-path inputs, a
-denial-only search stop, and name-keyed caching. What it adds is diagnostics: codes, positions, the
+denial-only search stop, name-keyed caching, and a long-path-aware Windows conversion. What it adds is diagnostics: codes, positions, the
 searched roots and import chains, plus a stricter logical-name validator shared by every frontend. What
 it leaves out is every mechanism the reference compiler does not have — case folding, native identity,
 an isolated-root convenience, statistics and test seams — so that each behavior can be justified by

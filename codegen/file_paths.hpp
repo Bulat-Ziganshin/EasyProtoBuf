@@ -2,6 +2,7 @@
 #define EASYPB_FILE_PATHS_HPP_INCLUDED
 
 #include <string>
+#include <vector>
 
 namespace easypb_file {
 
@@ -22,11 +23,19 @@ namespace easypb_file {
 // supported; Windows accepts both '/' and '\' in disk paths while
 // logical names always use '/'.
 //
+// That conversion also applies the long-path prefix of the reference
+// layer: the spelling is made absolute, its separators become '\', and
+// the result is prefixed with "\\?\" ("\\?\UNC\" for a network share), so
+// a filesystem call reaches paths beyond MAX_PATH without a manifest and
+// without any registry setting. The prefix turns off Win32 path
+// post-processing, so trailing spaces and dots stay literal and '.'/'..'
+// are resolved by this module's lexical normalization instead of by the
+// API. See wide_win32_path below.
+//
 // Disk-path handling follows the reference compiler (protoc) on purpose:
 // prefix comparison is byte-wise and case-sensitive on every platform,
 // and the filesystem itself decides which spellings name which entry.
-// There is no case folding, no file-identity query and no long-path
-// prefix here.
+// There is no case folding and no file-identity query here.
 
 // Join a search root with a logical import name ("a/b.proto") using the
 // native separator convention. A logical name always uses '/'; on
@@ -95,6 +104,24 @@ bool strip_search_root_prefix(const std::string& file_absolute,
 // (wide argv) and tests; filesystem helpers perform the inverse conversion
 // only immediately around W API calls. Returns false for invalid input.
 bool utf8_from_wide(const wchar_t* text, std::string& utf8);
+
+// Converts one UTF-8 disk path to the wide spelling to hand to a Win32 W
+// API. The spelling is made absolute through lexical_absolute, its
+// separators become '\', and the long-path prefix is prepended - "\\?\"
+// for a drive path, "\\?\UNC\" for a network share - exactly like the
+// io_win32 layer of the reference compiler. The prefix is what makes a
+// path beyond MAX_PATH reachable without a manifest or a registry
+// setting, and it also stops the API from post-processing the spelling:
+// trailing dots and spaces stay literal, as they are in the stored
+// spelling, and '.'/'..' were already resolved lexically. A spelling that
+// already carries the prefix is passed through verbatim, and a path that
+// cannot be made absolute falls back to the plain conversion this module
+// used before long paths were supported; both paths are non-empty
+// buffers without a terminator, so callers still append one. Returns
+// false only when the spelling is not valid UTF-8 or contains a NUL.
+// Exposed for the tests and for later output-side helpers; every call in
+// this module that reaches the disk goes through it.
+bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 #endif
 
 } // namespace easypb_file
