@@ -795,6 +795,37 @@ void test_message_defaults_are_rejected()
     CHECK(error.location.line == 4);
 }
 
+// protoc's rule for the entry name a `map` field implies, and the reason the
+// rule is one shared function: the parser synthesizes the entry with it and
+// the linker later derives the same name with no parser linked at all
+// (plan-4 amendments A22, A24). The expectations are measured, not inherited:
+// libprotoc 30.1 generated exactly these entry names from exactly these field
+// names, and plan-4 Appendix C records the same pairs as A1, A12, A14, A15.
+// The last two rows are why there is no empty-name fallback - an all-underscore
+// field must yield `Entry`, which the parser's old `Map` fallback got wrong.
+void test_map_entry_name_follows_protoc()
+{
+    struct Case {
+        const char* field_name;
+        const char* entry_name;
+    };
+    const Case cases[] = {
+        {"foo", "FooEntry"},
+        {"foo_bar", "FooBarEntry"},
+        {"a_b_c", "ABCEntry"},
+        {"x__y", "XYEntry"},
+        {"A_1b", "A1bEntry"},
+        {"z9_9z", "Z99zEntry"},
+        {"_lead", "LeadEntry"},
+        {"Foo", "FooEntry"},
+        {"_", "Entry"}
+    };
+    for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        CHECK(easypb_schema::map_entry_name(cases[i].field_name) ==
+              cases[i].entry_name);
+    }
+}
+
 } // namespace
 
 int main()
@@ -814,6 +845,7 @@ int main()
     test_cross_file_service_collision_names_symbol();
     test_cross_file_type_symbol_text_is_order_independent();
     test_message_defaults_are_rejected();
+    test_map_entry_name_follows_protoc();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

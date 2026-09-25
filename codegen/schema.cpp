@@ -272,6 +272,31 @@ const FieldSource* find_field_source(const SchemaFile& file,
     return 0;
 }
 
+std::string map_entry_name(const std::string& field_name)
+{
+    std::string output;
+    bool capitalize = true;
+    for (std::size_t i = 0; i < field_name.size(); ++i) {
+        const char c = field_name[i];
+        if (c == '_') {
+            capitalize = true;
+            continue;
+        }
+        if (capitalize && c >= 'a' && c <= 'z') {
+            output.push_back(static_cast<char>(c - 'a' + 'A'));
+        } else {
+            output.push_back(c);
+        }
+        capitalize = false;
+    }
+    // The suffix belongs to the rule and not to a call site: what the linker
+    // compares against an entry's simple name is the complete entry name.
+    // An all-underscore field leaves output empty, so the name is "Entry" - a
+    // name protoc produces itself (amendment A14), never a fallback we invent.
+    output += "Entry";
+    return output;
+}
+
 bool bind_import_edges(SchemaSet& files, bool allow_missing,
                        Diagnostic& error)
 {

@@ -260,6 +260,20 @@ const FieldDescriptorProto* find_field(const SchemaFile& file,
 const FieldSource* find_field_source(const SchemaFile& file,
                                      const DescriptorPath& path);
 
+// protoc's own rule for naming the nested entry message a `map` field implies:
+// an underscore capitalizes the next character only when it is a lowercase
+// ASCII letter, every other character is copied through and clears the flag,
+// and the result carries the "Entry" suffix. There is deliberately no
+// empty-name fallback - `map<string, int32> _ = 1;` yields the entry `Entry`
+// in protoc, and any other answer is a divergence from the reference
+// compiler. Measured with libprotoc 30.1 against the naming table in
+// tests/codegen/schema/test_semantics.cpp (plan-4 amendments A14, A15).
+//
+// It lives here rather than in the parser because the linker also builds in
+// the descriptor-only profile, which links no parser, and because acceptance
+// must not depend on which frontend produced a descriptor (amendment A24).
+std::string map_entry_name(const std::string& field_name);
+
 // Rebuilds every file's import edges from its authoritative descriptor
 // dependency lists (dependency, public_dependency, weak_dependency) in
 // dependency-list order. Source coordinates come from imports only and
