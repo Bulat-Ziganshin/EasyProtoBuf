@@ -642,6 +642,14 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
 // must resolve strictly underneath it with no outward fallback
 // (B1/B7/B11/B12/B14).
 //
+// Visibility is always the same question about the symbol the name lands on: a
+// package node is visible when ANY visible file declares exactly that package
+// (`package_is_visible`, R4), every other declaration when its own file is
+// visible. Neither spelling of a name can change that answer, in the whole-name
+// branch or in the compound-member branch (D-06: both branches used to test the
+// node's recorded owner, so a merged package node answered INVISIBLE where the
+// relative walk answered NOT_A_TYPE).
+//
 // A member that the index does know but that is not a type (a field, an enum
 // value, a oneof, a package scope) is RESOLVE_NOT_A_TYPE, the same category
 // the absolute spelling of that declaration reports; only a member the index
@@ -675,7 +683,12 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
             symbols.symbols.find(raw);
         if (found == symbols.symbols.end()) return 0;
         *matched_name = raw;
-        if (visible_files.find(found->second.owner) == visible_files.end()) {
+        // Every name this function tests is the index's dotted absolute
+        // spelling (`scope_candidate` builds them that way, and
+        // `package_prefix` returns a dotted package), so R4's question is asked
+        // with the name itself - the recorded-owner test gave a merged package
+        // node two codes depending on the spelling (D-06).
+        if (!candidate_is_visible(found->second, visible_files, raw)) {
             *outcome = RESOLVE_INVISIBLE;
             return 0;
         }
@@ -741,7 +754,11 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
             return 0;
         }
         *matched_name = compound;
-        if (visible_files.find(member->second.owner) == visible_files.end()) {
+        // A package member asks the same question: the merged node is visible
+        // when ANY visible file declares exactly this package, so a package
+        // reached through a committed head answers one code in both spellings
+        // (D-06, the compound half of the same finding).
+        if (!candidate_is_visible(member->second, visible_files, compound)) {
             *outcome = RESOLVE_INVISIBLE;
             return 0;
         }

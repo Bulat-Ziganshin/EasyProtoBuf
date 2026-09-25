@@ -1452,6 +1452,216 @@ void test_compound_member_non_type_matches_absolute_spelling()
     }
 }
 
+// --- D-06 ------------------------------------------------------------------
+// A package scope reached as a TYPE must report one code however it is spelled
+// and whichever branch of the walk reaches it. The rule is R4: a merged package
+// node is visible when ANY visible file declares exactly that package, not when
+// the file the index recorded first - the node's owner - is visible. Both
+// branches tested the owner, so the relative spelling, which asks R4, answered
+// NOT_A_TYPE while the absolute spelling answered INVISIBLE for the same
+// declaration, naming a file the requester never imported.
+//
+// The fixtures mirror the measured oracle cases in build/plan4/fix-r2/oracle
+// (libprotoc 30.1): the merged corner, where an unimported first-indexed file
+// and an imported file declare the same package (protoc: ".game.deep" is not a
+// type), the same question through the compound-member path, where the head
+// stays visible while the member is a package node owned by the unimported
+// file (protoc: "deep.sub" is not a type), and the inverse controls - no
+// visible declarer keeps INVISIBLE, and a real message under the member package
+// still resolves.
+easypb_schema::SchemaFile& make_reference_requester(
+    easypb_schema::SchemaSet& set, const std::vector<std::string>& deps,
+    const char* reference)
+{
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaFile& file = make_file(set, "a.proto", deps, no_indexes,
+                                                no_indexes);
+    set_package(file, "game");
+    DescriptorProto ask;
+    ask.name = file.strings.save("Ask");
+    ask.has_name = true;
+    add_field(file, ask, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, reference);
+    file.file.message_type.push_back(ask);
+    return file;
+}
+
+// h.proto declares the package and is never imported, and it is indexed first,
+// so the merged node's recorded owner is an invisible file; z.proto, imported,
+// declares the same package, which is what keeps the node visible under R4.
+void make_merged_package_fixture(easypb_schema::SchemaSet& set,
+                                 easypb_schema::SchemaFile*& requester,
+                                 const char* reference)
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaFile& a = make_reference_requester(
+        set, std::vector<std::string>(1, "z.proto"), reference);
+    easypb_schema::SchemaFile& unimported =
+        make_file(set, "h.proto", no_deps, no_indexes, no_indexes);
+    set_package(unimported, "game.deep");
+    easypb_schema::SchemaFile& imported =
+        make_file(set, "z.proto", no_deps, no_indexes, no_indexes);
+    set_package(imported, "game.deep");
+    add_message(imported, "Msg");
+    requester = &a;
+}
+
+// The compound half: y.proto declares exactly `package game.deep` (the head the
+// walk must keep), h.proto and, when visible_sub, z.proto declare exactly
+// `package game.deep.sub`. h.proto is indexed first and never imported, so it
+// owns the member node; with visible_sub false nothing visible declares that
+// package, which is the control.
+void make_chain_package_fixture(easypb_schema::SchemaSet& set,
+                                easypb_schema::SchemaFile*& requester,
+                                const char* reference, bool visible_sub)
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+    std::vector<std::string> deps(1, "y.proto");
+    if (visible_sub) deps.push_back("z.proto");
+    easypb_schema::SchemaFile& a =
+        make_reference_requester(set, deps, reference);
+    easypb_schema::SchemaFile& unimported =
+        make_file(set, "h.proto", no_deps, no_indexes, no_indexes);
+    set_package(unimported, "game.deep.sub");
+    add_message(unimported, "HiddenOnly");
+    easypb_schema::SchemaFile& head =
+        make_file(set, "y.proto", no_deps, no_indexes, no_indexes);
+    set_package(head, "game.deep");
+    if (visible_sub) {
+        easypb_schema::SchemaFile& member =
+            make_file(set, "z.proto", no_deps, no_indexes, no_indexes);
+        set_package(member, "game.deep.sub");
+        add_message(member, "VisibleOnly");
+        add_message(member, "Thing");
+    }
+    requester = &a;
+}
+
+// No visible file declares the package at all: the inverse control.
+void make_unimported_package_fixture(easypb_schema::SchemaSet& set,
+                                     easypb_schema::SchemaFile*& requester,
+                                     const char* reference)
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaFile& a = make_reference_requester(set, no_deps,
+                                                            reference);
+    easypb_schema::SchemaFile& unimported =
+        make_file(set, "h.proto", no_deps, no_indexes, no_indexes);
+    set_package(unimported, "game.deep");
+    add_message(unimported, "Msg");
+    requester = &a;
+}
+
+// One expectation: `expected_code` is -1 when the reference must resolve, and
+// `expected_interned` is the name the field must carry once it does.
+void check_reference_case(easypb_schema::SchemaSet& set,
+                          easypb_schema::SchemaFile& requester,
+                          int expected_code, const char* expected_substr,
+                          const char* expected_interned)
+{
+    easypb_schema::Diagnostic error;
+    const bool resolved = resolve_after_link(set, requester, false, error);
+    CHECK(resolved == (expected_code < 0));
+    if (!resolved && expected_code >= 0) CHECK(error.code == expected_code);
+    if (!resolved && expected_substr != 0) {
+        CHECK(error.message.find(expected_substr) != std::string::npos);
+    }
+    if (resolved && expected_interned != 0) {
+        CHECK(text(requester.file.message_type[0].field[0].type_name) ==
+              expected_interned);
+    }
+}
+
+void test_merged_package_node_is_not_a_type_in_both_spellings()
+{
+    // The merged node as a type: the relative spelling asks R4, and the absolute
+    // spelling must agree instead of naming the unimported owner.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_merged_package_fixture(set, requester, "deep");
+        check_reference_case(set, *requester,
+                             easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+                             "a package scope", 0);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_merged_package_fixture(set, requester, ".game.deep");
+        check_reference_case(set, *requester,
+                             easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+                             "a package scope", 0);
+    }
+    // The compound-member branch, same question: the visible head commits the
+    // name and the member is the package node the unimported file owns.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_chain_package_fixture(set, requester, "deep.sub", true);
+        check_reference_case(set, *requester,
+                             easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+                             "a package scope", 0);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_chain_package_fixture(set, requester, ".game.deep.sub", true);
+        check_reference_case(set, *requester,
+                             easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+                             "a package scope", 0);
+    }
+    // Controls: with no visible declarer the node stays invisible, and the two
+    // spellings still agree - the fix moved the rule, not the category.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_unimported_package_fixture(set, requester, "deep");
+        check_reference_case(set, *requester,
+                             easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE,
+                             "h.proto", 0);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_unimported_package_fixture(set, requester, ".game.deep");
+        check_reference_case(set, *requester,
+                             easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE,
+                             "h.proto", 0);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_chain_package_fixture(set, requester, "deep.sub", false);
+        check_reference_case(set, *requester,
+                             easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE,
+                             "h.proto", 0);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_chain_package_fixture(set, requester, ".game.deep.sub", false);
+        check_reference_case(set, *requester,
+                             easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE,
+                             "h.proto", 0);
+    }
+    // Accept controls: the walk still reaches a real message under the member
+    // package, in both spellings.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_chain_package_fixture(set, requester, "deep.sub.Thing", true);
+        check_reference_case(set, *requester, -1, 0, ".game.deep.sub.Thing");
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile* requester = 0;
+        make_chain_package_fixture(set, requester, ".game.deep.sub.Thing", true);
+        check_reference_case(set, *requester, -1, 0, ".game.deep.sub.Thing");
+    }
+}
+
 // Self-recursion, mutual recursion inside one file, and a reference into a
 // visible file: only IMPORT cycles are errors and stage 2 already rejected
 // those, so resolution must leave all three shapes alone.
@@ -1732,6 +1942,7 @@ int main()
     test_sub_package_does_not_make_the_parent_visible();
     test_enum_value_member_paths();
     test_compound_member_non_type_matches_absolute_spelling();
+    test_merged_package_node_is_not_a_type_in_both_spellings();
     test_legal_recursion_stays_legal();
     test_legal_map_fields_resolve_to_their_entry();
     test_foreign_map_entry_references_are_rejected();
