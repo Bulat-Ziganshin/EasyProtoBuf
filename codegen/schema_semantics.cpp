@@ -195,6 +195,13 @@ SourceLocation declaration_location(const SchemaFile& file,
 // the name is already taken. The error carries the redeclaration position
 // when the file records one; descriptor-only errors name the descriptor
 // path and use an unknown location instead of fabricated coordinates.
+//
+// A name already taken in this scope is the SAME defect as a collision between
+// two files, so it carries the same dedicated code: E1/A3 map one lookup
+// outcome to one code, not one code per producer, and a caller must never have
+// to read a message text to tell a redeclaration from a generic failure. The
+// message names both declarations by kind and name within the scope; the
+// cross-file producer (add_symbol) additionally names both logical files.
 bool add_scope_name(const SchemaFile& file,
                     std::map<std::string, std::string>& names,
                     const std::string& name,
@@ -216,7 +223,7 @@ bool add_scope_name(const SchemaFile& file,
         error.location = location;
         error.message = message;
         error.warning = false;
-        error.code = DIAGNOSTIC_GENERIC;
+        error.code = DIAGNOSTIC_DUPLICATE_SYMBOL;
         return false;
     }
     return true;
@@ -635,6 +642,14 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
 // must resolve strictly underneath it with no outward fallback
 // (B1/B7/B11/B12/B14).
 //
+// A member that the index does know but that is not a type (a field, an enum
+// value, a oneof, a package scope) is RESOLVE_NOT_A_TYPE, the same category
+// the absolute spelling of that declaration reports; only a member the index
+// does not know at all is RESOLVE_MISSING (B12/B14). The oracle separates the
+// two the same way - "is not a type" for `Holder.not_a_type`, `Holder.pick`
+// and `Holder.V`, "resolved to ... which is not defined" for `Holder.E.V`,
+// whose value is indexed in the containing scope rather than under the enum.
+//
 // When nothing wins, a second walk over the same candidates without the
 // visibility filter decides why: a declaration that is not a type is
 // RESOLVE_NOT_A_TYPE (B9/B15), any other found candidate is RESOLVE_INVISIBLE
@@ -731,7 +746,12 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
             return 0;
         }
         if (member->second.kind == 0 || member->second.kind == SYMBOL_PACKAGE) {
-            *outcome = RESOLVE_MISSING;
+            // Found, but not a type: mirror the whole-name branch above
+            // instead of collapsing it into "not defined", which would give
+            // the same declaration two codes depending on how it is spelled
+            // (E1/A3). `*matched_name` already names the compound path, so the
+            // diagnostic still says which member was reached.
+            *outcome = RESOLVE_NOT_A_TYPE;
             return 0;
         }
         if (is_foreign_map_entry(context, member->second)) {
@@ -855,15 +875,23 @@ bool fail_at(const SchemaFile& file, const std::string& message,
     return fail_at_code(file, message, location, path, DIAGNOSTIC_GENERIC, error);
 }
 
-// The diagnostic code one lookup outcome maps to (Step 4.1's table).
+// The diagnostic code one lookup outcome maps to (Step 4.1's table). Every
+// enumerator is listed explicitly and there is no `default:` label on purpose:
+// a new outcome added to ResolveOutcome then has to be given a code here
+// instead of silently reading as "unresolved type".
 DiagnosticCode outcome_code(ResolveOutcome outcome)
 {
     switch (outcome) {
+        case RESOLVE_MISSING: return DIAGNOSTIC_UNRESOLVED_TYPE;
         case RESOLVE_INVISIBLE: return DIAGNOSTIC_INVISIBLE_TYPE;
         case RESOLVE_NOT_A_TYPE: return DIAGNOSTIC_NOT_A_TYPE;
         case RESOLVE_MAP_ENTRY: return DIAGNOSTIC_MAP_ENTRY_TYPE;
-        default: return DIAGNOSTIC_UNRESOLVED_TYPE;
+        case RESOLVE_OK:
+            // Not a failure: the caller asks for a code only when the lookup
+            // failed. Kept so the switch stays exhaustive.
+            return DIAGNOSTIC_GENERIC;
     }
+    return DIAGNOSTIC_GENERIC;
 }
 
 // Names the declaration category of an indexed non-type symbol, so a "not a

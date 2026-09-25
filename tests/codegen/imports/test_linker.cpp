@@ -864,6 +864,64 @@ void test_index_collision_text_is_order_independent()
     CHECK(forward.message.find("duplicate type name .ZERO") != std::string::npos);
 }
 
+// D-05: a conflicting declaration is ONE category, so it carries ONE code by
+// whichever producer catches it - the scope validation that runs inside a file
+// before anything is indexed, or the symbol insertion that sees the collision
+// between two files. Oracle (libprotoc 30.1, cases E307/E308) rejects both
+// shapes but words them differently ("already defined in \"pkg\"" against
+// "already defined in file \"a.proto\""), so the shared contract has to be
+// the code, never the text (E1/A3).
+void test_conflicting_declaration_reports_one_code()
+{
+    easypb_schema::DiagnosticCode codes[2];
+    easypb_schema::Diagnostic errors[2];
+
+    // Producer 1: both declarations in the same file and the same scope.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        add_message(file, "Same");
+        add_message(file, "Same");
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        codes[0] = error.code;
+        errors[0] = error;
+        CHECK(error.file == "a.proto");
+        CHECK(error.message.find("Same") != std::string::npos);
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+    }
+    // Producer 2: the same collision split over two files.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", "pkg");
+        add_message(a, "Same");
+        easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", "pkg");
+        add_message(b, "Same");
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        codes[1] = error.code;
+        errors[1] = error;
+        CHECK(error.message.find("Same") != std::string::npos);
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+    }
+
+    CHECK(codes[0] == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(codes[1] == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(codes[0] == codes[1]);
+    // Neither message may read as a generic failure: each names the colliding
+    // declaration, and the cross-file one names both files as well.
+    CHECK(errors[0].message.find("name collision") != std::string::npos);
+    CHECK(errors[1].message.find("already defined") != std::string::npos);
+}
+
 void test_link_indexes_every_file_once()
 {
     // Regression guard for "never cache the index" (Step 3.1, Appendix A):
@@ -1285,6 +1343,115 @@ void test_enum_value_member_paths()
     CHECK(error.message.find("an enum value") != std::string::npos);
 }
 
+// Holder with one member of every non-type category the index can hold, plus a
+// real nested type: the shape that tells a "found, but not a type" member
+// apart from a member the index does not know at all.
+void make_holder_fixture(easypb_schema::SchemaFile& file)
+{
+    DescriptorProto holder;
+    holder.name = file.strings.save("Holder");
+    holder.has_name = true;
+    add_field(file, holder, "not_a_type", 1,
+              FieldDescriptorProto::LABEL_OPTIONAL, 0);
+
+    OneofDescriptorProto oneof;
+    oneof.name = file.strings.save("pick");
+    oneof.has_name = true;
+    holder.oneof_decl.push_back(oneof);
+
+    EnumDescriptorProto enumeration;
+    enumeration.name = file.strings.save("E");
+    enumeration.has_name = true;
+    EnumValueDescriptorProto value;
+    value.name = file.strings.save("V");
+    value.has_name = true;
+    value.number = 0;
+    value.has_number = true;
+    enumeration.value.push_back(value);
+    holder.enum_type.push_back(enumeration);
+
+    add_nested(file, holder, "N");
+    file.file.message_type.push_back(holder);
+}
+
+// D-01: a compound relative name whose member the index KNOWS but which is not
+// a type reports the same code as the absolute spelling of that declaration -
+// one category, one code (E1/A3) - while a member nothing is indexed under
+// stays "resolved to ... which is not defined", and a real type still
+// resolves. Oracle (libprotoc 30.1, cases E300-E306): `Holder.not_a_type`,
+// `Holder.pick` and `Holder.V` are all "is not a type", `Holder.E.V` is
+// "resolved to \"pkg.Holder.E.V\", which is not defined" because the value is
+// indexed in the enum's CONTAINING scope, and `Holder.N` is accepted.
+void test_compound_member_non_type_matches_absolute_spelling()
+{
+    struct Case {
+        const char* reference;
+        easypb_schema::DiagnosticCode code;
+        const char* category;
+    };
+    const Case cases[] = {
+        // A field, a oneof and an enum value in its containing scope: three
+        // spellings of "the member exists and is not a type".
+        {"Holder.not_a_type", easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+         "a field"},
+        {".pkg.Holder.not_a_type", easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+         "a field"},
+        {"Holder.pick", easypb_schema::DIAGNOSTIC_NOT_A_TYPE, "a oneof"},
+        {".pkg.Holder.pick", easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+         "a oneof"},
+        {"Holder.V", easypb_schema::DIAGNOSTIC_NOT_A_TYPE, "an enum value"},
+        {".pkg.Holder.V", easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+         "an enum value"},
+        // Nothing is indexed under the enum's own path, so this member really
+        // is absent and keeps the compound-path wording.
+        {"Holder.E.V", easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE,
+         "which is not defined"},
+        {"Holder.absent_member", easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE,
+         "which is not defined"}
+    };
+
+    for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        make_holder_fixture(file);
+        DescriptorProto requester;
+        requester.name = file.strings.save("R");
+        requester.has_name = true;
+        add_field(file, requester, "bad", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, cases[i].reference);
+        file.file.message_type.push_back(requester);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!resolve_after_link(set, file, false, error));
+        CHECK(error.code == cases[i].code);
+        CHECK(error.message.find(cases[i].category) != std::string::npos);
+        // Both the relative and the absolute row name the resolved path, so
+        // the diagnostic does not read as a plain typo.
+        CHECK(error.message.find("\".pkg.") != std::string::npos);
+    }
+
+    // The real nested type of the same fixture still resolves: the fix moves
+    // the classification of a non-type member, it does not narrow the walk.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        make_holder_fixture(file);
+        DescriptorProto requester;
+        requester.name = file.strings.save("R");
+        requester.has_name = true;
+        add_field(file, requester, "bad", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "Holder.N");
+        file.file.message_type.push_back(requester);
+
+        easypb_schema::Diagnostic error;
+        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(text(file.file.message_type[1].field[0].type_name) ==
+              ".pkg.Holder.N");
+        CHECK(file.file.message_type[1].field[0].type ==
+              FieldDescriptorProto::TYPE_MESSAGE);
+    }
+}
+
 // Self-recursion, mutual recursion inside one file, and a reference into a
 // visible file: only IMPORT cycles are errors and stage 2 already rejected
 // those, so resolution must leave all three shapes alone.
@@ -1555,6 +1722,7 @@ int main()
     test_index_same_package_in_two_files_merges();
     test_index_message_and_field_names_live_in_different_scopes();
     test_index_collision_text_is_order_independent();
+    test_conflicting_declaration_reports_one_code();
     test_link_indexes_every_file_once();
     test_resolution_separates_invisible_from_missing();
     test_shadowing_commits_the_matched_aggregate();
@@ -1563,6 +1731,7 @@ int main()
     test_merged_package_is_visible_when_any_declaring_file_is();
     test_sub_package_does_not_make_the_parent_visible();
     test_enum_value_member_paths();
+    test_compound_member_non_type_matches_absolute_spelling();
     test_legal_recursion_stays_legal();
     test_legal_map_fields_resolve_to_their_entry();
     test_foreign_map_entry_references_are_rejected();

@@ -55,8 +55,13 @@ struct SymbolIndex
 // values, fields, oneofs, and retained service names. Returns false and
 // fills error (with a recorded source position when the file carries one)
 // on conflicting declarations, reported as DIAGNOSTIC_DUPLICATE_SYMBOL with
-// both declarations named: error.file is the file being indexed and the
-// message carries both logical file names. Package scopes merge instead of
+// both declarations named. The code is the same for both producers - a name
+// already taken inside this file's own scopes, which the scope validation
+// catches before anything is indexed and which names both declarations by
+// kind within the scope, and a name taken by an already indexed file, which
+// additionally names both logical file names - so no caller has to read a
+// message text to tell a redeclaration from a generic failure (E1/A3).
+// error.file is the file being indexed. Package scopes merge instead of
 // conflicting. Each file must be indexed once: re-indexing the same file
 // reports its own declarations as duplicates.
 bool index_file(SchemaFile& file, SymbolIndex& symbols, Diagnostic& error);

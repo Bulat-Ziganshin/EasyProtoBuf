@@ -695,6 +695,11 @@ void test_duplicate_declarations_are_rejected()
         easypb_schema::SymbolIndex symbols;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::index_file(file, symbols, error));
+        // The code is part of the contract, not just the text (E1/A3): the
+        // same defect across two files carries this code too, and
+        // test_linker.cpp's test_conflicting_declaration_reports_one_code
+        // asserts the pair (D-05).
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
         CHECK(error.message.find("name collision") != std::string::npos);
         CHECK(error.location.line == 5);
     }
@@ -711,6 +716,7 @@ void test_duplicate_declarations_are_rejected()
         easypb_schema::SymbolIndex symbols;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::index_file(file, symbols, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
         CHECK(error.message.find("[4, 1]") != std::string::npos);
         CHECK(error.location.line == 0);
     }
@@ -734,6 +740,7 @@ void test_duplicate_declarations_are_rejected()
         easypb_schema::SymbolIndex symbols;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::index_file(file, symbols, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
         CHECK(error.message.find("name collision") != std::string::npos);
         CHECK(error.message.find("field x") != std::string::npos);
         CHECK(error.location.line == 4);
