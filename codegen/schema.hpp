@@ -43,7 +43,16 @@ enum DiagnosticCode
     // Plan 4 (A3): a conflicting declaration, with both declarations named.
     // New values are appended, never inserted: an existing value must keep
     // its numeric identity for every caller that stores or compares codes.
-    DIAGNOSTIC_DUPLICATE_SYMBOL
+    DIAGNOSTIC_DUPLICATE_SYMBOL,
+    // Plan 4 Step 4.1 (A3, A9): the name exists in the compilation but its
+    // defining file is not visible from the requesting file.
+    DIAGNOSTIC_INVISIBLE_TYPE,
+    // Plan 4 Step 4.1 (A3, A9): the name resolves to a declaration that is
+    // not a type (a field, an enum value, a oneof, a service, or a package).
+    DIAGNOSTIC_NOT_A_TYPE,
+    // Plan 4 Step 4.2 (A3, A22/A24): a user field names a synthetic map-entry
+    // message instead of the map field that owns it.
+    DIAGNOSTIC_MAP_ENTRY_TYPE
 };
 
 struct Diagnostic

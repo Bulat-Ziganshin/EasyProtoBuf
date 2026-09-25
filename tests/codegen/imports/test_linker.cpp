@@ -168,6 +168,213 @@ void add_message_with_field(easypb_schema::SchemaFile& file, const char* message
     file.file.message_type.push_back(message);
 }
 
+// Step 4 helpers. Descriptor-origin fixtures have no FieldSource, so a field's
+// raw reference is exactly what type_name carries - the same shape a decoded
+// .pbs file has, which is why these tests can drive the shared resolver
+// without a parser.
+
+// Appends one field. A null type_name makes the field a scalar (no
+// type_name), which is how the "a nearer non-type head" fixtures get a field
+// whose name shadows nothing.
+void add_field(easypb_schema::SchemaFile& file, DescriptorProto& message,
+               const char* name, int number, int label, const char* type_name)
+{
+    FieldDescriptorProto field;
+    field.name = file.strings.save(name);
+    field.has_name = true;
+    field.number = number;
+    field.has_number = true;
+    field.label = label;
+    field.has_label = true;
+    if (type_name == 0) {
+        field.type = FieldDescriptorProto::TYPE_INT32;
+        field.has_type = true;
+    } else {
+        field.type = FieldDescriptorProto::TYPE_MESSAGE;
+        field.has_type = true;
+        field.type_name = file.strings.save(type_name);
+        field.has_type_name = true;
+    }
+    message.field.push_back(field);
+}
+
+void add_nested(easypb_schema::SchemaFile& file, DescriptorProto& parent,
+                const char* name)
+{
+    DescriptorProto nested;
+    nested.name = file.strings.save(name);
+    nested.has_name = true;
+    parent.nested_type.push_back(nested);
+}
+
+// Appends the synthetic entry message a map field implies: protoc's marker,
+// key field 1, value field 2. A null value_type_name makes the value a scalar.
+void add_map_entry(easypb_schema::SchemaFile& file, DescriptorProto& message,
+                   const char* entry_name, const char* value_type_name)
+{
+    DescriptorProto entry;
+    entry.name = file.strings.save(entry_name);
+    entry.has_name = true;
+    entry.options.map_entry = true;
+    entry.options.has_map_entry = true;
+    entry.has_options = true;
+
+    FieldDescriptorProto key;
+    key.name = file.strings.save("key");
+    key.has_name = true;
+    key.number = 1;
+    key.has_number = true;
+    key.label = FieldDescriptorProto::LABEL_OPTIONAL;
+    key.has_label = true;
+    key.type = FieldDescriptorProto::TYPE_INT32;
+    key.has_type = true;
+    entry.field.push_back(key);
+
+    FieldDescriptorProto value;
+    value.name = file.strings.save("value");
+    value.has_name = true;
+    value.number = 2;
+    value.has_number = true;
+    value.label = FieldDescriptorProto::LABEL_OPTIONAL;
+    value.has_label = true;
+    if (value_type_name == 0) {
+        value.type = FieldDescriptorProto::TYPE_STRING;
+        value.has_type = true;
+    } else {
+        value.type = FieldDescriptorProto::TYPE_MESSAGE;
+        value.has_type = true;
+        value.type_name = file.strings.save(value_type_name);
+        value.has_type_name = true;
+    }
+    entry.field.push_back(value);
+
+    message.nested_type.push_back(entry);
+}
+
+// Appends the repeated message field a map<> declaration becomes.
+void add_map_field(easypb_schema::SchemaFile& file, DescriptorProto& message,
+                   const char* field_name, int number,
+                   const char* entry_type_name)
+{
+    FieldDescriptorProto field;
+    field.name = file.strings.save(field_name);
+    field.has_name = true;
+    field.number = number;
+    field.has_number = true;
+    field.label = FieldDescriptorProto::LABEL_REPEATED;
+    field.has_label = true;
+    field.type = FieldDescriptorProto::TYPE_MESSAGE;
+    field.has_type = true;
+    field.type_name = file.strings.save(entry_type_name);
+    field.has_type_name = true;
+    message.field.push_back(field);
+}
+
+// Retypes one field of one top-level message: the cheap way to build a case
+// that differs from its fixture by a single reference. A successful resolution
+// overwrites type_name with the absolute resolved name, so a fixture that
+// resolves twice must put the raw reference back first.
+void retype_field(easypb_schema::SchemaFile& file, int message_index,
+                  int field_index, int label, const char* type_name)
+{
+    FieldDescriptorProto& field =
+        file.file.message_type[message_index].field[field_index];
+    field.label = label;
+    field.has_label = true;
+    field.type_name = file.strings.save(type_name);
+    field.has_type_name = true;
+}
+
+// The same for a field of a nested message.
+void retype_nested_field(easypb_schema::SchemaFile& file, int message_index,
+                         int nested_index, int field_index,
+                         const char* type_name)
+{
+    FieldDescriptorProto& field = file.file.message_type[message_index]
+                                      .nested_type[nested_index]
+                                      .field[field_index];
+    field.type_name = file.strings.save(type_name);
+    field.has_type_name = true;
+}
+
+// Runs complete linking first (stages 2-4 publish the index and the visibility
+// sets) and then resolves ONE file through the shared resolve path. Step 5
+// wires that call into link_schema itself; until then the Step-4 tests drive
+// resolve_file directly, which is why a resolution failure is reported here
+// while the link stays green.
+bool resolve_after_link(easypb_schema::SchemaSet& set,
+                        easypb_schema::SchemaFile& file, bool allow_unresolved,
+                        easypb_schema::Diagnostic& error)
+{
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic link_error;
+    CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE, linked,
+                                     link_error));
+    const std::map<const easypb_schema::SchemaFile*,
+                   std::set<const easypb_schema::SchemaFile*> >::const_iterator
+        found = linked.visible_files.find(&file);
+    CHECK(found != linked.visible_files.end());
+    if (found == linked.visible_files.end()) return false;
+    return easypb_schema::resolve_file(file, linked.symbols, found->second,
+                                       allow_unresolved, error);
+}
+
+// The map-entry fixture: message D legally owns the map field map_field_name
+// (and therefore the synthesized entry entry_name) and message R is a second
+// message available as a requester that owns no entry. Everything is
+// descriptor-origin, so the entry reference is absolute and no FieldSource
+// exists - the corpus shape (Appendix D).
+void make_map_fixture(easypb_schema::SchemaSet& set, const char* map_field_name,
+                      const char* entry_name)
+{
+    easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+    file.from_descriptor_set = true;
+
+    DescriptorProto d;
+    d.name = file.strings.save("D");
+    d.has_name = true;
+    add_map_entry(file, d, entry_name, 0);
+    add_map_field(file, d, map_field_name, 1,
+                  (".pkg.D." + std::string(entry_name)).c_str());
+    file.file.message_type.push_back(d);
+
+    DescriptorProto r;
+    r.name = file.strings.save("R");
+    r.has_name = true;
+    file.file.message_type.push_back(r);
+}
+
+// The same shape split across two files: defs.proto owns the entry, a.proto
+// imports it and holds the requester. requester_package decides whether a
+// relative compound name can reach the entry at all.
+void make_imported_map_fixture(easypb_schema::SchemaSet& set,
+                               const char* requester_package)
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+
+    easypb_schema::SchemaFile& defs = make_file(set, "defs.proto", no_deps,
+                                               no_indexes, no_indexes);
+    defs.from_descriptor_set = true;
+    set_package(defs, "pkg");
+    DescriptorProto d;
+    d.name = defs.strings.save("D");
+    d.has_name = true;
+    add_map_entry(defs, d, "FooEntry", 0);
+    add_map_field(defs, d, "foo", 1, ".pkg.D.FooEntry");
+    defs.file.message_type.push_back(d);
+
+    easypb_schema::SchemaFile& root = make_file(
+        set, "a.proto", std::vector<std::string>(1, "defs.proto"),
+        no_indexes, no_indexes);
+    root.from_descriptor_set = true;
+    set_package(root, requester_package);
+    DescriptorProto r;
+    r.name = root.strings.save("R");
+    r.has_name = true;
+    root.file.message_type.push_back(r);
+}
+
 // The plan-4 Task 1 fixture, built as in-memory descriptors:
 //
 //   a.proto  imports b.proto (ordinary, public, or weak)
@@ -675,6 +882,659 @@ void test_link_indexes_every_file_once()
     CHECK(second.symbols.symbols.count(".app.A.v") == 1);
 }
 
+// Step 4.3, Task 1's negative fixture: a's field is retyped at c's symbol,
+// which is defined behind b's ordinary edge. The definition exists in the
+// compilation but not in Visible(a), so the answer is the invisible category
+// naming c.proto - not the missing one that a name no file declares produces.
+// The public edge re-exports c and the very same reference resolves
+// (A9; oracle B3/B4/B5).
+void test_resolution_separates_invisible_from_missing()
+{
+    {
+        easypb_schema::SchemaSet set;
+        const Chain chain = make_chain_fixture(set, false, false);
+        easypb_schema::Diagnostic error;
+
+        // Control: b's own symbol resolves through the ordinary edge and is
+        // interned as an absolute name.
+        CHECK(resolve_after_link(set, *chain.a, false, error));
+        CHECK(text(chain.a->file.message_type[0].field[0].type_name) ==
+              ".shared.Value");
+        CHECK(chain.a->file.message_type[0].field[0].type ==
+              FieldDescriptorProto::TYPE_MESSAGE);
+
+        // c's symbol: known to the compilation, invisible from a.proto.
+        retype_field(*chain.a, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL,
+                     "shared.Other");
+        error = easypb_schema::Diagnostic();
+        CHECK(!resolve_after_link(set, *chain.a, false, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+        CHECK(error.file == "a.proto");
+        CHECK(error.message.find(".shared.Other") != std::string::npos);
+        CHECK(error.message.find("c.proto") != std::string::npos);
+        CHECK(error.message.find("import") != std::string::npos);
+
+        // A name no file declares: the same walk, the other category.
+        retype_field(*chain.a, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL,
+                     "shared.Absent");
+        error = easypb_schema::Diagnostic();
+        CHECK(!resolve_after_link(set, *chain.a, false, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find("unresolved type shared.Absent") !=
+              std::string::npos);
+        CHECK(error.message.find(".app.A") != std::string::npos);
+        // The committed package scope is named, so the failure does not read
+        // like a plain typo and the two codes cannot collapse into each other.
+        CHECK(error.message.find("\".shared.Absent\"") != std::string::npos);
+    }
+    {
+        // The same fixture with a public b -> c edge (B4).
+        easypb_schema::SchemaSet set;
+        const Chain chain = make_chain_fixture(set, true, false);
+        retype_field(*chain.a, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL,
+                     "shared.Other");
+        easypb_schema::Diagnostic error;
+        CHECK(resolve_after_link(set, *chain.a, false, error));
+        CHECK(text(chain.a->file.message_type[0].field[0].type_name) ==
+              ".shared.Other");
+    }
+}
+
+// The plan's shadowing case with the measured expectation (A19, oracle
+// B1/B2): an outer pkg.Choice.Item and a nearer empty pkg.Encloser.Choice. The
+// relative reference commits to the nearer aggregate and fails naming the
+// resolved compound path - neither a non-type nor a plain missing name - while
+// the explicit absolute reference to the intended outer type passes.
+void test_shadowing_commits_the_matched_aggregate()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+    {
+        DescriptorProto choice;
+        choice.name = file.strings.save("Choice");
+        choice.has_name = true;
+        add_nested(file, choice, "Item");
+        file.file.message_type.push_back(choice);
+    }
+    {
+        DescriptorProto encloser;
+        encloser.name = file.strings.save("Encloser");
+        encloser.has_name = true;
+        add_nested(file, encloser, "Choice");
+        DescriptorProto m;
+        m.name = file.strings.save("M");
+        m.has_name = true;
+        add_field(file, m, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  "Choice.Item");
+        encloser.nested_type.push_back(m);
+        file.file.message_type.push_back(encloser);
+    }
+
+    easypb_schema::Diagnostic error;
+    CHECK(!resolve_after_link(set, file, false, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(error.message.find("unresolved type Choice.Item") != std::string::npos);
+    CHECK(error.message.find("\".pkg.Encloser.Choice.Item\"") !=
+          std::string::npos);
+    CHECK(error.message.find("resolved to") != std::string::npos);
+
+    // B2: the absolute reference to the intended outer type still passes, and
+    // it needs no outward fallback to get there.
+    retype_nested_field(file, 1, 1, 0, ".pkg.Choice.Item");
+    error = easypb_schema::Diagnostic();
+    CHECK(resolve_after_link(set, file, false, error));
+    CHECK(text(file.file.message_type[1].nested_type[1].field[0].type_name) ==
+          ".pkg.Choice.Item");
+    CHECK(file.file.message_type[1].nested_type[1].field[0].type ==
+          FieldDescriptorProto::TYPE_MESSAGE);
+}
+
+// The two mirror cases that separate the corrected walk from a
+// resolve-then-check one: a nearer candidate that is a FIELD (B8) or an enum
+// VALUE (B13) never wins a component, so the outer aggregate still resolves;
+// a whole name that IS a non-type is refused by code (B9).
+void test_non_type_heads_do_not_shadow()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        {
+            DescriptorProto choice;
+            choice.name = file.strings.save("Choice");
+            choice.has_name = true;
+            add_nested(file, choice, "Item");
+            file.file.message_type.push_back(choice);
+        }
+        {
+            DescriptorProto m;
+            m.name = file.strings.save("M");
+            m.has_name = true;
+            add_field(file, m, "Choice", 1,
+                      FieldDescriptorProto::LABEL_OPTIONAL, 0);
+            add_field(file, m, "f", 2, FieldDescriptorProto::LABEL_OPTIONAL,
+                      "Choice.Item");
+            file.file.message_type.push_back(m);
+        }
+        easypb_schema::Diagnostic error;
+        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(text(file.file.message_type[1].field[1].type_name) ==
+              ".pkg.Choice.Item");
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        {
+            DescriptorProto choice;
+            choice.name = file.strings.save("Choice");
+            choice.has_name = true;
+            add_nested(file, choice, "Item");
+            file.file.message_type.push_back(choice);
+        }
+        {
+            DescriptorProto n;
+            n.name = file.strings.save("N");
+            n.has_name = true;
+            EnumDescriptorProto enumeration;
+            enumeration.name = file.strings.save("E");
+            enumeration.has_name = true;
+            EnumValueDescriptorProto value;
+            value.name = file.strings.save("Choice");
+            value.has_name = true;
+            value.number = 0;
+            value.has_number = true;
+            enumeration.value.push_back(value);
+            n.enum_type.push_back(enumeration);
+            add_field(file, n, "f", 2, FieldDescriptorProto::LABEL_OPTIONAL,
+                      "Choice.Item");
+            file.file.message_type.push_back(n);
+        }
+        easypb_schema::Diagnostic error;
+        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(text(file.file.message_type[1].field[0].type_name) ==
+              ".pkg.Choice.Item");
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        DescriptorProto p;
+        p.name = file.strings.save("P");
+        p.has_name = true;
+        add_field(file, p, "Thing", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        add_field(file, p, "t", 2, FieldDescriptorProto::LABEL_OPTIONAL, "Thing");
+        file.file.message_type.push_back(p);
+        easypb_schema::Diagnostic error;
+        CHECK(!resolve_after_link(set, file, false, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
+        CHECK(error.message.find("\"Thing\"") != std::string::npos);
+        CHECK(error.message.find("a field") != std::string::npos);
+    }
+}
+
+// An invisible nearer candidate does not shadow either (B6/B10), while making
+// its file a direct import makes the same head win and commit (B7/B11) - which
+// is what tells a walk that filters candidates from one that resolves first
+// and checks visibility second.
+void test_invisible_candidates_do_not_shadow()
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+
+    // B6/B7: the nearer candidate is a PACKAGE declared by a file outside
+    // Visible(a).
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& root = make_file(
+            set, "a.proto", std::vector<std::string>(1, "vis.proto"),
+            no_indexes, no_indexes);
+        set_package(root, "pkg");
+        DescriptorProto m;
+        m.name = root.strings.save("M");
+        m.has_name = true;
+        add_field(root, m, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, "sub.X");
+        root.file.message_type.push_back(m);
+
+        easypb_schema::SchemaFile& visible = make_file(set, "vis.proto", no_deps,
+                                                      no_indexes, no_indexes);
+        set_package(visible, "sub");
+        add_message(visible, "X");
+
+        easypb_schema::SchemaFile& hidden = make_file(set, "hidden.proto", no_deps,
+                                                      no_indexes, no_indexes);
+        set_package(hidden, "pkg.sub");
+        add_message(hidden, "Other");
+
+        easypb_schema::Diagnostic error;
+        CHECK(resolve_after_link(set, root, false, error));
+        CHECK(text(root.file.message_type[0].field[0].type_name) == ".sub.X");
+
+        root.file.dependency.push_back(root.strings.save("hidden.proto"));
+        retype_field(root, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL, "sub.X");
+        error = easypb_schema::Diagnostic();
+        CHECK(!resolve_after_link(set, root, false, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find("\".pkg.sub.X\"") != std::string::npos);
+    }
+    // B10/B11: the same pair with a nearer MESSAGE instead of a package.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& root = make_file(
+            set, "a.proto", std::vector<std::string>(1, "vis.proto"),
+            no_indexes, no_indexes);
+        set_package(root, "pkg");
+        DescriptorProto m;
+        m.name = root.strings.save("M");
+        m.has_name = true;
+        add_field(root, m, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, "sub.X");
+        root.file.message_type.push_back(m);
+
+        easypb_schema::SchemaFile& visible = make_file(set, "vis.proto", no_deps,
+                                                      no_indexes, no_indexes);
+        set_package(visible, "sub");
+        add_message(visible, "X");
+
+        easypb_schema::SchemaFile& hidden = make_file(set, "hidden.proto", no_deps,
+                                                      no_indexes, no_indexes);
+        set_package(hidden, "pkg");
+        add_message(hidden, "sub");
+
+        easypb_schema::Diagnostic error;
+        CHECK(resolve_after_link(set, root, false, error));
+        CHECK(text(root.file.message_type[0].field[0].type_name) == ".sub.X");
+
+        root.file.dependency.push_back(root.strings.save("hidden.proto"));
+        retype_field(root, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL, "sub.X");
+        error = easypb_schema::Diagnostic();
+        CHECK(!resolve_after_link(set, root, false, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find("\".pkg.sub.X\"") != std::string::npos);
+    }
+}
+
+// Package scopes merge across files, so the node the index keeps is owned by
+// whichever file was indexed first - here the one file the requester cannot
+// see. protoc decides package visibility by asking whether ANY visible file
+// declares the package, and a plain owner test would reject this input, which
+// is the failure class A9/R3 exists to prevent.
+void test_merged_package_is_visible_when_any_declaring_file_is()
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaSet set;
+
+    // Indexed first, invisible from r.proto, and it declares `package shared`.
+    easypb_schema::SchemaFile& first = make_file(set, "a.proto", no_deps,
+                                                 no_indexes, no_indexes);
+    set_package(first, "shared");
+    add_message(first, "Unrelated");
+
+    easypb_schema::SchemaFile& root = make_file(
+        set, "r.proto", std::vector<std::string>(1, "z.proto"), no_indexes,
+        no_indexes);
+    set_package(root, "app");
+    DescriptorProto m;
+    m.name = root.strings.save("M");
+    m.has_name = true;
+    add_field(root, m, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+              "shared.Value");
+    root.file.message_type.push_back(m);
+
+    easypb_schema::SchemaFile& second = make_file(set, "z.proto", no_deps,
+                                                  no_indexes, no_indexes);
+    set_package(second, "shared");
+    add_message(second, "Value");
+
+    easypb_schema::Diagnostic error;
+    CHECK(resolve_after_link(set, root, false, error));
+    CHECK(text(root.file.message_type[0].field[0].type_name) == ".shared.Value");
+
+    // Oracle F4: the invisible first-indexed file declares only the SUB-package
+    // `package shared.deep`, which still creates the parent package node with
+    // that file as its owner. protoc accepts the same shape, and it settles the
+    // question by comparing the package string, so what makes the head visible
+    // is the visible file's exact `package shared` - not the sub-package.
+    {
+        easypb_schema::SchemaSet sub_set;
+        easypb_schema::SchemaFile& deep = make_file(sub_set, "a.proto", no_deps,
+                                                    no_indexes, no_indexes);
+        set_package(deep, "shared.deep");
+        add_message(deep, "Nope");
+
+        easypb_schema::SchemaFile& sub_root = make_file(
+            sub_set, "r.proto", std::vector<std::string>(1, "z.proto"),
+            no_indexes, no_indexes);
+        set_package(sub_root, "app");
+        DescriptorProto request;
+        request.name = sub_root.strings.save("M");
+        request.has_name = true;
+        add_field(sub_root, request, "f", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "shared.Value");
+        sub_root.file.message_type.push_back(request);
+
+        easypb_schema::SchemaFile& sub_vis = make_file(
+            sub_set, "z.proto", no_deps, no_indexes, no_indexes);
+        set_package(sub_vis, "shared");
+        add_message(sub_vis, "Value");
+
+        easypb_schema::Diagnostic sub_error;
+        CHECK(resolve_after_link(sub_set, sub_root, false, sub_error));
+        CHECK(text(sub_root.file.message_type[0].field[0].type_name) ==
+              ".shared.Value");
+    }
+}
+
+// Oracle F5: a visible file that declares only the SUB-package `shared.deep`
+// does not make the parent package `shared` visible, so `shared.Value` fails.
+// protoc's own package check compares the package string (and answers "is not
+// defined" here); our compilation-wide index knows the `.shared` node exists,
+// so the residual category is *invisible* naming the file that declares it.
+void test_sub_package_does_not_make_the_parent_visible()
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaSet set;
+
+    easypb_schema::SchemaFile& root = make_file(
+        set, "a.proto", std::vector<std::string>(1, "deep.proto"), no_indexes,
+        no_indexes);
+    set_package(root, "app");
+    DescriptorProto m;
+    m.name = root.strings.save("M");
+    m.has_name = true;
+    add_field(root, m, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+              "shared.Value");
+    root.file.message_type.push_back(m);
+
+    easypb_schema::SchemaFile& deep = make_file(set, "deep.proto", no_deps,
+                                                no_indexes, no_indexes);
+    set_package(deep, "shared.deep");
+    add_message(deep, "X");
+
+    easypb_schema::Diagnostic error;
+    CHECK(!resolve_after_link(set, root, false, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+    CHECK(error.message.find("deep.proto") != std::string::npos);
+}
+
+// B14 vs B15: an enum value is not addressable through its enum type, so that
+// reference fails under the matched enum with the compound path named, while
+// the value named on its own IS found in its containing scope - and a found
+// declaration that is not a type is a different category, not the same one.
+void test_enum_value_member_paths()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+    add_enum(file, "SomeEnum", "VALUE");
+    DescriptorProto m;
+    m.name = file.strings.save("M");
+    m.has_name = true;
+    add_field(file, m, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+              "SomeEnum.VALUE");
+    file.file.message_type.push_back(m);
+
+    easypb_schema::Diagnostic error;
+    CHECK(!resolve_after_link(set, file, false, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(error.message.find("SomeEnum.VALUE") != std::string::npos);
+    CHECK(error.message.find("\".pkg.SomeEnum.VALUE\"") != std::string::npos);
+
+    retype_field(file, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL, "VALUE");
+    error = easypb_schema::Diagnostic();
+    CHECK(!resolve_after_link(set, file, false, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
+    CHECK(error.message.find("\"VALUE\"") != std::string::npos);
+    CHECK(error.message.find("an enum value") != std::string::npos);
+}
+
+// Self-recursion, mutual recursion inside one file, and a reference into a
+// visible file: only IMPORT cycles are errors and stage 2 already rejected
+// those, so resolution must leave all three shapes alone.
+void test_legal_recursion_stays_legal()
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaSet set;
+
+    easypb_schema::SchemaFile& root = make_file(
+        set, "a.proto", std::vector<std::string>(1, "y.proto"), no_indexes,
+        no_indexes);
+    set_package(root, "pkg");
+    {
+        DescriptorProto node;
+        node.name = root.strings.save("Node");
+        node.has_name = true;
+        add_field(root, node, "next", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  "Node");
+        root.file.message_type.push_back(node);
+    }
+    {
+        DescriptorProto a;
+        a.name = root.strings.save("A");
+        a.has_name = true;
+        add_field(root, a, "b", 1, FieldDescriptorProto::LABEL_OPTIONAL, "B");
+        root.file.message_type.push_back(a);
+
+        DescriptorProto b;
+        b.name = root.strings.save("B");
+        b.has_name = true;
+        add_field(root, b, "a", 1, FieldDescriptorProto::LABEL_OPTIONAL, "A");
+        root.file.message_type.push_back(b);
+    }
+    {
+        DescriptorProto x;
+        x.name = root.strings.save("X");
+        x.has_name = true;
+        add_field(root, x, "y", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  ".q.Y");
+        root.file.message_type.push_back(x);
+    }
+
+    easypb_schema::SchemaFile& other = make_file(set, "y.proto", no_deps,
+                                                 no_indexes, no_indexes);
+    set_package(other, "q");
+    DescriptorProto y;
+    y.name = other.strings.save("Y");
+    y.has_name = true;
+    add_field(other, y, "self", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+              ".q.Y");
+    other.file.message_type.push_back(y);
+
+    easypb_schema::Diagnostic error;
+    CHECK(resolve_after_link(set, root, false, error));
+    CHECK(text(root.file.message_type[0].field[0].type_name) == ".pkg.Node");
+    CHECK(text(root.file.message_type[1].field[0].type_name) == ".pkg.B");
+    CHECK(text(root.file.message_type[2].field[0].type_name) == ".pkg.A");
+    CHECK(text(root.file.message_type[3].field[0].type_name) == ".q.Y");
+    CHECK(resolve_after_link(set, other, false, error));
+    CHECK(text(other.file.message_type[0].field[0].type_name) == ".q.Y");
+}
+
+// A1: a legal map field resolves to its synthesized entry in both spellings a
+// descriptor can carry - the absolute reference of a decoded file and the
+// relative one the parser writes.
+void test_legal_map_fields_resolve_to_their_entry()
+{
+    {
+        easypb_schema::SchemaSet set;
+        make_map_fixture(set, "foo", "FooEntry");
+        easypb_schema::SchemaFile& file = *set.find_file("a.proto");
+        easypb_schema::Diagnostic error;
+        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(text(file.file.message_type[0].field[0].type_name) ==
+              ".pkg.D.FooEntry");
+        CHECK(file.file.message_type[0].field[0].type ==
+              FieldDescriptorProto::TYPE_MESSAGE);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        make_map_fixture(set, "foo", "FooEntry");
+        easypb_schema::SchemaFile& file = *set.find_file("a.proto");
+        retype_field(file, 0, 0, FieldDescriptorProto::LABEL_REPEATED, "FooEntry");
+        easypb_schema::Diagnostic error;
+        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(text(file.file.message_type[0].field[0].type_name) ==
+              ".pkg.D.FooEntry");
+    }
+}
+
+// Adds one reference to the requester message of a fresh map fixture and
+// CHECKs that resolution refuses it with the map-entry code (A22/A24).
+// message_index 0 is the owning message D - the "own entry" shapes - and 1 is
+// the requester R.
+void check_map_entry_rejection(const char* map_field_name,
+                               const char* entry_name, int message_index,
+                               const char* field_name, int label,
+                               const char* type_name)
+{
+    easypb_schema::SchemaSet set;
+    make_map_fixture(set, map_field_name, entry_name);
+    easypb_schema::SchemaFile& file = *set.find_file("a.proto");
+    add_field(file, file.file.message_type[message_index], field_name, 2, label,
+              type_name);
+    easypb_schema::Diagnostic error;
+    CHECK(!resolve_after_link(set, file, false, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
+    CHECK(error.message.find("map entry") != std::string::npos);
+    CHECK(error.message.find(entry_name) != std::string::npos);
+}
+
+// Every user-facing spelling of a synthetic entry fails, and each of these
+// rows is a shape protoc rejects too (A2-A6, A10, A11, E3, E4, E5). The
+// repeated rows are the ones that prove the field NAME is consulted: a
+// structural test alone accepts them.
+void test_foreign_map_entry_references_are_rejected()
+{
+    // A2 and A10: a field of the owning message itself, by simple name,
+    // singular and repeated.
+    check_map_entry_rejection("foo", "FooEntry", 0, "own",
+                              FieldDescriptorProto::LABEL_OPTIONAL, "FooEntry");
+    check_map_entry_rejection("foo", "FooEntry", 0, "e",
+                              FieldDescriptorProto::LABEL_REPEATED, "FooEntry");
+    // A11/E3: the same repeated field with the absolute reference a descriptor
+    // carries, which is the descriptor-level shape E3 records.
+    check_map_entry_rejection("foo", "FooEntry", 1, "e",
+                              FieldDescriptorProto::LABEL_REPEATED,
+                              ".pkg.D.FooEntry");
+    // A3/A4: another message's entry, by compound name. A requester inside the
+    // owning message would resolve the compound name to .pkg.D.D.FooEntry and
+    // fail as missing under the matched message instead; both verdicts reject,
+    // and protoc's own algorithm walks the same way.
+    check_map_entry_rejection("foo", "FooEntry", 1, "e",
+                              FieldDescriptorProto::LABEL_OPTIONAL,
+                              "D.FooEntry");
+    // The row that makes the NESTING half of the ownership rule load-bearing:
+    // a repeated field of another message whose name does derive the entry's
+    // name is still not that entry's owning map field. Without the nesting
+    // test this reference is accepted (protoc rejects it).
+    check_map_entry_rejection("foo", "FooEntry", 1, "foo",
+                              FieldDescriptorProto::LABEL_REPEATED,
+                              "D.FooEntry");
+    // E5: a singular field whose name DOES derive the entry name - the
+    // repeated label is part of the rule, not decoration.
+    check_map_entry_rejection("foo_bar", "FooBarEntry", 0, "fooBar",
+                              FieldDescriptorProto::LABEL_OPTIONAL,
+                              "FooBarEntry");
+
+    // E4: the entry was renamed off the derivation, so protoc no longer
+    // recognizes the field as a map field at all and rejects it even though no
+    // user field references the entry. A structural-only guard accepts this.
+    {
+        easypb_schema::SchemaSet set;
+        make_map_fixture(set, "foo", "ItemEntry");
+        easypb_schema::SchemaFile& file = *set.find_file("a.proto");
+        easypb_schema::Diagnostic error;
+        CHECK(!resolve_after_link(set, file, false, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
+        CHECK(error.message.find("ItemEntry") != std::string::npos);
+    }
+
+    // A5: an entry owned by another file, named absolutely.
+    {
+        easypb_schema::SchemaSet set;
+        make_imported_map_fixture(set, "app");
+        easypb_schema::SchemaFile& root = *set.find_file("a.proto");
+        add_field(root, root.file.message_type[0], "e", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, ".pkg.D.FooEntry");
+        easypb_schema::Diagnostic error;
+        CHECK(!resolve_after_link(set, root, false, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
+    }
+    // A6: the same entry by the relative compound name, which reaches it only
+    // because requester and owner share a package.
+    {
+        easypb_schema::SchemaSet set;
+        make_imported_map_fixture(set, "pkg");
+        easypb_schema::SchemaFile& root = *set.find_file("a.proto");
+        add_field(root, root.file.message_type[0], "e", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "D.FooEntry");
+        easypb_schema::Diagnostic error;
+        CHECK(!resolve_after_link(set, root, false, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
+    }
+}
+
+// A9: the guard runs AFTER visibility. An entry whose owning file is not
+// imported is an ordinary invisible type naming that file, never the
+// map-entry answer.
+void test_map_entry_guard_runs_after_visibility()
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaSet set;
+
+    easypb_schema::SchemaFile& hidden = make_file(set, "hidden.proto", no_deps,
+                                                  no_indexes, no_indexes);
+    hidden.from_descriptor_set = true;
+    set_package(hidden, "pkg");
+    DescriptorProto h;
+    h.name = hidden.strings.save("H");
+    h.has_name = true;
+    add_map_entry(hidden, h, "FooEntry", 0);
+    add_map_field(hidden, h, "foo", 1, ".pkg.H.FooEntry");
+    hidden.file.message_type.push_back(h);
+
+    easypb_schema::SchemaFile& root = make_simple_file(set, "a.proto", "app");
+    root.from_descriptor_set = true;
+    DescriptorProto r;
+    r.name = root.strings.save("R");
+    r.has_name = true;
+    add_field(root, r, "e", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+              ".pkg.H.FooEntry");
+    root.file.message_type.push_back(r);
+
+    easypb_schema::Diagnostic error;
+    CHECK(!resolve_after_link(set, root, false, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+    CHECK(error.message.find("hidden.proto") != std::string::npos);
+    CHECK(error.message.find("map entry") == std::string::npos);
+}
+
+// The synthesized entry's value field is resolved from its own reference, not
+// through the map field's synthetic entry name: the other route would silently
+// defeat the cross-syntax check Step 6.2 adds (the classification itself is
+// Step 6's, so this test asserts the precondition only).
+void test_map_entry_value_resolves_from_its_own_token()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+    file.from_descriptor_set = true;
+    add_enum(file, "SomeEnum", "ZERO");
+    DescriptorProto m;
+    m.name = file.strings.save("M");
+    m.has_name = true;
+    add_map_entry(file, m, "FooEntry", ".pkg.SomeEnum");
+    add_map_field(file, m, "foo", 1, ".pkg.M.FooEntry");
+    file.file.message_type.push_back(m);
+
+    easypb_schema::Diagnostic error;
+    CHECK(resolve_after_link(set, file, false, error));
+    CHECK(text(file.file.message_type[0].field[0].type_name) ==
+          ".pkg.M.FooEntry");
+    const FieldDescriptorProto& value =
+        file.file.message_type[0].nested_type[0].field[1];
+    CHECK(value.has_type && value.type == FieldDescriptorProto::TYPE_ENUM);
+    CHECK(text(value.type_name) == ".pkg.SomeEnum");
+}
+
 } // namespace
 
 int main()
@@ -696,6 +1556,18 @@ int main()
     test_index_message_and_field_names_live_in_different_scopes();
     test_index_collision_text_is_order_independent();
     test_link_indexes_every_file_once();
+    test_resolution_separates_invisible_from_missing();
+    test_shadowing_commits_the_matched_aggregate();
+    test_non_type_heads_do_not_shadow();
+    test_invisible_candidates_do_not_shadow();
+    test_merged_package_is_visible_when_any_declaring_file_is();
+    test_sub_package_does_not_make_the_parent_visible();
+    test_enum_value_member_paths();
+    test_legal_recursion_stays_legal();
+    test_legal_map_fields_resolve_to_their_entry();
+    test_foreign_map_entry_references_are_rejected();
+    test_map_entry_guard_runs_after_visibility();
+    test_map_entry_value_resolves_from_its_own_token();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

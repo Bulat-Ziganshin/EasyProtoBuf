@@ -466,47 +466,303 @@ bool index_message(SchemaFile& file, SymbolIndex& symbols,
     return true;
 }
 
-// Implements protobuf lexical name lookup over visible type declarations: an
-// absolute name is checked directly; a relative name is tried from the
-// innermost scope outward to the package/global scope. Non-type declarations
-// and declarations owned by invisible files never match. On success the
-// matched fully qualified name is stored in *matched_name.
+// Field context for the resolver: the file that contains the field, the
+// field's descriptor path, and the field itself. The synthetic-map-entry
+// guard (Step 4.2) and the descriptor-origin declared-kind check (Step 5)
+// both need the field, not only its enclosing scope.
+struct ResolveContext
+{
+    const SchemaFile* owner;
+    const DescriptorPath* field_path;
+    const FieldDescriptorProto* field;
+
+    ResolveContext() : owner(0), field_path(0), field(0) {}
+};
+
+// How a lookup ended. Each value maps to one diagnostic code, so no caller
+// has to read a message text (Step 4.1): missing -> DIAGNOSTIC_UNRESOLVED_TYPE,
+// invisible -> DIAGNOSTIC_INVISIBLE_TYPE, a declaration that is not a type ->
+// DIAGNOSTIC_NOT_A_TYPE, a foreign synthetic map entry ->
+// DIAGNOSTIC_MAP_ENTRY_TYPE. Only RESOLVE_OK carries a symbol.
+enum ResolveOutcome
+{
+    RESOLVE_OK,
+    RESOLVE_MISSING,
+    RESOLVE_INVISIBLE,
+    RESOLVE_NOT_A_TYPE,
+    RESOLVE_MAP_ENTRY
+};
+
+// Splits a relative reference into its first component and the remainder.
+void split_reference(const std::string& raw, std::string& first, std::string& rest)
+{
+    const std::size_t dot = raw.find('.');
+    if (dot == std::string::npos) {
+        first = raw;
+        rest.clear();
+        return;
+    }
+    first = raw.substr(0, dot);
+    rest = raw.substr(dot + 1);
+}
+
+// The candidate first component one scope contributes. protoc tries the first
+// component of a relative name in every enclosing scope, the global scope
+// last. One function serves the winning walk and the failure walk, so the two
+// cannot drift apart.
+std::string scope_candidate(const std::string& scope, const std::string& first)
+{
+    return scope.empty() ? "." + first : scope + "." + first;
+}
+
+// Steps one lexical scope outward. Returns false at the global scope (the
+// empty string), which is the last scope tried.
+bool enclosing_scope(const std::string& scope, std::string& outer)
+{
+    if (scope.empty()) return false;
+    const std::size_t dot = scope.rfind('.');
+    if (dot == std::string::npos || dot == 0) outer.clear();
+    else outer = scope.substr(0, dot);
+    return true;
+}
+
+// A package scope is visible when ANY file in the requester's visible set
+// declares that package, not merely when the file the index recorded as the
+// node's owner does. Package scopes merge across files, so the owner is just
+// the first file indexed; protoc's lookup carries the same special case for
+// packages, and it compares the declaring file's package string for EQUALITY
+// (descriptor.cc FindSymbol keeps the package symbol only when one of the
+// visible files has exactly that package, "we can't really rule out this
+// symbol unless none of the dependencies define it").
+//
+// Measured with libprotoc 30.1 (oracle cases F1a/F1b/F4): the unimported file
+// may declare `package shared` (F1) or only the sub-package
+// `package shared.deep` (F4) - accepted either way, in both root orders - and
+// what makes the reference resolve is a VISIBLE file's exact `package shared`.
+// So a sub-package declaration does not make the parent visible, and the
+// reverse case is the one that matters: without this rule a package whose
+// first indexed file happens to be invisible would hide a visible
+// same-package file and reject input protoc accepts.
+bool package_is_visible(const std::set<const SchemaFile*>& visible_files,
+                        const std::string& package_head)
+{
+    for (std::set<const SchemaFile*>::const_iterator it = visible_files.begin();
+         it != visible_files.end(); ++it) {
+        if (package_prefix(**it) == package_head) return true;
+    }
+    return false;
+}
+
+// True when the candidate first component is visible from the requesting file.
+bool candidate_is_visible(const SymbolEntry& entry,
+                          const std::set<const SchemaFile*>& visible_files,
+                          const std::string& candidate)
+{
+    if (entry.kind == SYMBOL_PACKAGE) {
+        return package_is_visible(visible_files, candidate);
+    }
+    return visible_files.find(entry.owner) != visible_files.end();
+}
+
+// True when the entry descriptor is nested directly in the referencing
+// field's own message. The field's path is message_path + [2, index] and the
+// entry's is message_path + [3, index], so the two share the container prefix
+// and differ only in the declaration slot.
+bool nested_in_field_message(const ResolveContext& context,
+                             const DescriptorPath& entry_path)
+{
+    if (context.field_path == 0) return false;
+    const DescriptorPath& field_path = *context.field_path;
+    if (entry_path.size() != field_path.size() || entry_path.size() < 2) {
+        return false;
+    }
+    for (std::size_t i = 0; i + 2 < entry_path.size(); ++i) {
+        if (entry_path[i] != field_path[i]) return false;
+    }
+    return entry_path[entry_path.size() - 2] == 3 &&
+           field_path[field_path.size() - 2] == 2;
+}
+
+// protoc's ownership rule for a synthetic map entry (A22, measured): the
+// reference belongs to the owning map field exactly when the entry is nested
+// directly in the field's own message, the field is repeated, and the field's
+// own NAME derives the entry's simple name through the shared map_entry_name
+// (A24). The ownership test never looks at the raw reference text, which
+// differs by origin (relative for source, absolute for descriptors).
+//
+// The entry's own map_entry marker proves the message kind, and that is the
+// only kind test that survives deferred resolution: a source map field carries
+// no assigned kind until linking, so requiring TYPE_MESSAGE here would reject
+// every legal source map field the loader deferred.
+bool owns_map_entry(const ResolveContext& context, const SymbolEntry& entry)
+{
+    if (context.field == 0 || context.owner == 0 || context.field_path == 0) {
+        return false;
+    }
+    if (entry.owner != context.owner) return false;
+    if (context.field->label != FieldDescriptorProto::LABEL_REPEATED) return false;
+    const DescriptorProto* entry_message = find_message(*entry.owner, entry.path);
+    if (entry_message == 0) return false;
+    if (!entry_message->options.has_map_entry || !entry_message->options.map_entry) {
+        return false;
+    }
+    if (!nested_in_field_message(context, entry.path)) return false;
+    return map_entry_name(view_text(context.field->name)) ==
+           view_text(entry_message->name);
+}
+
+// True when the resolved symbol is a synthetic map entry owned by some other
+// field, so naming it is a user attempt to use an entry as a field type.
+bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entry)
+{
+    if (entry.kind != FieldDescriptorProto::TYPE_MESSAGE) return false;
+    const DescriptorProto* entry_message = find_message(*entry.owner, entry.path);
+    if (entry_message == 0) return false;
+    if (!entry_message->options.has_map_entry || !entry_message->options.map_entry) {
+        return false;
+    }
+    return !owns_map_entry(context, entry);
+}
+
+// Implements protoc's lexical name lookup over the compilation-wide index.
+//
+// An absolute name is looked up whole, with visibility still applied. A
+// relative name resolves its FIRST component from the innermost enclosing
+// scope outward, and the walk continues past a candidate that is invisible
+// (B6/B10) or is not an aggregate (B8/B13): visibility filters the walk
+// instead of judging its result (A9). A winning aggregate - a message, an
+// enum, or a package scope - commits the rest of the name, so the remainder
+// must resolve strictly underneath it with no outward fallback
+// (B1/B7/B11/B12/B14).
+//
+// When nothing wins, a second walk over the same candidates without the
+// visibility filter decides why: a declaration that is not a type is
+// RESOLVE_NOT_A_TYPE (B9/B15), any other found candidate is RESOLVE_INVISIBLE
+// (B3), and a reference the index does not know at all is RESOLVE_MISSING
+// (B5). Every outcome except RESOLVE_OK is named, never guessed from a
+// message text, and the reason is recorded in *outcome.
+//
+// *matched_name carries the fully qualified name the diagnostic must name:
+// the resolved symbol on success, the resolved compound path when its member
+// is absent (that is what makes the shadowing diagnostic name
+// ".pkg.Encloser.Choice.Item" instead of the raw text), or the candidate the
+// failure walk stopped at. It stays empty when there is no candidate at all.
 const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope,
                                 const SymbolIndex& symbols,
                                 const std::set<const SchemaFile*>& visible_files,
-                                std::string* matched_name)
+                                const ResolveContext& context,
+                                ResolveOutcome* outcome, std::string* matched_name)
 {
+    *outcome = RESOLVE_MISSING;
+    matched_name->clear();
     if (!raw.empty() && raw[0] == '.') {
         const std::map<std::string, SymbolEntry>::const_iterator found =
             symbols.symbols.find(raw);
         if (found == symbols.symbols.end()) return 0;
-        if (found->second.kind != FieldDescriptorProto::TYPE_MESSAGE &&
-            found->second.kind != FieldDescriptorProto::TYPE_ENUM) {
+        *matched_name = raw;
+        if (visible_files.find(found->second.owner) == visible_files.end()) {
+            *outcome = RESOLVE_INVISIBLE;
             return 0;
         }
-        if (visible_files.find(found->second.owner) == visible_files.end()) return 0;
-        *matched_name = found->first;
+        // A package is a lookup aggregate but never a type.
+        if (found->second.kind == SYMBOL_PACKAGE || found->second.kind == 0) {
+            *outcome = RESOLVE_NOT_A_TYPE;
+            return 0;
+        }
+        if (is_foreign_map_entry(context, found->second)) {
+            *outcome = RESOLVE_MAP_ENTRY;
+            return 0;
+        }
+        *outcome = RESOLVE_OK;
         return &found->second;
     }
-    std::string current_scope = scope;
+
+    std::string first;
+    std::string rest;
+    split_reference(raw, first, rest);
+
+    // Pass 1: the innermost VISIBLE AGGREGATE candidate wins the head.
+    std::string candidate_scope = scope;
+    std::string winning_head;
+    const SymbolEntry* winner = 0;
     for (;;) {
-        const std::string candidate =
-            current_scope.empty() ? "." + raw : current_scope + "." + raw;
+        const std::string head = scope_candidate(candidate_scope, first);
         const std::map<std::string, SymbolEntry>::const_iterator found =
-            symbols.symbols.find(candidate);
-        if (found != symbols.symbols.end() &&
-            (found->second.kind == FieldDescriptorProto::TYPE_MESSAGE ||
-             found->second.kind == FieldDescriptorProto::TYPE_ENUM) &&
-            visible_files.find(found->second.owner) != visible_files.end()) {
-            *matched_name = found->first;
-            return &found->second;
+            symbols.symbols.find(head);
+        if (found != symbols.symbols.end() && found->second.kind != 0 &&
+            candidate_is_visible(found->second, visible_files, head)) {
+            winning_head = head;
+            winner = &found->second;
+            break;
         }
-        if (current_scope.empty()) break;
-        const std::size_t dot = current_scope.rfind('.');
-        if (dot == std::string::npos || dot == 0) current_scope.clear();
-        else current_scope.erase(dot);
+        std::string outer;
+        if (!enclosing_scope(candidate_scope, outer)) break;
+        candidate_scope = outer;
     }
-    return 0;
+
+    if (winner != 0) {
+        if (rest.empty()) {
+            if (winner->kind == SYMBOL_PACKAGE) {
+                *outcome = RESOLVE_NOT_A_TYPE;
+                *matched_name = winning_head;
+                return 0;
+            }
+            if (is_foreign_map_entry(context, *winner)) {
+                *outcome = RESOLVE_MAP_ENTRY;
+                *matched_name = winning_head;
+                return 0;
+            }
+            *outcome = RESOLVE_OK;
+            *matched_name = winning_head;
+            return winner;
+        }
+        const std::string compound = winning_head + "." + rest;
+        const std::map<std::string, SymbolEntry>::const_iterator member =
+            symbols.symbols.find(compound);
+        if (member == symbols.symbols.end()) {
+            // The matched aggregate commits the whole name: no outer scope is
+            // tried again (R3), and the diagnostic names this path.
+            *matched_name = compound;
+            return 0;
+        }
+        *matched_name = compound;
+        if (visible_files.find(member->second.owner) == visible_files.end()) {
+            *outcome = RESOLVE_INVISIBLE;
+            return 0;
+        }
+        if (member->second.kind == 0 || member->second.kind == SYMBOL_PACKAGE) {
+            *outcome = RESOLVE_MISSING;
+            return 0;
+        }
+        if (is_foreign_map_entry(context, member->second)) {
+            *outcome = RESOLVE_MAP_ENTRY;
+            return 0;
+        }
+        *outcome = RESOLVE_OK;
+        return &member->second;
+    }
+
+    // Pass 2: nothing won, so classify the failure. The same scope walk runs
+    // again without the visibility filter; the first candidate the index
+    // knows decides between "not a type" and "not visible". A candidate that
+    // is visible AND an aggregate cannot appear here: pass 1 would have
+    // returned it.
+    candidate_scope = scope;
+    for (;;) {
+        const std::string head = scope_candidate(candidate_scope, first);
+        const std::map<std::string, SymbolEntry>::const_iterator found =
+            symbols.symbols.find(head);
+        if (found != symbols.symbols.end()) {
+            *outcome = found->second.kind == 0 ? RESOLVE_NOT_A_TYPE
+                                               : RESOLVE_INVISIBLE;
+            *matched_name = head;
+            return 0;
+        }
+        std::string outer;
+        if (!enclosing_scope(candidate_scope, outer)) break;
+        candidate_scope = outer;
+    }
+    return 0;   // RESOLVE_MISSING, with no candidate to name
 }
 
 void warn_once(SchemaFile& file, const std::string& message,
@@ -574,9 +830,13 @@ std::string raw_type_name(const SchemaFile& file,
     return std::string();
 }
 
-bool fail_at(const SchemaFile& file, const std::string& message,
-             const SourceLocation& location, const DescriptorPath& path,
-             Diagnostic& error)
+// The one place every fatal diagnostic is built: unknown positions fall back
+// to the descriptor path, and the caller chooses the code. The resolvable
+// failures below carry their own code instead of DIAGNOSTIC_GENERIC, because a
+// caller matching on message text is not a contract (A3).
+bool fail_at_code(const SchemaFile& file, const std::string& message,
+                  const SourceLocation& location, const DescriptorPath& path,
+                  DiagnosticCode code, Diagnostic& error)
 {
     std::string text = message;
     if (location.line == 0) text += " at " + format_path(path);
@@ -584,8 +844,106 @@ bool fail_at(const SchemaFile& file, const std::string& message,
     error.location = location;
     error.message = text;
     error.warning = false;
-    error.code = DIAGNOSTIC_GENERIC;
+    error.code = code;
     return false;
+}
+
+bool fail_at(const SchemaFile& file, const std::string& message,
+             const SourceLocation& location, const DescriptorPath& path,
+             Diagnostic& error)
+{
+    return fail_at_code(file, message, location, path, DIAGNOSTIC_GENERIC, error);
+}
+
+// The diagnostic code one lookup outcome maps to (Step 4.1's table).
+DiagnosticCode outcome_code(ResolveOutcome outcome)
+{
+    switch (outcome) {
+        case RESOLVE_INVISIBLE: return DIAGNOSTIC_INVISIBLE_TYPE;
+        case RESOLVE_NOT_A_TYPE: return DIAGNOSTIC_NOT_A_TYPE;
+        case RESOLVE_MAP_ENTRY: return DIAGNOSTIC_MAP_ENTRY_TYPE;
+        default: return DIAGNOSTIC_UNRESOLVED_TYPE;
+    }
+}
+
+// Names the declaration category of an indexed non-type symbol, so a "not a
+// type" diagnostic can say what the name actually is. The index stores kind 0
+// for every non-type declaration, so the category comes from the descriptor
+// path the index recorded.
+std::string declaration_category(const SchemaFile& file,
+                                 const DescriptorPath& path, int kind)
+{
+    if (kind == SYMBOL_PACKAGE) return "a package scope";
+    if (path.size() >= 2 && path[path.size() - 2] == 8) return "a oneof";
+    if (path.size() >= 2 && path[path.size() - 2] == 2) {
+        const DescriptorPath container(path.begin(), path.end() - 2);
+        if (find_enum(file, container) != 0) return "an enum value";
+        if (find_message(file, container) != 0) return "a field";
+        return "a declaration";
+    }
+    if (path.size() == 2 && path[0] == 6) return "a service";
+    return "a declaration";
+}
+
+// The logical name of the file that defines an indexed symbol, for the
+// diagnostics that must name it.
+std::string defining_file_name(const SymbolIndex& symbols, const std::string& name)
+{
+    const std::map<std::string, SymbolEntry>::const_iterator found =
+        symbols.symbols.find(name);
+    if (found == symbols.symbols.end()) return std::string();
+    return view_text(found->second.owner->file.name);
+}
+
+// The text for a reference that failed because the name is known but must not
+// be used as a type here. Each category states the rule instead of copying
+// protoc's wording: its texts are editions-era UX paragraphs, and the
+// differential checkpoint compares verdicts, not message texts (Appendix C).
+std::string reference_failure_message(const SchemaFile& file,
+                                      const SymbolIndex& symbols,
+                                      const std::string& raw,
+                                      ResolveOutcome outcome,
+                                      const std::string& matched)
+{
+    const std::string resolved = matched.empty() ? raw : matched;
+    if (outcome == RESOLVE_MAP_ENTRY) {
+        return "map entry type \"" + resolved + "\" is not a user type: only the "
+               "map field that owns it may reference it; declare the field as "
+               "map<KeyType, ValueType> instead";
+    }
+    if (outcome == RESOLVE_INVISIBLE) {
+        const std::string defining = defining_file_name(symbols, resolved);
+        std::string message = "type \"" + resolved + "\"";
+        if (defining.empty()) {
+            message += " is not visible from \"" + view_text(file.file.name) + "\"";
+        } else {
+            message += " is defined in \"" + defining + "\", which is not visible "
+                       "from \"" + view_text(file.file.name) + "\"";
+        }
+        message += "; add the import of that file";
+        return message;
+    }
+    const std::map<std::string, SymbolEntry>::const_iterator found =
+        symbols.symbols.find(resolved);
+    std::string category = "a declaration";
+    if (found != symbols.symbols.end()) {
+        category = declaration_category(*found->second.owner, found->second.path,
+                                        found->second.kind);
+    }
+    return "type reference \"" + raw + "\" is not a type: it is " + category +
+           " (\"" + resolved + "\")";
+}
+
+// The text for a reference the index cannot resolve at all. A committed
+// aggregate whose member path is absent names the resolved compound path, so
+// the shadowing case does not read like a plain typo (Step 4.3, oracle B1).
+std::string missing_reference_message(const std::string& raw,
+                                      const std::string& scope,
+                                      const std::string& matched)
+{
+    if (matched.empty()) return "unresolved type " + raw + " in " + scope;
+    return "unresolved type " + raw + " in " + scope + ": it is resolved to \"" +
+           matched + "\", which is not defined";
 }
 
 // Type-dependent semantic validation for the textual default_value stored
@@ -737,23 +1095,52 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                 unknown = true;
             } else {
                 const std::string raw = raw_type_name(file, field, field_path);
+                ResolveContext context;
+                context.owner = &file;
+                context.field_path = &field_path;
+                context.field = &field;
+                ResolveOutcome outcome = RESOLVE_MISSING;
                 std::string resolved_name;
-                const SymbolEntry* resolved =
-                    resolve_name(raw, scope, symbols, visible_files, &resolved_name);
+                const SymbolEntry* resolved = resolve_name(
+                    raw, scope, symbols, visible_files, context, &outcome,
+                    &resolved_name);
                 if (resolved != 0) {
                     field.type = resolved->kind;
                     field.has_type = true;
                     field.type_name = file.strings.save(resolved_name);
                 } else {
                     unknown = true;
-                    if (!allow_unresolved) {
-                        return fail_at(file, "unresolved type " + raw + " in " + scope,
-                                       field_type_location(file, field_path),
-                                       field_path, error);
+                    // A reference that exists but cannot be a field type is an
+                    // error even where a missing type is only deferred
+                    // (allow_unresolved): no import can turn a field, an enum
+                    // value, a service, or a foreign map entry into a legal
+                    // field type, and protoc rejects each of them today.
+                    // "Invisible" stays deferrable, because a later linking
+                    // pass is exactly what makes such a file visible.
+                    if (outcome == RESOLVE_NOT_A_TYPE ||
+                        outcome == RESOLVE_MAP_ENTRY) {
+                        return fail_at_code(
+                            file,
+                            reference_failure_message(file, symbols, raw, outcome,
+                                                      resolved_name),
+                            field_type_location(file, field_path), field_path,
+                            outcome_code(outcome), error);
                     }
-                    warn_once(file, "unresolved type " + raw + " in " + scope +
+                    const std::string reason =
+                        outcome == RESOLVE_INVISIBLE
+                            ? reference_failure_message(file, symbols, raw, outcome,
+                                                        resolved_name)
+                            : missing_reference_message(raw, scope, resolved_name);
+                    if (!allow_unresolved) {
+                        return fail_at_code(file, reason,
+                                            field_type_location(file, field_path),
+                                            field_path, outcome_code(outcome),
+                                            error);
+                    }
+                    warn_once(file,
+                              reason +
                               "; it is kept as TYPE_MESSAGE until imports are linked",
-                              DIAGNOSTIC_UNRESOLVED_TYPE,
+                              outcome_code(outcome),
                               field_type_location(file, field_path), field_path);
                 }
             }

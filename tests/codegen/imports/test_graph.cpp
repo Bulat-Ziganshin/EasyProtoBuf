@@ -134,10 +134,14 @@ void test_logical_paths_invalid()
 // aliases an existing one is exactly the bug this test exists to catch, and a
 // code that does not exist yet cannot be named:
 //   DIAGNOSTIC_DUPLICATE_SYMBOL      appended by Step 3.1 (asserted below)
-//   DIAGNOSTIC_INVISIBLE_TYPE        Step 4.1
-//   DIAGNOSTIC_NOT_A_TYPE            Step 4.1
-//   DIAGNOSTIC_KIND_MISMATCH         Step 4.1
-//   DIAGNOSTIC_MAP_ENTRY_TYPE        Steps 4.2 / 5
+//   DIAGNOSTIC_INVISIBLE_TYPE        appended by Step 4.1 (asserted below)
+//   DIAGNOSTIC_NOT_A_TYPE            appended by Step 4.1 (asserted below)
+//   DIAGNOSTIC_MAP_ENTRY_TYPE        appended by Step 4.2 (asserted below)
+//   DIAGNOSTIC_KIND_MISMATCH         Step 5.1 - this checklist used to file
+//                                    it under Step 4.1, but Step 5.1 owns the
+//                                    descriptor-origin declared-kind check
+//                                    the code exists for, so it is appended
+//                                    by the step that first needs it
 //   DIAGNOSTIC_MALFORMED_MAP_ENTRY   Step 5.1
 //   DIAGNOSTIC_UNSUPPORTED_SYNTAX    Step 6.1
 void test_diagnostic_codes_stay_distinct()
@@ -168,6 +172,51 @@ void test_diagnostic_codes_stay_distinct()
           easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
     CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
           easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    // Step 4.1/4.2: the four lookup outcomes are told apart by code, not by
+    // message text, so none of the three appended values may alias any earlier
+    // one - or another.
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
 }
 
 void test_bind_simple_chain()
