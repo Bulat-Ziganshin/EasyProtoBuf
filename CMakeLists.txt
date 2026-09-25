@@ -49,6 +49,30 @@ else()
 endif()
 
 
+# P-03: an unhandled enumerator must not compile.
+# `outcome_code` in codegen/schema_semantics.cpp switches over an internal enum
+# and has no `default:` label, so adding an outcome and forgetting its case has
+# to break the build instead of silently reading as DIAGNOSTIC_GENERIC. The flag
+# therefore sits on every target, the library included - the switch is library
+# code, and a flag on the test executables alone would guard the one place the
+# defect cannot be. `add_compile_options` is directory-scoped, so this governs
+# EasyProtoBuf's own targets (library, code generator, examples, tests) and not
+# a parent project that adds this directory as a subdirectory.
+# GNU and Clang only. MSVC's equivalent (/we4061, C4061) is deliberately not set
+# here: no MSVC lane in this repository measures it, and the plan-4 package's
+# verifier records that gap as a note instead of pretending it is covered.
+include(CheckCXXCompilerFlag)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    check_cxx_compiler_flag("-Werror=switch" EASYPB_HAS_WERROR_SWITCH)
+    if(EASYPB_HAS_WERROR_SWITCH)
+        add_compile_options("-Werror=switch")
+        message(STATUS "EasyProtoBuf: -Werror=switch is on (P-03: an unhandled enumerator fails the build)")
+    else()
+        message(WARNING "EasyProtoBuf: this compiler rejects -Werror=switch, so P-03's compile-time guarantee is not enforced")
+    endif()
+endif()
+
+
 add_executable(decoder examples/decoder/decoder.cpp)
 target_include_directories(decoder PRIVATE include)
 
