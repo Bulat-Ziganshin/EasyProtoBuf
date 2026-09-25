@@ -74,6 +74,73 @@ void add_message(easypb_schema::SchemaFile& file, const char* name)
     file.file.message_type.push_back(message);
 }
 
+// A dependency-free file, optionally with a package: the shape the
+// cross-file collision cases need, because they must reach the index without
+// anything in the bind stage to complain about.
+easypb_schema::SchemaFile& make_simple_file(easypb_schema::SchemaSet& set,
+                                           const char* logical,
+                                           const char* package)
+{
+    easypb_schema::SchemaFile& file = make_file(
+        set, logical, std::vector<std::string>(), std::vector<std::int32_t>(),
+        std::vector<std::int32_t>());
+    if (package != 0) set_package(file, package);
+    return file;
+}
+
+void add_enum(easypb_schema::SchemaFile& file, const char* enum_name,
+              const char* value_name)
+{
+    EnumDescriptorProto enumeration;
+    enumeration.name = file.strings.save(enum_name);
+    enumeration.has_name = true;
+    if (value_name != 0) {
+        EnumValueDescriptorProto value;
+        value.name = file.strings.save(value_name);
+        value.has_name = true;
+        value.number = 0;
+        value.has_number = true;
+        enumeration.value.push_back(value);
+    }
+    file.file.enum_type.push_back(enumeration);
+}
+
+void add_service(easypb_schema::SchemaFile& file, const char* name)
+{
+    ServiceDescriptorProto service;
+    service.name = file.strings.save(name);
+    service.has_name = true;
+    file.file.service.push_back(service);
+}
+
+// Links a fixture whose two files must collide in the stage-3 index and
+// CHECKs the duplicate-declaration contract (A3): the dedicated code, both
+// logical file names in the message, the redeclaration recorded in
+// error.file, a position or descriptor path for each declaration, and - E3 -
+// nothing published. `redeclaring` is the file indexed second, which the
+// name-sorted walk makes the alphabetically later one.
+void check_duplicate_failure(easypb_schema::SchemaSet& set,
+                             const char* expected_substring,
+                             const char* redeclaring)
+{
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+
+    CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                      linked, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(error.message.find(expected_substring) != std::string::npos);
+    CHECK(error.message.find("\"a.proto\"") != std::string::npos);
+    CHECK(error.message.find("\"b.proto\"") != std::string::npos);
+    CHECK(error.message.find(" at [") != std::string::npos);
+    CHECK(error.message != "link_schema: not implemented");
+    CHECK(error.file == redeclaring);
+    CHECK(linked.files == 0);
+    CHECK(!linked.complete);
+    CHECK(linked.symbols.symbols.empty());
+    CHECK(linked.visible_files.empty());
+}
+
 // One message with one optional named field. The field is what keeps this
 // fixture linkable from Step 5 on, when a failed link publishes nothing:
 // type_name is the descriptor spelling of a type defined in another file.
@@ -249,13 +316,13 @@ easypb_schema::LinkedSchema link_ok(easypb_schema::SchemaSet& set)
     return linked;
 }
 
-// Step 2.2's temporary contract. It replaced Step 1's "not implemented"
-// expectation and Step 5.1 replaces its success half with real linking.
-void test_link_stub_publishes_stages_2_and_4()
+// Step 2.2's staged contract, extended by Step 3.1: stages 2, 3 and 4 ran and
+// the view is published, but it is explicitly incomplete because stage 5 is
+// not implemented. Step 5.1 replaces its success half with real linking.
+void test_link_stub_publishes_stages_2_3_and_4()
 {
-    // Success path: stages 2 and 4 ran, the view is published, and it is
-    // explicitly incomplete -- stage 3 does not exist yet and stage 5 is not
-    // implemented.
+    // Success path: the bind stage, the shared symbol index and the
+    // visibility sets all ran, and the result says so.
     easypb_schema::SchemaSet set;
     const Chain chain = make_chain_fixture(set, false, false);
     easypb_schema::LinkedSchema linked;
@@ -265,7 +332,13 @@ void test_link_stub_publishes_stages_2_and_4()
                                      linked, error));
     CHECK(linked.files == &set);
     CHECK(!linked.complete);
-    CHECK(linked.symbols.symbols.empty());     // stage 3 is not wired yet
+    // Stage 3: one index over every file, in the walk order, with the type
+    // names both files define and the field a references.
+    CHECK(linked.symbols.symbols.count(".app.A") == 1);
+    CHECK(linked.symbols.symbols.count(".app.A.v") == 1);
+    CHECK(linked.symbols.symbols.count(".shared.Value") == 1);
+    CHECK(linked.symbols.symbols.count(".shared.Other") == 1);
+    CHECK(linked.symbols.symbols.count(".shared") == 1);   // package scope
     CHECK(linked.visible_files.size() == 3);   // every file, not just one
     CHECK(visible_names(linked, *chain.a) == "a.proto,b.proto");
 
@@ -430,11 +503,183 @@ void test_visibility_public_chain_re_exports_recursively()
     CHECK(visible_names(linked, d) == "d.proto");
 }
 
+// Step 3.1/3.2: cross-file collisions. Each pair below is two
+// dependency-free files, so nothing in the bind stage can be the reason the
+// link fails, and the name-sorted walk indexes `a.proto` before `b.proto`.
+
+void test_index_message_vs_message_across_files()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", "dup");
+    add_message(a, "Same");
+    easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", "dup");
+    add_message(b, "Same");
+
+    check_duplicate_failure(set, "duplicate type name .dup.Same", "b.proto");
+}
+
+void test_index_message_vs_enum_across_files()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", 0);
+    add_message(a, "Mix");
+    easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", 0);
+    add_enum(b, "Mix", 0);
+
+    check_duplicate_failure(set, "duplicate type name .Mix", "b.proto");
+}
+
+void test_index_type_vs_enum_value_across_files()
+{
+    // Enum values live in the containing scope, not under the enum type: a's
+    // ZERO occupies ".ZERO", so b's message ZERO collides with it.
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", 0);
+    add_enum(a, "E", "ZERO");
+    easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", 0);
+    add_message(b, "ZERO");
+
+    check_duplicate_failure(set, "duplicate type name .ZERO", "b.proto");
+}
+
+void test_index_type_vs_service_name_across_files()
+{
+    // A retained service name participates in collisions but can never be
+    // used as a field type; the wording is decided by both sides, because at
+    // least one of them is a type, so the text does not depend on which file
+    // is indexed first.
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", 0);
+    add_service(a, "Svc");
+    easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", 0);
+    add_message(b, "Svc");
+
+    check_duplicate_failure(set, "duplicate type name .Svc", "b.proto");
+}
+
+void test_index_package_vs_type_across_files()
+{
+    // Appendix C D2: `package foo.bar;` in one file, `message foo {}` in
+    // another. Every package component is indexed, so the collision is on
+    // ".foo" - the component, not the whole package name.
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", "foo.bar");
+    (void)a;
+    easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", 0);
+    add_message(b, "foo");
+
+    check_duplicate_failure(set, "duplicate package name .foo", "b.proto");
+}
+
+void test_index_same_package_in_two_files_merges()
+{
+    // Package scopes merge across files and must not be re-coded as a
+    // collision (Step 3.1).
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", "a");
+    add_message(a, "A");
+    easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", "a");
+    add_message(b, "B");
+
+    const easypb_schema::LinkedSchema linked = link_ok(set);
+
+    CHECK(linked.symbols.symbols.count(".a") == 1);      // one merged scope
+    CHECK(linked.symbols.symbols.count(".a.A") == 1);
+    CHECK(linked.symbols.symbols.count(".a.B") == 1);
+    CHECK(linked.symbols.symbols.count(".a.A.B") == 0);
+}
+
+void test_index_message_and_field_names_live_in_different_scopes()
+{
+    // A message named like another message's field is not a collision: the
+    // field's key is qualified by its containing scope.
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", 0);
+    add_message_with_field(a, "Holder", "value", 1, ".value");
+    easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", 0);
+    add_message(b, "value");
+
+    const easypb_schema::LinkedSchema linked = link_ok(set);
+
+    CHECK(linked.symbols.symbols.count(".Holder") == 1);
+    CHECK(linked.symbols.symbols.count(".Holder.value") == 1);
+    CHECK(linked.symbols.symbols.count(".value") == 1);
+}
+
+// Builds the collision pair used by the two tests below, in either insertion
+// order: an enum value ZERO in a.proto and a message ZERO in b.proto.
+void build_enum_value_collision_pair(easypb_schema::SchemaSet& set, bool reversed)
+{
+    const char* first = reversed ? "b.proto" : "a.proto";
+    const char* second = reversed ? "a.proto" : "b.proto";
+    if (reversed) {
+        easypb_schema::SchemaFile& b = make_simple_file(set, first, 0);
+        add_message(b, "ZERO");
+        easypb_schema::SchemaFile& a = make_simple_file(set, second, 0);
+        add_enum(a, "E", "ZERO");
+        return;
+    }
+    easypb_schema::SchemaFile& a = make_simple_file(set, first, 0);
+    add_enum(a, "E", "ZERO");
+    easypb_schema::SchemaFile& b = make_simple_file(set, second, 0);
+    add_message(b, "ZERO");
+}
+
+void test_index_collision_text_is_order_independent()
+{
+    // The first observable consequence of the name-sorted walk (A2): the same
+    // two colliding files, added to the set in opposite orders, must produce
+    // one diagnostic. The pair is chosen so that a wording decided by "which
+    // side is the type" instead of by both sides would differ between the two
+    // orders - the enum value expands to the same occupied name as the
+    // message, but it is not a type.
+    easypb_schema::Diagnostic forward;
+    easypb_schema::Diagnostic backward;
+    {
+        easypb_schema::SchemaSet set;
+        build_enum_value_collision_pair(set, false);
+        easypb_schema::LinkedSchema linked;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, forward));
+    }
+    {
+        easypb_schema::SchemaSet set;
+        build_enum_value_collision_pair(set, true);
+        easypb_schema::LinkedSchema linked;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, backward));
+    }
+
+    CHECK(forward.code == backward.code);
+    CHECK(forward.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(forward.message == backward.message);
+    CHECK(forward.file == backward.file);
+    CHECK(forward.message.find("duplicate type name .ZERO") != std::string::npos);
+}
+
+void test_link_indexes_every_file_once()
+{
+    // Regression guard for "never cache the index" (Step 3.1, Appendix A):
+    // index_file reports a file's own declarations as duplicates on a second
+    // pass, so a cached index would make the second link fail while the first
+    // one succeeded.
+    easypb_schema::SchemaSet set;
+    make_chain_fixture(set, false, false);
+
+    const easypb_schema::LinkedSchema first = link_ok(set);
+    const easypb_schema::LinkedSchema second = link_ok(set);
+
+    CHECK(second.symbols.symbols.size() == first.symbols.symbols.size());
+    CHECK(first.symbols.symbols.size() == 6);   // 2 package scopes, 3 types, 1 field
+    CHECK(second.symbols.symbols.count(".shared.Value") == 1);
+    CHECK(second.symbols.symbols.count(".app.A.v") == 1);
+}
+
 } // namespace
 
 int main()
 {
-    test_link_stub_publishes_stages_2_and_4();
+    test_link_stub_publishes_stages_2_3_and_4();
     test_visibility_ordinary_import_is_not_transitive();
     test_visibility_public_import_is_transitive();
     test_visibility_root_status_grants_nothing();
@@ -442,6 +687,15 @@ int main()
     test_visibility_weak_import_behaves_as_ordinary();
     test_visibility_diamond_public_exports_are_complete();
     test_visibility_public_chain_re_exports_recursively();
+    test_index_message_vs_message_across_files();
+    test_index_message_vs_enum_across_files();
+    test_index_type_vs_enum_value_across_files();
+    test_index_type_vs_service_name_across_files();
+    test_index_package_vs_type_across_files();
+    test_index_same_package_in_two_files_merges();
+    test_index_message_and_field_names_live_in_different_scopes();
+    test_index_collision_text_is_order_independent();
+    test_link_indexes_every_file_once();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

@@ -386,15 +386,29 @@ bool add_symbol(const SchemaFile& file, SymbolIndex& symbols,
         } else {
             message = "duplicate symbol name " + name;
         }
+        // Both declarations are named, the way protoc's `"X" is already
+        // defined in file "Y"` names the *other* file (Appendix C D1/D2):
+        // error.file/error.location keep the redeclaration, which is the
+        // file being indexed, and the message carries both logical file
+        // names plus the position each declaration has. A descriptor-origin
+        // file has no recorded position, so its path stands in for one.
+        const SchemaFile* previous = inserted.first->second.owner;
         SourceLocation location = declaration_location(file, path);
+        std::string text = message + " in \"" + view_text(file.file.name) + "\"";
         if (location.line == 0 && !path.empty()) {
-            message += " at " + format_path(path);
+            text += " at " + format_path(path);
+        }
+        text += "; already defined in \"" + view_text(previous->file.name) + "\"";
+        const SourceLocation previous_location =
+            declaration_location(*previous, inserted.first->second.path);
+        if (previous_location.line == 0 && !inserted.first->second.path.empty()) {
+            text += " at " + format_path(inserted.first->second.path);
         }
         error.file = view_text(file.file.name);
         error.location = location;
-        error.message = message;
+        error.message = text;
         error.warning = false;
-        error.code = DIAGNOSTIC_GENERIC;
+        error.code = DIAGNOSTIC_DUPLICATE_SYMBOL;
         return false;
     }
     return true;

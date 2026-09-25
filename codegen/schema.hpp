@@ -39,7 +39,11 @@ enum DiagnosticCode
     DIAGNOSTIC_UNRESOLVED_TYPE,
     DIAGNOSTIC_INVALID_IMPORT,
     DIAGNOSTIC_MISSING_IMPORT,
-    DIAGNOSTIC_IMPORT_CYCLE
+    DIAGNOSTIC_IMPORT_CYCLE,
+    // Plan 4 (A3): a conflicting declaration, with both declarations named.
+    // New values are appended, never inserted: an existing value must keep
+    // its numeric identity for every caller that stores or compares codes.
+    DIAGNOSTIC_DUPLICATE_SYMBOL
 };
 
 struct Diagnostic

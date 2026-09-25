@@ -129,6 +129,17 @@ void test_logical_paths_invalid()
     }
 }
 
+// Checklist for the seven plan-4 code values (A3, contract A3/A25/A26); each
+// one is asserted here by the step that appends it, because a value that
+// aliases an existing one is exactly the bug this test exists to catch, and a
+// code that does not exist yet cannot be named:
+//   DIAGNOSTIC_DUPLICATE_SYMBOL      appended by Step 3.1 (asserted below)
+//   DIAGNOSTIC_INVISIBLE_TYPE        Step 4.1
+//   DIAGNOSTIC_NOT_A_TYPE            Step 4.1
+//   DIAGNOSTIC_KIND_MISMATCH         Step 4.1
+//   DIAGNOSTIC_MAP_ENTRY_TYPE        Steps 4.2 / 5
+//   DIAGNOSTIC_MALFORMED_MAP_ENTRY   Step 5.1
+//   DIAGNOSTIC_UNSUPPORTED_SYNTAX    Step 6.1
 void test_diagnostic_codes_stay_distinct()
 {
     CHECK(easypb_schema::DIAGNOSTIC_GENERIC !=
@@ -144,6 +155,18 @@ void test_diagnostic_codes_stay_distinct()
     CHECK(easypb_schema::DIAGNOSTIC_INVALID_IMPORT !=
           easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
     CHECK(easypb_schema::DIAGNOSTIC_MISSING_IMPORT !=
+          easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    // Step 3.1: a conflicting declaration is never DIAGNOSTIC_GENERIC, and it
+    // is distinct from each import failure above.
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
+          easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
+          easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
+          easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
+          easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
           easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
 }
 

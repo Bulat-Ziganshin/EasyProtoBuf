@@ -54,8 +54,11 @@ struct SymbolIndex
 // Validates declaration scopes and indexes one file's messages, enums, enum
 // values, fields, oneofs, and retained service names. Returns false and
 // fills error (with a recorded source position when the file carries one)
-// on conflicting declarations. Each file must be indexed once: re-indexing
-// the same file reports its own declarations as duplicates.
+// on conflicting declarations, reported as DIAGNOSTIC_DUPLICATE_SYMBOL with
+// both declarations named: error.file is the file being indexed and the
+// message carries both logical file names. Package scopes merge instead of
+// conflicting. Each file must be indexed once: re-indexing the same file
+// reports its own declarations as duplicates.
 bool index_file(SchemaFile& file, SymbolIndex& symbols, Diagnostic& error);
 
 // Resolves custom field type names against symbols, considering only files

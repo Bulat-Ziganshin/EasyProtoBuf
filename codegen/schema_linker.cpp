@@ -1,6 +1,6 @@
-// Link orchestration for the schema layer. Stages 2 (edge binding) and 4
-// (visibility sets) are implemented; stage 3 (indexing) and stage 5
-// (resolution) arrive in the later plan-4 steps, so the result this file
+// Link orchestration for the schema layer. Stages 2 (edge binding), 3 (the
+// shared symbol index) and 4 (visibility sets) are implemented; stage 5
+// (resolution) arrives in a later plan-4 step, so the result this file
 // publishes today is deliberately incomplete (see the TEMPORARY note on the
 // success path of link_schema).
 
@@ -111,9 +111,16 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // Everything is built into a local and assigned once, at the end (A1).
     LinkedSchema linked;
 
+    // Stage 3: one symbol index over every loaded file. The index is built
+    // here, per call, and never cached: a file must be indexed exactly once,
+    // and re-indexing one through a surviving index would report its own
+    // declarations as duplicates (Step 3.1, Appendix A).
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        if (!index_file(*ordered[i], linked.symbols, error)) return false;
+    }
+
     // Stage 4: Visible(F) for every file, sharing one public-export memo.
-    // Stage 3 (indexing) does not exist yet, so symbols stays empty: the
-    // visibility sets depend on the import graph alone.
+    // Visibility depends on the import graph alone, not on the index.
     ExportMemo memo;
     for (std::size_t i = 0; i < ordered.size(); ++i) {
         linked.visible_files[ordered[i]] = visible_files(ordered[i], memo);
