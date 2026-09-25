@@ -20,7 +20,7 @@ target("tutorial")
 target("easypb_schema")
     set_kind("static")
     add_includedirs("codegen", {public = true})
-    add_files("codegen/schema.cpp", "codegen/schema_semantics.cpp", "codegen/logical_paths.cpp")
+    add_files("codegen/schema.cpp", "codegen/schema_semantics.cpp", "codegen/logical_paths.cpp", "codegen/schema_linker.cpp")
 target_end()
 
 if has_config("codegen_parser") then

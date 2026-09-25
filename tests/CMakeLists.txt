@@ -471,6 +471,12 @@ if(BUILD_TESTING)
     target_link_libraries(codegen_imports_graph_test PRIVATE easypb_schema)
     add_test(NAME codegen.imports.graph COMMAND codegen_imports_graph_test)
 
+    # Descriptor-only linker suite: links easypb_schema alone, so it must keep
+    # building and passing when the proto parser is off.
+    add_executable(codegen_imports_linker_test codegen/imports/test_linker.cpp)
+    target_link_libraries(codegen_imports_linker_test PRIVATE easypb_schema)
+    add_test(NAME codegen.imports.linker COMMAND codegen_imports_linker_test)
+
     add_executable(codegen_imports_graph_exhaustive_test
         codegen/imports/test_graph_exhaustive.cpp)
     target_link_libraries(codegen_imports_graph_exhaustive_test PRIVATE easypb_schema)
@@ -507,6 +513,24 @@ if(BUILD_TESTING)
         # Pin the scratch directory explicitly: the test creates
         # imports-loader-work below its working directory.
         set_tests_properties(codegen.imports.loader PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+        # Source-driven linker suite: needs load_source_files and the parser
+        # include directories, so it lives inside the parser guard. The data
+        # directory is a positional argument and the scratch directory is
+        # pinned, mirroring the loader suite above.
+        add_executable(codegen_imports_source_linker_test
+            codegen/imports/test_source_linker.cpp)
+        target_include_directories(codegen_imports_source_linker_test PRIVATE
+            ${easypb_test_include_dir}
+            ${PROJECT_SOURCE_DIR}/codegen
+            ${PROJECT_SOURCE_DIR}/codegen/parser)
+        target_link_libraries(codegen_imports_source_linker_test
+            PRIVATE easypb_proto_loader)
+        add_test(NAME codegen.imports.source
+            COMMAND codegen_imports_source_linker_test
+                ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/linker)
+        set_tests_properties(codegen.imports.source PROPERTIES
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
     endif()

@@ -64,7 +64,7 @@ add_executable(easypb_codegen codegen/main.cpp codegen/cpp_names.cpp)
 set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
 target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl codegen)
 
-add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp codegen/logical_paths.cpp)
+add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp codegen/logical_paths.cpp codegen/schema_linker.cpp)
 target_include_directories(easypb_schema
     PUBLIC include codegen)
 
