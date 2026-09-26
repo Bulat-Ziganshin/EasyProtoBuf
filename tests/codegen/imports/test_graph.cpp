@@ -137,13 +137,18 @@ void test_logical_paths_invalid()
 //   DIAGNOSTIC_INVISIBLE_TYPE        appended by Step 4.1 (asserted below)
 //   DIAGNOSTIC_NOT_A_TYPE            appended by Step 4.1 (asserted below)
 //   DIAGNOSTIC_MAP_ENTRY_TYPE        appended by Step 4.2 (asserted below)
-//   DIAGNOSTIC_KIND_MISMATCH         Step 5.1 - this checklist used to file
-//                                    it under Step 4.1, but Step 5.1 owns the
+//   DIAGNOSTIC_KIND_MISMATCH         appended by Step 5.1 (asserted below) -
+//                                    this checklist used to file it under
+//                                    Step 4.1, but Step 5.1 owns the
 //                                    descriptor-origin declared-kind check
 //                                    the code exists for, so it is appended
 //                                    by the step that first needs it
-//   DIAGNOSTIC_MALFORMED_MAP_ENTRY   Step 5.1
-//   DIAGNOSTIC_UNSUPPORTED_SYNTAX    Step 6.1
+//   DIAGNOSTIC_MALFORMED_MAP_ENTRY   appended by Step 5.1 (asserted below)
+//   DIAGNOSTIC_UNSUPPORTED_SYNTAX    appended by Step 5.1 (asserted below):
+//                                    A25's refusal at link_schema's entry
+//                                    point, which Step 5.2's test needs; Step
+//                                    6.1 consumes the value for the
+//                                    cross-syntax enum rule
 void test_diagnostic_codes_stay_distinct()
 {
     CHECK(easypb_schema::DIAGNOSTIC_GENERIC !=
@@ -217,6 +222,35 @@ void test_diagnostic_codes_stay_distinct()
           easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
     CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
           easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
+    // Step 5.1: three more appended values - the descriptor-origin kind
+    // mismatch (A7), the malformed map entry (A26), and the unsupported file
+    // syntax (A25). Each must differ from every earlier code and from its two
+    // siblings: callers switch on these codes instead of reading message text,
+    // so an alias is exactly the bug this checklist exists to catch.
+    const easypb_schema::DiagnosticCode appended[] = {
+        easypb_schema::DIAGNOSTIC_KIND_MISMATCH,
+        easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY,
+        easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX
+    };
+    const easypb_schema::DiagnosticCode earlier[] = {
+        easypb_schema::DIAGNOSTIC_GENERIC,
+        easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE,
+        easypb_schema::DIAGNOSTIC_INVALID_IMPORT,
+        easypb_schema::DIAGNOSTIC_MISSING_IMPORT,
+        easypb_schema::DIAGNOSTIC_IMPORT_CYCLE,
+        easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL,
+        easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE,
+        easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+        easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE
+    };
+    for (std::size_t i = 0; i < sizeof(appended) / sizeof(appended[0]); ++i) {
+        for (std::size_t j = 0; j < sizeof(earlier) / sizeof(earlier[0]); ++j) {
+            CHECK(appended[i] != earlier[j]);
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            CHECK(appended[i] != appended[j]);
+        }
+    }
 }
 
 void test_bind_simple_chain()

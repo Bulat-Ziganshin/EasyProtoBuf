@@ -1,13 +1,15 @@
-// Link orchestration for the schema layer. Stages 2 (edge binding), 3 (the
-// shared symbol index) and 4 (visibility sets) are implemented; stage 5
-// (resolution) arrives in a later plan-4 step, so the result this file
-// publishes today is deliberately incomplete (see the TEMPORARY note on the
-// success path of link_schema).
+// Link orchestration for the schema layer: the six stages of the end-state map
+// - edge binding, one shared index, visibility, resolution, warning hygiene,
+// publication - with the deterministic name-sorted walk (A2) and the
+// publish-on-success rule (A1) that hold across all of them. The compatibility
+// branch belongs to Task 3 (Step 7); until it lands, the mode refuses loudly
+// instead of publishing a half-linked view.
 
 #include "schema_linker.hpp"
 
 #include <algorithm>
 #include <cstddef>
+#include <vector>
 
 namespace easypb_schema {
 
@@ -73,7 +75,7 @@ bool less_by_logical_name(const SchemaFile* left, const SchemaFile* right)
     return view_text(left->file.name) < view_text(right->file.name);
 }
 
-// The deterministic walk order of stages 3-5: a function of the logical file
+// The deterministic walk order of stages 1-6: a function of the logical file
 // names, never of files.files() insertion order and never of pointer values
 // (A2). SchemaSet rejects duplicate logical names, so equal keys cannot
 // occur; stable_sort keeps that guarantee explicit - the order stays a
@@ -90,6 +92,66 @@ std::vector<SchemaFile*> files_by_logical_name(const SchemaSet& files)
     return ordered;
 }
 
+// A25's refusal: an input-capability statement, not a validation verdict. We
+// do not model editions or their features, and protoc decides enum openness
+// and field presence from the edition, so a "not proto3 means proto2" test
+// would silently downgrade an editions file to a semantics it does not have
+// (measured: oracle E8 accepts where E9, the proto2 twin, rejects).
+//
+// No descriptor path suffix: the file itself is the subject, and the value is
+// quoted so the message names what was actually read.
+bool fail_unsupported_syntax(const SchemaFile& file, Diagnostic& error)
+{
+    error = Diagnostic();
+    error.file = view_text(file.file.name);
+    error.location = unknown_location();
+    error.message = "file \"" + view_text(file.file.name) + "\" declares syntax \"" +
+                    view_text(file.file.syntax) + "\", which is not supported: " +
+                    "only absent, \"proto2\", and \"proto3\" are accepted";
+    error.warning = false;
+    error.code = DIAGNOSTIC_UNSUPPORTED_SYNTAX;
+    return false;
+}
+
+// A10's warning hygiene. The standalone parser path resolves with
+// allow_unresolved = true (proto_parser.cpp's semantic pass), so a file in the
+// set may already carry DIAGNOSTIC_UNRESOLVED_TYPE warnings for references
+// this link has just resolved. On success exactly that code is removed and
+// every other code is left alone - a warning about a deferred default is still
+// true and the caller may still need it. On failure the caller removes
+// nothing, because the warnings are part of the explanation.
+void drop_stale_unresolved_warnings(SchemaFile& file)
+{
+    std::vector<Diagnostic> kept;
+    kept.reserve(file.warnings.size());
+    for (std::size_t i = 0; i < file.warnings.size(); ++i) {
+        if (file.warnings[i].code != DIAGNOSTIC_UNRESOLVED_TYPE) {
+            kept.push_back(file.warnings[i]);
+        }
+    }
+    file.warnings.swap(kept);
+}
+
+// Placeholder for Step 7 (Task 3). The compatibility pass is a named policy of
+// its own - one descriptor-origin file, missing external definitions permitted
+// only when the descriptor classifies them itself, a bounded one-warning-per-
+// type rule - and it must not be approximated by running the complete-mode
+// pipeline: that would resolve with allow_unresolved = false and misreport the
+// thin descriptors this mode exists for as unresolved-type errors. Until Step
+// 7 defines it, the mode refuses loudly and, like every other failure path,
+// publishes nothing (A1).
+bool link_compatibility(SchemaSet& files, LinkedSchema& result,
+                        Diagnostic& error)
+{
+    (void)files;
+    (void)result;   // already the invalid empty state, set by the caller
+    error = Diagnostic();
+    error.message =
+        "compatibility mode is not implemented until Step 7 of plan 4";
+    error.code = DIAGNOSTIC_GENERIC;
+    return false;
+}
+
 } // namespace
 
 bool link_schema(SchemaSet& files, LinkMode mode,
@@ -99,14 +161,44 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // a failed link can never leave an earlier publication readable.
     result = LinkedSchema();
 
-    // Stage 2: bind every file's import edges. In compatibility mode a
-    // missing target is an expected single-file condition; in complete mode it
-    // is an error. Stage 1's mode preconditions are not implemented yet.
-    const bool allow_missing = (mode == LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY);
-    if (!bind_import_edges(files, allow_missing, error)) return false;
-
-    // Stages 3-5 share this walk order (A2).
+    // The deterministic walk order of every stage below (A2). It is computed
+    // once and taken before stage 1, because the syntax classification has to
+    // see the files in the same order the later stages use; binding edges only
+    // fills each file's edge list, so the pointers stay valid.
     const std::vector<SchemaFile*> ordered = files_by_logical_name(files);
+
+    // Stage 1 (A25, both modes): classify every file's syntax before stage 2
+    // binds edges and before the index is built. Refusing here keeps the
+    // capability statement honest - an editions file with no cross-syntax
+    // reference would otherwise link silently, because no resolver would ever
+    // ask about its syntax.
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        if (classify_file_syntax(ordered[i]->file) ==
+            FILE_SYNTAX_UNSUPPORTED) {
+            return fail_unsupported_syntax(*ordered[i], error);
+        }
+    }
+
+    // Compatibility mode is its own named pass (A6). It performs the same
+    // syntax refusal in its preconditions, so the check above stays outside
+    // the branch.
+    if (mode == LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY) {
+        return link_compatibility(files, result, error);
+    }
+
+    // Stage 2: bind every file's import edges. In complete mode a missing
+    // target is an error.
+    if (!bind_import_edges(files, false, error)) return false;
+
+    // Stage 3a (A26): every synthetic map entry present in an available file
+    // must carry a field numbered 1 and a field numbered 2, whether or not
+    // anything references it. This runs before resolution on purpose: the
+    // ownership guard is driven by a referencing field, while a malformed
+    // entry is a structural fact about the descriptor and must fail on its
+    // own, including in compatibility mode (Step 7.2 repeats the sweep).
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        if (!validate_map_entry_shapes(*ordered[i], error)) return false;
+    }
 
     // Everything is built into a local and assigned once, at the end (A1).
     LinkedSchema linked;
@@ -126,10 +218,31 @@ bool link_schema(SchemaSet& files, LinkMode mode,
         linked.visible_files[ordered[i]] = visible_files(ordered[i], memo);
     }
 
-    // TEMPORARY (Step 2): stage 5 is not implemented yet; Step 5 replaces this
-    // with real resolution and flips complete to true.
+    // Stage 5: resolve every file against its own visible set. The linker's
+    // answer is authoritative and overwrites anything an earlier local pass
+    // may have resolved; allow_unresolved is false, because in complete mode a
+    // reference that cannot be resolved is an error. The walk order makes the
+    // first reported failure a function of the logical names alone.
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        if (!resolve_file(*ordered[i], linked.symbols,
+                          linked.visible_files[ordered[i]],
+                          /*allow_unresolved=*/false, error)) {
+            return false;
+        }
+    }
+
+    // Stage 5b (A10): warning hygiene after the last stage that can add
+    // warnings and before publication. Nothing is dropped on a failure path -
+    // the loops above return first.
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        drop_stale_unresolved_warnings(*ordered[i]);
+    }
+
+    // Stage 6: publish only now. Every stage above built `linked`; a failure
+    // returned before this line leaves `result` in the invalid empty state set
+    // at entry, never a partial view.
     linked.files = &files;
-    linked.complete = false;
+    linked.complete = true;
     result = linked;   // SymbolIndex/map copies are fine: the files are not.
     return true;
 }

@@ -209,8 +209,12 @@ void add_nested(easypb_schema::SchemaFile& file, DescriptorProto& parent,
 
 // Appends the synthetic entry message a map field implies: protoc's marker,
 // key field 1, value field 2. A null value_type_name makes the value a scalar.
+// value_kind is the kind a descriptor-origin value member DECLARES: the
+// declared-kind check (A7) compares it with the definition the name resolves
+// to, so an enum-valued entry must pass TYPE_ENUM, not the message default.
 void add_map_entry(easypb_schema::SchemaFile& file, DescriptorProto& message,
-                   const char* entry_name, const char* value_type_name)
+                   const char* entry_name, const char* value_type_name,
+                   int value_kind = FieldDescriptorProto::TYPE_MESSAGE)
 {
     DescriptorProto entry;
     entry.name = file.strings.save(entry_name);
@@ -241,7 +245,7 @@ void add_map_entry(easypb_schema::SchemaFile& file, DescriptorProto& message,
         value.type = FieldDescriptorProto::TYPE_STRING;
         value.has_type = true;
     } else {
-        value.type = FieldDescriptorProto::TYPE_MESSAGE;
+        value.type = value_kind;
         value.has_type = true;
         value.type_name = file.strings.save(value_type_name);
         value.has_type_name = true;
@@ -297,26 +301,28 @@ void retype_nested_field(easypb_schema::SchemaFile& file, int message_index,
     field.has_type_name = true;
 }
 
-// Runs complete linking first (stages 2-4 publish the index and the visibility
-// sets) and then resolves ONE file through the shared resolve path. Step 5
-// wires that call into link_schema itself; until then the Step-4 tests drive
-// resolve_file directly, which is why a resolution failure is reported here
-// while the link stays green.
-bool resolve_after_link(easypb_schema::SchemaSet& set,
-                        easypb_schema::SchemaFile& file, bool allow_unresolved,
-                        easypb_schema::Diagnostic& error)
+// The verdict of a complete link: true when every file resolved against its
+// own visible set and a complete view was published, false when the first
+// failure (in name-sorted file order) was reported in error. Step 5 wired
+// stage 5 into link_schema, so this IS the resolution verdict the Step-4
+// tests want: a helper that linked a stub-published index and then resolved
+// one file by hand could not run any more, because a resolution failure is now
+// the link's own failure and nothing is published for it.
+bool link_verdict(easypb_schema::SchemaSet& set,
+                  easypb_schema::Diagnostic& error)
 {
     easypb_schema::LinkedSchema linked;
-    easypb_schema::Diagnostic link_error;
-    CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE, linked,
-                                     link_error));
-    const std::map<const easypb_schema::SchemaFile*,
-                   std::set<const easypb_schema::SchemaFile*> >::const_iterator
-        found = linked.visible_files.find(&file);
-    CHECK(found != linked.visible_files.end());
-    if (found == linked.visible_files.end()) return false;
-    return easypb_schema::resolve_file(file, linked.symbols, found->second,
-                                       allow_unresolved, error);
+    const bool linked_ok = easypb_schema::link_schema(
+        set, easypb_schema::LINK_COMPLETE, linked, error);
+    if (linked_ok) {
+        CHECK(linked.files == &set);
+        CHECK(linked.complete);
+    } else {
+        // Publish-on-failure (A1, E3): nothing readable survives a failure.
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+    }
+    return linked_ok;
 }
 
 // The map-entry fixture: message D legally owns the map field map_field_name
@@ -510,10 +516,9 @@ std::string visible_names(const easypb_schema::LinkedSchema& linked,
     return joined;
 }
 
-// Links a fixture in complete mode and CHECKs that the staged publish of Step
-// 2.2 produced a view. The contract details live in one place,
-// test_link_stub_publishes_stages_2_and_4; the visibility tests below only
-// need the published view.
+// Links a fixture in complete mode and CHECKs that a view was published. The
+// contract details live in one place, test_complete_link_publishes_after_every
+// _stage; the visibility tests below only need the published view.
 easypb_schema::LinkedSchema link_ok(easypb_schema::SchemaSet& set)
 {
     easypb_schema::LinkedSchema linked;
@@ -523,13 +528,14 @@ easypb_schema::LinkedSchema link_ok(easypb_schema::SchemaSet& set)
     return linked;
 }
 
-// Step 2.2's staged contract, extended by Step 3.1: stages 2, 3 and 4 ran and
-// the view is published, but it is explicitly incomplete because stage 5 is
-// not implemented. Step 5.1 replaces its success half with real linking.
-void test_link_stub_publishes_stages_2_3_and_4()
+// Step 5.1's success contract, extended across the earlier steps: the bind
+// stage, the shared symbol index, the visibility sets and the resolution pass
+// all ran, the staged publish of Step 2.2 is gone, and the result is a
+// COMPLETE link. The failure paths below are unchanged - a failing stage still
+// publishes nothing at all.
+void test_complete_link_publishes_after_every_stage()
 {
-    // Success path: the bind stage, the shared symbol index and the
-    // visibility sets all ran, and the result says so.
+    // Success path.
     easypb_schema::SchemaSet set;
     const Chain chain = make_chain_fixture(set, false, false);
     easypb_schema::LinkedSchema linked;
@@ -538,7 +544,13 @@ void test_link_stub_publishes_stages_2_3_and_4()
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                      linked, error));
     CHECK(linked.files == &set);
-    CHECK(!linked.complete);
+    CHECK(linked.complete);
+    // Stage 5: the field resolved against a's visible set and was rewritten to
+    // the absolute name the index holds.
+    CHECK(text(chain.a->file.message_type[0].field[0].type_name) ==
+          ".shared.Value");
+    CHECK(chain.a->file.message_type[0].field[0].type ==
+          FieldDescriptorProto::TYPE_MESSAGE);
     // Stage 3: one index over every file, in the walk order, with the type
     // names both files define and the field a references.
     CHECK(linked.symbols.symbols.count(".app.A") == 1);
@@ -576,6 +588,24 @@ void test_link_stub_publishes_stages_2_3_and_4()
                                       reused, error));
     CHECK(reused.files == 0);
     CHECK(!reused.complete);
+    CHECK(reused.visible_files.empty());
+
+    // The same rule for the resolution stage: the failure below is reported by
+    // stage 5, and the reused result - which holds the SUCCESSFUL view of the
+    // chain above - must end up invalid-empty rather than half-updated.
+    easypb_schema::SchemaSet unresolved;
+    {
+        easypb_schema::SchemaFile& broken =
+            make_simple_file(unresolved, "a.proto", "app");
+        add_message_with_field(broken, "A", "v", 1, ".shared.Absent");
+    }
+    CHECK(!easypb_schema::link_schema(unresolved,
+                                      easypb_schema::LINK_COMPLETE, reused,
+                                      error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(reused.files == 0);
+    CHECK(!reused.complete);
+    CHECK(reused.symbols.symbols.empty());
     CHECK(reused.visible_files.empty());
 }
 
@@ -799,9 +829,14 @@ void test_index_same_package_in_two_files_merges()
 void test_index_message_and_field_names_live_in_different_scopes()
 {
     // A message named like another message's field is not a collision: the
-    // field's key is qualified by its containing scope.
+    // field's key is qualified by its containing scope. a.proto imports
+    // b.proto so the fixture's field really resolves from Step 5 on - the
+    // index keys are the subject here, not a visibility failure.
+    const std::vector<std::int32_t> no_indexes;
     easypb_schema::SchemaSet set;
-    easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", 0);
+    easypb_schema::SchemaFile& a = make_file(
+        set, "a.proto", std::vector<std::string>(1, "b.proto"), no_indexes,
+        no_indexes);
     add_message_with_field(a, "Holder", "value", 1, ".value");
     easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", 0);
     add_message(b, "value");
@@ -955,7 +990,7 @@ void test_resolution_separates_invisible_from_missing()
 
         // Control: b's own symbol resolves through the ordinary edge and is
         // interned as an absolute name.
-        CHECK(resolve_after_link(set, *chain.a, false, error));
+        CHECK(link_verdict(set, error));
         CHECK(text(chain.a->file.message_type[0].field[0].type_name) ==
               ".shared.Value");
         CHECK(chain.a->file.message_type[0].field[0].type ==
@@ -965,7 +1000,7 @@ void test_resolution_separates_invisible_from_missing()
         retype_field(*chain.a, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL,
                      "shared.Other");
         error = easypb_schema::Diagnostic();
-        CHECK(!resolve_after_link(set, *chain.a, false, error));
+        CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
         CHECK(error.file == "a.proto");
         CHECK(error.message.find(".shared.Other") != std::string::npos);
@@ -976,7 +1011,7 @@ void test_resolution_separates_invisible_from_missing()
         retype_field(*chain.a, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL,
                      "shared.Absent");
         error = easypb_schema::Diagnostic();
-        CHECK(!resolve_after_link(set, *chain.a, false, error));
+        CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
         CHECK(error.message.find("unresolved type shared.Absent") !=
               std::string::npos);
@@ -992,7 +1027,7 @@ void test_resolution_separates_invisible_from_missing()
         retype_field(*chain.a, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL,
                      "shared.Other");
         easypb_schema::Diagnostic error;
-        CHECK(resolve_after_link(set, *chain.a, false, error));
+        CHECK(link_verdict(set, error));
         CHECK(text(chain.a->file.message_type[0].field[0].type_name) ==
               ".shared.Other");
     }
@@ -1029,7 +1064,7 @@ void test_shadowing_commits_the_matched_aggregate()
     }
 
     easypb_schema::Diagnostic error;
-    CHECK(!resolve_after_link(set, file, false, error));
+    CHECK(!link_verdict(set, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
     CHECK(error.message.find("unresolved type Choice.Item") != std::string::npos);
     CHECK(error.message.find("\".pkg.Encloser.Choice.Item\"") !=
@@ -1040,7 +1075,7 @@ void test_shadowing_commits_the_matched_aggregate()
     // it needs no outward fallback to get there.
     retype_nested_field(file, 1, 1, 0, ".pkg.Choice.Item");
     error = easypb_schema::Diagnostic();
-    CHECK(resolve_after_link(set, file, false, error));
+    CHECK(link_verdict(set, error));
     CHECK(text(file.file.message_type[1].nested_type[1].field[0].type_name) ==
           ".pkg.Choice.Item");
     CHECK(file.file.message_type[1].nested_type[1].field[0].type ==
@@ -1074,7 +1109,7 @@ void test_non_type_heads_do_not_shadow()
             file.file.message_type.push_back(m);
         }
         easypb_schema::Diagnostic error;
-        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(link_verdict(set, error));
         CHECK(text(file.file.message_type[1].field[1].type_name) ==
               ".pkg.Choice.Item");
     }
@@ -1107,7 +1142,7 @@ void test_non_type_heads_do_not_shadow()
             file.file.message_type.push_back(n);
         }
         easypb_schema::Diagnostic error;
-        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(link_verdict(set, error));
         CHECK(text(file.file.message_type[1].field[0].type_name) ==
               ".pkg.Choice.Item");
     }
@@ -1121,7 +1156,7 @@ void test_non_type_heads_do_not_shadow()
         add_field(file, p, "t", 2, FieldDescriptorProto::LABEL_OPTIONAL, "Thing");
         file.file.message_type.push_back(p);
         easypb_schema::Diagnostic error;
-        CHECK(!resolve_after_link(set, file, false, error));
+        CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
         CHECK(error.message.find("\"Thing\"") != std::string::npos);
         CHECK(error.message.find("a field") != std::string::npos);
@@ -1162,13 +1197,13 @@ void test_invisible_candidates_do_not_shadow()
         add_message(hidden, "Other");
 
         easypb_schema::Diagnostic error;
-        CHECK(resolve_after_link(set, root, false, error));
+        CHECK(link_verdict(set, error));
         CHECK(text(root.file.message_type[0].field[0].type_name) == ".sub.X");
 
         root.file.dependency.push_back(root.strings.save("hidden.proto"));
         retype_field(root, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL, "sub.X");
         error = easypb_schema::Diagnostic();
-        CHECK(!resolve_after_link(set, root, false, error));
+        CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
         CHECK(error.message.find("\".pkg.sub.X\"") != std::string::npos);
     }
@@ -1196,13 +1231,13 @@ void test_invisible_candidates_do_not_shadow()
         add_message(hidden, "sub");
 
         easypb_schema::Diagnostic error;
-        CHECK(resolve_after_link(set, root, false, error));
+        CHECK(link_verdict(set, error));
         CHECK(text(root.file.message_type[0].field[0].type_name) == ".sub.X");
 
         root.file.dependency.push_back(root.strings.save("hidden.proto"));
         retype_field(root, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL, "sub.X");
         error = easypb_schema::Diagnostic();
-        CHECK(!resolve_after_link(set, root, false, error));
+        CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
         CHECK(error.message.find("\".pkg.sub.X\"") != std::string::npos);
     }
@@ -1242,7 +1277,7 @@ void test_merged_package_is_visible_when_any_declaring_file_is()
     add_message(second, "Value");
 
     easypb_schema::Diagnostic error;
-    CHECK(resolve_after_link(set, root, false, error));
+    CHECK(link_verdict(set, error));
     CHECK(text(root.file.message_type[0].field[0].type_name) == ".shared.Value");
 
     // Oracle F4: the invisible first-indexed file declares only the SUB-package
@@ -1274,7 +1309,7 @@ void test_merged_package_is_visible_when_any_declaring_file_is()
         add_message(sub_vis, "Value");
 
         easypb_schema::Diagnostic sub_error;
-        CHECK(resolve_after_link(sub_set, sub_root, false, sub_error));
+        CHECK(link_verdict(sub_set, sub_error));
         CHECK(text(sub_root.file.message_type[0].field[0].type_name) ==
               ".shared.Value");
     }
@@ -1308,7 +1343,7 @@ void test_sub_package_does_not_make_the_parent_visible()
     add_message(deep, "X");
 
     easypb_schema::Diagnostic error;
-    CHECK(!resolve_after_link(set, root, false, error));
+    CHECK(!link_verdict(set, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
     CHECK(error.message.find("deep.proto") != std::string::npos);
 }
@@ -1330,14 +1365,14 @@ void test_enum_value_member_paths()
     file.file.message_type.push_back(m);
 
     easypb_schema::Diagnostic error;
-    CHECK(!resolve_after_link(set, file, false, error));
+    CHECK(!link_verdict(set, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
     CHECK(error.message.find("SomeEnum.VALUE") != std::string::npos);
     CHECK(error.message.find("\".pkg.SomeEnum.VALUE\"") != std::string::npos);
 
     retype_field(file, 0, 0, FieldDescriptorProto::LABEL_OPTIONAL, "VALUE");
     error = easypb_schema::Diagnostic();
-    CHECK(!resolve_after_link(set, file, false, error));
+    CHECK(!link_verdict(set, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
     CHECK(error.message.find("\"VALUE\"") != std::string::npos);
     CHECK(error.message.find("an enum value") != std::string::npos);
@@ -1422,7 +1457,7 @@ void test_compound_member_non_type_matches_absolute_spelling()
         file.file.message_type.push_back(requester);
 
         easypb_schema::Diagnostic error;
-        CHECK(!resolve_after_link(set, file, false, error));
+        CHECK(!link_verdict(set, error));
         CHECK(error.code == cases[i].code);
         CHECK(error.message.find(cases[i].category) != std::string::npos);
         // Both the relative and the absolute row name the resolved path, so
@@ -1444,7 +1479,7 @@ void test_compound_member_non_type_matches_absolute_spelling()
         file.file.message_type.push_back(requester);
 
         easypb_schema::Diagnostic error;
-        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(link_verdict(set, error));
         CHECK(text(file.file.message_type[1].field[0].type_name) ==
               ".pkg.Holder.N");
         CHECK(file.file.message_type[1].field[0].type ==
@@ -1562,7 +1597,7 @@ void check_reference_case(easypb_schema::SchemaSet& set,
                           const char* expected_interned)
 {
     easypb_schema::Diagnostic error;
-    const bool resolved = resolve_after_link(set, requester, false, error);
+    const bool resolved = link_verdict(set, error);
     CHECK(resolved == (expected_code < 0));
     if (!resolved && expected_code >= 0) CHECK(error.code == expected_code);
     if (!resolved && expected_substr != 0) {
@@ -1715,13 +1750,15 @@ void test_legal_recursion_stays_legal()
               ".q.Y");
     other.file.message_type.push_back(y);
 
+    // One link resolves BOTH files: stage 5 walks every file, not a chosen
+    // root, so the cross-file reference (X -> y.proto's Y) and the remote
+    // file's own self-reference are answered by the same pass.
     easypb_schema::Diagnostic error;
-    CHECK(resolve_after_link(set, root, false, error));
+    CHECK(link_verdict(set, error));
     CHECK(text(root.file.message_type[0].field[0].type_name) == ".pkg.Node");
     CHECK(text(root.file.message_type[1].field[0].type_name) == ".pkg.B");
     CHECK(text(root.file.message_type[2].field[0].type_name) == ".pkg.A");
     CHECK(text(root.file.message_type[3].field[0].type_name) == ".q.Y");
-    CHECK(resolve_after_link(set, other, false, error));
     CHECK(text(other.file.message_type[0].field[0].type_name) == ".q.Y");
 }
 
@@ -1735,7 +1772,7 @@ void test_legal_map_fields_resolve_to_their_entry()
         make_map_fixture(set, "foo", "FooEntry");
         easypb_schema::SchemaFile& file = *set.find_file("a.proto");
         easypb_schema::Diagnostic error;
-        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(link_verdict(set, error));
         CHECK(text(file.file.message_type[0].field[0].type_name) ==
               ".pkg.D.FooEntry");
         CHECK(file.file.message_type[0].field[0].type ==
@@ -1747,7 +1784,7 @@ void test_legal_map_fields_resolve_to_their_entry()
         easypb_schema::SchemaFile& file = *set.find_file("a.proto");
         retype_field(file, 0, 0, FieldDescriptorProto::LABEL_REPEATED, "FooEntry");
         easypb_schema::Diagnostic error;
-        CHECK(resolve_after_link(set, file, false, error));
+        CHECK(link_verdict(set, error));
         CHECK(text(file.file.message_type[0].field[0].type_name) ==
               ".pkg.D.FooEntry");
     }
@@ -1768,7 +1805,7 @@ void check_map_entry_rejection(const char* map_field_name,
     add_field(file, file.file.message_type[message_index], field_name, 2, label,
               type_name);
     easypb_schema::Diagnostic error;
-    CHECK(!resolve_after_link(set, file, false, error));
+    CHECK(!link_verdict(set, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
     CHECK(error.message.find("map entry") != std::string::npos);
     CHECK(error.message.find(entry_name) != std::string::npos);
@@ -1819,7 +1856,7 @@ void test_foreign_map_entry_references_are_rejected()
         make_map_fixture(set, "foo", "ItemEntry");
         easypb_schema::SchemaFile& file = *set.find_file("a.proto");
         easypb_schema::Diagnostic error;
-        CHECK(!resolve_after_link(set, file, false, error));
+        CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
         CHECK(error.message.find("ItemEntry") != std::string::npos);
     }
@@ -1832,7 +1869,7 @@ void test_foreign_map_entry_references_are_rejected()
         add_field(root, root.file.message_type[0], "e", 1,
                   FieldDescriptorProto::LABEL_OPTIONAL, ".pkg.D.FooEntry");
         easypb_schema::Diagnostic error;
-        CHECK(!resolve_after_link(set, root, false, error));
+        CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
     }
     // A6: the same entry by the relative compound name, which reaches it only
@@ -1844,7 +1881,7 @@ void test_foreign_map_entry_references_are_rejected()
         add_field(root, root.file.message_type[0], "e", 1,
                   FieldDescriptorProto::LABEL_OPTIONAL, "D.FooEntry");
         easypb_schema::Diagnostic error;
-        CHECK(!resolve_after_link(set, root, false, error));
+        CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
     }
 }
@@ -1879,7 +1916,7 @@ void test_map_entry_guard_runs_after_visibility()
     root.file.message_type.push_back(r);
 
     easypb_schema::Diagnostic error;
-    CHECK(!resolve_after_link(set, root, false, error));
+    CHECK(!link_verdict(set, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
     CHECK(error.message.find("hidden.proto") != std::string::npos);
     CHECK(error.message.find("map entry") == std::string::npos);
@@ -1888,7 +1925,10 @@ void test_map_entry_guard_runs_after_visibility()
 // The synthesized entry's value field is resolved from its own reference, not
 // through the map field's synthetic entry name: the other route would silently
 // defeat the cross-syntax check Step 6.2 adds (the classification itself is
-// Step 6's, so this test asserts the precondition only).
+// Step 6's, so this test asserts the precondition only). The entry is
+// descriptor-origin, so its value member must DECLARE the kind it names (A7):
+// an enum-valued entry that claims a message is a kind mismatch, not a
+// resolution, from Step 5.1 on.
 void test_map_entry_value_resolves_from_its_own_token()
 {
     easypb_schema::SchemaSet set;
@@ -1898,12 +1938,13 @@ void test_map_entry_value_resolves_from_its_own_token()
     DescriptorProto m;
     m.name = file.strings.save("M");
     m.has_name = true;
-    add_map_entry(file, m, "FooEntry", ".pkg.SomeEnum");
+    add_map_entry(file, m, "FooEntry", ".pkg.SomeEnum",
+                  FieldDescriptorProto::TYPE_ENUM);
     add_map_field(file, m, "foo", 1, ".pkg.M.FooEntry");
     file.file.message_type.push_back(m);
 
     easypb_schema::Diagnostic error;
-    CHECK(resolve_after_link(set, file, false, error));
+    CHECK(link_verdict(set, error));
     CHECK(text(file.file.message_type[0].field[0].type_name) ==
           ".pkg.M.FooEntry");
     const FieldDescriptorProto& value =
@@ -1912,11 +1953,777 @@ void test_map_entry_value_resolves_from_its_own_token()
     CHECK(text(value.type_name) == ".pkg.SomeEnum");
 }
 
+// --- Step 5: the complete-mode link loop -----------------------------------
+// The cases below drive link_schema itself. Step 5 wired stage 5 into it, so a
+// resolution failure IS the link's failure and nothing is published for it;
+// the Step-3/4 tests above call the same helper, link_verdict.
+
+easypb_schema::SourceLocation at_line(int line)
+{
+    easypb_schema::SourceLocation location;
+    location.offset = 0;
+    location.line = static_cast<std::size_t>(line);
+    location.column = 1;
+    return location;
+}
+
+// Records the per-field source provenance a parser would record, so a failure
+// can be asserted AT the token the contract names instead of at a descriptor
+// path. Fixtures without this stay descriptor-only and fall back to the path.
+void record_field_source(easypb_schema::SchemaFile& file,
+                         const easypb_schema::DescriptorPath& path,
+                         const char* raw_type_name, int type_line,
+                         int default_line, int packed_line)
+{
+    easypb_schema::FieldSource source;
+    source.path = path;
+    if (raw_type_name != 0) source.raw_type_name = raw_type_name;
+    source.type_location =
+        type_line > 0 ? at_line(type_line) : easypb_schema::unknown_location();
+    source.default_location = default_line > 0
+                                  ? at_line(default_line)
+                                  : easypb_schema::unknown_location();
+    source.packed_location = packed_line > 0
+                                 ? at_line(packed_line)
+                                 : easypb_schema::unknown_location();
+    file.field_sources.push_back(source);
+}
+
+// The plan-4 Task 2 regression pair, in memory, with the enumeration values the
+// contract fixes (READY = 7, STOPPED = 9):
+//
+//   state.proto  package shared; enum State { READY = 7; STOPPED = 9; }
+//   report.proto package app; imports state.proto;
+//                message Report {
+//                  repeated shared.State states = 1 [packed = true];
+//                  optional shared.State state = 2 [default = STOPPED];
+//                }
+//
+// Both files are source-origin, so their named fields carry no declared kind
+// (deferred parsing leaves has_type unset) and resolution owes them both the
+// kind and the absolute name. The recorded token lines are what the two
+// mutations below assert against: the pack requires the default failure at
+// the default token, and the packed failure at the packed option.
+struct StateReport
+{
+    easypb_schema::SchemaFile* state;
+    easypb_schema::SchemaFile* report;
+};
+
+StateReport make_state_report_fixture(easypb_schema::SchemaSet& set,
+                                      bool state_is_message)
+{
+    easypb_schema::SchemaFile& state =
+        make_simple_file(set, "state.proto", "shared");
+    if (state_is_message) {
+        add_message(state, "State");
+    } else {
+        EnumDescriptorProto enumeration;
+        enumeration.name = state.strings.save("State");
+        enumeration.has_name = true;
+        const char* names[2] = { "READY", "STOPPED" };
+        const int numbers[2] = { 7, 9 };
+        for (int i = 0; i < 2; ++i) {
+            EnumValueDescriptorProto value;
+            value.name = state.strings.save(names[i]);
+            value.has_name = true;
+            value.number = numbers[i];
+            value.has_number = true;
+            enumeration.value.push_back(value);
+        }
+        state.file.enum_type.push_back(enumeration);
+    }
+
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaFile& report = make_file(
+        set, "report.proto", std::vector<std::string>(1, "state.proto"),
+        no_indexes, no_indexes);
+    set_package(report, "app");
+    DescriptorProto message;
+    message.name = report.strings.save("Report");
+    message.has_name = true;
+    {
+        FieldDescriptorProto field;
+        field.name = report.strings.save("states");
+        field.has_name = true;
+        field.number = 1;
+        field.has_number = true;
+        field.label = FieldDescriptorProto::LABEL_REPEATED;
+        field.has_label = true;
+        field.type_name = report.strings.save("shared.State");
+        field.has_type_name = true;
+        field.options.packed = true;
+        field.options.has_packed = true;
+        message.field.push_back(field);
+    }
+    {
+        FieldDescriptorProto field;
+        field.name = report.strings.save("state");
+        field.has_name = true;
+        field.number = 2;
+        field.has_number = true;
+        field.label = FieldDescriptorProto::LABEL_OPTIONAL;
+        field.has_label = true;
+        field.type_name = report.strings.save("shared.State");
+        field.has_type_name = true;
+        field.default_value = report.strings.save("STOPPED");
+        field.has_default_value = true;
+        message.field.push_back(field);
+    }
+    report.file.message_type.push_back(message);
+
+    const easypb_schema::DescriptorPath message_path =
+        easypb_schema::file_message_path(0);
+    record_field_source(report,
+                        easypb_schema::message_field_path(message_path, 0),
+                        "shared.State", 5, 0, 5);
+    record_field_source(report,
+                        easypb_schema::message_field_path(message_path, 1),
+                        "shared.State", 6, 6, 0);
+
+    StateReport pair = { &state, &report };
+    return pair;
+}
+
+void test_task2_pair_links_and_its_two_mutations_fail()
+{
+    // Intact: both fields resolve to the imported enum, with its kind and its
+    // absolute name, and the link publishes completely.
+    {
+        easypb_schema::SchemaSet set;
+        const StateReport pair = make_state_report_fixture(set, false);
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        const FieldDescriptorProto& states =
+            pair.report->file.message_type[0].field[0];
+        CHECK(states.has_type && states.type == FieldDescriptorProto::TYPE_ENUM);
+        CHECK(text(states.type_name) == ".shared.State");
+        const FieldDescriptorProto& state =
+            pair.report->file.message_type[0].field[1];
+        CHECK(state.has_type && state.type == FieldDescriptorProto::TYPE_ENUM);
+        CHECK(text(state.type_name) == ".shared.State");
+    }
+    // Mutation A: the default names an enumerator the enum does not define.
+    // protoc reports it at the default token, and so do we: the recorded
+    // default line is what the diagnostic carries.
+    {
+        easypb_schema::SchemaSet set;
+        const StateReport pair = make_state_report_fixture(set, false);
+        pair.report->file.message_type[0].field[1].default_value =
+            pair.report->strings.save("STARTED");
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.file == "report.proto");
+        CHECK(error.location.line == 6);
+        CHECK(error.message.find(".shared.State") != std::string::npos);
+        CHECK(error.message.find("STARTED") != std::string::npos);
+    }
+    // Mutation B: the imported definition becomes a message, so the packed
+    // field is rejected at the packed option. This is NOT the kind-mismatch
+    // case: the field is source-origin, so it declares no kind and the packed
+    // check fires first (A7 is tested with a declared kind below).
+    {
+        easypb_schema::SchemaSet set;
+        const StateReport pair = make_state_report_fixture(set, true);
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.file == "report.proto");
+        CHECK(error.location.line == 5);
+        CHECK(error.message.find("packed") != std::string::npos);
+    }
+}
+
+// A7: a descriptor-origin field's declared kind is authoritative metadata, so
+// the resolver COMPARES it with the definition its name resolved to. An enum
+// declaration that names a message must fail with DIAGNOSTIC_KIND_MISMATCH,
+// and the failure must not have rewritten the metadata it refused - which is
+// why the check lives before `field.type = resolved->kind`. The mirror case
+// (declares a message, names an enum) is the same rule from the other side,
+// and matching kinds still link: the rule is a comparison, not a rejection of
+// descriptor-origin input.
+void test_descriptor_origin_declared_kind_is_compared_not_rewritten()
+{
+    // Declares an enum, names a message.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "Holder");
+        DescriptorProto r;
+        r.name = file.strings.save("R");
+        r.has_name = true;
+        add_field(file, r, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  ".pkg.Holder");
+        r.field[0].type = FieldDescriptorProto::TYPE_ENUM;
+        file.file.message_type.push_back(r);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_KIND_MISMATCH);
+        CHECK(error.file == "a.proto");
+        CHECK(error.message.find("\"f\"") != std::string::npos);
+        CHECK(error.message.find(".pkg.Holder") != std::string::npos);
+        CHECK(error.message.find("an enum") != std::string::npos);
+        CHECK(error.message.find("a message") != std::string::npos);
+        // The declared kind and the raw name survive the refusal.
+        CHECK(r.field[0].has_type);
+        CHECK(r.field[0].type == FieldDescriptorProto::TYPE_ENUM);
+        CHECK(text(r.field[0].type_name) == ".pkg.Holder");
+    }
+    // Declares a message, names an enum.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        file.from_descriptor_set = true;
+        add_enum(file, "Holder", "ZERO");
+        DescriptorProto r;
+        r.name = file.strings.save("R");
+        r.has_name = true;
+        add_field(file, r, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  ".pkg.Holder");
+        file.file.message_type.push_back(r);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_KIND_MISMATCH);
+        CHECK(error.message.find("a message") != std::string::npos);
+        CHECK(error.message.find("an enum") != std::string::npos);
+        CHECK(r.field[0].type == FieldDescriptorProto::TYPE_MESSAGE);
+    }
+    // Matching kinds: an enum declared as an enum.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        file.from_descriptor_set = true;
+        add_enum(file, "Holder", "ZERO");
+        DescriptorProto r;
+        r.name = file.strings.save("R");
+        r.has_name = true;
+        add_field(file, r, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  ".pkg.Holder");
+        r.field[0].type = FieldDescriptorProto::TYPE_ENUM;
+        file.file.message_type.push_back(r);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        CHECK(r.field[0].type == FieldDescriptorProto::TYPE_ENUM);
+        CHECK(text(r.field[0].type_name) == ".pkg.Holder");
+    }
+}
+
+// Appends a map-entry message with the marker but WITHOUT a value member: the
+// corpus shape (`tests/codegen/maps/data/malformed_map.pbs`), which the parser
+// cannot produce because it always synthesizes both members.
+void add_map_entry_key_only(easypb_schema::SchemaFile& file,
+                            DescriptorProto& message, const char* entry_name)
+{
+    DescriptorProto entry;
+    entry.name = file.strings.save(entry_name);
+    entry.has_name = true;
+    entry.options.map_entry = true;
+    entry.options.has_map_entry = true;
+    entry.has_options = true;
+
+    FieldDescriptorProto key;
+    key.name = file.strings.save("key");
+    key.has_name = true;
+    key.number = 1;
+    key.has_number = true;
+    key.label = FieldDescriptorProto::LABEL_OPTIONAL;
+    key.has_label = true;
+    key.type = FieldDescriptorProto::TYPE_INT32;
+    key.has_type = true;
+    entry.field.push_back(key);
+
+    message.nested_type.push_back(entry);
+}
+
+// A26: entry shape is descriptor input, not a by-product of a reference. Every
+// message carrying the map_entry marker must hold a field numbered 1 and a
+// field numbered 2, whether or not anything names the entry, and the failure
+// must beat the resolution of a referencing field - the sweep runs first, so a
+// user reference cannot re-code it as a foreign map entry. The message text is
+// the generator's today, so the CLI-visible check keeps matching when plan 5
+// deletes the generator's own copy of this rule.
+void test_malformed_map_entry_is_rejected_without_a_reference()
+{
+    const char* expected =
+        "Malformed map entry .easypb.test.BrokenMap.ItemsEntry: fields 1 and 2 "
+        "are required";
+    // Unreferenced, and named exactly like the corpus fixture the generator
+    // rejects today (`tests/codegen/maps/test_codegen_maps.cmake:139`).
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "malformed_map.pbs", "easypb.test");
+        file.from_descriptor_set = true;
+        DescriptorProto broken;
+        broken.name = file.strings.save("BrokenMap");
+        broken.has_name = true;
+        add_map_entry_key_only(file, broken, "ItemsEntry");
+        file.file.message_type.push_back(broken);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY);
+        CHECK(error.file == "malformed_map.pbs");
+        CHECK(error.message == expected);
+    }
+    // Referenced by an ordinary repeated message field: same verdict and same
+    // text, because the structural sweep answers before resolution.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "malformed_map.pbs", "easypb.test");
+        file.from_descriptor_set = true;
+        DescriptorProto broken;
+        broken.name = file.strings.save("BrokenMap");
+        broken.has_name = true;
+        add_map_entry_key_only(file, broken, "ItemsEntry");
+        file.file.message_type.push_back(broken);
+        DescriptorProto r;
+        r.name = file.strings.save("R");
+        r.has_name = true;
+        add_field(file, r, "items", 1, FieldDescriptorProto::LABEL_REPEATED,
+                  ".easypb.test.BrokenMap.ItemsEntry");
+        file.file.message_type.push_back(r);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY);
+        CHECK(error.message == expected);
+    }
+    // The legal shape links, and so does an entry nobody references: the rule
+    // is about the two members, never about the marker alone.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "malformed_map.pbs", "easypb.test");
+        file.from_descriptor_set = true;
+        DescriptorProto ok;
+        ok.name = file.strings.save("BrokenMap");
+        ok.has_name = true;
+        add_map_entry(file, ok, "ItemsEntry", 0);
+        file.file.message_type.push_back(ok);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+}
+
+// A25's classification table: absent is proto2 (the parser writes the field
+// only for an explicit declaration), the two known values classify as
+// themselves, and every other value is refused instead of being read as
+// proto2. The explicit empty value is in that last group on purpose - "not
+// proto3" is not "proto2", and has_syntax with an empty string is not the
+// absence of a declaration.
+void test_file_syntax_classification()
+{
+    FileDescriptorProto file;
+    CHECK(easypb_schema::classify_file_syntax(file) ==
+          easypb_schema::FILE_SYNTAX_PROTO2);
+    file.syntax = "proto2";
+    file.has_syntax = true;
+    CHECK(easypb_schema::classify_file_syntax(file) ==
+          easypb_schema::FILE_SYNTAX_PROTO2);
+    file.syntax = "proto3";
+    CHECK(easypb_schema::classify_file_syntax(file) ==
+          easypb_schema::FILE_SYNTAX_PROTO3);
+    file.syntax = "editions";
+    CHECK(easypb_schema::classify_file_syntax(file) ==
+          easypb_schema::FILE_SYNTAX_UNSUPPORTED);
+    file.syntax = "";
+    CHECK(easypb_schema::classify_file_syntax(file) ==
+          easypb_schema::FILE_SYNTAX_UNSUPPORTED);
+    // Absence wins over whatever the string field happens to hold.
+    file.has_syntax = false;
+    file.syntax = "editions";
+    CHECK(easypb_schema::classify_file_syntax(file) ==
+          easypb_schema::FILE_SYNTAX_PROTO2);
+}
+
+// A25 at the link's entry point: an editions file is refused in complete mode
+// before any resolution work, in both modes, and nothing is published for it
+// (A1). The refusal is the verdict even when another file in the set is
+// independently unresolvable: classification runs before everything else, so
+// deeper work never gets to answer for an input we cannot model.
+void test_unsupported_syntax_is_refused_before_resolution()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("editions");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+        CHECK(error.file == "a.proto");
+        CHECK(error.message.find("editions") != std::string::npos);
+        CHECK(error.message.find("proto3") != std::string::npos);
+    }
+    {
+        // a.proto's field is unresolvable; z.proto, which sorts last, declares
+        // the editions syntax. The verdict is still the syntax refusal.
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& broken =
+            make_simple_file(set, "a.proto", "pkg");
+        broken.from_descriptor_set = true;
+        add_message_with_field(broken, "M", "f", 1, ".pkg.Absent");
+        easypb_schema::SchemaFile& editions =
+            make_simple_file(set, "z.proto", 0);
+        editions.from_descriptor_set = true;
+        editions.file.syntax = editions.strings.save("editions");
+        editions.file.has_syntax = true;
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+        CHECK(error.file == "z.proto");
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+        CHECK(linked.symbols.symbols.empty());
+    }
+    // proto3 is not refused: the classification is the subject, so the fixture
+    // is a resolvable one-file set.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "p3.proto", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+    // The refusal runs in BOTH modes (E7): the compatibility branch is reached
+    // only after the classification, so an editions thin descriptor is refused
+    // by its own syntax and never downgraded to proto2 by a mode that tolerates
+    // missing external definitions.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "thin.pbs", 0);
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("editions");
+        file.file.has_syntax = true;
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(
+            set, easypb_schema::LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY,
+            linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+    }
+}
+
+// Sweep row B4: a field whose oneof_index points outside the message's
+// oneof_decl is a descriptor error the tracked corpus can produce
+// (`parser/data/integration-*.pbs` carry the valid shape). Linking must reject
+// it by reusing the shared resolver's bounds check rather than growing a second
+// one, and the valid shape must still link.
+void test_dangling_oneof_index_is_rejected()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto m;
+        m.name = file.strings.save("M");
+        m.has_name = true;
+        add_field(file, m, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        m.field[0].oneof_index = 0;
+        m.field[0].has_oneof_index = true;   // no oneof_decl at all
+        file.file.message_type.push_back(m);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.file == "a.proto");
+        CHECK(error.message.find("oneof_index") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto m;
+        m.name = file.strings.save("M");
+        m.has_name = true;
+        OneofDescriptorProto oneof;
+        oneof.name = file.strings.save("pick");
+        oneof.has_name = true;
+        m.oneof_decl.push_back(oneof);
+        add_field(file, m, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        m.field[0].oneof_index = 0;
+        m.field[0].has_oneof_index = true;
+        file.file.message_type.push_back(m);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+}
+
+// One file of the ordering graph below, in the requested insertion position.
+// a.proto is package app and its one field targets .shared.Value (or a name
+// nothing declares, when failures is set); b.proto is package shared and, in
+// the failure variant, carries the second independent offender; c.proto is the
+// second file of the shared package.
+void add_order_file(easypb_schema::SchemaSet& set, const char* logical,
+                    bool failures)
+{
+    const std::vector<std::int32_t> no_indexes;
+    if (std::string(logical) == "a.proto") {
+        std::vector<std::string> deps;
+        deps.push_back("b.proto");
+        deps.push_back("c.proto");
+        easypb_schema::SchemaFile& a = make_file(set, "a.proto", deps,
+                                                 no_indexes, no_indexes);
+        set_package(a, "app");
+        add_message_with_field(a, "A", "v", 1,
+                               failures ? ".shared.Missing1"
+                                        : ".shared.Value");
+        return;
+    }
+    if (std::string(logical) == "b.proto") {
+        easypb_schema::SchemaFile& b = make_file(
+            set, "b.proto", std::vector<std::string>(1, "c.proto"),
+            no_indexes, no_indexes);
+        set_package(b, "shared");
+        add_message(b, "Value");
+        if (failures) {
+            DescriptorProto r;
+            r.name = b.strings.save("R");
+            r.has_name = true;
+            add_field(b, r, "bad", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                      ".shared.Missing2");
+            b.file.message_type.push_back(r);
+        }
+        return;
+    }
+    easypb_schema::SchemaFile& c = make_file(
+        set, "c.proto", std::vector<std::string>(), no_indexes, no_indexes);
+    set_package(c, "shared");
+    add_message(c, "Other");
+}
+
+std::string resolved_field_names(const easypb_schema::SchemaSet& set)
+{
+    std::vector<std::string> names;
+    const std::vector<std::unique_ptr<easypb_schema::SchemaFile> >& files =
+        set.files();
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        for (std::size_t m = 0; m < files[i]->file.message_type.size(); ++m) {
+            for (std::size_t f = 0;
+                 f < files[i]->file.message_type[m].field.size(); ++f) {
+                names.push_back(text(
+                    files[i]->file.message_type[m].field[f].type_name));
+            }
+        }
+    }
+    std::sort(names.begin(), names.end());
+    std::string joined;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (!joined.empty()) joined += ',';
+        joined += names[i];
+    }
+    return joined;
+}
+
+// A2: the walk order is a function of the logical file names, so the same
+// graph links identically however it was inserted, targets are inert, and the
+// first failure of a broken set is the same file with the same message in
+// every order. The failure variant holds two independent offenders and inserts
+// the name-sorted-first one LAST, so an implementation that followed insertion
+// order would name b.proto. (The collision duplicate's order-independence is
+// pinned separately by test_index_collision_text_is_order_independent.)
+void test_input_order_and_targets_do_not_decide_the_verdict()
+{
+    const char* orders[6][3] = {
+        { "a.proto", "b.proto", "c.proto" },
+        { "a.proto", "c.proto", "b.proto" },
+        { "b.proto", "a.proto", "c.proto" },
+        { "b.proto", "c.proto", "a.proto" },
+        { "c.proto", "a.proto", "b.proto" },
+        { "c.proto", "b.proto", "a.proto" }
+    };
+
+    std::string first_names;
+    for (int o = 0; o < 6; ++o) {
+        easypb_schema::SchemaSet set;
+        for (int s = 0; s < 3; ++s) add_order_file(set, orders[o][s], false);
+        // Targets are requested in a different order per variant, and left
+        // empty in one: the linker must not read targets() at all (A15).
+        if (o == 0) {
+            set.add_target(*set.find_file("b.proto"));
+            set.add_target(*set.find_file("a.proto"));
+        } else if (o == 1) {
+            set.add_target(*set.find_file("a.proto"));
+            set.add_target(*set.find_file("c.proto"));
+            set.add_target(*set.find_file("b.proto"));
+        } else if (o == 2) {
+            set.add_target(*set.find_file("c.proto"));
+            set.add_target(*set.find_file("b.proto"));
+        } else if (o == 4) {
+            set.add_target(*set.find_file("a.proto"));
+        } else if (o == 5) {
+            set.add_target(*set.find_file("b.proto"));
+        }
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        CHECK(linked.complete);
+        // Two package scopes, three messages and one field.
+        CHECK(linked.symbols.symbols.size() == 6);
+        const std::string names = resolved_field_names(set);
+        if (o == 0) first_names = names;
+        else CHECK(names == first_names);
+    }
+    CHECK(first_names == ".shared.Value");
+
+    std::string first_message;
+    for (int o = 0; o < 6; ++o) {
+        easypb_schema::SchemaSet set;
+        for (int s = 0; s < 3; ++s) add_order_file(set, orders[o][s], true);
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.file == "a.proto");
+        CHECK(error.message.find(".shared.Missing1") != std::string::npos);
+        if (o == 0) first_message = error.message;
+        else CHECK(error.message == first_message);
+    }
+
+    // The only broken file is inserted FIRST and requested as a target LAST:
+    // the verdict still names it.
+    {
+        easypb_schema::SchemaSet set;
+        add_order_file(set, "a.proto", true);
+        add_order_file(set, "b.proto", false);
+        add_order_file(set, "c.proto", false);
+        set.add_target(*set.find_file("c.proto"));
+        set.add_target(*set.find_file("b.proto"));
+        set.add_target(*set.find_file("a.proto"));
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.file == "a.proto");
+    }
+}
+
+// Task 2: a caller may hand the linker a set an earlier pass already resolved,
+// and the linker's answer for the visible set is authoritative - it must
+// overwrite the earlier one. The fixture makes visibility change the answer:
+// the early pass knows only a.proto and vis.proto, so the relative sub.X
+// commits to .sub.X; the link also sees hidden.proto, whose message `sub` is
+// the nearer aggregate and commits the name to .pkg.sub.X.
+void test_already_resolved_input_is_resolved_again()
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaSet set;
+
+    std::vector<std::string> deps;
+    deps.push_back("vis.proto");
+    deps.push_back("hidden.proto");
+    easypb_schema::SchemaFile& a = make_file(set, "a.proto", deps, no_indexes,
+                                             no_indexes);
+    set_package(a, "pkg");
+    DescriptorProto m;
+    m.name = a.strings.save("M");
+    m.has_name = true;
+    add_field(a, m, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, "sub.X");
+    a.file.message_type.push_back(m);
+    // The raw reference must stay recoverable after the early pass overwrites
+    // the descriptor's absolute type_name, so record it the way a parser does
+    // (a source-origin file carries a FieldSource; without one the fallback
+    // reads the already-resolved name and the reference can no longer change).
+    record_field_source(a,
+                        easypb_schema::message_field_path(
+                            easypb_schema::file_message_path(0), 0),
+                        "sub.X", 5, 0, 0);
+
+    easypb_schema::SchemaFile& vis = make_file(set, "vis.proto", no_deps,
+                                               no_indexes, no_indexes);
+    set_package(vis, "sub");
+    add_message(vis, "X");
+
+    easypb_schema::SchemaFile& hidden = make_file(
+        set, "hidden.proto", no_deps, no_indexes, no_indexes);
+    set_package(hidden, "pkg");
+    {
+        DescriptorProto sub;
+        sub.name = hidden.strings.save("sub");
+        sub.has_name = true;
+        add_nested(hidden, sub, "X");
+        hidden.file.message_type.push_back(sub);
+    }
+
+    // The early pass: index a.proto and vis.proto only, resolve strictly.
+    easypb_schema::SymbolIndex partial;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::index_file(a, partial, error));
+    CHECK(easypb_schema::index_file(vis, partial, error));
+    std::set<const easypb_schema::SchemaFile*> early_visible;
+    early_visible.insert(&a);
+    early_visible.insert(&vis);
+    CHECK(easypb_schema::resolve_file(a, partial, early_visible, false, error));
+    CHECK(text(a.file.message_type[0].field[0].type_name) == ".sub.X");
+
+    // The link sees hidden.proto too: the nearer message commits the name.
+    CHECK(link_verdict(set, error));
+    CHECK(text(a.file.message_type[0].field[0].type_name) == ".pkg.sub.X");
+    CHECK(a.file.message_type[0].field[0].type ==
+          FieldDescriptorProto::TYPE_MESSAGE);
+}
+
+// R13/A10: the parser's standalone pass resolves with allow_unresolved = true,
+// so a file can carry a DIAGNOSTIC_UNRESOLVED_TYPE warning for a reference the
+// link then resolves. After a successful link exactly that code is gone, and
+// no other warning is - a warning of another code is still true.
+void test_warning_hygiene_drops_only_stale_unresolved_warnings()
+{
+    easypb_schema::SchemaSet set;
+    const Chain chain = make_chain_fixture(set, false, false);
+    easypb_schema::SchemaFile& a = *chain.a;
+
+    // The parser's shape: index ONE file and resolve it with only its own file
+    // visible, so .shared.Value is missing from that index and the shared
+    // warning path records the unresolved-type warning (proto_parser.cpp's
+    // semantic pass calls resolve_file exactly this way).
+    easypb_schema::SymbolIndex partial;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::index_file(a, partial, error));
+    std::set<const easypb_schema::SchemaFile*> own;
+    own.insert(&a);
+    CHECK(easypb_schema::resolve_file(a, partial, own, true, error));
+    CHECK(a.warnings.size() == 1);
+    CHECK(a.warnings[0].code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(a.warnings[0].message.find(".shared.Value") != std::string::npos);
+
+    easypb_schema::Diagnostic kept;
+    kept.file = "a.proto";
+    kept.warning = true;
+    kept.code = easypb_schema::DIAGNOSTIC_GENERIC;
+    kept.message = "a note another pass recorded";
+    a.warnings.push_back(kept);
+
+    CHECK(link_verdict(set, error));
+    CHECK(text(a.file.message_type[0].field[0].type_name) == ".shared.Value");
+    CHECK(a.warnings.size() == 1);
+    CHECK(a.warnings[0].code == easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(a.warnings[0].message == "a note another pass recorded");
+}
+
 } // namespace
 
 int main()
 {
-    test_link_stub_publishes_stages_2_3_and_4();
+    test_complete_link_publishes_after_every_stage();
     test_visibility_ordinary_import_is_not_transitive();
     test_visibility_public_import_is_transitive();
     test_visibility_root_status_grants_nothing();
@@ -1948,6 +2755,15 @@ int main()
     test_foreign_map_entry_references_are_rejected();
     test_map_entry_guard_runs_after_visibility();
     test_map_entry_value_resolves_from_its_own_token();
+    test_task2_pair_links_and_its_two_mutations_fail();
+    test_descriptor_origin_declared_kind_is_compared_not_rewritten();
+    test_malformed_map_entry_is_rejected_without_a_reference();
+    test_file_syntax_classification();
+    test_unsupported_syntax_is_refused_before_resolution();
+    test_dangling_oneof_index_is_rejected();
+    test_input_order_and_targets_do_not_decide_the_verdict();
+    test_already_resolved_input_is_resolved_again();
+    test_warning_hygiene_drops_only_stale_unresolved_warnings();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

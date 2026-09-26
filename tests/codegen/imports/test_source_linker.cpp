@@ -19,7 +19,11 @@ int main(int argc, char** argv)
     // registration passes as a positional argument and fails without it:
     // that is the only thing this step can verify about the source-driven
     // wiring, and a later edit that drops the argument would otherwise stay
-    // invisible until Step 5. Step 5 fills this executable in.
+    // invisible until the body lands. Step 8.2 fills this executable in: the
+    // source-location, oracle-decoding, buffer-lifetime and parser-dependent
+    // checks live here (A12), not in the parser-free suite. (This comment said
+    // Step 5 until the Step-5 session corrected it; Step 5.2's tests all fit in
+    // test_linker.cpp, because they need no parser.)
     if (argc < 2) {
         std::cerr << "usage: codegen_imports_source_linker_test <fixture-dir>\n";
         return EXIT_FAILURE;

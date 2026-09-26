@@ -940,6 +940,89 @@ std::string defining_file_name(const SymbolIndex& symbols, const std::string& na
     return view_text(found->second.owner->file.name);
 }
 
+// The declared kind of a descriptor field, named for the A7 mismatch message.
+// Only messages and enums are definitions a field type may name, so the two
+// names below are the ones a legal descriptor carries; anything else is named
+// by its numeric kind instead of being guessed at.
+std::string descriptor_kind_name(int kind)
+{
+    if (kind == FieldDescriptorProto::TYPE_MESSAGE) return "a message";
+    if (kind == FieldDescriptorProto::TYPE_ENUM) return "an enum";
+    if (kind == FieldDescriptorProto::TYPE_GROUP) return "a group";
+    std::ostringstream text;
+    text << "kind " << kind;
+    return text.str();
+}
+
+// A7's sentence: the field, the definition it names, the kind the descriptor
+// declares it with, and the kind the definition actually has.
+std::string kind_mismatch_message(const FieldDescriptorProto& field,
+                                  const std::string& resolved_name, int kind)
+{
+    return "field \"" + view_text(field.name) + "\" declares \"" +
+           resolved_name + "\" as " + descriptor_kind_name(field.type) +
+           " but it is defined as " + descriptor_kind_name(kind) +
+           ": descriptor metadata is authoritative and is not rewritten";
+}
+
+// A26: the fully qualified name of a message that carries the synthetic
+// map-entry marker, used in the failure text. The walk is recursive because an
+// entry is normally a nested type, and the whole declaration chain must appear
+// in the name - the generator's own message is fully qualified, and
+// tests/codegen/maps/test_codegen_maps.cmake matches the sentence with
+// string(FIND), so the simple `BrokenMap.ItemsEntry` spelling would satisfy a
+// descriptor-path assertion and still break that test.
+//
+// The failure is deliberately NOT built through fail_at: that helper appends
+// " at <descriptor path>" when the file records no location, which is exactly
+// the descriptor-origin case an entry without a value member comes from, and
+// this sentence has to stay verbatim. No location suffix, no rewording: the
+// text is what lets plan 5 delete the generator's own check without touching
+// the CLI-visible test.
+bool fail_malformed_map_entry(const SchemaFile& file,
+                              const std::string& entry_name, Diagnostic& error)
+{
+    error = Diagnostic();
+    error.file = view_text(file.file.name);
+    error.location = unknown_location();
+    error.message = "Malformed map entry " + entry_name +
+                    ": fields 1 and 2 are required";
+    error.warning = false;
+    error.code = DIAGNOSTIC_MALFORMED_MAP_ENTRY;
+    return false;
+}
+
+bool validate_message_map_entries(const SchemaFile& file,
+                                  const DescriptorProto& message,
+                                  const std::string& qualified_name,
+                                  Diagnostic& error)
+{
+    // The marker is the only thing consulted, so the check runs whether or not
+    // anything references the entry: an unreferenced entry never enters a
+    // lookup, and a reference-driven check would accept the corpus fixture
+    // `tests/codegen/maps/data/malformed_map.pbs`.
+    if (message.options.has_map_entry && message.options.map_entry) {
+        bool has_key = false;
+        bool has_value = false;
+        for (std::size_t i = 0; i < message.field.size(); ++i) {
+            if (message.field[i].number == 1) has_key = true;
+            if (message.field[i].number == 2) has_value = true;
+        }
+        if (!has_key || !has_value) {
+            return fail_malformed_map_entry(file, qualified_name, error);
+        }
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_map_entries(
+                file, message.nested_type[i],
+                qualified_name + "." + view_text(message.nested_type[i].name),
+                error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The text for a reference that failed because the name is known but must not
 // be used as a type here. Each category states the rule instead of copying
 // protoc's wording: its texts are editions-era UX paragraphs, and the
@@ -1150,6 +1233,23 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                     raw, scope, symbols, visible_files, context, &outcome,
                     &resolved_name);
                 if (resolved != 0) {
+                    // A7: a descriptor-origin field's declared kind is
+                    // authoritative metadata, so it is COMPARED with the kind
+                    // of the definition its name resolved to, never silently
+                    // rewritten. The comparison belongs before the assignment
+                    // below, which destroys the declared kind - after
+                    // resolution no post-pass can recover it. Source-origin
+                    // fields carry no declared kind (deferred parsing leaves
+                    // has_type unset), so they are overwritten as before.
+                    if (file.from_descriptor_set && field.has_type &&
+                        field.type != resolved->kind) {
+                        return fail_at_code(
+                            file,
+                            kind_mismatch_message(field, resolved_name,
+                                                  resolved->kind),
+                            field_type_location(file, field_path), field_path,
+                            DIAGNOSTIC_KIND_MISMATCH, error);
+                    }
                     field.type = resolved->kind;
                     field.has_type = true;
                     field.type_name = file.strings.save(resolved_name);
@@ -1259,6 +1359,26 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
 }
 
 } // namespace
+
+bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error)
+{
+    // Every top-level message is visited in declaration order, and the
+    // recursion visits an entry before its own nested types, so the first
+    // malformed entry is the first one in the file's declaration order. No
+    // symbol index and no visibility set is consulted: entry shape is provable
+    // from the available descriptor alone, which is why it runs before any
+    // resolution and in both linking modes.
+    const std::string prefix = package_prefix(file);
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!validate_message_map_entries(
+                file, file.file.message_type[i],
+                prefix + "." + view_text(file.file.message_type[i].name),
+                error)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 bool index_file(SchemaFile& file, SymbolIndex& symbols, Diagnostic& error)
 {

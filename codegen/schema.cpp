@@ -272,6 +272,19 @@ const FieldSource* find_field_source(const SchemaFile& file,
     return 0;
 }
 
+FileSyntax classify_file_syntax(const FileDescriptorProto& file)
+{
+    // This function is the ONE place the project classifies a file's syntax,
+    // and the only place the literal "proto3" may decide a file's class (E7).
+    // An absent value and the explicit "proto2" value are the same thing - the
+    // parser writes the field only when the source declared it - and any other
+    // value, editions above all, is refused instead of being read as proto2.
+    if (!file.has_syntax) return FILE_SYNTAX_PROTO2;
+    if (file.syntax == "proto2") return FILE_SYNTAX_PROTO2;
+    if (file.syntax == "proto3") return FILE_SYNTAX_PROTO3;
+    return FILE_SYNTAX_UNSUPPORTED;
+}
+
 std::string map_entry_name(const std::string& field_name)
 {
     std::string output;

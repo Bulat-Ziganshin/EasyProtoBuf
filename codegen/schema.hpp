@@ -52,7 +52,19 @@ enum DiagnosticCode
     DIAGNOSTIC_NOT_A_TYPE,
     // Plan 4 Step 4.2 (A3, A22/A24): a user field names a synthetic map-entry
     // message instead of the map field that owns it.
-    DIAGNOSTIC_MAP_ENTRY_TYPE
+    DIAGNOSTIC_MAP_ENTRY_TYPE,
+    // Plan 4 Step 5.1 (A3, A7): a descriptor-origin field's declared kind
+    // disagrees with the definition its type_name resolves to. The declared
+    // kind is authoritative metadata, so it is compared, never rewritten.
+    DIAGNOSTIC_KIND_MISMATCH,
+    // Plan 4 Step 5.1 (A26): a descriptor carries a synthetic map entry whose
+    // shape is not the key/value pair protoc requires, referenced or not.
+    DIAGNOSTIC_MALFORMED_MAP_ENTRY,
+    // Plan 4 Step 5.1 (A25): a file's syntax value is neither proto2 nor
+    // proto3 (protoc 30.1 writes "editions" for an editions file), so the
+    // project cannot model its semantics. Refused loudly instead of being
+    // silently downgraded to proto2.
+    DIAGNOSTIC_UNSUPPORTED_SYNTAX
 };
 
 struct Diagnostic
@@ -65,6 +77,23 @@ struct Diagnostic
 
     Diagnostic() : warning(false), code(DIAGNOSTIC_GENERIC) {}
 };
+
+// Plan 4 amendment A25: one classification of a file's syntax, shared by every
+// component that must not guess. Absent and "proto2" are proto2; "proto3" is
+// proto3; anything else - protoc 30.1 writes "editions" for a file declared
+// with `edition = "2023";` - is an unsupported input, because enum openness and
+// field presence come from the edition's features, which this model does not
+// carry. Declared here and defined in schema.cpp so the parser-free profile can
+// refuse it too; link_schema refuses FILE_SYNTAX_UNSUPPORTED in both modes
+// before any resolution work.
+enum FileSyntax
+{
+    FILE_SYNTAX_PROTO2,        // syntax absent, or exactly "proto2"
+    FILE_SYNTAX_PROTO3,        // syntax exactly "proto3"
+    FILE_SYNTAX_UNSUPPORTED    // any other value, including "editions"
+};
+
+FileSyntax classify_file_syntax(const FileDescriptorProto& file);
 
 struct ImportInfo
 {

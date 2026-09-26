@@ -77,6 +77,18 @@ bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
                   const std::set<const SchemaFile*>& visible_files,
                   bool allow_unresolved, Diagnostic& error);
 
+// Validates the shape of every synthetic map entry the file declares
+// (amendment A26): a message carrying options.map_entry == true must hold a
+// field numbered 1 and a field numbered 2, referenced or not, reported as
+// DIAGNOSTIC_MALFORMED_MAP_ENTRY with the message text the generator prints
+// today. An entry nobody references is still descriptor input, so the check is
+// unconditional and must not hide behind the map-entry ownership guard, which
+// only fires for a referencing field. Source origin cannot produce the shape
+// (the parser synthesizes both members), so this is the descriptor-origin
+// check that also runs in compatibility mode. Returns false and fills error
+// at the first malformed entry, in declaration order.
+bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
+
 // Validates everything that needs no import linking: duplicate field
 // names/numbers, oneof bounds, packed labels, and scalar packed/default
 // rules. Named-type packed/default checks are left for complete linking,
