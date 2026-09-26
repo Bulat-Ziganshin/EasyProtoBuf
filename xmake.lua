@@ -6,7 +6,10 @@ set_warnings("all", "extra", "pedantic")
 -- P-03: an unhandled enumerator must not compile. See CMakeLists.txt for the
 -- full reason; `set_warnings("all")` above only warns, and the guarantee needs
 -- the error form. MSVC is left out for the same reason it is left out there: no
--- measured lane for /we4061 in this repository.
+-- measured lane for it in this repository, and the codes are not
+-- interchangeable - `outcome_code` has no `default:` label, so its analogue is
+-- /we4062 (C4062), while /we4061 (C4061) is the one for a default-bearing
+-- switch (fix round r5, H-3).
 if is_compiler("gcc") or is_compiler("clang") then
     add_cxflags("-Werror=switch")
 end

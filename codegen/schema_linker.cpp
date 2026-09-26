@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 namespace easypb_schema {
@@ -246,7 +247,14 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // at entry, never a partial view.
     linked.files = &files;
     linked.complete = true;
-    result = linked;   // SymbolIndex/map copies are fine: the files are not.
+    // A move, not a copy (fix round r5, ledger H-8/P-05). `LinkedSchema`
+    // declares only a user-provided default constructor, which does not
+    // suppress the implicit move assignment, and every member moves in O(1):
+    // one pointer, the symbol map, the visibility map, one bool. `linked` is
+    // function-local and nothing reads it after this line, so the moved-from
+    // state is never observed; the copy this replaces was the whole symbol
+    // index plus every visibility set.
+    result = std::move(linked);
     return true;
 }
 

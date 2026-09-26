@@ -1,0 +1,2 @@
+import "dep_shared.proto";
+message M { optional shared.deep.D d = 1; }

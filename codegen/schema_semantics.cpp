@@ -1,5 +1,6 @@
 #include "schema_semantics.hpp"
 
+#include <cassert>
 #include <cerrno>
 #include <cstddef>
 #include <cstdlib>
@@ -367,6 +368,16 @@ bool add_symbol(const SchemaFile& file, SymbolIndex& symbols,
                 const std::string& name, int kind, const DescriptorPath& path,
                 Diagnostic& error)
 {
+    // H-2 of the classical code review (fix round r5): the kind domain every
+    // lookup depends on. Pass 1 reads `kind != 0` as "a type or a package
+    // scope" and the failure walk reads `kind == 0` as "a declaration that is
+    // not a type"; both readings hold only while this is the single point
+    // that writes a kind. Debug-only by construction (profile trees compile
+    // with NDEBUG), which is why the guarantee is also stated in the comment
+    // above `index_file` and pinned by the indexed-kind test.
+    assert(kind == 0 || kind == SYMBOL_PACKAGE ||
+           kind == FieldDescriptorProto::TYPE_MESSAGE ||
+           kind == FieldDescriptorProto::TYPE_ENUM);
     SymbolEntry entry;
     entry.kind = kind;
     entry.owner = &file;
@@ -533,29 +544,47 @@ bool enclosing_scope(const std::string& scope, std::string& outer)
     return true;
 }
 
-// A package scope is visible when ANY file in the requester's visible set
-// declares that package, not merely when the file the index recorded as the
-// node's owner does. Package scopes merge across files, so the owner is just
-// the first file indexed; protoc's lookup carries the same special case for
-// packages, and it compares the declaring file's package string for EQUALITY
-// (descriptor.cc FindSymbol keeps the package symbol only when one of the
-// visible files has exactly that package, "we can't really rule out this
-// symbol unless none of the dependencies define it").
+// A package scope is visible when a VISIBLE file's package is the head itself
+// or lies under it: `package a.b` covers the head `.a`, because protoc's
+// reference rule is a prefix test with a dot boundary (`descriptor.cc`
+// `IsInPackage`, kept by the code-review lane as
+// `build/code-review-2d/descriptor.cc`). The dot boundary is load-bearing:
+// `package foobar` must NOT cover `.foo` (oracle b02). Ownership still does
+// not decide the answer - package scopes merge across files, so the recorded
+// owner is just the first file indexed - and the question is asked about the
+// VISIBLE set only, so an unimported declarer still covers nothing.
 //
-// Measured with libprotoc 30.1 (oracle cases F1a/F1b/F4): the unimported file
-// may declare `package shared` (F1) or only the sub-package
-// `package shared.deep` (F4) - accepted either way, in both root orders - and
-// what makes the reference resolve is a VISIBLE file's exact `package shared`.
-// So a sub-package declaration does not make the parent visible, and the
-// reverse case is the one that matters: without this rule a package whose
-// first indexed file happens to be invisible would hide a visible
-// same-package file and reject input protoc accepts.
+// The equality form this function carried before fix round r5 came from
+// `descriptor.cc`'s `FindSymbol`, whose package special case answers which
+// file OWNS the merged node; the rule a lookup needs is `IsInPackage`, and
+// the two differ exactly for a reference headed by a parent package.
+//
+// Measured with libprotoc 30.1. The relative-reference group r01..r07 of the
+// code-review-2d corpus (`build/plan4/fix-r5/oracle/`, re-run by fix round
+// r5): a reference whose first component is a package declared only as a
+// parent prefix of a visible file's package is ACCEPTED when the member
+// exists (r01..r04, r06 - source exit 0, descriptor validator exit 0) and
+// rejected with "is not defined" when it does not (r05); no import at all
+// still rejects (r08). The step-4 group (F1a/F1b/F4/F5) survives intact: the
+// unimported file may declare `package shared` (F1) or only the sub-package
+// `package shared.deep` (F4) without breaking the accept, in both root
+// orders, while F5's shape - only a visible sub-package declarer and no
+// visible file declaring the head's own package - is rejected, and protoc
+// words that rejection "is not defined": the sub-package declarer covers the
+// head, the member is absent, and the committed head yields the not-defined
+// class, not the not-visible one (b01).
 bool package_is_visible(const std::set<const SchemaFile*>& visible_files,
                         const std::string& package_head)
 {
     for (std::set<const SchemaFile*>::const_iterator it = visible_files.begin();
          it != visible_files.end(); ++it) {
-        if (package_prefix(**it) == package_head) return true;
+        const std::string declared = package_prefix(**it);
+        if (declared == package_head) return true;
+        if (declared.size() > package_head.size() &&
+            declared.compare(0, package_head.size(), package_head) == 0 &&
+            declared[package_head.size()] == '.') {
+            return true;
+        }
     }
     return false;
 }

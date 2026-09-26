@@ -37,6 +37,13 @@ struct LinkedSchema {
 // Links all files in the set according to mode. On success fills result and
 // returns true; on failure fills error, leaves result in the invalid empty
 // state, and returns false. Never publish a partially linked result.
+//
+// Ownership is not mutation: the link writes into the CALLER'S set. Every
+// field it resolves gets `type_name` rewritten to the index's absolute
+// spelling and `type`/`has_type` set to the resolved kind (a proto2 group
+// keeps its declared TYPE_GROUP, because that is what its wire encoding
+// needs), so a set that was linked once no longer matches the bytes it was
+// loaded from. One set, one link (H-6).
 bool link_schema(SchemaSet& files, LinkMode mode,
                  LinkedSchema& result, Diagnostic& error);
 

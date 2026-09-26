@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -1315,11 +1316,17 @@ void test_merged_package_is_visible_when_any_declaring_file_is()
     }
 }
 
-// Oracle F5: a visible file that declares only the SUB-package `shared.deep`
-// does not make the parent package `shared` visible, so `shared.Value` fails.
-// protoc's own package check compares the package string (and answers "is not
-// defined" here); our compilation-wide index knows the `.shared` node exists,
-// so the residual category is *invisible* naming the file that declares it.
+// Oracle F5, re-derived by fix round r5: a visible file that declares only
+// the SUB-package `shared.deep` offers no `Value` under `shared`, so
+// `shared.Value` fails. The sub-package declarer DOES cover the head `shared`
+// - protoc's reference rule is a prefix test with a dot boundary
+// (`descriptor.cc` IsInPackage; oracle rows r01..r07 of the code-review
+// corpus) - which commits the package head; the member `.shared.Value` is not
+// indexed, so the residual category is the not-defined one, exactly the class
+// protoc reports for this shape (`"shared.Value" is not defined`, oracle
+// b01, `build/plan4/fix-r5/oracle/oracle-summary.txt`). The equality rule
+// this test was written under answered *invisible* here and named deep.proto;
+// that reading was the D-14 defect.
 void test_sub_package_does_not_make_the_parent_visible()
 {
     const std::vector<std::string> no_deps;
@@ -1344,8 +1351,8 @@ void test_sub_package_does_not_make_the_parent_visible()
 
     easypb_schema::Diagnostic error;
     CHECK(!link_verdict(set, error));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
-    CHECK(error.message.find("deep.proto") != std::string::npos);
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(error.message.find("shared.Value") != std::string::npos);
 }
 
 // B14 vs B15: an enum value is not addressable through its enum type, so that
@@ -2870,6 +2877,248 @@ void test_warning_hygiene_drops_the_paired_default_warning()
     CHECK(!easypb_schema::is_deferred_default_warning(a.warnings[0]));
 }
 
+// Fix round r5, D-14: a relative reference whose FIRST component is a package
+// node declared only as the parent PREFIX of a visible file's package must
+// resolve. protoc's reference rule is a prefix test with a dot boundary
+// (`descriptor.cc` IsInPackage), and the equality reading this suite was built
+// under refused every such reference on the source path - the primary user
+// path, and the one input class the registered .pbs corpus cannot witness,
+// because descriptor-set names are absolute (ledger D-14/D-15).
+//
+// Verdicts are protoc 30.1's, measured on the source path by fix round r5
+// (`build/plan4/fix-r5/oracle/oracle-summary.txt`); the same rows also run
+// through the real loader and linker in test_source_linker.cpp:
+//   r01 no package, r02 `package own`, r03 `package a.b` - all ACCEPT, the
+//       head `a` covered by dep_ab's `package a.b`;
+//   r06 through a public import - ACCEPT;
+//   r07 the control where the visible file declares exactly `package a` -
+//       ACCEPT (accepted before the fix too).
+void test_relative_package_head_reference_resolves()
+{
+    for (int root_package = 0; root_package < 3; ++root_package) {
+        easypb_schema::SchemaSet set;
+        const std::vector<std::string> no_deps;
+        const std::vector<std::int32_t> no_indexes;
+        easypb_schema::SchemaFile& dep = make_file(
+            set, "dep_ab.proto", no_deps, no_indexes, no_indexes);
+        set_package(dep, "a.b");
+        add_message(dep, "Type");
+
+        easypb_schema::SchemaFile& root = make_file(
+            set, "root.proto", std::vector<std::string>(1, "dep_ab.proto"),
+            no_indexes, no_indexes);
+        if (root_package == 1) set_package(root, "own");
+        if (root_package == 2) set_package(root, "a.b");
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "t", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "a.b.Type");
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        // Resolution rewrote the relative spelling to the index's absolute
+        // name, which is what a generator reads.
+        CHECK(text(root.file.message_type[0].field[0].type_name) ==
+              ".a.b.Type");
+    }
+
+    {
+        // r06: the head is reached through the requester's public import.
+        easypb_schema::SchemaSet set;
+        const std::vector<std::int32_t> no_indexes;
+        easypb_schema::SchemaFile& dep = make_file(
+            set, "dep_ab.proto", std::vector<std::string>(), no_indexes,
+            no_indexes);
+        set_package(dep, "a.b");
+        add_message(dep, "Type");
+        const std::vector<std::int32_t> public_index(1, 0);
+        easypb_schema::SchemaFile& pub = make_file(
+            set, "dep_pub.proto", std::vector<std::string>(1, "dep_ab.proto"),
+            public_index, no_indexes);
+        set_package(pub, "pub");
+        easypb_schema::SchemaFile& root = make_file(
+            set, "root.proto", std::vector<std::string>(1, "dep_pub.proto"),
+            no_indexes, no_indexes);
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "t", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "a.b.Type");
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        CHECK(text(root.file.message_type[0].field[0].type_name) ==
+              ".a.b.Type");
+    }
+
+    {
+        // r07: the control - a visible file declaring exactly `package a`.
+        easypb_schema::SchemaSet set;
+        const std::vector<std::int32_t> no_indexes;
+        easypb_schema::SchemaFile& dep = make_file(
+            set, "dep_a.proto", std::vector<std::string>(), no_indexes,
+            no_indexes);
+        set_package(dep, "a");
+        add_message(dep, "Type");
+        easypb_schema::SchemaFile& root = make_file(
+            set, "root.proto", std::vector<std::string>(1, "dep_a.proto"),
+            no_indexes, no_indexes);
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "t", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "a.Type");
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        CHECK(text(root.file.message_type[0].field[0].type_name) ==
+              ".a.Type");
+    }
+}
+
+// The rejecting half of the same family, with protoc's verdicts: a deeper
+// name whose parent package IS declared exactly (r05) and a reference with no
+// import at all (r08) are both not-defined rejections naming the reference.
+void test_relative_package_head_reference_rejections()
+{
+    {
+        easypb_schema::SchemaSet set;
+        const std::vector<std::int32_t> no_indexes;
+        easypb_schema::SchemaFile& dep = make_file(
+            set, "dep_shared.proto", std::vector<std::string>(), no_indexes,
+            no_indexes);
+        set_package(dep, "shared");
+        add_message(dep, "S");
+        easypb_schema::SchemaFile& root = make_file(
+            set, "root.proto", std::vector<std::string>(1, "dep_shared.proto"),
+            no_indexes, no_indexes);
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "d", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "shared.deep.D");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find("shared.deep.D") != std::string::npos);
+    }
+
+    {
+        easypb_schema::SchemaSet set;
+        const std::vector<std::int32_t> no_indexes;
+        easypb_schema::SchemaFile& root = make_file(
+            set, "root.proto", std::vector<std::string>(), no_indexes,
+            no_indexes);
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "t", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "a.b.Type");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find("a.b.Type") != std::string::npos);
+    }
+}
+
+// Fix round r5, H-1 - re-derived, not applied. The review asked for pass 2 to
+// classify through `candidate_is_visible` "because both passes ask the same
+// pure question". They do not: pass 1 skips kind-0 entries and invisible
+// entries, while pass 2's kind test deliberately answers NOT_A_TYPE for a
+// nearer DECLARATION THAT IS NOT A TYPE even when the file declaring it is
+// invisible (B9/B15: the category is about what the name IS, not who declares
+// it) - and `candidate_is_visible` would answer INVISIBLE for exactly that
+// shape. This test pins the measured difference, so a later "consistency"
+// edit has to be a deliberate, test-breaking decision with an oracle behind
+// it: `.app.VALUE` is an enum value (kind 0) owned by a file the requester
+// does not import.
+void test_invisible_nearer_non_type_keeps_the_not_a_type_category()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& hidden =
+        make_simple_file(set, "hidden.proto", "app");
+    add_enum(hidden, "E", "VALUE");
+
+    easypb_schema::SchemaFile& root =
+        make_simple_file(set, "root.proto", "app");
+    add_message(root, "M");
+    add_field(root, root.file.message_type[0], "f", 1,
+              FieldDescriptorProto::LABEL_OPTIONAL, "VALUE");
+
+    easypb_schema::Diagnostic error;
+    CHECK(!link_verdict(set, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
+    CHECK(error.message.find("an enum value") != std::string::npos);
+}
+
+// Fix round r5, H-2: the kind domain every lookup reads. Pass 1 reads
+// `kind != 0` as "a type or a package scope"; the failure walk reads
+// `kind == 0` as "a declaration that is not a type". `add_symbol` is the
+// single point that writes a kind (its debug assert states the domain), and
+// this test measures the PUBLISHED index, so the guarantee is visible in a
+// release build too.
+void test_indexed_symbol_kinds_stay_in_the_documented_domain()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file = make_simple_file(set, "a.proto", "pkg");
+    make_holder_fixture(file);
+    add_service(file, "Svc");
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE, linked,
+                                     error));
+
+    std::size_t non_types = 0;
+    std::size_t packages = 0;
+    std::size_t messages = 0;
+    std::size_t enums = 0;
+    for (std::map<std::string, easypb_schema::SymbolEntry>::const_iterator it =
+             linked.symbols.symbols.begin();
+         it != linked.symbols.symbols.end(); ++it) {
+        const int kind = it->second.kind;
+        CHECK(kind == 0 || kind == easypb_schema::SYMBOL_PACKAGE ||
+              kind == FieldDescriptorProto::TYPE_MESSAGE ||
+              kind == FieldDescriptorProto::TYPE_ENUM);
+        if (kind == 0) ++non_types;
+        else if (kind == easypb_schema::SYMBOL_PACKAGE) ++packages;
+        else if (kind == FieldDescriptorProto::TYPE_MESSAGE) ++messages;
+        else if (kind == FieldDescriptorProto::TYPE_ENUM) ++enums;
+    }
+    // Every category is represented, so the domain check did not pass on a
+    // single-category index.
+    CHECK(non_types > 0);
+    CHECK(packages > 0);
+    CHECK(messages > 0);
+    CHECK(enums > 0);
+}
+
+// The dot boundary of the package prefix test, measured rather than assumed
+// (fix round r5; the `naive` mutation drops the boundary and only this test
+// catches it): `package foobar` must NOT cover the head `.foo`, so a reference
+// `foo.T` whose only `foo` package lives in an unimported file stays the
+// invisible category naming that file. protoc rejects the same shape
+// ("foo.T" is not defined, oracle b02): the verdict agrees, the wording is
+// ours (B3).
+void test_package_prefix_needs_a_dot_boundary()
+{
+    easypb_schema::SchemaSet set;
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaFile& invisible = make_file(
+        set, "foo.proto", std::vector<std::string>(), no_indexes, no_indexes);
+    set_package(invisible, "foo");
+    add_message(invisible, "S");
+    easypb_schema::SchemaFile& near_miss = make_file(
+        set, "foobar.proto", std::vector<std::string>(), no_indexes,
+        no_indexes);
+    set_package(near_miss, "foobar");
+    add_message(near_miss, "T");
+    easypb_schema::SchemaFile& root = make_file(
+        set, "root.proto", std::vector<std::string>(1, "foobar.proto"),
+        no_indexes, no_indexes);
+    add_message(root, "M");
+    add_field(root, root.file.message_type[0], "t", 1,
+              FieldDescriptorProto::LABEL_OPTIONAL, "foo.T");
+
+    easypb_schema::Diagnostic error;
+    CHECK(!link_verdict(set, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+    CHECK(error.message.find("foo.proto") != std::string::npos);
+}
+
 } // namespace
 
 int main()
@@ -2917,6 +3166,11 @@ int main()
     test_warning_hygiene_drops_only_stale_unresolved_warnings();
     test_group_field_links_and_keeps_its_declared_kind();
     test_warning_hygiene_drops_the_paired_default_warning();
+    test_relative_package_head_reference_resolves();
+    test_relative_package_head_reference_rejections();
+    test_invisible_nearer_non_type_keeps_the_not_a_type_category();
+    test_indexed_symbol_kinds_stay_in_the_documented_domain();
+    test_package_prefix_needs_a_dot_boundary();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

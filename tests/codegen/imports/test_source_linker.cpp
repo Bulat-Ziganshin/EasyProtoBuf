@@ -5,31 +5,115 @@
 //
 // Registered only inside if(EASYPB_CODEGEN_WITH_PROTO_PARSER) in
 // tests/CMakeLists.txt, so descriptor-set-only profiles never compile it.
+//
+// Fix round r5 (ledger D-15) filled the first case family: the
+// relative-reference rows of the code-review lane's corpus, whose verdicts
+// protoc 30.1 settles on the SOURCE path
+// (build/plan4/fix-r5/oracle/oracle-summary.txt, fixtures inventoried in
+// tests/codegen/imports/data/linker/relative/README.md). Before this, no gate
+// exercised a relative reference whose first component is a package node: the
+// registered .pbs corpus carries absolute names, which is how D-14 survived
+// six oracle-measured rounds. The remaining Step-8.2 families (source
+// locations, oracle decoding, buffer lifetime) are still owned by Step 8.
 
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "proto_loader.hpp"
 #include "schema_linker.hpp"
 
+namespace {
+
+int failures = 0;
+
+void check(bool condition, const char* expression, const char* file, int line)
+{
+    if (!condition) {
+        std::cerr << file << ':' << line << ": CHECK failed: " << expression << '\n';
+        ++failures;
+    }
+}
+
+#define CHECK(x) check((x), #x, __FILE__, __LINE__)
+
+struct RelativeCase {
+    const char* root;
+    bool accept;
+    const char* substring;
+};
+
+// Loads one root with the fixture directory as its only search root, links in
+// complete mode, and checks the verdict against protoc's. Every rejection in
+// this family is a not-defined rejection naming the reference - protoc words
+// them `"<name>" is not defined` - and a rejection publishes nothing (E3/A1).
+void run_relative_case(const std::string& directory, const RelativeCase& item)
+{
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(directory);
+    const std::vector<std::string> roots(1, std::string(item.root));
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_proto::load_source_files(options, roots, set, error));
+
+    easypb_schema::LinkedSchema linked;
+    const bool accepted = easypb_schema::link_schema(
+        set, easypb_schema::LINK_COMPLETE, linked, error);
+    CHECK(accepted == item.accept);
+    if (item.accept) {
+        CHECK(linked.files == &set);
+        CHECK(linked.complete);
+        return;
+    }
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(error.message.find(item.substring) != std::string::npos);
+    CHECK(linked.files == 0);
+    CHECK(!linked.complete);
+}
+
+// A reference whose first component is a package node, spelled relatively, is
+// resolved from the source path exactly as protoc resolves it: the parent
+// package of a visible file's package covers the head when the member exists
+// (r01 no package, r03 the same package spelled out, r06 through a public
+// import), and the shapes protoc rejects - a partially visible deeper name
+// (r05) and an import-free reference (r08) - are rejected as not defined.
+void test_relative_references_match_protoc(const std::string& directory)
+{
+    const RelativeCase accepts[] = {
+        {"r01_nopkg_to_subpkg.proto", true, 0},
+        {"r03_same_pkg.proto", true, 0},
+        {"r06_pub_import.proto", true, 0},
+    };
+    for (std::size_t i = 0; i < sizeof(accepts) / sizeof(accepts[0]); ++i) {
+        run_relative_case(directory, accepts[i]);
+    }
+
+    const RelativeCase rejects[] = {
+        {"r05_partial_visible.proto", false, "shared.deep.D"},
+        {"r08_no_import.proto", false, "a.b.Type"},
+    };
+    for (std::size_t i = 0; i < sizeof(rejects) / sizeof(rejects[0]); ++i) {
+        run_relative_case(directory, rejects[i]);
+    }
+}
+
+} // namespace
+
 int main(int argc, char** argv)
 {
-    // Step 1 skeleton. It still reads the data directory the CTest
-    // registration passes as a positional argument and fails without it:
-    // that is the only thing this step can verify about the source-driven
-    // wiring, and a later edit that drops the argument would otherwise stay
-    // invisible until the body lands. Step 8.2 fills this executable in: the
-    // source-location, oracle-decoding, buffer-lifetime and parser-dependent
-    // checks live here (A12), not in the parser-free suite. (This comment said
-    // Step 5 until the Step-5 session corrected it; Step 5.2's tests all fit in
-    // test_linker.cpp, because they need no parser.)
     if (argc < 2) {
         std::cerr << "usage: codegen_imports_source_linker_test <fixture-dir>\n";
         return EXIT_FAILURE;
     }
+    const std::string data_dir(argv[1]);
+    test_relative_references_match_protoc(data_dir + "/relative");
 
-    std::cout << "source linker skeleton: no cases yet (fixtures: "
-              << argv[1] << ")\n";
+    if (failures != 0) {
+        std::cerr << failures << " test(s) failed\n";
+        return EXIT_FAILURE;
+    }
+    std::cout << "all source linker tests passed\n";
     return EXIT_SUCCESS;
 }

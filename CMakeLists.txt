@@ -58,9 +58,14 @@ endif()
 # defect cannot be. `add_compile_options` is directory-scoped, so this governs
 # EasyProtoBuf's own targets (library, code generator, examples, tests) and not
 # a parent project that adds this directory as a subdirectory.
-# GNU and Clang only. MSVC's equivalent (/we4061, C4061) is deliberately not set
-# here: no MSVC lane in this repository measures it, and the plan-4 package's
-# verifier records that gap as a note instead of pretending it is covered.
+# GNU and Clang only. MSVC is deliberately not set here: no MSVC lane in this
+# repository measures it, and the plan-4 package's verifier records that gap as
+# a note instead of pretending it is covered. A future MSVC lane needs BOTH
+# codes, because the two switch shapes differ: C4062 ("no default label that can
+# catch it") is this flag's analogue for `outcome_code`, which has no
+# `default:` label, while C4061 ("has a default case") covers a default-bearing
+# switch such as the ImportInfo modifier switch in codegen/schema.cpp. Both are
+# level 4 and off by default, so each needs its own /we (fix round r5, H-3).
 include(CheckCXXCompilerFlag)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     check_cxx_compiler_flag("-Werror=switch" EASYPB_HAS_WERROR_SWITCH)
