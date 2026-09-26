@@ -992,6 +992,13 @@ bool fail_malformed_map_entry(const SchemaFile& file,
     return false;
 }
 
+// The one sentence validate_default's unknown-kind branch records. It lives
+// here, beside the call that writes it, so the predicate below and the
+// producer cannot drift and no other translation unit has to match on message
+// text (fix round r4, ledger D-13).
+const std::string kDeferredDefaultPrefix =
+    "cannot validate default for unresolved imported type ";
+
 bool validate_message_map_entries(const SchemaFile& file,
                                   const DescriptorProto& message,
                                   const std::string& qualified_name,
@@ -1096,8 +1103,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
     // this check must precede the switch below.
     if (unknown) {
         warn_once(file,
-                  "cannot validate default for unresolved imported type " +
-                  view_text(field.type_name),
+                  kDeferredDefaultPrefix + view_text(field.type_name),
                   DIAGNOSTIC_GENERIC, where, field_path);
         return true;
     }
@@ -1241,8 +1247,20 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                     // resolution no post-pass can recover it. Source-origin
                     // fields carry no declared kind (deferred parsing leaves
                     // has_type unset), so they are overwritten as before.
+                    //
+                    // A group field declares TYPE_GROUP and names the group
+                    // message, and a group IS a message: protoc's own model
+                    // carries TYPE_GROUP only on the field. The index records
+                    // every message as TYPE_MESSAGE, so comparing the two
+                    // kinds literally used to refuse every legal proto2 group -
+                    // a divergence from the oracle, which accepts such a
+                    // descriptor (fix round r4, ledger D-12). The two kinds
+                    // therefore agree here, and the declared one is kept.
+                    const bool declared_group =
+                        field.type == FieldDescriptorProto::TYPE_GROUP &&
+                        resolved->kind == FieldDescriptorProto::TYPE_MESSAGE;
                     if (file.from_descriptor_set && field.has_type &&
-                        field.type != resolved->kind) {
+                        !declared_group && field.type != resolved->kind) {
                         return fail_at_code(
                             file,
                             kind_mismatch_message(field, resolved_name,
@@ -1250,7 +1268,13 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                             field_type_location(file, field_path), field_path,
                             DIAGNOSTIC_KIND_MISMATCH, error);
                     }
-                    field.type = resolved->kind;
+                    // Authoritative metadata is not rewritten: a group keeps
+                    // its declared TYPE_GROUP, because overwriting it with
+                    // TYPE_MESSAGE would silently change the wire encoding the
+                    // generator emits for it.
+                    field.type = declared_group
+                        ? FieldDescriptorProto::TYPE_GROUP
+                        : resolved->kind;
                     field.has_type = true;
                     field.type_name = file.strings.save(resolved_name);
                 } else {
@@ -1449,6 +1473,20 @@ bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
         }
     }
     return true;
+}
+
+bool is_deferred_default_warning(const Diagnostic& diagnostic)
+{
+    // The paired companion of an unresolved-type warning: the parser's
+    // standalone pass records it for the same field because it could not
+    // validate the default of a type it had not resolved. After a complete link
+    // that resolved the type and validated the default, it is stale, so A10
+    // drops it together with the unresolved-type warning it was paired with
+    // (fix round r4, ledger D-13).
+    return diagnostic.code == DIAGNOSTIC_GENERIC &&
+           diagnostic.message.size() >= kDeferredDefaultPrefix.size() &&
+           diagnostic.message.compare(0, kDeferredDefaultPrefix.size(),
+                                      kDeferredDefaultPrefix) == 0;
 }
 
 bool validate_deferred_file(SchemaFile& file, Diagnostic& error)

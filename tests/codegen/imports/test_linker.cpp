@@ -2719,6 +2719,157 @@ void test_warning_hygiene_drops_only_stale_unresolved_warnings()
     CHECK(a.warnings[0].message == "a note another pass recorded");
 }
 
+// D-12 (fix round r4): a group field declares TYPE_GROUP and names the group
+// message, and a group IS a message - protoc's model carries TYPE_GROUP only on
+// the field. The index records every message as TYPE_MESSAGE, so the declared-
+// kind comparison must treat the two as agreeing or every legal proto2 group is
+// refused; protoc accepts the same descriptor (review r4's oracle, exit 0).
+// The declared kind must also SURVIVE the link: overwriting it with
+// TYPE_MESSAGE would silently change the wire encoding the generator emits.
+void test_group_field_links_and_keeps_its_declared_kind()
+{
+    // A descriptor-origin group: nested message G, field g of TYPE_GROUP.
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file = make_simple_file(set, "group.proto", "pkg");
+    file.from_descriptor_set = true;
+    DescriptorProto m;
+    m.name = file.strings.save("M");
+    m.has_name = true;
+    add_nested(file, m, "G");
+    add_field(file, m, "g", 1, FieldDescriptorProto::LABEL_OPTIONAL, ".pkg.M.G");
+    m.field[0].type = FieldDescriptorProto::TYPE_GROUP;
+    file.file.message_type.push_back(m);
+
+    easypb_schema::Diagnostic error;
+    CHECK(link_verdict(set, error));
+    CHECK(text(file.file.message_type[0].field[0].type_name) == ".pkg.M.G");
+    CHECK(file.file.message_type[0].field[0].type ==
+          FieldDescriptorProto::TYPE_GROUP);
+
+    // A group field that also has a body field still links, and the body's own
+    // scalar is untouched by the group handling.
+    easypb_schema::SchemaSet nested;
+    easypb_schema::SchemaFile& host = make_simple_file(nested, "group2.proto", "pkg");
+    host.from_descriptor_set = true;
+    DescriptorProto outer;
+    outer.name = host.strings.save("Outer");
+    outer.has_name = true;
+    DescriptorProto group;
+    group.name = host.strings.save("In");
+    group.has_name = true;
+    FieldDescriptorProto body;
+    body.name = host.strings.save("x");
+    body.has_name = true;
+    body.number = 1;
+    body.has_number = true;
+    body.label = FieldDescriptorProto::LABEL_OPTIONAL;
+    body.has_label = true;
+    body.type = FieldDescriptorProto::TYPE_INT32;
+    body.has_type = true;
+    group.field.push_back(body);
+    outer.nested_type.push_back(group);
+    add_field(host, outer, "in", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+              ".pkg.Outer.In");
+    outer.field[0].type = FieldDescriptorProto::TYPE_GROUP;
+    host.file.message_type.push_back(outer);
+
+    easypb_schema::Diagnostic error2;
+    CHECK(link_verdict(nested, error2));
+    CHECK(host.file.message_type[0].field[0].type ==
+          FieldDescriptorProto::TYPE_GROUP);
+
+    // The control from review r4 still holds: a genuine kind disagreement - a
+    // field declaring an enum but naming a message - is still refused. Without
+    // this the row above would pass even if the comparison were deleted.
+    easypb_schema::SchemaSet wrong;
+    easypb_schema::SchemaFile& w = make_simple_file(wrong, "wrong.proto", "pkg");
+    w.from_descriptor_set = true;
+    add_message(w, "Holder");
+    DescriptorProto r;
+    r.name = w.strings.save("R");
+    r.has_name = true;
+    add_field(w, r, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, ".pkg.Holder");
+    r.field[0].type = FieldDescriptorProto::TYPE_ENUM;
+    w.file.message_type.push_back(r);
+    easypb_schema::Diagnostic error3;
+    CHECK(!link_verdict(wrong, error3));
+    CHECK(error3.code == easypb_schema::DIAGNOSTIC_KIND_MISMATCH);
+}
+
+// D-13 (fix round r4): the parser's standalone pass records TWO warnings for one
+// unresolved field - the unresolved-type warning and a generic companion about
+// the default it could not validate. A successful complete link resolves the
+// type and validates the default, so neither survives; an unrelated warning of
+// another code does, and the predicate that recognises the companion is the one
+// the producer's own sentence backs.
+void test_warning_hygiene_drops_the_paired_default_warning()
+{
+    // The companion warning is only recorded for a field that HAS a default, so
+    // the fixture is one defaulted field naming a type the standalone pass
+    // cannot see. `make_chain_fixture`'s field carries no default and would
+    // produce only the unresolved-type warning.
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& shared = set.add_file("pair.shared.proto");
+    shared.file.package = shared.strings.save("pairq");
+    shared.file.has_package = true;
+    add_enum(shared, "Color", "RED");
+
+    easypb_schema::SchemaFile& a = set.add_file("pair.a.proto");
+    a.file.package = a.strings.save("pair");
+    a.file.has_package = true;
+    a.file.dependency.push_back(a.strings.save("pair.shared.proto"));
+    DescriptorProto m;
+    m.name = a.strings.save("M");
+    m.has_name = true;
+    FieldDescriptorProto field;
+    field.name = a.strings.save("color");
+    field.has_name = true;
+    field.number = 1;
+    field.has_number = true;
+    field.label = FieldDescriptorProto::LABEL_OPTIONAL;
+    field.has_label = true;
+    field.type = FieldDescriptorProto::TYPE_MESSAGE;   // standalone placeholder
+    field.has_type = true;
+    field.type_name = a.strings.save(".pairq.Color");
+    field.has_type_name = true;
+    field.default_value = a.strings.save("RED");
+    field.has_default_value = true;
+    m.field.push_back(field);
+    a.file.message_type.push_back(m);
+
+    // The standalone shape: one file indexed, only itself visible, so the
+    // reference is missing and BOTH warnings are recorded.
+    easypb_schema::SymbolIndex partial;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::index_file(a, partial, error));
+    std::set<const easypb_schema::SchemaFile*> own;
+    own.insert(&a);
+    CHECK(easypb_schema::resolve_file(a, partial, own, true, error));
+    CHECK(a.warnings.size() == 2);
+    CHECK(a.warnings[0].code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(easypb_schema::is_deferred_default_warning(a.warnings[1]));
+    // The predicate is about this warning only, not about message text.
+    CHECK(!easypb_schema::is_deferred_default_warning(a.warnings[0]));
+
+    // A warning of another kind must survive the link.
+    easypb_schema::Diagnostic kept;
+    kept.file = "pair.a.proto";
+    kept.warning = true;
+    kept.code = easypb_schema::DIAGNOSTIC_GENERIC;
+    kept.message = "a note another pass recorded";
+    a.warnings.push_back(kept);
+
+    CHECK(link_verdict(set, error));
+    // The link resolved the kind and validated the default, so both stale
+    // warnings are gone and only the unrelated one is left.
+    CHECK(a.file.message_type[0].field[0].type ==
+          FieldDescriptorProto::TYPE_ENUM);
+    CHECK(a.warnings.size() == 1);
+    CHECK(a.warnings[0].code == easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(a.warnings[0].message == "a note another pass recorded");
+    CHECK(!easypb_schema::is_deferred_default_warning(a.warnings[0]));
+}
+
 } // namespace
 
 int main()
@@ -2764,6 +2915,8 @@ int main()
     test_input_order_and_targets_do_not_decide_the_verdict();
     test_already_resolved_input_is_resolved_again();
     test_warning_hygiene_drops_only_stale_unresolved_warnings();
+    test_group_field_links_and_keeps_its_declared_kind();
+    test_warning_hygiene_drops_the_paired_default_warning();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

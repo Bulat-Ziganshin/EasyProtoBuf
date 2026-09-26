@@ -116,18 +116,21 @@ bool fail_unsupported_syntax(const SchemaFile& file, Diagnostic& error)
 // A10's warning hygiene. The standalone parser path resolves with
 // allow_unresolved = true (proto_parser.cpp's semantic pass), so a file in the
 // set may already carry DIAGNOSTIC_UNRESOLVED_TYPE warnings for references
-// this link has just resolved. On success exactly that code is removed and
-// every other code is left alone - a warning about a deferred default is still
-// true and the caller may still need it. On failure the caller removes
-// nothing, because the warnings are part of the explanation.
+// this link has just resolved, each paired with a generic warning about the
+// default that could not be validated either. A successful complete link
+// resolves the type and validates the default, so BOTH are stale and both are
+// dropped; every other code is left alone, because a warning of another kind
+// is still true. On failure the caller removes nothing, because the warnings
+// are part of the explanation (fix round r4, ledger D-13).
 void drop_stale_unresolved_warnings(SchemaFile& file)
 {
     std::vector<Diagnostic> kept;
     kept.reserve(file.warnings.size());
     for (std::size_t i = 0; i < file.warnings.size(); ++i) {
-        if (file.warnings[i].code != DIAGNOSTIC_UNRESOLVED_TYPE) {
-            kept.push_back(file.warnings[i]);
-        }
+        const bool stale =
+            file.warnings[i].code == DIAGNOSTIC_UNRESOLVED_TYPE ||
+            is_deferred_default_warning(file.warnings[i]);
+        if (!stale) kept.push_back(file.warnings[i]);
     }
     file.warnings.swap(kept);
 }

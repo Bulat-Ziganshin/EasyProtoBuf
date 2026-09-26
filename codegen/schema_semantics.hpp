@@ -84,10 +84,21 @@ bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
 // today. An entry nobody references is still descriptor input, so the check is
 // unconditional and must not hide behind the map-entry ownership guard, which
 // only fires for a referencing field. Source origin cannot produce the shape
-// (the parser synthesizes both members), so this is the descriptor-origin
-// check that also runs in compatibility mode. Returns false and fills error
-// at the first malformed entry, in declaration order.
+// (the parser synthesizes both members), so this is a descriptor-origin check:
+// `link_schema` runs it in complete mode, and compatibility mode's own sweep is
+// Step 7's obligation, not this function's (review r4, style-only note).
+// Returns false and fills error at the first malformed entry, in declaration
+// order.
 bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
+
+// True for the paired companion of an unresolved-type warning: the generic
+// warning the standalone pass records when it cannot validate the default of a
+// type it has not resolved. Complete linking resolves the type and validates the
+// default, which makes it stale, so A10's warning hygiene removes it together
+// with the unresolved-type warning it was recorded with. The sentence itself
+// stays private to schema_semantics.cpp - callers ask this question instead of
+// matching on message text (fix round r4, ledger D-13).
+bool is_deferred_default_warning(const Diagnostic& diagnostic);
 
 // Validates everything that needs no import linking: duplicate field
 // names/numbers, oneof bounds, packed labels, and scalar packed/default
