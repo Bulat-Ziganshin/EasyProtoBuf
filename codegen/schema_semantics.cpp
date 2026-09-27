@@ -1110,6 +1110,24 @@ std::string missing_reference_message(const std::string& raw,
            matched + "\", which is not defined";
 }
 
+// The one sentence the cross-syntax enum rule records (Step 6.1, R11). It
+// states the rule instead of copying protoc's editions-era wording ("is not an
+// open enum"), which is reference evidence and not a template (Appendix C C2):
+// the text names the enum, the file that declares it, the requesting file, and
+// the rule itself, so no reader has to know about editions. Openness belongs
+// to the file that declares the enum, which is why the declaring file's syntax
+// is the whole explanation.
+std::string cross_syntax_enum_message(const SchemaFile& requesting,
+                                      const SchemaFile& declaring,
+                                      const std::string& enum_name)
+{
+    return "enum type \"" + enum_name + "\" is declared in \"" +
+           view_text(declaring.file.name) +
+           "\", a proto2 file, and must not be used by a proto3 field in \"" +
+           view_text(requesting.file.name) +
+           "\": a proto3 field requires an enum declared in a proto3 file";
+}
+
 // Type-dependent semantic validation for the textual default_value stored
 // during parsing. Unknown kinds are the caller's responsibility: the caller
 // passes unknown == true when the named type could not be resolved, in which
@@ -1296,6 +1314,47 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                                                   resolved->kind),
                             field_type_location(file, field_path), field_path,
                             DIAGNOSTIC_KIND_MISMATCH, error);
+                    }
+                    // Step 6.1 (R11): the cross-syntax enum restriction. A
+                    // proto3 field must not directly use a proto2 enum, and
+                    // the rule keys on the file that DECLARES the enum, never
+                    // on the requesting file alone or on a transitive notion
+                    // of openness: a proto3 field may name a proto2 message
+                    // even when that message carries proto2 enum fields of its
+                    // own (oracle C3 accepts that shape), while a proto2 field
+                    // may use an enum of either syntax (S1, S2). The check
+                    // sits after the A7 comparison because the declared-kind
+                    // contradiction is the more specific verdict when a
+                    // descriptor carries both, and before the rewrite below
+                    // so a refused reference keeps its metadata.
+                    //
+                    // It is silent wherever the kind is unknown: the deferred
+                    // pass (link_types == false) resolves nothing, so `unknown`
+                    // still covers every named type, and the parser's own
+                    // allow_unresolved pass resolves only inside its own file,
+                    // whose syntax is the field's file's syntax by definition.
+                    // FILE_SYNTAX_UNSUPPORTED never matches on either side, so
+                    // a direct caller keeps A25's own verdict for an editions
+                    // file: link_schema refuses such a file before resolution,
+                    // and nothing here reads "not proto3" as proto2.
+                    //
+                    // No dedicated code exists for this verdict among the
+                    // seven plan-4 values (A3/A25/A26), each of which has a
+                    // frozen meaning that this rule would dilute - an eighth
+                    // value is a contract amendment, not a step - so the
+                    // failure carries DIAGNOSTIC_GENERIC like the other
+                    // kind-independent validation verdicts (packed legality,
+                    // default validation, duplicate field names).
+                    if (resolved->kind == FieldDescriptorProto::TYPE_ENUM &&
+                        classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3 &&
+                        classify_file_syntax(resolved->owner->file) ==
+                            FILE_SYNTAX_PROTO2) {
+                        return fail_at(file,
+                                       cross_syntax_enum_message(
+                                           file, *resolved->owner,
+                                           resolved_name),
+                                       field_type_location(file, field_path),
+                                       field_path, error);
                     }
                     // Authoritative metadata is not rewritten: a group keeps
                     // its declared TYPE_GROUP, because overwriting it with

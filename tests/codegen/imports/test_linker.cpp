@@ -3119,6 +3119,372 @@ void test_package_prefix_needs_a_dot_boundary()
     CHECK(error.message.find("foo.proto") != std::string::npos);
 }
 
+// --- Step 6: cross-syntax enum rules (R11) ---------------------------------
+// The rule keys on the file that DECLARES the enum, never on the requesting
+// file alone and never transitively on what a referenced message carries. The
+// verdicts these tests assert are the Step-6.1 oracle re-run in this session
+// with libprotoc 30.1 (`build/plan4/step-06-cross-syntax/oracle/`): C2 rejects
+// a proto3 field of a proto2 enum, C3 accepts a proto3 field of a proto2
+// message that carries proto2 enum fields, C4 rejects the proto3 map-value
+// shape, S1/S2/S3 are the accepting directions, and S4 rejects a provider
+// whose syntax declaration is ABSENT - absence is proto2, so a mutation that
+// reads for an explicit "proto2" string would link an enum protoc refuses.
+
+void set_syntax(easypb_schema::SchemaFile& file, const char* syntax)
+{
+    file.file.syntax = file.strings.save(syntax);
+    file.file.has_syntax = true;
+}
+
+// Appends one field whose DECLARED kind is explicit. Descriptor-origin input
+// carries an authoritative kind (A7), so a fixture typed by an enum must
+// declare TYPE_ENUM: the kind-mismatch check answers before the syntax rule
+// under test otherwise, and the fixture would prove the wrong rule.
+void add_typed_field(easypb_schema::SchemaFile& file, DescriptorProto& message,
+                     const char* name, int number, int label, int kind,
+                     const char* type_name)
+{
+    FieldDescriptorProto field;
+    field.name = file.strings.save(name);
+    field.has_name = true;
+    field.number = number;
+    field.has_number = true;
+    field.label = label;
+    field.has_label = true;
+    field.type = kind;
+    field.has_type = true;
+    if (type_name != 0) {
+        field.type_name = file.strings.save(type_name);
+        field.has_type_name = true;
+    }
+    message.field.push_back(field);
+}
+
+// Appends a nested enum with one zero-valued enumerator: the C3 fixture's
+// proto2 message needs a proto2 enum field of its own, or it would not carry
+// the shape the oracle accepts.
+void add_nested_enum(easypb_schema::SchemaFile& file, DescriptorProto& parent,
+                     const char* enum_name, const char* value_name)
+{
+    EnumDescriptorProto enumeration;
+    enumeration.name = file.strings.save(enum_name);
+    enumeration.has_name = true;
+    EnumValueDescriptorProto value;
+    value.name = file.strings.save(value_name);
+    value.has_name = true;
+    value.number = 0;
+    value.has_number = true;
+    enumeration.value.push_back(value);
+    parent.enum_type.push_back(enumeration);
+}
+
+// One enum-only provider file, the shape every cross-syntax fixture shares. A
+// null syntax leaves the declaration ABSENT, which is proto2 by absence, and a
+// zero-valued first enumerator keeps the map fixtures off the orthogonal
+// "Enum value in map must define 0 as the first value" rule (C4's second
+// error), so each fixture proves exactly one rule.
+easypb_schema::SchemaFile& make_enum_provider(easypb_schema::SchemaSet& set,
+                                              const char* logical,
+                                              const char* package,
+                                              const char* syntax)
+{
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaFile& provider = make_file(
+        set, logical, std::vector<std::string>(), no_indexes, no_indexes);
+    provider.from_descriptor_set = true;
+    set_package(provider, package);
+    if (syntax != 0) set_syntax(provider, syntax);
+    add_enum(provider, "State", "STATE_UNKNOWN");
+    return provider;
+}
+
+// One consumer file whose message holds one field of the given declared kind
+// and type name, optionally importing the provider. syntax == 0 leaves the
+// consumer's syntax absent (proto2).
+easypb_schema::SchemaFile& make_enum_consumer(
+    easypb_schema::SchemaSet& set, const char* logical, const char* package,
+    const char* syntax, const char* dependency, int declared_kind,
+    const char* type_name)
+{
+    const std::vector<std::int32_t> no_indexes;
+    std::vector<std::string> deps;
+    if (dependency != 0) deps.push_back(dependency);
+    easypb_schema::SchemaFile& consumer =
+        make_file(set, logical, deps, no_indexes, no_indexes);
+    consumer.from_descriptor_set = true;
+    if (syntax != 0) set_syntax(consumer, syntax);
+    set_package(consumer, package);
+    DescriptorProto u;
+    u.name = consumer.strings.save("U");
+    u.has_name = true;
+    add_typed_field(consumer, u, "s", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                    declared_kind, type_name);
+    consumer.file.message_type.push_back(u);
+    return consumer;
+}
+
+// C2 (reject) and S4 (reject with an ABSENT provider syntax): a proto3 field
+// typed by a proto2 enum fails, and the text names the enum, the file that
+// declares it, the requesting file, and the rule. Nothing is published for the
+// failure - link_verdict asserts that on every failure it drives.
+void test_proto3_field_may_not_use_a_proto2_enum()
+{
+    for (int explicit_proto2 = 1; explicit_proto2 >= 0; --explicit_proto2) {
+        easypb_schema::SchemaSet set;
+        make_enum_provider(set, "base2.proto", "base2",
+                           explicit_proto2 ? "proto2" : 0);
+        make_enum_consumer(set, "root.proto", "app", "proto3", "base2.proto",
+                           FieldDescriptorProto::TYPE_ENUM, ".base2.State");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.file == "root.proto");
+        // The verdict is the syntax rule, never an unresolved type: the
+        // reference was resolved before it was judged.
+        CHECK(error.code != easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find(".base2.State") != std::string::npos);
+        CHECK(error.message.find("base2.proto") != std::string::npos);
+        CHECK(error.message.find("root.proto") != std::string::npos);
+        CHECK(error.message.find("proto2") != std::string::npos);
+        CHECK(error.message.find("proto3") != std::string::npos);
+        // Descriptor-origin input carries no source position, so the refusal
+        // names the descriptor path of the field it refused.
+        CHECK(error.message.find("at [4, 0, 2, 0]") != std::string::npos);
+    }
+}
+
+// The C4 shape: a consumer whose map field is owned by the synthetic entry
+// whose VALUE member names the imported enum. consumer_syntax decides the
+// verdict; the provider is always proto2.
+void make_enum_map_fixture(easypb_schema::SchemaSet& set,
+                           const char* consumer_syntax)
+{
+    make_enum_provider(set, "base2.proto", "base2", "proto2");
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaFile& root = make_file(
+        set, "root.proto", std::vector<std::string>(1, "base2.proto"),
+        no_indexes, no_indexes);
+    root.from_descriptor_set = true;
+    set_syntax(root, consumer_syntax);
+    set_package(root, "app");
+    DescriptorProto u;
+    u.name = root.strings.save("U");
+    u.has_name = true;
+    add_map_entry(root, u, "MEntry", ".base2.State",
+                  FieldDescriptorProto::TYPE_ENUM);
+    add_map_field(root, u, "m", 1, ".app.U.MEntry");
+    root.file.message_type.push_back(u);
+}
+
+// C4: a proto3 map value typed by a proto2 enum is the same syntax verdict,
+// and the failure is NOT an unresolved type - which is what proves the entry
+// value was resolved from its own token (Step 4.2's map case) instead of the
+// map field hiding it. Its accepting twin, a proto2 map over a proto2 enum,
+// links with the entry value resolved in place.
+void test_proto3_map_value_may_not_use_a_proto2_enum()
+{
+    {
+        easypb_schema::SchemaSet set;
+        make_enum_map_fixture(set, "proto3");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.file == "root.proto");
+        CHECK(error.code != easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find(".base2.State") != std::string::npos);
+        // The refused field is the ENTRY's value member: [4, 0] is U, [3, 0]
+        // its nested entry, [2, 1] the value field.
+        CHECK(error.message.find("at [4, 0, 3, 0, 2, 1]") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        make_enum_map_fixture(set, "proto2");
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        easypb_schema::SchemaFile* root = set.find_file("root.proto");
+        CHECK(root != 0);
+        const FieldDescriptorProto& value =
+            root->file.message_type[0].nested_type[0].field[1];
+        CHECK(value.has_type &&
+              value.type == FieldDescriptorProto::TYPE_ENUM);
+        CHECK(text(value.type_name) == ".base2.State");
+    }
+}
+
+// C3 (accept): a proto3 field may name a proto2 MESSAGE even when that message
+// carries proto2 enum fields of its own - the restriction is per reference,
+// never transitive. The message's own enum field resolves to the nested enum
+// normally, which is what would break if the rule inspected the referenced
+// definition instead of the reference.
+void test_proto3_field_may_use_a_proto2_message_with_enum_fields()
+{
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& provider = make_file(
+        set, "msg2.proto", std::vector<std::string>(), no_indexes, no_indexes);
+    provider.from_descriptor_set = true;
+    set_syntax(provider, "proto2");
+    set_package(provider, "msg2");
+    DescriptorProto holder;
+    holder.name = provider.strings.save("Holder");
+    holder.has_name = true;
+    add_nested_enum(provider, holder, "E", "A");
+    add_typed_field(provider, holder, "e", 1,
+                    FieldDescriptorProto::LABEL_OPTIONAL,
+                    FieldDescriptorProto::TYPE_ENUM, "E");
+    provider.file.message_type.push_back(holder);
+
+    easypb_schema::SchemaFile& root = make_file(
+        set, "root.proto", std::vector<std::string>(1, "msg2.proto"),
+        no_indexes, no_indexes);
+    root.from_descriptor_set = true;
+    set_syntax(root, "proto3");
+    set_package(root, "app");
+    DescriptorProto u;
+    u.name = root.strings.save("U");
+    u.has_name = true;
+    add_typed_field(root, u, "h", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                    FieldDescriptorProto::TYPE_MESSAGE, ".msg2.Holder");
+    root.file.message_type.push_back(u);
+
+    easypb_schema::Diagnostic error;
+    CHECK(link_verdict(set, error));
+    CHECK(root.file.message_type[0].field[0].type ==
+          FieldDescriptorProto::TYPE_MESSAGE);
+    CHECK(text(root.file.message_type[0].field[0].type_name) ==
+          ".msg2.Holder");
+    CHECK(provider.file.message_type[0].field[0].type ==
+          FieldDescriptorProto::TYPE_ENUM);
+    CHECK(text(provider.file.message_type[0].field[0].type_name) ==
+          ".msg2.Holder.E");
+}
+
+// The accepting directions the rule must not break: a proto2 field may use a
+// proto2 enum across an import (the plan-4 pair's own shape, C5), a proto2
+// field may use a proto3 enum (S1), and a proto3 field may use a proto3 enum
+// from its own file (S3). A mutation keying on the requesting file alone fails
+// the first two; one keying on the provider regardless of the request fails
+// the second.
+void test_proto2_fields_may_use_either_enum_syntax()
+{
+    {
+        easypb_schema::SchemaSet set;
+        make_enum_provider(set, "base2.proto", "shared", "proto2");
+        easypb_schema::SchemaFile& root = make_enum_consumer(
+            set, "root.proto", "app", "proto2", "base2.proto",
+            FieldDescriptorProto::TYPE_ENUM, ".shared.State");
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        CHECK(root.file.message_type[0].field[0].type ==
+              FieldDescriptorProto::TYPE_ENUM);
+        CHECK(text(root.file.message_type[0].field[0].type_name) ==
+              ".shared.State");
+    }
+    {
+        easypb_schema::SchemaSet set;
+        make_enum_provider(set, "base3.proto", "base3", "proto3");
+        easypb_schema::SchemaFile& root = make_enum_consumer(
+            set, "root.proto", "app", "proto2", "base3.proto",
+            FieldDescriptorProto::TYPE_ENUM, ".base3.State");
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        CHECK(text(root.file.message_type[0].field[0].type_name) ==
+              ".base3.State");
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& root =
+            make_simple_file(set, "root.proto", "app");
+        root.from_descriptor_set = true;
+        set_syntax(root, "proto3");
+        add_enum(root, "State", "STATE_UNKNOWN");
+        DescriptorProto u;
+        u.name = root.strings.save("U");
+        u.has_name = true;
+        add_typed_field(root, u, "s", 1,
+                        FieldDescriptorProto::LABEL_OPTIONAL,
+                        FieldDescriptorProto::TYPE_ENUM, ".app.State");
+        root.file.message_type.push_back(u);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        CHECK(text(root.file.message_type[0].field[0].type_name) ==
+              ".app.State");
+    }
+}
+
+// The A25 precedence, asserted rather than assumed: classification runs before
+// any resolution, so a set that also contains the proto3-uses-proto2-enum
+// shape answers DIAGNOSTIC_UNSUPPORTED_SYNTAX and never the enum-openness
+// verdict (Step 6.2's "the last two rows are not the cross-syntax rule"). The
+// editions file is the offending consumer in the first block and a later-
+// named sibling in the second; both carry A25's own sentence, which is what
+// shows the cross-syntax rule never got to answer.
+void test_unsupported_syntax_beats_the_cross_syntax_rule()
+{
+    {
+        easypb_schema::SchemaSet set;
+        make_enum_provider(set, "base2.proto", "base2", "proto2");
+        make_enum_consumer(set, "a.proto", "app", "editions", "base2.proto",
+                           FieldDescriptorProto::TYPE_ENUM, ".base2.State");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+        CHECK(error.file == "a.proto");
+        CHECK(error.message.find("is not supported") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        make_enum_provider(set, "base2.proto", "base2", "proto2");
+        make_enum_consumer(set, "a.proto", "app", "proto3", "base2.proto",
+                           FieldDescriptorProto::TYPE_ENUM, ".base2.State");
+        easypb_schema::SchemaFile& editions =
+            make_simple_file(set, "z.proto", 0);
+        editions.from_descriptor_set = true;
+        set_syntax(editions, "editions");
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+        CHECK(error.file == "z.proto");
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+    }
+}
+
+// The deferred pass resolves nothing, so the rule stays silent there: a proto3
+// file whose field names a proto2 enum passes validation with its metadata
+// untouched. The parser's own allow_unresolved pass resolves inside its own
+// file only, whose syntax is the field's file's syntax by definition, so the
+// rule cannot start rejecting files that pass accepted before their imports
+// were linked.
+void test_cross_syntax_rule_is_silent_in_the_deferred_pass()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file =
+        make_simple_file(set, "root.proto", "app");
+    file.from_descriptor_set = true;
+    set_syntax(file, "proto3");
+    DescriptorProto u;
+    u.name = file.strings.save("U");
+    u.has_name = true;
+    add_typed_field(file, u, "s", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                    FieldDescriptorProto::TYPE_ENUM, ".base2.State");
+    file.file.message_type.push_back(u);
+
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::validate_deferred_file(file, error));
+    const FieldDescriptorProto& field = file.file.message_type[0].field[0];
+    CHECK(field.type == FieldDescriptorProto::TYPE_ENUM);
+    CHECK(text(field.type_name) == ".base2.State");
+}
+
 } // namespace
 
 int main()
@@ -3171,6 +3537,12 @@ int main()
     test_invisible_nearer_non_type_keeps_the_not_a_type_category();
     test_indexed_symbol_kinds_stay_in_the_documented_domain();
     test_package_prefix_needs_a_dot_boundary();
+    test_proto3_field_may_not_use_a_proto2_enum();
+    test_proto3_map_value_may_not_use_a_proto2_enum();
+    test_proto3_field_may_use_a_proto2_message_with_enum_fields();
+    test_proto2_fields_may_use_either_enum_syntax();
+    test_unsupported_syntax_beats_the_cross_syntax_rule();
+    test_cross_syntax_rule_is_silent_in_the_deferred_pass();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";
