@@ -411,6 +411,12 @@ void test_bind_rejects_negative_weak_index()
     CHECK(error.message.find("weak dependency index") != std::string::npos);
 }
 
+// The three shapes below are refused by DECISION, not by parity: libprotoc
+// 30.1 builds all three from a descriptor set (measured 2026-09-27, both
+// readers over the same bytes; `build/plan4/step-11-oracle-parity/p21/`).
+// A18 is what requires the refusal - `allow_missing` relaxes missing targets
+// and never malformed indexes - and ledger `D-29` carries the divergence, so a
+// later session that re-measures it should read this comment first.
 void test_bind_rejects_duplicate_and_overlapping_indexes()
 {
     {

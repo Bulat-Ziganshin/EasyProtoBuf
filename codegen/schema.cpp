@@ -359,6 +359,18 @@ bool bind_import_edges(SchemaSet& files, bool allow_missing,
 
         // Index/modifier validation. The descriptor lists are authoritative
         // for graph meaning; imports supplies positions only.
+        //
+        // Three shapes below are refused although libprotoc 30.1 BUILDS them -
+        // measured on 2026-09-27 with both readers over the same bytes (a
+        // repeated public dependency index, a repeated weak one, and an index
+        // that is both public and weak; `build/plan4/step-11-oracle-parity/`
+        // `p21/VERDICT.md`). That is a decision and not an oversight: A18 gives
+        // malformed indexes their own row and nothing there lets
+        // `allow_missing` relax them - it relaxes missing TARGETS only
+        // (`plan4/steps/04-task3-compat.md`) - and no `protoc`-written set can
+        // carry either shape, because the compiler emits each index at most
+        // once. Ledger `D-29` records the divergence so that a later session
+        // measuring it again reads the verdict instead of refiling it.
         std::set<std::int32_t> public_indexes;
         std::set<std::int32_t> weak_indexes;
         for (std::size_t i = 0; i < importer.file.public_dependency.size(); ++i) {
