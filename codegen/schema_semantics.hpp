@@ -77,6 +77,27 @@ bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
                   const std::set<const SchemaFile*>& visible_files,
                   bool allow_unresolved, Diagnostic& error);
 
+// The compatibility finish pass (plan 4 Task 3, amendments A5/A6): the one
+// descriptor-origin file of LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY is resolved
+// against its own declarations, and a reference that resolves nowhere is
+// tolerated ONLY when the descriptor classifies it itself - an explicit
+// TYPE_MESSAGE/TYPE_ENUM kind and an absolute type name. Every permitted
+// external reference records one warning per type name: the bound is the
+// caller-owned warned_types set (A5), while warn_once only keeps a repeated
+// pass idempotent, and the warning goes to the stable unknown location because
+// a thin descriptor carries no positions. missing_external is the pass's own
+// report that external information was absent (A4), and a field whose type
+// resolves locally is checked exactly as complete linking checks it - the
+// declared-kind comparison (A7) included. Unlike resolve_file's
+// allow_unresolved policy, this pass never accepts a relative source-style
+// name, and it never rewrites the metadata of a permitted external reference
+// (a refused reference keeps its metadata too, because every check runs before
+// the rewrite). Returns false and fills error on the first fatal problem.
+bool resolve_file_compat(SchemaFile& file, const SymbolIndex& symbols,
+                         const std::set<const SchemaFile*>& visible_files,
+                         std::set<std::string>& warned_types,
+                         bool& missing_external, Diagnostic& error);
+
 // Validates the shape of every synthetic map entry the file declares
 // (amendment A26): a message carrying options.map_entry == true must hold a
 // field numbered 1 and a field numbered 2, referenced or not, reported as

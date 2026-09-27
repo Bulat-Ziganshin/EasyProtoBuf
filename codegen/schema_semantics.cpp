@@ -1128,6 +1128,18 @@ std::string cross_syntax_enum_message(const SchemaFile& requesting,
            "\": a proto3 field requires an enum declared in a proto3 file";
 }
 
+// The one sentence the compatibility pass records for a permitted external
+// reference (A5). It names the type and states exactly what the mode could not
+// validate, so a reader of the warning sees the warranty's edge. It is
+// separate from a refusal's message on purpose: this is a warning about
+// missing external information, not a verdict.
+std::string external_reference_message(const std::string& type_name)
+{
+    return "external type \"" + type_name +
+           "\" is not declared in the linked set: its members, defaults, and "
+           "dependency visibility were not validated";
+}
+
 // Type-dependent semantic validation for the textual default_value stored
 // during parsing. Unknown kinds are the caller's responsibility: the caller
 // passes unknown == true when the named type could not be resolved, in which
@@ -1237,6 +1249,26 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
     }
 }
 
+// What a named type that resolves nowhere means to the pass that called
+// resolve_message. Exactly one of the three behaviours applies, and the two
+// pointers are the compatibility pass's caller-owned state (A4/A5):
+//
+// - complete linking: fatal, with the shared outcome code (complete);
+// - the parser's standalone pass: a per-field warning that keeps the raw
+//   metadata so a later complete link can resolve it (deferred);
+// - descriptor compatibility: an external reference is permitted only when
+//   the descriptor classifies it itself, and its warning is bounded one per
+//   type name by the caller-owned set (external_warned_types non-null).
+struct UnresolvedPolicy
+{
+    bool deferred;
+    std::set<std::string>* external_warned_types;
+    bool* missing_external;
+
+    UnresolvedPolicy()
+        : deferred(false), external_warned_types(0), missing_external(0) {}
+};
+
 // Checks every field in one message subtree. With link_types == true this
 // resolves custom field TypeNames and applies the semantic rules that
 // require the resolved kind (packed legality for named types, named default
@@ -1244,9 +1276,13 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
 // resolution run: a locally resolvable kind must not decide the outcome,
 // because shadowing imports may change it after linking. Unknown-kind
 // packed/default rules are then left for complete linking.
+//
+// `unresolved_policy` says what a type_name that resolves nowhere means to
+// the pass that called this (see UnresolvedPolicy above).
 bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                      const std::set<const SchemaFile*>& visible_files,
-                     bool allow_unresolved, bool link_types,
+                     const UnresolvedPolicy& unresolved_policy,
+                     bool link_types,
                      DescriptorProto& message,
                      const std::string& parent, const DescriptorPath& message_path,
                      Diagnostic& error)
@@ -1268,6 +1304,11 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
         }
 
         bool unknown = false;
+        // Set when the compatibility policy permitted an external reference:
+        // the declared metadata is kept verbatim and the field's default is
+        // not validated, because the external definition cannot answer and the
+        // A5 warning already states that defaults were not validated.
+        bool external_reference = false;
         if (field.has_type_name) {
             if (!link_types) {
                 // Deferred: never resolve locally. The resolved kind is
@@ -1388,17 +1429,66 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                             ? reference_failure_message(file, symbols, raw, outcome,
                                                         resolved_name)
                             : missing_reference_message(raw, scope, resolved_name);
-                    if (!allow_unresolved) {
+                    if (unresolved_policy.external_warned_types != 0) {
+                        // Step 7.2: compatibility mode tolerates a missing
+                        // target only when the descriptor classifies the
+                        // reference itself - an explicit supported message or
+                        // enum kind and an absolute type name. Everything else
+                        // (a relative source-style name, a missing has_type)
+                        // is refused even here, or the mode becomes the
+                        // general unresolved-type escape hatch the contract
+                        // forbids. The code stays the lookup outcome's own
+                        // (DIAGNOSTIC_UNRESOLVED_TYPE for a missing target):
+                        // the reference is unresolved, the policy merely
+                        // refuses to tolerate it.
+                        const bool classified =
+                            field.has_type && field.has_type_name &&
+                            (field.type == FieldDescriptorProto::TYPE_MESSAGE ||
+                             field.type == FieldDescriptorProto::TYPE_ENUM) &&
+                            !view_text(field.type_name).empty() &&
+                            view_text(field.type_name)[0] == '.';
+                        if (!classified) {
+                            return fail_at_code(
+                                file,
+                                reason +
+                                "; compatibility mode accepts an unresolved "
+                                "type only when the descriptor supplies an "
+                                "absolute type name and an explicit message or "
+                                "enum kind",
+                                field_type_location(file, field_path),
+                                field_path, outcome_code(outcome), error);
+                        }
+                        // A5: the bound is one warning per type NAME, not per
+                        // field, and it is the caller-owned set that carries
+                        // it - warn_once only keeps a repeated pass idempotent.
+                        // The warning goes to the stable unknown location
+                        // because a thin descriptor has no positions, and the
+                        // reference is never rewritten: no fabricated kind, no
+                        // absolute name invented, no first enumerator or
+                        // integer zero for its default.
+                        external_reference = true;
+                        if (unresolved_policy.missing_external != 0) {
+                            *unresolved_policy.missing_external = true;
+                        }
+                        const std::string type_name = view_text(field.type_name);
+                        if (unresolved_policy.external_warned_types
+                                ->insert(type_name).second) {
+                            warn_once(file, external_reference_message(type_name),
+                                      DIAGNOSTIC_GENERIC, unknown_location(),
+                                      field_path);
+                        }
+                    } else if (unresolved_policy.deferred) {
+                        warn_once(file,
+                                  reason +
+                                  "; it is kept as TYPE_MESSAGE until imports are linked",
+                                  outcome_code(outcome),
+                                  field_type_location(file, field_path), field_path);
+                    } else {
                         return fail_at_code(file, reason,
                                             field_type_location(file, field_path),
                                             field_path, outcome_code(outcome),
                                             error);
                     }
-                    warn_once(file,
-                              reason +
-                              "; it is kept as TYPE_MESSAGE until imports are linked",
-                              outcome_code(outcome),
-                              field_type_location(file, field_path), field_path);
                 }
             }
         }
@@ -1435,7 +1525,7 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                                   field_path, error)) {
                 return false;
             }
-        } else if (link_types) {
+        } else if (link_types && !external_reference) {
             if (!validate_default(file, symbols, visible_files, field, unknown,
                                   field_path, error)) {
                 return false;
@@ -1461,7 +1551,7 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                            declaration_location(file, nested_path),
                            nested_path, error);
         }
-        if (!resolve_message(file, symbols, visible_files, allow_unresolved,
+        if (!resolve_message(file, symbols, visible_files, unresolved_policy,
                              link_types,
                              message.nested_type[i], scope, nested_path, error)) {
             return false;
@@ -1551,9 +1641,36 @@ bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
                   const std::set<const SchemaFile*>& visible_files,
                   bool allow_unresolved, Diagnostic& error)
 {
+    UnresolvedPolicy unresolved_policy;
+    unresolved_policy.deferred = allow_unresolved;
     const std::string prefix = package_prefix(file);
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
-        if (!resolve_message(file, symbols, visible_files, allow_unresolved,
+        if (!resolve_message(file, symbols, visible_files, unresolved_policy,
+                             true,
+                             file.file.message_type[i], prefix,
+                             file_message_path(static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool resolve_file_compat(SchemaFile& file, const SymbolIndex& symbols,
+                         const std::set<const SchemaFile*>& visible_files,
+                         std::set<std::string>& warned_types,
+                         bool& missing_external, Diagnostic& error)
+{
+    // The named policy of A6: the shared resolver, told what a reference that
+    // resolves nowhere means to THIS pass. The per-type dedup set and the
+    // missing-information report are the caller's, because both describe the
+    // whole link (A5, A4), not one message; the walk is the same declaration
+    // order resolve_file uses, so the first failure is deterministic.
+    UnresolvedPolicy unresolved_policy;
+    unresolved_policy.external_warned_types = &warned_types;
+    unresolved_policy.missing_external = &missing_external;
+    const std::string prefix = package_prefix(file);
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!resolve_message(file, symbols, visible_files, unresolved_policy,
                              true,
                              file.file.message_type[i], prefix,
                              file_message_path(static_cast<int>(i)), error)) {
@@ -1584,9 +1701,12 @@ bool validate_deferred_file(SchemaFile& file, Diagnostic& error)
     // checks run here.
     const SymbolIndex no_symbols;
     const std::set<const SchemaFile*> no_visible_files;
+    UnresolvedPolicy unresolved_policy;
+    unresolved_policy.deferred = true;
     const std::string prefix = package_prefix(file);
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
-        if (!resolve_message(file, no_symbols, no_visible_files, true, false,
+        if (!resolve_message(file, no_symbols, no_visible_files,
+                             unresolved_policy, false,
                              file.file.message_type[i], prefix,
                              file_message_path(static_cast<int>(i)), error)) {
             return false;

@@ -2,8 +2,10 @@
 // - edge binding, one shared index, visibility, resolution, warning hygiene,
 // publication - with the deterministic name-sorted walk (A2) and the
 // publish-on-success rule (A1) that hold across all of them. The compatibility
-// branch belongs to Task 3 (Step 7); until it lands, the mode refuses loudly
-// instead of publishing a half-linked view.
+// branch (Task 3) shares those stages as its own named pass: exactly one
+// descriptor-origin file, missing targets tolerated as null-target edges, and
+// a finish pass that permits an unresolved reference only when the descriptor
+// classifies it itself.
 
 #include "schema_linker.hpp"
 
@@ -136,24 +138,122 @@ void drop_stale_unresolved_warnings(SchemaFile& file)
     file.warnings.swap(kept);
 }
 
-// Placeholder for Step 7 (Task 3). The compatibility pass is a named policy of
-// its own - one descriptor-origin file, missing external definitions permitted
-// only when the descriptor classifies them itself, a bounded one-warning-per-
-// type rule - and it must not be approximated by running the complete-mode
-// pipeline: that would resolve with allow_unresolved = false and misreport the
-// thin descriptors this mode exists for as unresolved-type errors. Until Step
-// 7 defines it, the mode refuses loudly and, like every other failure path,
-// publishes nothing (A1).
+// 7.1's preconditions: the two ways a set can fail to be the single
+// descriptor-origin file this mode's warranty is written for. A mode
+// precondition has no dedicated code among plan 4's frozen seven (the verdict
+// is neither a lookup outcome nor a syntax statement) and an eighth value
+// would be a contract amendment, so these refusals carry DIAGNOSTIC_GENERIC
+// with the rule in the message, like the other kind-independent refusals. The
+// step notes record the classical review's H-5 question (a distinguishable
+// code for the mode's own refusals) as an open item, not a silent choice.
+bool fail_compatibility(const std::string& file_name,
+                        const std::string& message, Diagnostic& error)
+{
+    error = Diagnostic();
+    error.file = file_name;
+    error.location = unknown_location();
+    error.message = message;
+    error.warning = false;
+    error.code = DIAGNOSTIC_GENERIC;
+    return false;
+}
+
+// Task 3 (Steps 7.1/7.2): the thin single-descriptor workflow. Its
+// preconditions are deliberately strict - exactly one descriptor-origin file -
+// because the mode tolerates missing dependencies, and without the one-file
+// rule it would become the general unresolved-type escape hatch the contract
+// forbids. A25's unsupported-syntax refusal is not repeated here:
+// link_schema's stage 1 already classified every file of every mode before
+// this branch runs, so an editions input is refused with
+// DIAGNOSTIC_UNSUPPORTED_SYNTAX in the same place for both modes, before any
+// resolution work.
 bool link_compatibility(SchemaSet& files, LinkedSchema& result,
                         Diagnostic& error)
 {
-    (void)files;
-    (void)result;   // already the invalid empty state, set by the caller
-    error = Diagnostic();
-    error.message =
-        "compatibility mode is not implemented until Step 7 of plan 4";
-    error.code = DIAGNOSTIC_GENERIC;
-    return false;
+    // Preconditions (7.1). The walk is name-sorted like every stage, so the
+    // first reported failure is a function of the logical names alone (A2).
+    const std::vector<SchemaFile*> ordered = files_by_logical_name(files);
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        if (!ordered[i]->from_descriptor_set) {
+            return fail_compatibility(
+                view_text(ordered[i]->file.name),
+                "compatibility mode is restricted to descriptor-origin input: "
+                "file \"" + view_text(ordered[i]->file.name) +
+                "\" was produced by a source frontend "
+                "(from_descriptor_set == false)",
+                error);
+        }
+    }
+    // A26: the precondition is EXACTLY one file. `parser/data/empty.pbs`
+    // decodes to zero files and fails the same check as a two-file set, so
+    // the message names both violations - "a single file" must not read as
+    // "at most one".
+    if (ordered.empty()) {
+        return fail_compatibility(
+            std::string(),
+            "compatibility mode links exactly one descriptor-origin file: "
+            "this set contains no file at all (a zero-file set fails the same "
+            "precondition as a set of two descriptor-origin files)",
+            error);
+    }
+    if (ordered.size() != 1) {
+        return fail_compatibility(
+            std::string(),
+            "compatibility mode links exactly one descriptor-origin file: "
+            "this set contains " + std::to_string(ordered.size()) +
+            " files (a set of two descriptor-origin files fails the same "
+            "precondition as a set with no file at all)",
+            error);
+    }
+    SchemaFile& file = *ordered[0];
+
+    // 7.2: missing targets become null-target edges; dependency-index
+    // malformation, duplicate symbols and cycles among available files stay
+    // errors - allow_missing relaxes missing targets, and nothing else (A18).
+    if (!bind_import_edges(files, /*allow_missing=*/true, error)) return false;
+
+    // A26's entry-shape sweep runs before the finish pass, exactly as in
+    // complete mode: the malformed shape is a structural fact about an
+    // available descriptor, not a by-product of a reference, and
+    // `maps/data/malformed_map.pbs` is the fixture consumed here.
+    if (!validate_map_entry_shapes(file, error)) return false;
+
+    // Everything is built into a local and assigned once, at the end (A1).
+    LinkedSchema linked;
+    if (!index_file(file, linked.symbols, error)) return false;
+
+    // Visible(F) degenerates to {F}: with one file in the set every dependency
+    // edge is a null-target edge (an edge naming the file itself is a cycle
+    // and the bind above refuses it), and null-target edges contribute
+    // nothing.
+    ExportMemo memo;
+    linked.visible_files[&file] = visible_files(&file, memo);
+
+    // The finish pass's caller-owned state (A4/A5): one warning per external
+    // type name, and the report that external information was absent.
+    std::set<std::string> warned_types;
+    bool missing_external = false;
+    if (!resolve_file_compat(file, linked.symbols, linked.visible_files[&file],
+                             warned_types, missing_external, error)) {
+        return false;
+    }
+
+    // A4: `complete` describes the input. Any null-target edge produced above
+    // or any permitted external reference makes it false; it stays true only
+    // for a thin descriptor whose whole dependency graph and every field
+    // resolved locally. A10's warning hygiene is not repeated here: a
+    // descriptor-origin file carries no stale warnings from the parser's
+    // standalone pass, and this mode resolves no external reference whose
+    // warning a later pass could make stale.
+    bool missing_edge = false;
+    for (std::size_t i = 0; i < file.edges.size(); ++i) {
+        if (file.edges[i].target == 0) missing_edge = true;
+    }
+
+    linked.files = &files;
+    linked.complete = !missing_edge && !missing_external;
+    result = std::move(linked);
+    return true;
 }
 
 } // namespace
@@ -183,9 +283,12 @@ bool link_schema(SchemaSet& files, LinkMode mode,
         }
     }
 
-    // Compatibility mode is its own named pass (A6). It performs the same
-    // syntax refusal in its preconditions, so the check above stays outside
-    // the branch.
+    // Compatibility mode is its own named pass (A6): preconditions, bind with
+    // allow_missing, the entry-shape sweep, index, visibility, the finish pass
+    // and publication all live in link_compatibility. The A25 refusal above
+    // stays outside the branch because it is an input-capability statement
+    // about every file, identical in both modes - which is what refuses an
+    // editions `.pbs` here too, before the finish pass can run.
     if (mode == LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY) {
         return link_compatibility(files, result, error);
     }

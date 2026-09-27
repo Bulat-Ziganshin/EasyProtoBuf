@@ -6,11 +6,15 @@
 // sets do; anything that destroys a source buffer or asserts a real source
 // location must not, and belongs in test_source_linker.cpp instead. Fixtures
 // are in-memory descriptors with empty physical_name and unknown positions.
+// The Step 7.4 corpus checkpoint decodes the tracked `.pbs` files through the
+// directory argument tests/CMakeLists.txt passes, and still links no parser.
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -3485,10 +3489,762 @@ void test_cross_syntax_rule_is_silent_in_the_deferred_pass()
     CHECK(text(field.type_name) == ".base2.State");
 }
 
+// --- Step 7: descriptor compatibility mode (Task 3, R15-R20) ---------------
+// LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY is the thin `.pbs` workflow: exactly
+// one descriptor-origin file, missing targets tolerated as null-target edges,
+// and a finish pass that permits an unresolved reference only when the
+// descriptor classifies it itself (an explicit message/enum kind and an
+// absolute name). The rows below are the pack's Step 7.3 table; the Step 7.4
+// corpus checkpoint is test_corpus_compatibility_mode, which receives the
+// tests source directory from tests/CMakeLists.txt because the tracked `.pbs`
+// fixtures live in several data directories.
+
+// The compat twin of link_verdict: `complete` is this mode's own verdict
+// (A4), so the caller reads it from `linked` and asserts it per fixture. The
+// publish-on-failure rule (A1) is asserted here for every row this helper
+// drives.
+bool link_compat(easypb_schema::SchemaSet& set,
+                 easypb_schema::LinkedSchema& linked,
+                 easypb_schema::Diagnostic& error)
+{
+    linked = easypb_schema::LinkedSchema();
+    const bool linked_ok = easypb_schema::link_schema(
+        set, easypb_schema::LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY, linked,
+        error);
+    if (linked_ok) {
+        CHECK(linked.files == &set);
+    } else {
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+    }
+    return linked_ok;
+}
+
+// One descriptor-origin file with an optional package and optional single
+// dependency: the thin `.pbs` shape every Step-7 row starts from. A null
+// dependency leaves the file without an import edge; a null package leaves it
+// at the global scope.
+easypb_schema::SchemaFile& make_thin_file(easypb_schema::SchemaSet& set,
+                                          const char* logical,
+                                          const char* package,
+                                          const char* dependency)
+{
+    std::vector<std::string> deps;
+    if (dependency != 0) deps.push_back(dependency);
+    const std::vector<std::int32_t> no_indexes;
+    easypb_schema::SchemaFile& file =
+        make_file(set, logical, deps, no_indexes, no_indexes);
+    file.from_descriptor_set = true;
+    if (package != 0) set_package(file, package);
+    return file;
+}
+
+// Reads one binary fixture whole. Descriptor sets are small tracked files,
+// and the test needs the bytes alive for as long as the decoded views are
+// (C++17 keeps str_view pointing into this buffer), so the caller keeps the
+// string on its own stack frame.
+bool read_binary_file(const std::string& path, std::string& contents)
+{
+    std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
+    if (!input) return false;
+    contents.assign(std::istreambuf_iterator<char>(input),
+                    std::istreambuf_iterator<char>());
+    return input.good() || input.eof();
+}
+
+// 7.3 row 1 and 2: a classified external message is accepted even though its
+// dependency is absent, `complete == false` comes from the null-target edge
+// alone (A4), and the same input under LINK_COMPLETE is a missing import.
+void test_compat_accepts_a_classified_external_message()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_thin_file(set, "thin.pbs", "app", "missing.proto");
+        DescriptorProto u;
+        u.name = file.strings.save("U");
+        u.has_name = true;
+        add_typed_field(file, u, "t", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                        FieldDescriptorProto::TYPE_MESSAGE, ".ext.Type");
+        file.file.message_type.push_back(u);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(link_compat(set, linked, error));
+        CHECK(!linked.complete);
+        CHECK(file.warnings.size() == 1);
+        CHECK(file.warnings[0].warning);
+        CHECK(file.warnings[0].code == easypb_schema::DIAGNOSTIC_GENERIC);
+        CHECK(file.warnings[0].message.find(".ext.Type") != std::string::npos);
+        CHECK(file.warnings[0].message.find("were not validated") !=
+              std::string::npos);
+        // A5's stable location: a thin descriptor carries no position, so the
+        // warning must not pretend to have one.
+        CHECK(file.warnings[0].location.line == 0);
+        CHECK(file.warnings[0].location.column == 0);
+        // The permitted reference keeps its declared metadata verbatim: no
+        // fabricated kind, no rewritten name.
+        const FieldDescriptorProto& field = file.file.message_type[0].field[0];
+        CHECK(field.has_type &&
+              field.type == FieldDescriptorProto::TYPE_MESSAGE);
+        CHECK(text(field.type_name) == ".ext.Type");
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_thin_file(set, "thin.pbs", "app", "missing.proto");
+        DescriptorProto u;
+        u.name = file.strings.save("U");
+        u.has_name = true;
+        add_typed_field(file, u, "t", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                        FieldDescriptorProto::TYPE_MESSAGE, ".ext.Type");
+        file.file.message_type.push_back(u);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    }
+}
+
+// 7.3 row 3: the dependency descriptor is absent while every field resolves
+// locally. The first edition's `complete` would have read true here; A4 ties
+// the flag to the null-target edge, which is the input's own fact.
+void test_compat_missing_dependency_without_external_references()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file =
+        make_thin_file(set, "thin.pbs", "app", "missing.proto");
+    add_enum(file, "State", "STATE_UNKNOWN");
+    DescriptorProto u;
+    u.name = file.strings.save("U");
+    u.has_name = true;
+    add_typed_field(file, u, "s", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                    FieldDescriptorProto::TYPE_ENUM, ".app.State");
+    file.file.message_type.push_back(u);
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(link_compat(set, linked, error));
+    CHECK(!linked.complete);
+    CHECK(file.warnings.empty());
+    const FieldDescriptorProto& field = file.file.message_type[0].field[0];
+    CHECK(field.type == FieldDescriptorProto::TYPE_ENUM);
+    CHECK(text(field.type_name) == ".app.State");
+}
+
+// 7.3 row 4: two fields naming one external type produce exactly ONE warning
+// (A5), at the stable unknown location - `warn_once` alone would emit one per
+// field, because it appends each field's descriptor path when the position is
+// unknown.
+void test_compat_warns_once_per_external_type_name()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file =
+        make_thin_file(set, "thin.pbs", "app", "missing.proto");
+    DescriptorProto u;
+    u.name = file.strings.save("U");
+    u.has_name = true;
+    add_typed_field(file, u, "a", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                    FieldDescriptorProto::TYPE_MESSAGE, ".ext.Type");
+    add_typed_field(file, u, "b", 2, FieldDescriptorProto::LABEL_OPTIONAL,
+                    FieldDescriptorProto::TYPE_MESSAGE, ".ext.Type");
+    file.file.message_type.push_back(u);
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(link_compat(set, linked, error));
+    CHECK(!linked.complete);
+    CHECK(file.warnings.size() == 1);
+    CHECK(file.warnings[0].location.line == 0);
+    CHECK(file.warnings[0].message.find(".ext.Type") != std::string::npos);
+}
+
+// 7.3 rows 5 and 6: the tolerance never covers an unclassified source-style
+// name. A relative external name is refused, and so is an absolute name whose
+// descriptor carries no explicit kind - the mode exists to preserve thin
+// descriptors, not to accept anything unresolved.
+void test_compat_rejects_unclassified_external_references()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_thin_file(set, "thin.pbs", "app", "missing.proto");
+        DescriptorProto u;
+        u.name = file.strings.save("U");
+        u.has_name = true;
+        add_typed_field(file, u, "t", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                        FieldDescriptorProto::TYPE_MESSAGE, "ext.Type");
+        file.file.message_type.push_back(u);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        // The category is still the lookup outcome's own: the reference is
+        // missing, and the policy merely refuses to tolerate it.
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find("compatibility mode") != std::string::npos);
+        CHECK(error.message.find("absolute type name") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_thin_file(set, "thin.pbs", "app", "missing.proto");
+        DescriptorProto u;
+        u.name = file.strings.save("U");
+        u.has_name = true;
+        FieldDescriptorProto field;
+        field.name = file.strings.save("t");
+        field.has_name = true;
+        field.number = 1;
+        field.has_number = true;
+        field.label = FieldDescriptorProto::LABEL_OPTIONAL;
+        field.has_label = true;
+        field.type_name = file.strings.save(".ext.Type");
+        field.has_type_name = true;
+        u.field.push_back(field);
+        file.file.message_type.push_back(u);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find("explicit message or enum kind") !=
+              std::string::npos);
+    }
+}
+
+// 7.3 row 7: a name that exists locally is resolved normally - `complete` is
+// unaffected by it, and no warning is recorded, which is the difference
+// between an external reference and a local one under this mode.
+void test_compat_resolves_local_references_normally()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file = make_thin_file(set, "thin.pbs", "app", 0);
+    add_enum(file, "State", "STATE_UNKNOWN");
+    DescriptorProto u;
+    u.name = file.strings.save("U");
+    u.has_name = true;
+    add_typed_field(file, u, "s", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                    FieldDescriptorProto::TYPE_ENUM, ".app.State");
+    file.file.message_type.push_back(u);
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(link_compat(set, linked, error));
+    CHECK(linked.complete);
+    CHECK(file.warnings.empty());
+    const FieldDescriptorProto& field = file.file.message_type[0].field[0];
+    CHECK(field.type == FieldDescriptorProto::TYPE_ENUM);
+    CHECK(text(field.type_name) == ".app.State");
+    // Visible(F) degenerates to {F} in this mode: the single file is the
+    // whole visible set.
+    CHECK(linked.visible_files.size() == 1);
+    CHECK(linked.visible_files.find(&file) != linked.visible_files.end());
+}
+
+// 7.3 row 8: the declared-kind check is the SAME one complete mode runs (A7,
+// written once in resolve_message), so a descriptor that declares the wrong
+// kind for a locally available definition fails with
+// DIAGNOSTIC_KIND_MISMATCH in both modes.
+void test_compat_kind_mismatch_is_the_complete_mode_code()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_thin_file(set, "thin.pbs", "app", 0);
+        add_message(file, "M");
+        DescriptorProto u;
+        u.name = file.strings.save("U");
+        u.has_name = true;
+        add_typed_field(file, u, "m", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                        FieldDescriptorProto::TYPE_ENUM, ".app.M");
+        file.file.message_type.push_back(u);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_KIND_MISMATCH);
+        CHECK(error.message.find(".app.M") != std::string::npos);
+    }
+    {
+        // The mirror, plus the complete-mode twin of the same fixture: one
+        // code, both modes.
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_thin_file(set, "thin.pbs", "app", 0);
+        add_enum(file, "E", "A");
+        DescriptorProto u;
+        u.name = file.strings.save("U");
+        u.has_name = true;
+        add_typed_field(file, u, "e", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                        FieldDescriptorProto::TYPE_MESSAGE, ".app.E");
+        file.file.message_type.push_back(u);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_KIND_MISMATCH);
+
+        easypb_schema::SchemaSet complete_set;
+        easypb_schema::SchemaFile& complete_file =
+            make_thin_file(complete_set, "thin.pbs", "app", 0);
+        add_enum(complete_file, "E", "A");
+        DescriptorProto complete_u;
+        complete_u.name = complete_file.strings.save("U");
+        complete_u.has_name = true;
+        add_typed_field(complete_file, complete_u, "e", 1,
+                        FieldDescriptorProto::LABEL_OPTIONAL,
+                        FieldDescriptorProto::TYPE_MESSAGE, ".app.E");
+        complete_file.file.message_type.push_back(complete_u);
+        easypb_schema::Diagnostic complete_error;
+        CHECK(!link_verdict(complete_set, complete_error));
+        CHECK(complete_error.code == easypb_schema::DIAGNOSTIC_KIND_MISMATCH);
+    }
+}
+
+// 7.3 row 9: A26's entry-shape sweep runs before the finish pass in this mode
+// too - the orphan entry is rejected without any field referencing it, and a
+// referencing field does not change the verdict, because the shape is proved
+// from the available descriptor first.
+void test_compat_runs_the_entry_shape_sweep_before_the_finish_pass()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_thin_file(set, "malformed_map.pbs", "easypb.test",
+                           "missing.proto");
+        DescriptorProto broken;
+        broken.name = file.strings.save("BrokenMap");
+        broken.has_name = true;
+        add_map_entry_key_only(file, broken, "ItemsEntry");
+        file.file.message_type.push_back(broken);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY);
+        CHECK(error.file == "malformed_map.pbs");
+        CHECK(error.message.find("BrokenMap.ItemsEntry") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_thin_file(set, "malformed_map.pbs", "easypb.test",
+                           "missing.proto");
+        DescriptorProto broken;
+        broken.name = file.strings.save("BrokenMap");
+        broken.has_name = true;
+        add_map_entry_key_only(file, broken, "ItemsEntry");
+        add_map_field(file, broken, "items", 1,
+                      ".easypb.test.BrokenMap.ItemsEntry");
+        file.file.message_type.push_back(broken);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY);
+        CHECK(error.message.find("BrokenMap.ItemsEntry") != std::string::npos);
+    }
+}
+
+// 7.3 rows 10-12: the 7.1 preconditions. A source-origin file is refused even
+// as the only file, the set must hold EXACTLY one file (a set of two
+// descriptor-origin files fails the same check as a zero-file set - A26),
+// and an editions file is refused by A25 before this branch runs at all.
+void test_compat_preconditions_are_exact()
+{
+    {
+        easypb_schema::SchemaSet set;
+        make_simple_file(set, "a.proto", "app");   // source-origin
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
+        CHECK(error.file == "a.proto");
+        CHECK(error.message.find("from_descriptor_set") != std::string::npos);
+    }
+    {
+        // The source-origin refusal runs before the count check, so a mixed
+        // set still names the source-origin file.
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& descriptor = make_simple_file(set, "b.proto", "app");
+        descriptor.from_descriptor_set = true;
+        make_simple_file(set, "a.proto", "app");
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.file == "a.proto");
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", "app");
+        a.from_descriptor_set = true;
+        easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", "app");
+        b.from_descriptor_set = true;
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.file.empty());
+        CHECK(error.message.find("exactly one") != std::string::npos);
+        CHECK(error.message.find("2 files") != std::string::npos);
+    }
+    {
+        // parser/data/empty.pbs decodes to exactly this: 0 bytes, 0 files.
+        easypb_schema::SchemaSet set;
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.message.find("no file at all") != std::string::npos);
+    }
+}
+
+// 7.3 row 13: A25's refusal is an input-capability statement, so it answers
+// before the mode's own preconditions - in compatibility mode exactly as in
+// complete mode, never downgraded to proto2.
+void test_compat_refuses_editions_like_complete_mode()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_thin_file(set, "thin.pbs", 0, 0);
+        set_syntax(file, "editions");
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+        CHECK(error.file == "thin.pbs");
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_thin_file(set, "thin.pbs", 0, 0);
+        set_syntax(file, "editions");
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+    }
+}
+
+// 7.3 row 14: allow_missing relaxes missing targets, not malformed indexes -
+// a public_dependency index outside the dependency list, and one that repeats
+// an index, are refused in this mode exactly as in complete mode (A18).
+void test_compat_binder_still_rejects_malformed_indexes()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_file(
+            set, "thin.pbs", std::vector<std::string>(1, "a.proto"),
+            std::vector<std::int32_t>(1, 5), std::vector<std::int32_t>());
+        file.from_descriptor_set = true;
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+        CHECK(error.message.find("public dependency index") !=
+              std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_file(
+            set, "thin.pbs", std::vector<std::string>(1, "a.proto"),
+            std::vector<std::int32_t>(2, 0), std::vector<std::int32_t>());
+        file.from_descriptor_set = true;
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+        CHECK(error.message.find("duplicate public") != std::string::npos);
+    }
+}
+
+// 7.3 row 15: a weak import of an absent file is tolerated exactly like a
+// normal missing target (A18): a null-target edge and `complete == false`,
+// never silence - while the same fixture under LINK_COMPLETE stays the hard
+// error it has always been.
+void test_compat_tolerates_a_missing_weak_target()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_file(
+            set, "thin.pbs", std::vector<std::string>(1, "gone.proto"),
+            std::vector<std::int32_t>(), std::vector<std::int32_t>(1, 0));
+        file.from_descriptor_set = true;
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(link_compat(set, linked, error));
+        CHECK(!linked.complete);
+        CHECK(file.warnings.empty());
+        CHECK(file.edges.size() == 1);
+        CHECK(file.edges[0].target == 0);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_file(
+            set, "thin.pbs", std::vector<std::string>(1, "gone.proto"),
+            std::vector<std::int32_t>(), std::vector<std::int32_t>(1, 0));
+        file.from_descriptor_set = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    }
+}
+
+// 7.3 row 16: an explicit imported-enum default is preserved verbatim - no
+// first enumerator, no integer zero - and the only diagnostic is the one
+// external-type warning (A5). The default is NOT validated against the
+// external enum, because the external definition cannot answer; 7.2's own
+// warning text states that defaults were not validated.
+void test_compat_preserves_an_external_enum_default()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file =
+        make_thin_file(set, "thin.pbs", "app", "missing.proto");
+    DescriptorProto u;
+    u.name = file.strings.save("U");
+    u.has_name = true;
+    add_typed_field(file, u, "state", 1,
+                    FieldDescriptorProto::LABEL_OPTIONAL,
+                    FieldDescriptorProto::TYPE_ENUM, ".ext.State");
+    u.field[0].default_value = file.strings.save("READY");
+    u.field[0].has_default_value = true;
+    file.file.message_type.push_back(u);
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(link_compat(set, linked, error));
+    CHECK(!linked.complete);
+    CHECK(file.warnings.size() == 1);
+    CHECK(file.warnings[0].code == easypb_schema::DIAGNOSTIC_GENERIC);
+    const FieldDescriptorProto& field = file.file.message_type[0].field[0];
+    CHECK(field.has_default_value && text(field.default_value) == "READY");
+    CHECK(field.type == FieldDescriptorProto::TYPE_ENUM);
+    CHECK(text(field.type_name) == ".ext.State");
+    // Nothing fabricated: the file declares no enumerator of its own, and no
+    // zero-valued member appeared where the external enum's first value would
+    // be.
+    CHECK(file.file.enum_type.empty());
+}
+
+// 7.3 row 17: a set that linked under compatibility mode does not teach
+// LINK_COMPLETE anything - the strict mode rebuilds the graph and rejects the
+// same input for the same reason it always did. The compat path is never
+// consulted from LINK_COMPLETE.
+void test_compat_then_complete_never_consults_the_escape_hatch()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& file =
+        make_thin_file(set, "thin.pbs", "app", "missing.proto");
+    DescriptorProto u;
+    u.name = file.strings.save("U");
+    u.has_name = true;
+    add_typed_field(file, u, "t", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                    FieldDescriptorProto::TYPE_MESSAGE, ".ext.Type");
+    file.file.message_type.push_back(u);
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(link_compat(set, linked, error));
+    CHECK(!linked.complete);
+
+    easypb_schema::Diagnostic complete_error;
+    CHECK(!link_verdict(set, complete_error));
+    CHECK(complete_error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+}
+
+// --- Step 7.4: the tracked `.pbs` corpus through compatibility mode (A23) --
+// Appendix D's inventory, measured before Step 1: 31 tracked fixtures = 26
+// clean single files + malformed_map (A26's shape rule) + custom_types
+// (dependency absent, no external reference) + external (dependency absent,
+// external references) + empty (no file) + integration-multi (two files).
+enum CorpusVerdict {
+    CORPUS_CLEAN,             // accept, complete == true, no warnings
+    CORPUS_INCOMPLETE,        // accept, complete == false
+    CORPUS_PRECONDITION,      // reject at 7.1 (no file / two files)
+    CORPUS_MALFORMED_ENTRY    // reject at A26's entry-shape check
+};
+
+struct CorpusFixture
+{
+    const char* relative;     // under the tests source directory
+    CorpusVerdict verdict;
+    std::size_t warnings;     // expected warnings when accepted
+};
+
+const CorpusFixture kCorpusFixtures[] = {
+    {"codegen/custom_types/data/cpp_group_without_type.pbs", CORPUS_CLEAN, 0},
+    {"codegen/custom_types/data/custom_types.pbs", CORPUS_INCOMPLETE, 0},
+    {"codegen/custom_types/data/empty_cpp_type.pbs", CORPUS_CLEAN, 0},
+    {"codegen/custom_types/data/foreign_51000.pbs", CORPUS_CLEAN, 0},
+    {"codegen/custom_types/data/template_cases.pbs", CORPUS_CLEAN, 0},
+    {"codegen/enums/data/enum_codegen.pbs", CORPUS_CLEAN, 0},
+    {"codegen/enums/data/open_enum.pbs", CORPUS_CLEAN, 0},
+    {"codegen/maps/data/enum_map.pbs", CORPUS_CLEAN, 0},
+    {"codegen/maps/data/malformed_map.pbs", CORPUS_MALFORMED_ENTRY, 0},
+    {"codegen/maps/data/message_map.pbs", CORPUS_CLEAN, 0},
+    {"codegen/maps/data/scalar_maps.pbs", CORPUS_CLEAN, 0},
+    {"codegen/packages/data/alpha.pbs", CORPUS_CLEAN, 0},
+    {"codegen/packages/data/beta.pbs", CORPUS_CLEAN, 0},
+    {"codegen/packages/data/external.pbs", CORPUS_INCOMPLETE, 2},
+    {"codegen/packages/data/import-package.pbs", CORPUS_CLEAN, 0},
+    {"codegen/packages/data/invalid-std.pbs", CORPUS_CLEAN, 0},
+    {"codegen/packages/data/module-package.pbs", CORPUS_CLEAN, 0},
+    {"codegen/packages/data/names.pbs", CORPUS_CLEAN, 0},
+    {"codegen/packages/data/shadow.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/empty.pbs", CORPUS_PRECONDITION, 0},
+    {"codegen/parser/data/integration-multi.pbs", CORPUS_PRECONDITION, 0},
+    {"codegen/parser/data/integration-proto2.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/integration-proto3.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/nested-ancestor-recursive.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/nested-forward.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/nested-lexical-cycle.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/nested-messages.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/nested-mutual.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/nested-recursive-map.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/nested-recursive-repeated.pbs", CORPUS_CLEAN, 0},
+    {"codegen/parser/data/nested-recursive.pbs", CORPUS_CLEAN, 0}
+
+};
+
+const std::size_t kCorpusFixtureCount =
+    sizeof(kCorpusFixtures) / sizeof(kCorpusFixtures[0]);
+
+// The Step 7.4 corpus checkpoint (A23): every tracked `.pbs` fixture goes
+// through compatibility mode with the verdict and warning count Appendix D
+// measured, in the parser-free suite. One SchemaSet per fixture: the mode's
+// warranty is per descriptor, and folding several `--descriptor-set` inputs
+// into one set is exactly the frontend mistake 7.1 refuses.
+void test_corpus_compatibility_mode(const std::string& fixture_dir)
+{
+    std::size_t classifiable = 0;
+    for (std::size_t i = 0; i < kCorpusFixtureCount; ++i) {
+        const CorpusFixture& fixture = kCorpusFixtures[i];
+        const std::string path = fixture_dir + "/" + fixture.relative;
+        std::string bytes;
+        CHECK(read_binary_file(path, bytes));
+
+        const FileDescriptorSet decoded =
+            easypb::decode<FileDescriptorSet>(bytes);
+        easypb_schema::SchemaSet set;
+        for (std::size_t j = 0; j < decoded.file.size(); ++j) {
+            const std::string logical = text(decoded.file[j].name);
+            easypb_schema::SchemaFile& file = set.add_file(logical);
+            file.physical_name.clear();
+            file.from_descriptor_set = true;
+            // The decoded views point into `bytes`, which outlives the link
+            // inside this iteration; C++11 copies the str_views into the
+            // descriptor, C++17 keeps the views themselves.
+            file.file = decoded.file[j];
+        }
+        if (!decoded.file.empty()) ++classifiable;
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        const bool accepted = easypb_schema::link_schema(
+            set, easypb_schema::LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY,
+            linked, error);
+        if (accepted) {
+            CHECK(linked.files == &set);
+        } else {
+            CHECK(linked.files == 0);
+            CHECK(!linked.complete);
+            // The checkpoint's non-count assertion (A25): NO fixture may be
+            // refused as an unsupported syntax. Such a refusal would mean the
+            // classifier turned a supported value into an unsupported one,
+            // and every thin `.pbs` consumer would stop. The refusals that
+            // remain are 7.1's own: empty.pbs has no file to classify, and
+            // integration-multi.pbs holds two.
+            CHECK(error.code != easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+        }
+
+        switch (fixture.verdict) {
+        case CORPUS_CLEAN:
+            CHECK(accepted);
+            if (accepted) {
+                CHECK(linked.complete);
+                CHECK(set.files()[0]->warnings.empty());
+            }
+            break;
+        case CORPUS_INCOMPLETE:
+            CHECK(accepted);
+            if (accepted) {
+                CHECK(!linked.complete);
+                CHECK(set.files()[0]->warnings.size() == fixture.warnings);
+            }
+            break;
+        case CORPUS_PRECONDITION:
+            CHECK(!accepted);
+            break;
+        case CORPUS_MALFORMED_ENTRY:
+            CHECK(!accepted);
+            if (!accepted) {
+                CHECK(error.code ==
+                      easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY);
+                // The decoded file's own logical name, not the .pbs path.
+                CHECK(error.file == "malformed_map.proto");
+                // The entry name, not the full sentence: the generator's
+                // CMake assertion (test_codegen_maps.cmake:139) keeps pinning
+                // the wording, so this test and it share it instead of both
+                // freezing a copy.
+                CHECK(error.message.find("BrokenMap.ItemsEntry") !=
+                      std::string::npos);
+            }
+            break;
+        }
+
+        if (accepted && std::string(fixture.relative) ==
+                            "codegen/packages/data/external.pbs") {
+            // Finding 2 / R19: the external enum default is preserved
+            // verbatim - nothing fabricates a first enumerator or an integer
+            // zero - and A5's bound produced ONE warning for the two fields
+            // sharing `.other.State`; the second warning is for
+            // `.other.External`. A per-field warn_once would have produced
+            // three references -> three warnings (the sweep's measured
+            // comparison).
+            const easypb_schema::SchemaFile& file = *set.files()[0];
+            const FieldDescriptorProto& state =
+                file.file.message_type[0].field[0];
+            CHECK(text(state.name) == "state");
+            CHECK(state.has_default_value &&
+                  text(state.default_value) == "READY");
+            CHECK(state.type == FieldDescriptorProto::TYPE_ENUM);
+            CHECK(text(state.type_name) == ".other.State");
+            CHECK(file.file.enum_type.empty());
+            std::size_t state_warnings = 0;
+            for (std::size_t w = 0; w < file.warnings.size(); ++w) {
+                if (file.warnings[w].message.find("\".other.State\"") !=
+                    std::string::npos) {
+                    ++state_warnings;
+                }
+            }
+            CHECK(state_warnings == 1);
+        }
+    }
+    // 26 proto3 + 4 proto2 files are classifiable; `empty.pbs` holds no file
+    // at all, which is why this count is 30 rather than 31.
+    CHECK(classifiable == 30);
+}
+
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    if (argc < 2 || argv[1][0] == '\0') {
+        std::cerr << "usage: test_linker <tests-source-dir>\n"
+                  << "The argument is the tests/ source directory: the Step\n"
+                  << "7.4 corpus checkpoint links the tracked .pbs fixtures\n"
+                  << "under codegen/*/data/. Run via ctest.\n";
+        return EXIT_FAILURE;
+    }
+    const std::string fixture_dir = argv[1];
+    {
+        // Fail loudly on a wrong argument instead of letting the corpus
+        // group read thirty bogus paths.
+        std::string probe;
+        if (!read_binary_file(
+                fixture_dir + "/codegen/maps/data/malformed_map.pbs", probe)) {
+            std::cerr << "fixture directory lacks "
+                         "codegen/maps/data/malformed_map.pbs: "
+                      << fixture_dir << '\n';
+            return EXIT_FAILURE;
+        }
+    }
+
     test_complete_link_publishes_after_every_stage();
     test_visibility_ordinary_import_is_not_transitive();
     test_visibility_public_import_is_transitive();
@@ -3543,6 +4299,20 @@ int main()
     test_proto2_fields_may_use_either_enum_syntax();
     test_unsupported_syntax_beats_the_cross_syntax_rule();
     test_cross_syntax_rule_is_silent_in_the_deferred_pass();
+    test_compat_accepts_a_classified_external_message();
+    test_compat_missing_dependency_without_external_references();
+    test_compat_warns_once_per_external_type_name();
+    test_compat_rejects_unclassified_external_references();
+    test_compat_resolves_local_references_normally();
+    test_compat_kind_mismatch_is_the_complete_mode_code();
+    test_compat_runs_the_entry_shape_sweep_before_the_finish_pass();
+    test_compat_preconditions_are_exact();
+    test_compat_refuses_editions_like_complete_mode();
+    test_compat_binder_still_rejects_malformed_indexes();
+    test_compat_tolerates_a_missing_weak_target();
+    test_compat_preserves_an_external_enum_default();
+    test_compat_then_complete_never_consults_the_escape_hatch();
+    test_corpus_compatibility_mode(fixture_dir);
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

@@ -472,10 +472,13 @@ if(BUILD_TESTING)
     add_test(NAME codegen.imports.graph COMMAND codegen_imports_graph_test)
 
     # Descriptor-only linker suite: links easypb_schema alone, so it must keep
-    # building and passing when the proto parser is off.
+    # building and passing when the proto parser is off. The tests source
+    # directory is a positional argument: the Step 7.4 corpus checkpoint links
+    # the tracked `.pbs` fixtures, which live under several data directories.
     add_executable(codegen_imports_linker_test codegen/imports/test_linker.cpp)
     target_link_libraries(codegen_imports_linker_test PRIVATE easypb_schema)
-    add_test(NAME codegen.imports.linker COMMAND codegen_imports_linker_test)
+    add_test(NAME codegen.imports.linker
+        COMMAND codegen_imports_linker_test ${CMAKE_CURRENT_SOURCE_DIR})
 
     add_executable(codegen_imports_graph_exhaustive_test
         codegen/imports/test_graph_exhaustive.cpp)
