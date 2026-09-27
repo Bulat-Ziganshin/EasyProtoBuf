@@ -197,12 +197,16 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
             error);
     }
     if (ordered.size() != 1) {
+        // easypb::detail::number_to_string, not std::to_string: the supported
+        // legacy lane (GCC 4.7.3) has none, and the header-inline helper exists
+        // exactly for that (D-18, fix round r9).
         return fail_compatibility(
             std::string(),
             "compatibility mode links exactly one descriptor-origin file: "
-            "this set contains " + std::to_string(ordered.size()) +
-            " files (a set of two descriptor-origin files fails the same "
-            "precondition as a set with no file at all)",
+            "this set contains " +
+                easypb::detail::number_to_string(ordered.size()) +
+                " files (a set of two descriptor-origin files fails the same "
+                "precondition as a set with no file at all)",
             error);
     }
     SchemaFile& file = *ordered[0];
