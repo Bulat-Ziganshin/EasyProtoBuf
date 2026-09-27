@@ -4751,6 +4751,230 @@ void test_corpus_compatibility_mode(const std::string& fixture_dir)
     CHECK(classifiable == 30);
 }
 
+// ---------------------------------------------------------------------------
+// The 0927 gemini/muse review pass (2026-09-27) reported four shapes that do
+// not reproduce on this tree. The measurements are kept as rows here, so the
+// next review reads the verdict instead of re-deriving it (ledger P-18/P-19),
+// and so a regression that reintroduced one of them would fail a suite rather
+// than wait for an instrument to be rebuilt.
+// ---------------------------------------------------------------------------
+
+// F-M1 (refuted): a map entry nested two levels down is swept like any other.
+// `validate_message_map_entries` has recursed through every `nested_type`
+// unconditionally since step 05, so the marker is checked at every depth and
+// the diagnostic names the full descriptor path. Measured on libprotoc 30.1
+// for the same shape: the set is refused too (`map_entry should not be set
+// explicitly. Use map<KeyType, ValueType> instead.`) - the same verdict in
+// the reference compiler's own words.
+void test_map_entry_sweep_reaches_every_depth()
+{
+    // Outer.Mid.Deep marked as an entry and carrying only the key member.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "deep_entry.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto outer;
+        outer.name = file.strings.save("Outer");
+        outer.has_name = true;
+        add_nested(file, outer, "Mid");
+        add_map_entry_key_only(file, outer.nested_type[0], "Deep");
+        file.file.message_type.push_back(outer);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY);
+        CHECK(error.message ==
+              "Malformed map entry .pkg.Outer.Mid.Deep: fields 1 and 2 are "
+              "required");
+    }
+    // Four levels down is the same verdict: the walk is recursive, not
+    // depth-bounded.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "deep_entry.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto outer;
+        outer.name = file.strings.save("Outer");
+        outer.has_name = true;
+        add_nested(file, outer, "A");
+        add_nested(file, outer.nested_type[0], "B");
+        add_nested(file, outer.nested_type[0].nested_type[0], "C");
+        add_map_entry_key_only(file,
+                               outer.nested_type[0].nested_type[0]
+                                   .nested_type[0],
+                               "Deep");
+        file.file.message_type.push_back(outer);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY);
+        CHECK(error.message ==
+              "Malformed map entry .pkg.Outer.A.B.C.Deep: fields 1 and 2 are "
+              "required");
+    }
+    // Control: the same path with both members links - the sweep is about the
+    // key/value pair, never about the depth or the marker alone.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "deep_entry.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto outer;
+        outer.name = file.strings.save("Outer");
+        outer.has_name = true;
+        add_nested(file, outer, "Mid");
+        add_map_entry(file, outer.nested_type[0], "Deep", 0);
+        file.file.message_type.push_back(outer);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+}
+
+// F-L1 (refuted as a defect, pinned as parity): two fields whose names are all
+// underscores imply the SAME entry name, because that is protoc's own rule for
+// every name (strip the underscores, capitalize what follows, append `Entry`)
+// and an all-underscore name leaves nothing but the suffix. Measured on
+// libprotoc 30.1: the pair is refused - `"Entry" is already defined in
+// "gm.Holder"` - so refusing it here is the same verdict as the reference
+// compiler's. The rule half lives in test_semantics.cpp's entry-name table
+// (both `_` and `__` give `Entry`); this half pins the code the collision takes
+// in the linker.
+void test_underscore_map_fields_collide_on_the_shared_entry_name()
+{
+    CHECK(easypb_schema::map_entry_name("_") == "Entry");
+    CHECK(easypb_schema::map_entry_name("__") == "Entry");
+
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "underscore.pbs", "gm");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        // Exactly what the parser synthesizes for `map<int32, int32> _ = 1;`
+        // beside `map<int32, int32> __ = 2;` in one message: two entry
+        // messages, both named `Entry`.
+        add_map_entry(file, holder, "Entry", 0);
+        add_map_entry(file, holder, "Entry", 0);
+        add_map_field(file, holder, "_", 1, ".gm.Holder.Entry");
+        add_map_field(file, holder, "__", 2, ".gm.Holder.Entry");
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+        CHECK(error.message.find("Entry") != std::string::npos);
+    }
+    // Control: ONE all-underscore field is an ordinary legal map whose entry is
+    // named `Entry` - protoc generates exactly that name (measured).
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "underscore.pbs", "gm");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_map_entry(file, holder, "Entry", 0);
+        add_map_field(file, holder, "_", 1, ".gm.Holder.Entry");
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+}
+
+// F-H1 (refuted): the muse review's HIGH finding read "a field with neither a
+// declared kind nor a type_name slips past the A7/clause-12 guard, and protoc
+// rejects that shape too", and proposed refusing it with MISSING_TYPE_NAME.
+// Measured over a real descriptor set mutated by deleting the field's `type`
+// varint with every other byte preserved: libprotoc 30.1 BUILDS that file
+// (exit 0), so the proposed refusal would have created the divergence it
+// claimed to close. The rows below keep both accepted shapes and the
+// neighbour the same measurement settled, so a later session that wants the
+// refusal has to produce a new counter-example rather than re-read the report.
+void test_descriptor_origin_field_without_a_declared_kind_links()
+{
+    // Neither `type` nor `type_name`: protoc reads the absent kind as its own
+    // proto2 default and accepts; the link accepts and leaves the metadata
+    // alone.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "gap.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  0);
+        // The mutated bytes: the kind tag was never on the wire.
+        holder.field[0].has_type = false;
+        holder.field[0].type = 0;
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        // The absent kind stays absent - the model reads it as kind 0, NOT as
+        // protoc's default. Both readers accept the field at link time, so the
+        // difference is a generation question (plan 5), named here so it is
+        // not mistaken for a link verdict.
+        CHECK(!file.file.message_type[0].field[0].has_type);
+    }
+    // A type_name with no declared kind: protoc builds the NAMED type from the
+    // name (exit 0), and the link fills the kind from the definition - the one
+    // place a descriptor-origin kind is written without a comparison, because
+    // there is no declared kind to compare (A7's guard is `has_type && ...`).
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "gap.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "Target");
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  ".pkg.Target");
+        holder.field[0].has_type = false;
+        holder.field[0].type = 0;
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        const FieldDescriptorProto& linked_field =
+            file.file.message_type[1].field[0];
+        CHECK(linked_field.has_type);
+        CHECK(linked_field.type == FieldDescriptorProto::TYPE_MESSAGE);
+    }
+    // Neighbour from the same measurement: a DECLARED scalar kind carrying a
+    // type_name is refused by protoc (`Field with primitive type has
+    // type_name.`) and here by the A7 comparison - so "no declared kind" is
+    // accepted while "a declared kind that contradicts the name" is not.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "gap.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "Target");
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  ".pkg.Target");
+        holder.field[0].type = FieldDescriptorProto::TYPE_INT32;
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_KIND_MISMATCH);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -4850,6 +5074,9 @@ int main(int argc, char** argv)
     test_compat_preserves_an_external_enum_default();
     test_compat_then_complete_never_consults_the_escape_hatch();
     test_corpus_compatibility_mode(fixture_dir);
+    test_map_entry_sweep_reaches_every_depth();
+    test_underscore_map_fields_collide_on_the_shared_entry_name();
+    test_descriptor_origin_field_without_a_declared_kind_links();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

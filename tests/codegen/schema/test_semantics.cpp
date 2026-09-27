@@ -3,6 +3,7 @@
 // field resolution. Descriptors are built by hand so this test links only
 // easypb_schema and keeps passing in descriptor-set-only builds.
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <set>
@@ -808,8 +809,11 @@ void test_message_defaults_are_rejected()
 // (plan-4 amendments A22, A24). The expectations are measured, not inherited:
 // libprotoc 30.1 generated exactly these entry names from exactly these field
 // names, and plan-4 Appendix C records the same pairs as A1, A12, A14, A15.
-// The last two rows are why there is no empty-name fallback - an all-underscore
-// field must yield `Entry`, which the parser's old `Map` fallback got wrong.
+// The last four rows are why there is no empty-name fallback - an all-underscore
+// field must yield `Entry`, which the parser's old `Map` fallback got wrong -
+// and why a message carrying `_` beside `__` is refused rather than named
+// twice: both collapse onto `Entry`, exactly as they do in protoc (the pair's
+// verdict is pinned in test_linker.cpp, ledger P-18).
 void test_map_entry_name_follows_protoc()
 {
     struct Case {
@@ -825,11 +829,82 @@ void test_map_entry_name_follows_protoc()
         {"z9_9z", "Z99zEntry"},
         {"_lead", "LeadEntry"},
         {"Foo", "FooEntry"},
-        {"_", "Entry"}
+        {"_", "Entry"},
+        {"__", "Entry"},
+        {"___", "Entry"}
     };
     for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         CHECK(easypb_schema::map_entry_name(cases[i].field_name) ==
               cases[i].entry_name);
+    }
+}
+
+// The shared integer parser behind every descriptor-origin numeric default
+// (`parse_unsigned_integer` / `parse_signed_32`, both exported by
+// schema_semantics.hpp). Muse's 0927 review reported it accepting `"0x"` as 0
+// and the octal digits 8/9, and proposed exactly the `digit >= base` refusal
+// the code has carried since before the reviewed range - so the finding was
+// refuted by measurement (ledger P-18). These rows are that measurement kept
+// as a test: the whole reported set, each base's own edges, and the signed
+// wrapper, with the values asserted only where the parse succeeds (a failed
+// parse leaves `result` partially written by design).
+void test_integer_parsing_boundaries_follow_protoc()
+{
+    struct UnsignedCase {
+        const char* text;
+        bool ok;
+        std::uint64_t value;
+    };
+    const UnsignedCase cases[] = {
+        {"0", true, 0},
+        {"00", true, 0},
+        {"010", true, 8},            // octal, not decimal ten
+        {"8", true, 8},
+        {"0x0", true, 0},
+        {"0x10", true, 16},
+        {"536870911", true, 536870911ull},
+        {"09", false, 0},            // 9 is not an octal digit
+        {"08", false, 0},
+        {"019", false, 0},
+        {"0x", false, 0},            // the prefix alone is not a number
+        {"0X", false, 0},
+        {"0xG", false, 0},
+        {"", false, 0},
+        {"-1", false, 0}
+    };
+    for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        std::uint64_t value = 0;
+        const bool ok = easypb_schema::parse_unsigned_integer(cases[i].text,
+                                                              value);
+        CHECK(ok == cases[i].ok);
+        if (ok) CHECK(value == cases[i].value);
+    }
+
+    struct SignedCase {
+        const char* text;
+        bool ok;
+        std::int32_t value;
+    };
+    const SignedCase signed_cases[] = {
+        {"0", true, 0},
+        {"-0", true, 0},
+        {"010", true, 8},
+        {"0x10", true, 16},
+        {"-0x10", true, -16},
+        {"2147483647", true, 2147483647},
+        {"-2147483648", true, (-2147483647 - 1)},
+        {"2147483648", false, 0},    // one past INT32_MAX
+        {"-2147483649", false, 0},   // one past INT32_MIN
+        {"-09", false, 0},
+        {"-0x", false, 0}
+    };
+    for (std::size_t i = 0;
+         i < sizeof(signed_cases) / sizeof(signed_cases[0]); ++i) {
+        std::int32_t value = 0;
+        const bool ok = easypb_schema::parse_signed_32(signed_cases[i].text,
+                                                       value);
+        CHECK(ok == signed_cases[i].ok);
+        if (ok) CHECK(value == signed_cases[i].value);
     }
 }
 
@@ -853,6 +928,7 @@ int main()
     test_cross_file_type_symbol_text_is_order_independent();
     test_message_defaults_are_rejected();
     test_map_entry_name_follows_protoc();
+    test_integer_parsing_boundaries_follow_protoc();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";
