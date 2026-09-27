@@ -64,7 +64,19 @@ enum DiagnosticCode
     // proto3 (protoc 30.1 writes "editions" for an editions file), so the
     // project cannot model its semantics. Refused loudly instead of being
     // silently downgraded to proto2.
-    DIAGNOSTIC_UNSUPPORTED_SYNTAX
+    DIAGNOSTIC_UNSUPPORTED_SYNTAX,
+    // Plan 4 Step 5.1 (contract clause 12, D-23): a descriptor-origin field
+    // number outside 1..536870911 or inside the reserved 19000..19999 range.
+    // The parser refuses both shapes as source text
+    // (codegen/parser/proto_parser.cpp:1049-1060), so this is the
+    // descriptor-origin half of that frontend parity rule.
+    DIAGNOSTIC_INVALID_FIELD_NUMBER,
+    // Plan 4 Step 5.1 (contract clause 12, D-23): a field whose declared kind
+    // is a named kind (MESSAGE, ENUM, GROUP) but which carries no type_name,
+    // so the generator cannot name the type it must emit. protoc's own
+    // cross-link refuses the same shape (`Field with message or enum type
+    // missing type_name.`, descriptor.cc's CrossLinkField).
+    DIAGNOSTIC_MISSING_TYPE_NAME
 };
 
 struct Diagnostic

@@ -116,6 +116,54 @@ void test_rejects_proto3_required()
 }
 
 
+// D-23 (contract clause 12): the SOURCE half of the field-number rule - the
+// parser refuses 0, the reserved 19000..19999 range and anything above
+// 536870911, while both sides of the reserved range and the maximum itself
+// stay legal. These refusals had no test row before fix round r11, and they
+// are what the linker's DIAGNOSTIC_INVALID_FIELD_NUMBER mirrors on
+// descriptor-origin input: one rule, two frontends, the same numbers.
+void test_rejects_invalid_field_numbers()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    CHECK(!easypb_proto::parse_proto("num-zero.proto",
+        "message M { optional int32 x = 0; }", parsed, error));
+    CHECK(error.message.find("field number must be in range 1..536870911") !=
+          std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("num-reserved.proto",
+        "message M { optional int32 x = 19000; }", parsed, error));
+    CHECK(error.message.find("field numbers 19000..19999 are reserved") !=
+          std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("num-reserved-high.proto",
+        "message M { optional int32 x = 19999; }", parsed, error));
+    CHECK(error.message.find("field numbers 19000..19999 are reserved") !=
+          std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("num-big.proto",
+        "message M { optional int32 x = 536870912; }", parsed, error));
+    CHECK(error.message.find("field number must be in range 1..536870911") !=
+          std::string::npos);
+
+    CHECK(easypb_proto::parse_proto("num-ok.proto",
+        "message M { optional int32 a = 1; optional int32 b = 18999;"
+        " optional int32 c = 20000; optional int32 d = 536870911; }",
+        parsed, error));
+    if (parsed.file.message_type.size() == 1) {
+        const DescriptorProto& message = parsed.file.message_type[0];
+        CHECK(message.field.size() == 4);
+        if (message.field.size() == 4) {
+            CHECK(message.field[1].number == 18999);
+            CHECK(message.field[2].number == 20000);
+            CHECK(message.field[3].number == 536870911);
+        }
+    } else {
+        CHECK(parsed.file.message_type.size() == 1);
+    }
+}
+
 void test_map_keyword_can_be_a_type_name()
 {
     easypb_proto::ParsedProto parsed;
@@ -1033,6 +1081,7 @@ int main()
     test_complex_proto3();
     test_proto2_defaults_and_literals();
     test_rejects_proto3_required();
+    test_rejects_invalid_field_numbers();
     test_map_keyword_can_be_a_type_name();
     test_rejects_invalid_map_key();
     test_map_option_rejections_point_at_the_option();

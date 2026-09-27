@@ -2370,6 +2370,175 @@ void test_descriptor_origin_declared_kind_is_compared_not_rewritten()
     }
 }
 
+// D-23 (contract clause 12): a descriptor-origin field number must be in
+// 1..536870911 and outside the reserved 19000..19999 range, enforced over
+// every available field in both modes, referenced or not (A26's entry-shape
+// precedent) and before any resolution. The source path cannot produce these
+// shapes - the parser refuses them as source text, pinned by test_parser.cpp's
+// test_rejects_invalid_field_numbers - and the pre-fix measurement that raised
+// the row is build/plan4/code-review-0927-ds/probe: the same shapes printed
+// ACCEPTED from the complete linker.
+void test_descriptor_origin_field_numbers_are_validated()
+{
+    const struct { int number; const char* sentence; } bad[] = {
+        {0, "field \"f\" number 0 is outside the valid range 1..536870911"},
+        {19000, "field \"f\" number 19000 is inside the reserved range 19000..19999"},
+        {19999, "field \"f\" number 19999 is inside the reserved range 19000..19999"},
+        {536870912, "field \"f\" number 536870912 is outside the valid range 1..536870911"}
+    };
+    for (std::size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "gap.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", bad[i].number,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_NUMBER);
+        CHECK(error.file == "gap.pbs");
+        CHECK(error.message.find(bad[i].sentence) == 0);
+        // Descriptor-origin input has no source location, so the diagnostic
+        // appends the descriptor path (fail_at_code's convention).
+        CHECK(error.message.find(" at [") != std::string::npos);
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+    }
+    // The legal bounds on both sides stay legal: number 1, one below the
+    // reserved range, one above it, and the maximum itself.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "ok.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "a", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        add_field(file, holder, "b", 18999, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        add_field(file, holder, "c", 20000, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        add_field(file, holder, "d", 536870911,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+}
+
+// D-23 (contract clause 12): a field that declares a named kind - MESSAGE,
+// ENUM or GROUP - must carry a type_name, because the generator emits the name
+// the descriptor gives it (`codegen/codegen.cpp:234` reads `field.type_name`)
+// and an empty one becomes a broken qualified name. protoc's cross-link
+// refuses the same shape ("Field with message or enum type missing
+// type_name."), and a group is a message. The rule keys on a DECLARED kind: a
+// scalar kind without a type_name stays legal, and the parser's deferred
+// output (has_type_name set, has_type not yet) stays legal too - the name is
+// there, only the kind is left to the link.
+void test_descriptor_origin_named_kind_needs_type_name()
+{
+    const struct { int type; const char* category; } named[] = {
+        {FieldDescriptorProto::TYPE_MESSAGE, "a message"},
+        {FieldDescriptorProto::TYPE_ENUM, "an enum"},
+        {FieldDescriptorProto::TYPE_GROUP, "a group"}
+    };
+    for (std::size_t i = 0; i < sizeof(named) / sizeof(named[0]); ++i) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "gap.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        // Keep the declared kind and leave the name unset: the shape protoc
+        // refuses. The scalar type add_field wrote is overwritten, not the
+        // name, which was never set at all.
+        holder.field[0].type = named[i].type;
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_TYPE_NAME);
+        CHECK(error.file == "gap.pbs");
+        const std::string sentence =
+            std::string("field \"f\" declares ") + named[i].category +
+            " type but carries no type_name";
+        CHECK(error.message.find(sentence) == 0);
+        CHECK(error.message.find(" at [") != std::string::npos);
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+    }
+    // A scalar kind with no type_name is the ordinary case and links.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "ok.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+    // A declared named kind WITH its type_name links: the rule is the pair's
+    // coherence, not a ban on named kinds.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_simple_file(set, "ok.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "Target");
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  ".pkg.Target");
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+    // The parser's deferred output shape: has_type_name is set, has_type is
+    // not. The named-kind rule must not read it as a missing type_name, and
+    // the link resolves it to the local message.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "source.proto", "pkg");
+        add_message(file, "Target");
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        FieldDescriptorProto deferred;
+        deferred.name = file.strings.save("f");
+        deferred.has_name = true;
+        deferred.number = 1;
+        deferred.has_number = true;
+        deferred.label = FieldDescriptorProto::LABEL_OPTIONAL;
+        deferred.has_label = true;
+        deferred.type_name = file.strings.save("Target");
+        deferred.has_type_name = true;
+        holder.field.push_back(deferred);
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        const FieldDescriptorProto& linked_field =
+            file.file.message_type[1].field[0];
+        CHECK(linked_field.has_type);
+        CHECK(linked_field.type == FieldDescriptorProto::TYPE_MESSAGE);
+        CHECK(text(linked_field.type_name) == ".pkg.Target");
+    }
+}
+
 // Appends a map-entry message with the marker but WITHOUT a value member: the
 // corpus shape (`tests/codegen/maps/data/malformed_map.pbs`), which the parser
 // cannot produce because it always synthesizes both members.
@@ -4003,6 +4172,48 @@ void test_compat_runs_the_entry_shape_sweep_before_the_finish_pass()
     }
 }
 
+// D-23 in compatibility mode: the thin single-descriptor workflow runs the
+// same structure checks, because they live in the shared resolve_message walk -
+// an externally produced thin descriptor is exactly where a malformed field
+// lands, and the structure has to answer before the compat classifier could
+// permit the reference as external information. The codes and sentences are
+// the complete mode's.
+void test_compat_validates_field_structure()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_thin_file(set, "thin.pbs", "pkg", 0);
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 19000, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_NUMBER);
+        CHECK(error.message.find("19000") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_thin_file(set, "thin.pbs", "pkg", "missing.proto");
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        holder.field[0].type = FieldDescriptorProto::TYPE_MESSAGE;
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!link_compat(set, linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_TYPE_NAME);
+    }
+}
+
 // 7.3 rows 10-12: the 7.1 preconditions. A source-origin file is refused even
 // as the only file, the set must hold EXACTLY one file (a set of two
 // descriptor-origin files fails the same check as a zero-file set - A26),
@@ -4438,6 +4649,8 @@ int main(int argc, char** argv)
     test_map_entry_value_resolves_from_its_own_token();
     test_task2_pair_links_and_its_two_mutations_fail();
     test_descriptor_origin_declared_kind_is_compared_not_rewritten();
+    test_descriptor_origin_field_numbers_are_validated();
+    test_descriptor_origin_named_kind_needs_type_name();
     test_malformed_map_entry_is_rejected_without_a_reference();
     test_file_syntax_classification();
     test_unsupported_syntax_is_refused_before_resolution();
@@ -4465,6 +4678,7 @@ int main(int argc, char** argv)
     test_compat_resolves_local_references_normally();
     test_compat_kind_mismatch_is_the_complete_mode_code();
     test_compat_runs_the_entry_shape_sweep_before_the_finish_pass();
+    test_compat_validates_field_structure();
     test_compat_preconditions_are_exact();
     test_compat_refuses_editions_like_complete_mode();
     test_compat_binder_still_rejects_malformed_indexes();

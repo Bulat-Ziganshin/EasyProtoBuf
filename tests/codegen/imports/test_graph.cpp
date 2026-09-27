@@ -129,10 +129,10 @@ void test_logical_paths_invalid()
     }
 }
 
-// Checklist for the seven plan-4 code values (A3, contract A3/A25/A26); each
-// one is asserted here by the step that appends it, because a value that
-// aliases an existing one is exactly the bug this test exists to catch, and a
-// code that does not exist yet cannot be named:
+// Checklist for the nine plan-4 code values (A3, contract A3/A25/A26 and
+// clause 12); each one is asserted here by the step that appends it, because a
+// value that aliases an existing one is exactly the bug this test exists to
+// catch, and a code that does not exist yet cannot be named:
 //   DIAGNOSTIC_DUPLICATE_SYMBOL      appended by Step 3.1 (asserted below)
 //   DIAGNOSTIC_INVISIBLE_TYPE        appended by Step 4.1 (asserted below)
 //   DIAGNOSTIC_NOT_A_TYPE            appended by Step 4.1 (asserted below)
@@ -149,6 +149,12 @@ void test_logical_paths_invalid()
 //                                    point, which Step 5.2's test needs; Step
 //                                    6.1 consumes the value for the
 //                                    cross-syntax enum rule
+//   DIAGNOSTIC_INVALID_FIELD_NUMBER  appended by Step 5.1 (asserted below):
+//                                    contract clause 12's field-number rule
+//                                    for descriptor-origin input (D-23)
+//   DIAGNOSTIC_MISSING_TYPE_NAME     appended by Step 5.1 (asserted below):
+//                                    clause 12's named-kind-without-type_name
+//                                    shape (D-23)
 void test_diagnostic_codes_stay_distinct()
 {
     CHECK(easypb_schema::DIAGNOSTIC_GENERIC !=
@@ -222,15 +228,19 @@ void test_diagnostic_codes_stay_distinct()
           easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
     CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
           easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
-    // Step 5.1: three more appended values - the descriptor-origin kind
-    // mismatch (A7), the malformed map entry (A26), and the unsupported file
-    // syntax (A25). Each must differ from every earlier code and from its two
-    // siblings: callers switch on these codes instead of reading message text,
-    // so an alias is exactly the bug this checklist exists to catch.
+    // Step 5.1: five appended values - the descriptor-origin kind mismatch
+    // (A7), the malformed map entry (A26), the unsupported file syntax (A25),
+    // and clause 12's two descriptor-origin field-structure codes (D-23: the
+    // invalid field number and the named kind without a type_name). Each must
+    // differ from every earlier code and from its siblings: callers switch on
+    // these codes instead of reading message text, so an alias is exactly the
+    // bug this checklist exists to catch.
     const easypb_schema::DiagnosticCode appended[] = {
         easypb_schema::DIAGNOSTIC_KIND_MISMATCH,
         easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY,
-        easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX
+        easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX,
+        easypb_schema::DIAGNOSTIC_INVALID_FIELD_NUMBER,
+        easypb_schema::DIAGNOSTIC_MISSING_TYPE_NAME
     };
     const easypb_schema::DiagnosticCode earlier[] = {
         easypb_schema::DIAGNOSTIC_GENERIC,

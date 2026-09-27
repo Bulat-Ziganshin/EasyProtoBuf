@@ -536,6 +536,34 @@ bool is_aggregate_kind(int kind)
            kind == SYMBOL_SERVICE;
 }
 
+// The kinds that must carry a type_name: the named kinds a field can declare.
+// protoc's cross-link refuses a field whose cpp_type is a message or an enum
+// and whose descriptor carries no type_name (descriptor.cc's CrossLinkField:
+// "Field with message or enum type missing type_name."), and a group is a
+// message. Contract clause 12, ledger D-23 (fix round r11).
+bool is_named_kind(int kind)
+{
+    return kind == FieldDescriptorProto::TYPE_MESSAGE ||
+           kind == FieldDescriptorProto::TYPE_ENUM ||
+           kind == FieldDescriptorProto::TYPE_GROUP;
+}
+
+// The field-number bounds both frontends enforce. The parser refuses these
+// shapes as source text (proto_parser.cpp:1049-1060: 0, above the maximum,
+// and the reserved range) and resolve_message refuses them on
+// descriptor-origin input, so the two halves of the frontend parity rule
+// (contract clause 12, D-23) watch the same numbers.
+const std::int32_t kMaxFieldNumber = 536870911;
+const std::int32_t kReservedFieldNumberFirst = 19000;
+const std::int32_t kReservedFieldNumberLast = 19999;
+
+std::string number_text(std::int32_t number)
+{
+    std::ostringstream output;
+    output << number;
+    return output.str();
+}
+
 // Splits a relative reference into its first component and the remainder.
 void split_reference(const std::string& raw, std::string& first, std::string& rest)
 {
@@ -1358,6 +1386,43 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
         if (!numbers.insert(field.number).second) {
             return fail_at(file, "duplicate field number in message " + scope,
                            declaration_location(file, field_path), field_path, error);
+        }
+
+        // D-23 (contract clause 12): field structure is validated over every
+        // available field, in both modes, before any resolution, because the
+        // shapes are provable from the descriptor alone and a
+        // reference-driven check would never reach a field nothing names -
+        // A26's entry-shape precedent. The number rule mirrors the parser's
+        // source-path refusals; the named-kind rule has no source twin, since
+        // a source field always carries the type its declaration gave it.
+        if (field.number <= 0 || field.number > kMaxFieldNumber) {
+            return fail_at_code(
+                file,
+                "field \"" + view_text(field.name) + "\" number " +
+                    number_text(field.number) +
+                    " is outside the valid range 1..536870911",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_FIELD_NUMBER, error);
+        }
+        if (field.number >= kReservedFieldNumberFirst &&
+            field.number <= kReservedFieldNumberLast) {
+            return fail_at_code(
+                file,
+                "field \"" + view_text(field.name) + "\" number " +
+                    number_text(field.number) +
+                    " is inside the reserved range 19000..19999",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_FIELD_NUMBER, error);
+        }
+        if (field.has_type && is_named_kind(field.type) &&
+            !field.has_type_name) {
+            return fail_at_code(
+                file,
+                "field \"" + view_text(field.name) + "\" declares " +
+                    descriptor_kind_name(field.type) +
+                    " type but carries no type_name",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_MISSING_TYPE_NAME, error);
         }
 
         bool unknown = false;
