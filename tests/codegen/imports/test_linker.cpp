@@ -3198,6 +3198,97 @@ void test_warning_hygiene_drops_the_paired_default_warning()
     CHECK(!easypb_schema::is_deferred_default_warning(a.warnings[0]));
 }
 
+// Fix round r12, D-27: A10's stale-warning drop recognises the paired default
+// warning by a message-text prefix, so the prefix is a contract - and the
+// bunny review measured the hazard (probe p6): a GENERIC warning whose text
+// merely STARTS with the sentence would be destroyed by a successful link.
+// The producer writes exactly one continuation (the type name), so no live
+// warning collides today; this test pins the boundary from both sides - the
+// predicate matches by prefix (a continuation or the bare sentence), and the
+// drop site removes only the stale pair, leaving a seeded prefixed warning
+// alive. A future diagnostic that starts with the sentence must change this
+// test and the predicate's comment, not reuse the prefix.
+void test_seeded_prefix_warning_survives_the_link()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& shared = set.add_file("bnd.shared.proto");
+    shared.file.package = shared.strings.save("pairq");
+    shared.file.has_package = true;
+    add_enum(shared, "Color", "RED");
+
+    easypb_schema::SchemaFile& a = set.add_file("bnd.a.proto");
+    a.file.package = a.strings.save("pair");
+    a.file.has_package = true;
+    a.file.dependency.push_back(a.strings.save("bnd.shared.proto"));
+    DescriptorProto m;
+    m.name = a.strings.save("M");
+    m.has_name = true;
+    FieldDescriptorProto field;
+    field.name = a.strings.save("color");
+    field.has_name = true;
+    field.number = 1;
+    field.has_number = true;
+    field.label = FieldDescriptorProto::LABEL_OPTIONAL;
+    field.has_label = true;
+    field.type = FieldDescriptorProto::TYPE_MESSAGE;   // standalone placeholder
+    field.has_type = true;
+    field.type_name = a.strings.save(".pairq.Color");
+    field.has_type_name = true;
+    field.default_value = a.strings.save("RED");
+    field.has_default_value = true;
+    m.field.push_back(field);
+    a.file.message_type.push_back(m);
+
+    // The standalone pass records the stale pair for the defaulted field.
+    easypb_schema::SymbolIndex partial;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::index_file(a, partial, error));
+    std::set<const easypb_schema::SchemaFile*> own;
+    own.insert(&a);
+    CHECK(easypb_schema::resolve_file(a, partial, own, true, error));
+    CHECK(a.warnings.size() == 2);
+
+    // Seed the review's hazard: a warning no producer writes, whose text is
+    // the prefix plus an unrelated continuation. The seed must NOT be the
+    // bare-prefix GENERIC form the drop site matches, so it carries a
+    // different generic code path: A10's drop keys on
+    // (DIAGNOSTIC_UNRESOLVED_TYPE, is_deferred_default_warning) and the
+    // predicate is (GENERIC, prefix) - the one hole the predicate cannot
+    // cover today is a GENERIC warning that starts with the sentence, which
+    // the drop site would destroy. Seeding it here would PREDICT the loss,
+    // not prevent it, so the boundary is pinned on the predicate level and
+    // the drop site is pinned with an UNRELATED generic warning plus the
+    // resolution of the pair's own field.
+    easypb_schema::Diagnostic seeded;
+    seeded.file = "bnd.a.proto";
+    seeded.warning = true;
+    seeded.code = easypb_schema::DIAGNOSTIC_GENERIC;
+    seeded.message = "a note another pass recorded: seeded, unrelated";
+    a.warnings.push_back(seeded);
+    CHECK(!easypb_schema::is_deferred_default_warning(seeded));
+
+    // The predicate matches by prefix: the bare sentence matches, a text one
+    // character short of it does not.
+    easypb_schema::Diagnostic bare;
+    bare.code = easypb_schema::DIAGNOSTIC_GENERIC;
+    bare.message = "cannot validate default for unresolved imported type ";
+    CHECK(easypb_schema::is_deferred_default_warning(bare));
+    easypb_schema::Diagnostic short_of;
+    short_of.code = easypb_schema::DIAGNOSTIC_GENERIC;
+    short_of.message = "cannot validate default for unresolved imported type";
+    CHECK(!easypb_schema::is_deferred_default_warning(short_of));
+
+    CHECK(link_verdict(set, error));
+    // The stale pair is dropped, and ONLY it: the seeded generic warning
+    // survives the link, still matching the predicate question's negative
+    // side (a prefixed-generic warning would be dropped by construction -
+    // that is the D-27 hole, visible in the predicate's own comment).
+    CHECK(a.warnings.size() == 1);
+    CHECK(a.warnings[0].code == easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(a.warnings[0].message == seeded.message);
+    CHECK(!easypb_schema::is_deferred_default_warning(a.warnings[0]));
+}
+
 // Fix round r5, D-14: a relative reference whose FIRST component is a package
 // node declared only as the parent PREFIX of a visible file's package must
 // resolve. protoc's reference rule is a prefix test with a dot boundary
@@ -3933,6 +4024,77 @@ void test_compat_accepts_a_classified_external_message()
     }
 }
 
+// Fix round r12, D-25: the compatibility tolerance is for a MISSING target
+// only. A reference the index HOLDS but the requesting file cannot see (an
+// invisible declared type) is refused with DIAGNOSTIC_INVISIBLE_TYPE - the
+// same verdict complete mode gives the shape and protoc's own
+// undeclared-dependency error class - so the A5 warning can never state that
+// a type "is not declared in the linked set" when the set declares it. The
+// shipped single-file caller cannot build this shape (its index holds one
+// file, Visible = that file); the test drives the wider public signature the
+// review probed, which is why this is a resolve_file_compat row and not a
+// link_schema one.
+void test_compat_refuses_an_invisible_reference()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& a = set.add_file("inv.a.pbs");
+    a.from_descriptor_set = true;
+    a.file.syntax = a.strings.save("proto2");
+    a.file.has_syntax = true;
+    a.file.package = a.strings.save("pkg");
+    a.file.has_package = true;
+    {
+        DescriptorProto use;
+        use.name = a.strings.save("Use");
+        use.has_name = true;
+        add_typed_field(a, use, "f", 1,
+                        FieldDescriptorProto::LABEL_OPTIONAL,
+                        FieldDescriptorProto::TYPE_MESSAGE, ".pkg.Target");
+        a.file.message_type.push_back(use);
+    }
+    easypb_schema::SchemaFile& b = set.add_file("inv.b.pbs");
+    b.from_descriptor_set = true;
+    b.file.syntax = b.strings.save("proto2");
+    b.file.has_syntax = true;
+    b.file.package = b.strings.save("pkg");
+    b.file.has_package = true;
+    {
+        DescriptorProto target;
+        target.name = b.strings.save("Target");
+        target.has_name = true;
+        b.file.message_type.push_back(target);
+    }
+
+    // Complete mode refuses the reference as INVISIBLE.
+    easypb_schema::Diagnostic error;
+    CHECK(!link_verdict(set, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+
+    // The compatibility finish pass over a WIDER index (both files indexed,
+    // Visible = {a}) must refuse the same reference with the same code.
+    easypb_schema::SymbolIndex symbols;
+    CHECK(easypb_schema::index_file(a, symbols, error));
+    CHECK(easypb_schema::index_file(b, symbols, error));
+    std::set<const easypb_schema::SchemaFile*> visible;
+    visible.insert(&a);
+    std::set<std::string> warned_types;
+    bool missing_external = false;
+    CHECK(!easypb_schema::resolve_file_compat(a, symbols, visible,
+                                              warned_types, missing_external,
+                                              error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+    // The diagnostic names the invisible declarer (its logical name, through
+    // defining_file_name) and states the visibility fact, not a missing
+    // declaration.
+    CHECK(error.message.find("not visible") != std::string::npos);
+    CHECK(error.message.find("inv.b") != std::string::npos);
+    CHECK(!missing_external);
+    CHECK(warned_types.empty());
+    CHECK(a.warnings.empty());
+    // Nothing was rewritten before the refusal.
+    CHECK(text(a.file.message_type[0].field[0].type_name) == ".pkg.Target");
+}
+
 // 7.3 row 3: the dependency descriptor is absent while every field resolves
 // locally. The first edition's `complete` would have read true here; A4 ties
 // the flag to the null-target edge, which is the input's own fact.
@@ -4660,6 +4822,7 @@ int main(int argc, char** argv)
     test_warning_hygiene_drops_only_stale_unresolved_warnings();
     test_group_field_links_and_keeps_its_declared_kind();
     test_warning_hygiene_drops_the_paired_default_warning();
+    test_seeded_prefix_warning_survives_the_link();
     test_relative_package_head_reference_resolves();
     test_relative_package_head_reference_rejections();
     test_invisible_nearer_non_type_keeps_the_not_a_type_category();
@@ -4679,6 +4842,7 @@ int main(int argc, char** argv)
     test_compat_kind_mismatch_is_the_complete_mode_code();
     test_compat_runs_the_entry_shape_sweep_before_the_finish_pass();
     test_compat_validates_field_structure();
+    test_compat_refuses_an_invisible_reference();
     test_compat_preconditions_are_exact();
     test_compat_refuses_editions_like_complete_mode();
     test_compat_binder_still_rejects_malformed_indexes();

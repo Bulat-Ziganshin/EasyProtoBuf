@@ -1110,6 +1110,15 @@ bool fail_malformed_map_entry(const SchemaFile& file,
 // here, beside the call that writes it, so the predicate below and the
 // producer cannot drift and no other translation unit has to match on message
 // text (fix round r4, ledger D-13).
+//
+// The prefix is load-bearing by prefix-match, so it is also a boundary: any
+// diagnostic whose text merely STARTS with this sentence would be dropped by
+// A10's hygiene (the seeded-prefix measurement of the bunny review, ledger
+// D-27), and no other diagnostic may begin with these words. The companion
+// code review proposed a dedicated code or a paired-warning id instead; both
+// are contract amendments (E1's appended-codes rule), declined for now - the
+// text contract lives in these comments and is the change any new sentence
+// must clear.
 const std::string kDeferredDefaultPrefix =
     "cannot validate default for unresolved imported type ";
 
@@ -1431,6 +1440,26 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
         // not validated, because the external definition cannot answer and the
         // A5 warning already states that defaults were not validated.
         bool external_reference = false;
+        if (!field.has_type_name &&
+            unresolved_policy.external_warned_types != 0 &&
+            field.has_type && is_named_kind(field.type)) {
+            // fix round r12 (ledger D-25): the compatibility mode's
+            // single "maybe external" door is an ABSOLUTE type name,
+            // so a named-kind field with no type_name at all cannot be
+            // classified by the descriptor and is refused here instead
+            // of tolerated - the same shape clause 12 refuses in
+            // resolve mode, at the same site. Source origin cannot
+            // produce it (every field carries its declared type), and
+            // a source field naming a type outside the visible set
+            // stays the plain invisible/missing refusal below.
+            return fail_at_code(
+                file,
+                "field \"" + view_text(field.name) + "\" declares " +
+                    descriptor_kind_name(field.type) +
+                    " type but carries no type_name",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_MISSING_TYPE_NAME, error);
+        }
         if (field.has_type_name) {
             if (!link_types) {
                 // Deferred: never resolve locally. The resolved kind is
@@ -1546,21 +1575,42 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                             field_type_location(file, field_path), field_path,
                             outcome_code(outcome), error);
                     }
+                    // A name the index HOLDS but the requesting file cannot
+                    // see is not "missing external information" either: the
+                    // descriptor says the type is declared, and protoc's own
+                    // verdict for the shape is an ERROR - the undeclared-
+                    // dependency branch of AddNotDefinedError (descriptor.cc
+                    // 4898-4929, libprotoc 30.1), the same "seems to be
+                    // defined in ..., which is not imported by ..., add the
+                    // necessary import" wording the INVISIBLE branch of
+                    // reference_failure_message mirrors. Tolerating it in
+                    // compatibility mode would record a warning whose
+                    // sentence is false (the type IS declared in the set) and
+                    // give one reference two verdicts depending on which
+                    // entry point is called (the review's CR-3, ledger
+                    // D-25), so the tolerance below is reserved for a
+                    // reference the index does not know at all
+                    // (RESOLVE_MISSING).
+                    const bool invisible_reference =
+                        outcome == RESOLVE_INVISIBLE;
                     const std::string reason =
-                        outcome == RESOLVE_INVISIBLE
+                        invisible_reference
                             ? reference_failure_message(file, symbols, raw, outcome,
                                                         resolved_name)
                             : missing_reference_message(raw, scope, resolved_name);
-                    if (unresolved_policy.external_warned_types != 0) {
-                        // Step 7.2: compatibility mode tolerates a missing
+                    if (unresolved_policy.external_warned_types != 0 &&
+                        !invisible_reference) {
+                        // Step 7.2: compatibility mode tolerates a MISSING
                         // target only when the descriptor classifies the
                         // reference itself - an explicit supported message or
                         // enum kind and an absolute type name. Everything else
-                        // (a relative source-style name, a missing has_type)
+                        // (a relative source-style name, a missing has_type,
+                        // and since fix round r12 an invisible declared type)
                         // is refused even here, or the mode becomes the
                         // general unresolved-type escape hatch the contract
                         // forbids. The code stays the lookup outcome's own
-                        // (DIAGNOSTIC_UNRESOLVED_TYPE for a missing target):
+                        // (DIAGNOSTIC_UNRESOLVED_TYPE for a missing target,
+                        // DIAGNOSTIC_INVISIBLE_TYPE for an invisible one):
                         // the reference is unresolved, the policy merely
                         // refuses to tolerate it.
                         const bool classified =
@@ -1811,6 +1861,17 @@ bool is_deferred_default_warning(const Diagnostic& diagnostic)
     // that resolved the type and validated the default, it is stale, so A10
     // drops it together with the unresolved-type warning it was paired with
     // (fix round r4, ledger D-13).
+    //
+    // The match is (GENERIC, kDeferredDefaultPrefix) - deliberately narrow,
+    // and a contract: exactly one producer writes that sentence (the line at
+    // kDeferredDefaultPrefix's definition), no other diagnostic may start
+    // with it, and a new producer of a droppable warning must extend this
+    // predicate and its test instead of reusing the prefix. An unrelated
+    // GENERIC warning survives A10 (the pinned control). The match also
+    // covers DIAGNOSTIC_UNRESOLVED_TYPE and DIAGNOSTIC_INVISIBLE_TYPE pairs
+    // only through their own codes at the drop site; a partial-visible-set
+    // caller that leaves stale INVISIBLE warnings behind is D-27's second
+    // edge and has no producer today.
     return diagnostic.code == DIAGNOSTIC_GENERIC &&
            diagnostic.message.size() >= kDeferredDefaultPrefix.size() &&
            diagnostic.message.compare(0, kDeferredDefaultPrefix.size(),

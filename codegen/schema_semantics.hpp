@@ -79,11 +79,14 @@ bool index_file(SchemaFile& file, SymbolIndex& symbols, Diagnostic& error);
 
 // Resolves custom field type names against symbols, considering only files
 // in visible_files, and applies type-dependent validation (packed legality,
-// oneof bounds, default values). Fields whose type cannot be resolved are
-// reported once as DIAGNOSTIC_UNRESOLVED_TYPE warnings when allow_unresolved
-// is true, and as errors when it is false. Checks that do not need the
-// resolved kind are always applied. Returns false and fills error on the
-// first fatal problem.
+// oneof bounds, default values). A reference the index does not know at all
+// is reported once as DIAGNOSTIC_UNRESOLVED_TYPE when allow_unresolved is
+// true and as an error when it is false; an invisible declared type reports
+// DIAGNOSTIC_INVISIBLE_TYPE the same way, and a found non-type or a foreign
+// map entry is fatal in BOTH modes - no import can turn it into a legal
+// field type (the B9/B15 oracle rows). Checks that do not need the resolved
+// kind are always applied. Returns false and fills error on the first fatal
+// problem.
 bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
                   const std::set<const SchemaFile*>& visible_files,
                   bool allow_unresolved, Diagnostic& error);
@@ -129,7 +132,11 @@ bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
 // default, which makes it stale, so A10's warning hygiene removes it together
 // with the unresolved-type warning it was recorded with. The sentence itself
 // stays private to schema_semantics.cpp - callers ask this question instead of
-// matching on message text (fix round r4, ledger D-13).
+// matching on message text (fix round r4, ledger D-13). The match is a
+// contract, not a convenience: exactly one producer writes that sentence, no
+// other diagnostic may start with it, and a new droppable warning extends
+// this predicate and its test instead of reusing the prefix (ledger D-27,
+// fix round r12).
 bool is_deferred_default_warning(const Diagnostic& diagnostic);
 
 // Validates everything that needs no import linking: duplicate field
