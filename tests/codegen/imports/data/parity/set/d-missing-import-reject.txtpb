@@ -1,0 +1,20 @@
+file {
+  name: "sibling.proto"
+  package: "p"
+  syntax: "proto3"
+  message_type {
+    name: "S"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto3"
+  dependency: "dep.proto"
+  dependency: "sibling.proto"
+  message_type {
+    name: "M"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}

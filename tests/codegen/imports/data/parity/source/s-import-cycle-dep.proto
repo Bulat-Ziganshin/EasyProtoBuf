@@ -1,0 +1,3 @@
+syntax = "proto3";
+package s;
+message CycleDep { int32 x = 1; }

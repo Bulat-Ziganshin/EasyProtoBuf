@@ -1,0 +1,9 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto3"
+  message_type {
+    name: "M"
+    field { name: "a" number: 19000 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}

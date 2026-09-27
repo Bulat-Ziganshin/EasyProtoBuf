@@ -1,0 +1,45 @@
+case	origin	protoc	expected	kind	note
+s-invalid-import-accept	source	accept	accept	pair	
+s-invalid-import-duplicate-reject	source	reject	DIAGNOSTIC_INVALID_IMPORT	pair	
+s-invalid-import-dotdot-reject	source	reject	DIAGNOSTIC_INVALID_IMPORT	pair	
+s-invalid-import-backslash-reject	source	reject	DIAGNOSTIC_INVALID_IMPORT	pair	
+s-invalid-import-absolute-reject	source	reject	DIAGNOSTIC_INVALID_IMPORT	pair	
+s-missing-import-accept	source	accept	accept	pair	
+s-missing-import-reject	source	reject	DIAGNOSTIC_MISSING_IMPORT	pair	
+s-import-cycle-accept	source	accept	accept	pair	
+s-import-cycle-reject	source	reject	DIAGNOSTIC_IMPORT_CYCLE	pair	
+d-generic-not-raised	descriptor	accept	accept	none	no counterpart refusal exists: value 0 is not a parity code, it is the bucket for the loader/CLI classes. The row is the negative one - a protoc-accepted graph must never come back DIAGNOSTIC_GENERIC
+d-unsupported-syntax-accept	descriptor	accept	accept	pair	
+d-unsupported-syntax-reject	descriptor	reject	DIAGNOSTIC_UNSUPPORTED_SYNTAX	pair	
+d-unsupported-syntax-editions-inverse	descriptor	accept	DIAGNOSTIC_UNSUPPORTED_SYNTAX	inverse	protoc 30.1 accepts edition = "2023"; this project refuses it by A25 because the model carries no editions semantics - a recorded capability boundary whose owner is plan 5
+d-unresolved-type-accept	descriptor	accept	accept	pair	
+d-unresolved-type-reject	descriptor	reject	DIAGNOSTIC_UNRESOLVED_TYPE	pair	
+d-invisible-type-accept	descriptor	accept	accept	pair	
+d-invisible-type-reject	descriptor	reject	DIAGNOSTIC_INVISIBLE_TYPE	pair	
+d-duplicate-symbol-accept	descriptor	accept	accept	pair	
+d-duplicate-symbol-reject	descriptor	reject	DIAGNOSTIC_DUPLICATE_SYMBOL	pair	
+d-not-a-type-accept	descriptor	accept	accept	pair	
+d-not-a-type-reject	descriptor	reject	DIAGNOSTIC_NOT_A_TYPE	pair	
+d-map-entry-type-accept	descriptor	accept	accept	pair	
+d-map-entry-type-reject	descriptor	reject	DIAGNOSTIC_MAP_ENTRY_TYPE	pair	
+d-malformed-map-entry-accept	descriptor	accept	accept	pair	
+d-malformed-map-entry-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-kind-mismatch-accept	descriptor	accept	accept	pair	
+d-kind-mismatch-reject	descriptor	reject	DIAGNOSTIC_KIND_MISMATCH	pair	
+d-invalid-field-number-accept	descriptor	accept	accept	pair	
+d-invalid-field-number-zero-reject	descriptor	reject	DIAGNOSTIC_INVALID_FIELD_NUMBER	pair	
+d-invalid-field-number-reserved-reject	descriptor	reject	DIAGNOSTIC_INVALID_FIELD_NUMBER	pair	
+d-missing-type-name-accept	descriptor	accept	accept	pair	
+d-missing-type-name-reject	descriptor	reject	DIAGNOSTIC_MISSING_TYPE_NAME	pair	
+d-duplicate-enum-number-accept	descriptor	accept	accept	pair	
+d-duplicate-enum-number-reject	descriptor	reject	DIAGNOSTIC_DUPLICATE_ENUM_NUMBER	pair	
+d-empty-oneof-accept	descriptor	accept	accept	pair	
+d-empty-oneof-reject	descriptor	reject	DIAGNOSTIC_EMPTY_ONEOF	pair	
+d-missing-import-accept	descriptor	accept	accept	pair	
+d-missing-import-reject	descriptor	reject	DIAGNOSTIC_MISSING_IMPORT	pair	
+d-invalid-import-accept	descriptor	accept	accept	pair	
+d-invalid-import-duplicate-dependency-reject	descriptor	reject	DIAGNOSTIC_INVALID_IMPORT	pair	
+d-invalid-import-public-index-accept	descriptor	accept	accept	pair	
+d-invalid-import-public-index-out-of-range-reject	descriptor	reject	DIAGNOSTIC_INVALID_IMPORT	pair	
+d-invalid-import-public-index-duplicate-inverse	descriptor	accept	DIAGNOSTIC_INVALID_IMPORT	inverse	protoc 30.1 accepts this shape; bind_import_edges refuses it by A18 (a public/weak index that repeats a dependency is malformed, and allow_missing relaxes missing targets only) - ledger D-29, rejected 2026-09-27, pinned by test_bind_rejects_duplicate_and_overlapping_indexes
+d-invalid-import-public-and-weak-inverse	descriptor	accept	DIAGNOSTIC_INVALID_IMPORT	inverse	protoc 30.1 accepts this shape; bind_import_edges refuses it by A18 (a public/weak index that repeats a dependency is malformed, and allow_missing relaxes missing targets only) - ledger D-29, rejected 2026-09-27, pinned by test_bind_rejects_duplicate_and_overlapping_indexes

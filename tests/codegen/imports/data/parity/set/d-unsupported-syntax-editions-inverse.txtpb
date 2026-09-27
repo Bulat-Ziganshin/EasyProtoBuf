@@ -1,0 +1,10 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "editions"
+  edition: EDITION_2023
+  message_type {
+    name: "M"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}

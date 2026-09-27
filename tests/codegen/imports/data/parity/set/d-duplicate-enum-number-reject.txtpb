@@ -1,0 +1,11 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto3"
+  enum_type {
+    name: "A"
+    value { name: "ZERO" number: 0 }
+    value { name: "X" number: 1 }
+    value { name: "Y" number: 1 }
+  }
+}

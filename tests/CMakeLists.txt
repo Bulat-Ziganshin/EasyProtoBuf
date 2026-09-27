@@ -480,6 +480,23 @@ if(BUILD_TESTING)
     add_test(NAME codegen.imports.linker
         COMMAND codegen_imports_linker_test ${CMAKE_CURRENT_SOURCE_DIR})
 
+    # Step 11's two-way oracle parity lane, the descriptor half. Both halves
+    # read codegen/imports/data/parity/parity-cases.tsv from this one source
+    # file and assert every row's verdict; they are two registrations rather
+    # than one because the A12 split makes "parser-free" and "parser-dependent"
+    # mutually exclusive target classes (verify-package's `iso:parser-free
+    # targets link nothing the parser owns`): a target outside the parser guard
+    # must link `easypb_schema` alone in every tree. So the descriptor rows are
+    # registered here, for every profile, and the binary NAMES each
+    # source-origin row it does not read with the pack's `SKIP:` marker; the
+    # source half sits inside the parser guard beside the other loader suites.
+    add_executable(codegen_imports_parity_test codegen/imports/test_parity.cpp)
+    target_link_libraries(codegen_imports_parity_test PRIVATE easypb_schema)
+    target_compile_definitions(codegen_imports_parity_test
+        PRIVATE EASYPB_PARITY_HALF_DESCRIPTOR=1)
+    add_test(NAME codegen.imports.parity
+        COMMAND codegen_imports_parity_test ${CMAKE_CURRENT_SOURCE_DIR})
+
     add_executable(codegen_imports_graph_exhaustive_test
         codegen/imports/test_graph_exhaustive.cpp)
     target_link_libraries(codegen_imports_graph_exhaustive_test PRIVATE easypb_schema)
@@ -535,6 +552,25 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/linker)
         set_tests_properties(codegen.imports.source PROPERTIES
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+        # Step 11's parity lane, the source half: the same table's
+        # source-origin rows through the loader's own path (the pack's
+        # plan4/steps/06-oracle-parity.md, section 11.4). The descriptor half is
+        # registered above, outside this guard, so the two may not share one
+        # target (A12).
+        add_executable(codegen_imports_parity_source_test
+            codegen/imports/test_parity.cpp)
+        target_include_directories(codegen_imports_parity_source_test PRIVATE
+            ${easypb_test_include_dir}
+            ${PROJECT_SOURCE_DIR}/codegen
+            ${PROJECT_SOURCE_DIR}/codegen/parser)
+        target_link_libraries(codegen_imports_parity_source_test
+            PRIVATE easypb_proto_loader)
+        target_compile_definitions(codegen_imports_parity_source_test
+            PRIVATE EASYPB_PARITY_HALF_SOURCE=1)
+        add_test(NAME codegen.imports.parity.source
+            COMMAND codegen_imports_parity_source_test
+                ${CMAKE_CURRENT_SOURCE_DIR})
 
     endif()
 endif()

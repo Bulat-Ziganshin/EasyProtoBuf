@@ -1,0 +1,23 @@
+file {
+  name: "dep.proto"
+  package: "p"
+  syntax: "proto3"
+  message_type { name: "D" }
+}
+file {
+  name: "mid.proto"
+  package: "p"
+  syntax: "proto3"
+  dependency: "dep.proto"
+  public_dependency: 0
+}
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto3"
+  dependency: "mid.proto"
+  message_type {
+    name: "M"
+    field { name: "d" number: 1 label: LABEL_OPTIONAL type: TYPE_MESSAGE type_name: ".p.D" }
+  }
+}
