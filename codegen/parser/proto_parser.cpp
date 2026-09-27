@@ -1554,6 +1554,16 @@ private:
                         throw ParseFailure(value.location, "allow_alias must be true or false");
                     }
                     allow_alias = value.text == "true";
+                    // D-28 (fix round r13): the option travels in the model,
+                    // because the linker validates descriptor-origin enums for
+                    // repeated numbers and cannot tell an intentional alias
+                    // from that defect without it. Source text is refused below
+                    // when the option is absent, so recording it here is what
+                    // keeps an aliased source file (`enum_codegen.proto`'s
+                    // `STARTED = 1; ACTIVE = 1;`) linking.
+                    result.options.allow_alias = allow_alias;
+                    result.options.has_allow_alias = true;
+                    result.has_options = true;
                 }
                 continue;
             }

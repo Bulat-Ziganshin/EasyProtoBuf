@@ -126,6 +126,22 @@ bool resolve_file_compat(SchemaFile& file, const SymbolIndex& symbols,
 // order.
 bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
 
+// Validates every enum's value numbers the file declares, top-level and nested,
+// over the available descriptor alone: two values may share a number only when
+// the enum declares `option allow_alias = true`, reported as
+// DIAGNOSTIC_DUPLICATE_ENUM_NUMBER. An enum nothing references is still
+// descriptor input, so the check is unconditional, reference-free and runs
+// before any resolution, beside the entry-shape sweep (A26's precedent) - the
+// top-level enum is the entity no resolution pass walks (fix round r13, ledger
+// D-28, contract clause 12). The source path refuses the same shape as text
+// (`codegen/parser/proto_parser.cpp`'s duplicate-number rule) and records the
+// option in the model, so this is the descriptor-origin half of that frontend
+// parity rule. `link_schema` runs it in complete mode and the compatibility
+// pass repeats it before its own finish pass, because neither mode consults a
+// reference for the answer. Returns false and fills error at the first repeated
+// number, in declaration order.
+bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error);
+
 // True for the paired companion of an unresolved-type warning: the generic
 // warning the standalone pass records when it cannot validate the default of a
 // type it has not resolved. Complete linking resolves the type and validates the

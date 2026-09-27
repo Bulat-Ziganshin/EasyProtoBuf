@@ -129,7 +129,7 @@ void test_logical_paths_invalid()
     }
 }
 
-// Checklist for the nine plan-4 code values (A3, contract A3/A25/A26 and
+// Checklist for the eleven plan-4 code values (A3, contract A3/A25/A26 and
 // clause 12); each one is asserted here by the step that appends it, because a
 // value that aliases an existing one is exactly the bug this test exists to
 // catch, and a code that does not exist yet cannot be named:
@@ -155,6 +155,13 @@ void test_logical_paths_invalid()
 //   DIAGNOSTIC_MISSING_TYPE_NAME     appended by Step 5.1 (asserted below):
 //                                    clause 12's named-kind-without-type_name
 //                                    shape (D-23)
+//   DIAGNOSTIC_DUPLICATE_ENUM_NUMBER appended by Step 5.1 in fix round r13
+//                                    (asserted below): clause 12's repeated
+//                                    enum value number without `allow_alias`
+//                                    (D-28)
+//   DIAGNOSTIC_EMPTY_ONEOF           appended by Step 5.1 in fix round r13
+//                                    (asserted below): clause 12's oneof
+//                                    declaration no field points at (D-28)
 void test_diagnostic_codes_stay_distinct()
 {
     CHECK(easypb_schema::DIAGNOSTIC_GENERIC !=
@@ -228,19 +235,22 @@ void test_diagnostic_codes_stay_distinct()
           easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
     CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
           easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
-    // Step 5.1: five appended values - the descriptor-origin kind mismatch
+    // Step 5.1: seven appended values - the descriptor-origin kind mismatch
     // (A7), the malformed map entry (A26), the unsupported file syntax (A25),
-    // and clause 12's two descriptor-origin field-structure codes (D-23: the
-    // invalid field number and the named kind without a type_name). Each must
-    // differ from every earlier code and from its siblings: callers switch on
-    // these codes instead of reading message text, so an alias is exactly the
-    // bug this checklist exists to catch.
+    // and clause 12's four descriptor-origin structure codes (D-23: the
+    // invalid field number and the named kind without a type_name; D-28: the
+    // repeated enum value number and the oneof declaration no field points
+    // at). Each must differ from every earlier code and from its siblings:
+    // callers switch on these codes instead of reading message text, so an
+    // alias is exactly the bug this checklist exists to catch.
     const easypb_schema::DiagnosticCode appended[] = {
         easypb_schema::DIAGNOSTIC_KIND_MISMATCH,
         easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY,
         easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX,
         easypb_schema::DIAGNOSTIC_INVALID_FIELD_NUMBER,
-        easypb_schema::DIAGNOSTIC_MISSING_TYPE_NAME
+        easypb_schema::DIAGNOSTIC_MISSING_TYPE_NAME,
+        easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER,
+        easypb_schema::DIAGNOSTIC_EMPTY_ONEOF
     };
     const easypb_schema::DiagnosticCode earlier[] = {
         easypb_schema::DIAGNOSTIC_GENERIC,

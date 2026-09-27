@@ -1153,6 +1153,83 @@ bool validate_message_map_entries(const SchemaFile& file,
     return true;
 }
 
+// D-28 (fix round r13, contract clause 12): every enum's value numbers, over
+// every available file, before anything is resolved and in both linking modes -
+// A26's reference-free precedent, one sweep beside the entry-shape sweep,
+// because no resolution pass walks a top-level enum's values and an enum
+// nothing references is still descriptor input.
+//
+// Two values may share a number only when the enum declares
+// `option allow_alias = true`; that is protoc's own rule when it builds a
+// descriptor, and the source path refuses the same shape as text
+// (`proto_parser.cpp`'s duplicate-number rule). The option travels in the
+// model (`EnumOptions`) since this round, which is what lets an intentional
+// alias - `tests/codegen/enums/data/enum_codegen.proto`'s
+// `STARTED = 1; ACTIVE = 1;` - link, so refusing an aliased enum would be the
+// same divergence D-28 closed, in the other direction.
+bool validate_enum_value_numbers_in_enum(const SchemaFile& file,
+                                         const EnumDescriptorProto& enumeration,
+                                         const std::string& enum_name,
+                                         const DescriptorPath& enum_path,
+                                         Diagnostic& error)
+{
+    if (enumeration.options.has_allow_alias &&
+        enumeration.options.allow_alias) {
+        return true;
+    }
+    std::map<std::int32_t, std::string> first_by_number;
+    for (std::size_t i = 0; i < enumeration.value.size(); ++i) {
+        const std::int32_t number = enumeration.value[i].number;
+        const std::string value_name = view_text(enumeration.value[i].name);
+        const std::map<std::int32_t, std::string>::const_iterator seen =
+            first_by_number.find(number);
+        if (seen != first_by_number.end()) {
+            const DescriptorPath value_path =
+                enum_value_path(enum_path, static_cast<int>(i));
+            return fail_at_code(
+                file,
+                "enum value \"" + value_name + "\" of \"" + enum_name +
+                    "\" repeats number " + number_text(number) +
+                    ", which \"" + seen->second +
+                    "\" already uses; set option allow_alias = true to allow "
+                    "aliases",
+                declaration_location(file, value_path), value_path,
+                DIAGNOSTIC_DUPLICATE_ENUM_NUMBER, error);
+        }
+        first_by_number.insert(std::make_pair(number, value_name));
+    }
+    return true;
+}
+
+// The walk: a message's own enums first, then its nested types, in declaration
+// order - the same order validate_message_map_entries uses, so the first
+// malformed entity a reader would meet is the one reported.
+bool validate_message_enum_value_numbers(const SchemaFile& file,
+                                         const DescriptorProto& message,
+                                         const std::string& qualified_name,
+                                         const DescriptorPath& message_path,
+                                         Diagnostic& error)
+{
+    for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
+        if (!validate_enum_value_numbers_in_enum(
+                file, message.enum_type[i],
+                qualified_name + "." + view_text(message.enum_type[i].name),
+                message_enum_path(message_path, static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_enum_value_numbers(
+                file, message.nested_type[i],
+                qualified_name + "." + view_text(message.nested_type[i].name),
+                message_nested_path(message_path, static_cast<int>(i)),
+                error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The text for a reference that failed because the name is known but must not
 // be used as a type here. Each category states the rule instead of copying
 // protoc's wording: its texts are editions-era UX paragraphs, and the
@@ -1705,6 +1782,37 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
         }
     }
 
+    // D-28 (fix round r13, contract clause 12): every oneof declaration must be
+    // claimed by at least one field. The index-RANGE check inside the loop
+    // above only refuses a field pointing outside the list, so a declaration
+    // nothing points at is invisible to it, while protoc refuses the same shape
+    // when it builds a descriptor (`Oneof must have at least one field.`).
+    //
+    // It sits after the loop on purpose: a message that carries BOTH a dangling
+    // index and an unclaimed declaration is still reported by the more specific
+    // index rule first. It runs in both modes over every message, referenced or
+    // not, and the deferred pass reaches it too - which is how the SOURCE half
+    // is covered, since the parser accepts an empty oneof body as text while
+    // protoc does not.
+    for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
+        bool claimed = false;
+        for (std::size_t j = 0; j < message.field.size() && !claimed; ++j) {
+            claimed = message.field[j].has_oneof_index &&
+                      message.field[j].oneof_index ==
+                          static_cast<std::int32_t>(i);
+        }
+        if (!claimed) {
+            const DescriptorPath oneof_path =
+                message_oneof_path(message_path, static_cast<int>(i));
+            return fail_at_code(
+                file,
+                "oneof \"" + view_text(message.oneof_decl[i].name) +
+                    "\" in " + scope + " has no fields",
+                declaration_location(file, oneof_path), oneof_path,
+                DIAGNOSTIC_EMPTY_ONEOF, error);
+        }
+    }
+
     std::set<std::string> nested_names;
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
         const DescriptorPath enum_path =
@@ -1748,6 +1856,34 @@ bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error)
                 file, file.file.message_type[i],
                 prefix + "." + view_text(file.file.message_type[i].name),
                 error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error)
+{
+    // The same reference-free shape of walk as validate_map_entry_shapes:
+    // top-level enums in declaration order, then each top-level message and its
+    // nested types recursively, so the first malformed enum is the first one in
+    // the file's declaration order. No symbol index and no visibility set is
+    // consulted - the shape is provable from the available descriptor alone,
+    // which is why it runs before any resolution and in both linking modes.
+    const std::string prefix = package_prefix(file);
+    for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
+        if (!validate_enum_value_numbers_in_enum(
+                file, file.file.enum_type[i],
+                prefix + "." + view_text(file.file.enum_type[i].name),
+                file_enum_path(static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!validate_message_enum_value_numbers(
+                file, file.file.message_type[i],
+                prefix + "." + view_text(file.file.message_type[i].name),
+                file_message_path(static_cast<int>(i)), error)) {
             return false;
         }
     }

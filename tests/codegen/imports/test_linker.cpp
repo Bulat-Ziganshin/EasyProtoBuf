@@ -1552,6 +1552,16 @@ void make_holder_fixture(easypb_schema::SchemaFile& file)
     oneof.name = file.strings.save("pick");
     oneof.has_name = true;
     holder.oneof_decl.push_back(oneof);
+    // The declaration needs a member: an unclaimed oneof is the shape D-28's
+    // check refuses, protoc refuses it too (`Oneof must have at least one
+    // field.`), so a fixture carrying one would be a descriptor no reference
+    // compiler accepts. The member is the fixture's second non-type symbol,
+    // which keeps the kind census in
+    // test_indexed_symbol_kinds_stay_in_the_documented_domain meaningful.
+    add_field(file, holder, "pick_member", 2,
+              FieldDescriptorProto::LABEL_OPTIONAL, 0);
+    holder.field[1].oneof_index = 0;
+    holder.field[1].has_oneof_index = true;
 
     EnumDescriptorProto enumeration;
     enumeration.name = file.strings.save("E");
@@ -4975,6 +4985,319 @@ void test_descriptor_origin_field_without_a_declared_kind_links()
     }
 }
 
+// --- D-28 (fix round r13, contract clause 12) -------------------------------
+//
+// Two shapes a descriptor can carry, both provable from the descriptor alone
+// and both accepted where protoc refuses them: an enum whose two values share
+// a number with no `option allow_alias = true`, and a oneof declaration no
+// field points at. The rule is not a reference question, so it must answer the
+// SAME way in both modes - A26's entry-shape sweep is the neighbouring
+// reference-free check and the precedent the site follows.
+//
+// The two helpers below are that claim, not a convenience: a row that only
+// asked complete mode would leave compatibility mode free to accept the same
+// available descriptor with a different verdict.
+bool refused_in_both_modes(easypb_schema::SchemaSet& set,
+                           easypb_schema::Diagnostic& error)
+{
+    const bool complete_ok = link_verdict(set, error);
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic compat_error;
+    const bool compat_ok = easypb_schema::link_schema(
+        set, easypb_schema::LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY, linked,
+        compat_error);
+    CHECK(!complete_ok);
+    CHECK(!compat_ok);
+    if (!compat_ok) {
+        // One category, one code (E1/A3): the same available descriptor takes
+        // the same code and the same sentence in both modes.
+        CHECK(compat_error.code == error.code);
+        CHECK(compat_error.message == error.message);
+    }
+    return !complete_ok && !compat_ok;
+}
+
+bool accepted_in_both_modes(easypb_schema::SchemaSet& set,
+                            easypb_schema::Diagnostic& error)
+{
+    const bool complete_ok = link_verdict(set, error);
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic compat_error;
+    const bool compat_ok = easypb_schema::link_schema(
+        set, easypb_schema::LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY, linked,
+        compat_error);
+    if (!complete_ok) std::cerr << "complete mode: " << error.message << "\n";
+    if (!compat_ok) std::cerr << "compat mode: " << compat_error.message << "\n";
+    CHECK(complete_ok);
+    CHECK(compat_ok);
+    return complete_ok && compat_ok;
+}
+
+// A descriptor-origin enum with two values. option_state is the three-state
+// question the rule turns on: -1 no option at all, 0 `allow_alias = false`
+// written out, 1 `allow_alias = true`. The option travels in the model
+// (`EnumOptions`) because without it an intentional alias - the source fixture
+// `tests/codegen/enums/data/enum_codegen.proto`, whose `STARTED = 1` and
+// `ACTIVE = 1` sit under the option - would be refused like the defect.
+EnumDescriptorProto make_enum_with_numbers(easypb_schema::SchemaFile& file,
+                                           const char* enum_name,
+                                           std::int32_t first,
+                                           std::int32_t second,
+                                           int option_state)
+{
+    EnumDescriptorProto enumeration;
+    enumeration.name = file.strings.save(enum_name);
+    enumeration.has_name = true;
+    const char* names[2] = {"A", "B"};
+    const std::int32_t numbers[2] = {first, second};
+    for (int i = 0; i < 2; ++i) {
+        EnumValueDescriptorProto value;
+        value.name = file.strings.save(names[i]);
+        value.has_name = true;
+        value.number = numbers[i];
+        value.has_number = true;
+        enumeration.value.push_back(value);
+    }
+    if (option_state >= 0) {
+        enumeration.options.allow_alias = option_state == 1;
+        enumeration.options.has_allow_alias = true;
+        enumeration.has_options = true;
+    }
+    return enumeration;
+}
+
+void add_oneof_decl(easypb_schema::SchemaFile& file, DescriptorProto& message,
+                    const char* name)
+{
+    OneofDescriptorProto oneof;
+    oneof.name = file.strings.save(name);
+    oneof.has_name = true;
+    message.oneof_decl.push_back(oneof);
+}
+
+void claim_oneof(DescriptorProto& message, std::size_t field_index,
+                 int oneof_index)
+{
+    message.field[field_index].oneof_index = oneof_index;
+    message.field[field_index].has_oneof_index = true;
+}
+
+// The enum half. protoc refuses the first shape when it builds a descriptor
+// ("\"pkg.B\" uses the same enum value as \"pkg.A\". If this is intended, set
+// 'option allow_alias = true;'") and the parser refuses it as source text, so
+// what lands here is the descriptor-origin half of that frontend parity rule.
+void test_descriptor_origin_duplicate_enum_number_is_refused()
+{
+    // (a) A = 1 and B = 1 with no option: the reported shape. The sentence
+    // names both values and the number, and the descriptor path is appended
+    // because a thin descriptor carries no source location.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "alias.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.enum_type.push_back(make_enum_with_numbers(file, "E", 1, 1, -1));
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
+        CHECK(error.file == "alias.pbs");
+        CHECK(error.message.find(
+                  "enum value \"B\" of \".pkg.E\" repeats number 1, which "
+                  "\"A\" already uses; set option allow_alias = true to allow "
+                  "aliases") == 0);
+        CHECK(error.message.find(" at [") != std::string::npos);
+    }
+    // (b) The same shape in a nested enum: the walk recurses, so a message
+    // nothing references cannot carry it past the gate either.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "nested.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto outer;
+        outer.name = file.strings.save("Outer");
+        outer.has_name = true;
+        DescriptorProto inner;
+        inner.name = file.strings.save("Inner");
+        inner.has_name = true;
+        inner.enum_type.push_back(
+            make_enum_with_numbers(file, "E", 7, 7, -1));
+        outer.nested_type.push_back(inner);
+        file.file.message_type.push_back(outer);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
+        CHECK(error.message.find("of \".pkg.Outer.Inner.E\"") !=
+              std::string::npos);
+    }
+    // (c) An intentional alias: the option present and true keeps the same two
+    // numbers legal in both modes. This row is the parity control for the
+    // source fixture with the same shape, so the fix cannot close D-28 by
+    // refusing the aliased input too.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "aliased.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.enum_type.push_back(make_enum_with_numbers(file, "E", 1, 1, 1));
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+        CHECK(file.file.enum_type[0].options.has_allow_alias);
+    }
+    // (d) The option present and false is not a licence: still refused.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "noalias.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.enum_type.push_back(make_enum_with_numbers(file, "E", 1, 1, 0));
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
+    }
+    // (e) Distinct numbers stay legal with and without the option, so the rule
+    // refuses a repeated number rather than the option's presence.
+    for (int option_state = -1; option_state <= 0; ++option_state) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "distinct.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.enum_type.push_back(
+            make_enum_with_numbers(file, "E", 1, 2, option_state));
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (f) A one-value enum and an enum with no values at all are not this
+    // rule's business: neither repeats a number.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "single.pbs", "pkg");
+        file.from_descriptor_set = true;
+        EnumDescriptorProto single;
+        single.name = file.strings.save("S");
+        single.has_name = true;
+        EnumValueDescriptorProto value;
+        value.name = file.strings.save("ONLY");
+        value.has_name = true;
+        value.number = 4;
+        value.has_number = true;
+        single.value.push_back(value);
+        file.file.enum_type.push_back(single);
+        EnumDescriptorProto empty;
+        empty.name = file.strings.save("Nothing");
+        empty.has_name = true;
+        file.file.enum_type.push_back(empty);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
+// The oneof half: every declaration needs a field. The index-RANGE check
+// refuses a field pointing outside the list, so a declaration nothing points at
+// used to be invisible while protoc refuses it ("Oneof must have at least one
+// field."). The coverage check sits in `resolve_message` beside that range
+// check and AFTER the field loop, which is why row (d) below still sees the
+// more specific index failure first.
+void test_descriptor_origin_empty_oneof_is_rejected()
+{
+    // (a) One declaration no field points at.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "oneof.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_oneof_decl(file, holder, "pick");
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_EMPTY_ONEOF);
+        CHECK(error.file == "oneof.pbs");
+        CHECK(error.message.find("oneof \"pick\" in .pkg.Holder has no fields")
+              == 0);
+        CHECK(error.message.find(" at [") != std::string::npos);
+    }
+    // (b) The SECOND declaration is the unclaimed one: the first stays legal,
+    // so the check is per declaration and not "some declaration is claimed".
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "tail.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_oneof_decl(file, holder, "first");
+        add_oneof_decl(file, holder, "second");
+        add_field(file, holder, "x", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        claim_oneof(holder, 0, 0);
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_EMPTY_ONEOF);
+        CHECK(error.message.find("oneof \"second\"") == 0);
+    }
+    // (c) Every declaration claimed stays legal - one field each - and so does
+    // a message with no declaration at all, whose fields carry no index: the
+    // check refuses an unclaimed declaration, not an absent oneof.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "claimed.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_oneof_decl(file, holder, "first");
+        add_oneof_decl(file, holder, "second");
+        add_field(file, holder, "x", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        add_field(file, holder, "y", 2, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        claim_oneof(holder, 0, 0);
+        claim_oneof(holder, 1, 1);
+        DescriptorProto plain;
+        plain.name = file.strings.save("Plain");
+        plain.has_name = true;
+        add_field(file, plain, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        file.file.message_type.push_back(holder);
+        file.file.message_type.push_back(plain);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (d) Precedence: a message that carries BOTH an unclaimed declaration and
+    // a field pointing outside the list is still reported by the more specific
+    // index rule first, because the coverage check runs after the field loop.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "both.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_oneof_decl(file, holder, "pick");
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        claim_oneof(holder, 0, 4);
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
+        CHECK(error.message.find("oneof_index") != std::string::npos);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -5077,6 +5400,8 @@ int main(int argc, char** argv)
     test_map_entry_sweep_reaches_every_depth();
     test_underscore_map_fields_collide_on_the_shared_entry_name();
     test_descriptor_origin_field_without_a_declared_kind_links();
+    test_descriptor_origin_duplicate_enum_number_is_refused();
+    test_descriptor_origin_empty_oneof_is_rejected();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

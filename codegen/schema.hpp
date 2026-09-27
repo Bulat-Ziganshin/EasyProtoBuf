@@ -76,7 +76,23 @@ enum DiagnosticCode
     // so the generator cannot name the type it must emit. protoc's own
     // cross-link refuses the same shape (`Field with message or enum type
     // missing type_name.`, descriptor.cc's CrossLinkField).
-    DIAGNOSTIC_MISSING_TYPE_NAME
+    DIAGNOSTIC_MISSING_TYPE_NAME,
+    // Plan 4 Step 5.1 (contract clause 12, D-28): two values of one enum share
+    // a number and the enum does not declare `option allow_alias = true`.
+    // protoc refuses the shape when it builds a descriptor ("... uses the same
+    // enum value as ...") and our parser refuses it as source text
+    // (codegen/parser/proto_parser.cpp:1619-1624), which is why the option
+    // travels in the model (`EnumOptions`) - without it the linker could not
+    // tell an intentional alias from this defect. Descriptor-origin only: the
+    // parser cannot produce the shape.
+    DIAGNOSTIC_DUPLICATE_ENUM_NUMBER,
+    // Plan 4 Step 5.1 (contract clause 12, D-28): a message declares a oneof no
+    // field points at, so the declaration is unreachable rather than a choice
+    // set. protoc refuses the shape when it builds a descriptor (`Oneof must
+    // have at least one field.`); the index-RANGE check beside this one only
+    // refuses a field pointing outside the list, so a declaration nothing
+    // points at is invisible to it.
+    DIAGNOSTIC_EMPTY_ONEOF
 };
 
 struct Diagnostic

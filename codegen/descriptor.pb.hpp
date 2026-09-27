@@ -38,13 +38,26 @@ struct EnumValueDescriptorProto
 };
 
 
+// Enum options. Only `allow_alias` is modeled: with it set, two values of one
+// enum may share a number, and without it that shape is a defect the linker
+// refuses (D-28). It is the second field of EnumOptions in descriptor.proto.
+struct EnumOptions
+{
+    bool allow_alias = false;
+
+    bool has_allow_alias = false;
+};
+
+
 // Enum
 struct EnumDescriptorProto
 {
     str_view name;
     std::vector<EnumValueDescriptorProto> value;
+    EnumOptions options;
 
     bool has_name = false;
+    bool has_options = false;
 };
 
 
@@ -208,6 +221,19 @@ inline void decode(easypb::Decoder pb, EnumValueDescriptorProto &x)
 }
 
 
+inline void decode(easypb::Decoder pb, EnumOptions &x)
+{
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 2: pb.get_bool(&x.allow_alias, &x.has_allow_alias); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
 inline void decode(easypb::Decoder pb, EnumDescriptorProto &x)
 {
     while(pb.get_next_field())
@@ -216,6 +242,7 @@ inline void decode(easypb::Decoder pb, EnumDescriptorProto &x)
         {
             case 1: pb.get_string(&x.name, &x.has_name); break;
             case 2: pb.get_repeated_message(&x.value); break;
+            case 3: pb.get_message(&x.options, &x.has_options); break;
             default: pb.skip_field();
         }
     }

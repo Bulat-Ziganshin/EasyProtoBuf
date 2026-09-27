@@ -219,8 +219,11 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
     // A26's entry-shape sweep runs before the finish pass, exactly as in
     // complete mode: the malformed shape is a structural fact about an
     // available descriptor, not a by-product of a reference, and
-    // `maps/data/malformed_map.pbs` is the fixture consumed here.
+    // `maps/data/malformed_map.pbs` is the fixture consumed here. D-28's
+    // enum-number rule rides the same reference-free stage for the same reason
+    // (Step 7.2 repeats both).
     if (!validate_map_entry_shapes(file, error)) return false;
+    if (!validate_enum_value_numbers(file, error)) return false;
 
     // Everything is built into a local and assigned once, at the end (A1).
     LinkedSchema linked;
@@ -307,8 +310,14 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // ownership guard is driven by a referencing field, while a malformed
     // entry is a structural fact about the descriptor and must fail on its
     // own, including in compatibility mode (Step 7.2 repeats the sweep).
+    //
+    // D-28 (fix round r13) rides the same stage: every enum's value numbers are
+    // checked per file, referenced or not, because an enum no field names never
+    // enters resolution and would otherwise be accepted with a shape protoc
+    // refuses. Both checks are provable from the descriptor alone.
     for (std::size_t i = 0; i < ordered.size(); ++i) {
         if (!validate_map_entry_shapes(*ordered[i], error)) return false;
+        if (!validate_enum_value_numbers(*ordered[i], error)) return false;
     }
 
     // Everything is built into a local and assigned once, at the end (A1).
