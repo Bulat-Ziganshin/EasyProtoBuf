@@ -21,13 +21,24 @@ bool parse_signed_32(const std::string& text, std::int32_t& result);
 bool is_float_text(const std::string& text);
 
 // One indexed declaration. Message and enum entries use the matching
-// FieldDescriptorProto TYPE_* kind; package scopes use SYMBOL_PACKAGE;
-// every other declaration category (enum values, fields, oneofs, services)
-// uses kind 0 because field type names never resolve to them. Keys are
-// owned fully qualified names such as ".pkg.Outer.Inner". Package scopes
-// merge across files rather than conflict; any other collision is an error.
+// FieldDescriptorProto TYPE_* kind; package scopes use SYMBOL_PACKAGE and
+// service names SYMBOL_SERVICE; every other declaration category (enum
+// values, fields, oneofs) uses kind 0 because field type names never resolve
+// to them. Keys are owned fully qualified names such as ".pkg.Outer.Inner".
+// Package scopes merge across files rather than conflict; any other collision
+// is an error.
+//
+// The service value exists because protoc asks two questions about a service
+// and the lookup needs both answers (`descriptor.cc:676-679`):
+// `Symbol::IsAggregate()` counts a service, so a service may COMMIT the head
+// of a compound relative name (and then fails the member lookup, having no
+// members); `Symbol::IsType()` does not, so a service may never win a
+// whole-name reference. Appended, never inserted: `kind` is compared against
+// the FieldDescriptorProto TYPE_* values, whose numbers must keep their
+// identity (fix round r10, `D-21`).
 enum SymbolKind {
-    SYMBOL_PACKAGE = 100
+    SYMBOL_PACKAGE = 100,
+    SYMBOL_SERVICE = 101
 };
 struct SymbolEntry
 {

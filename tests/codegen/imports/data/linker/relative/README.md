@@ -25,5 +25,11 @@ eight seed rows (r01..r08) as in-memory descriptors; this directory carries
 the representative five as real source text, so `codegen.imports.source`
 exercises the loader -> linker path a user's `codegen file.proto` takes.
 
+Fix round r10 (ledger `D-21`) added a head-filter pair for the same class of
+rule, and it lives one directory up (`../h01_*`, `../h02_*`): these five
+fixtures spell their imports for THIS directory as the proto root, which is
+not the `--proto_path` the pack's Step 8.3 command prints, so protoc cannot
+generate artifacts for them in the differential lane.
+
 Step 8.1 replaces this file with the fixture inventory; until then this file is
 the inventory of the `relative/` subtree.

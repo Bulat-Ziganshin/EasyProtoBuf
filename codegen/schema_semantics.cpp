@@ -368,14 +368,17 @@ bool add_symbol(const SchemaFile& file, SymbolIndex& symbols,
                 const std::string& name, int kind, const DescriptorPath& path,
                 Diagnostic& error)
 {
-    // H-2 of the classical code review (fix round r5): the kind domain every
-    // lookup depends on. Pass 1 reads `kind != 0` as "a type or a package
-    // scope" and the failure walk reads `kind == 0` as "a declaration that is
-    // not a type"; both readings hold only while this is the single point
-    // that writes a kind. Debug-only by construction (profile trees compile
-    // with NDEBUG), which is why the guarantee is also stated in the comment
-    // above `index_file` and pinned by the indexed-kind test.
-    assert(kind == 0 || kind == SYMBOL_PACKAGE ||
+    // H-2 of the classical code review (fix round r5), extended by fix round
+    // r10: the kind domain every lookup depends on. The head filter reads
+    // `is_type_kind` / `is_aggregate_kind` (a message, an enum, a package
+    // scope or a service may commit a compound head; only a message or an
+    // enum may win a whole name) and the failure walk reads `is_type_kind`
+    // plus the package question; all of it holds only while this is the
+    // single point that writes a kind. Debug-only by construction (profile
+    // trees compile with NDEBUG), which is why the guarantee is also stated
+    // in `schema_semantics.hpp`'s SymbolKind comment and pinned by the
+    // indexed-kind test.
+    assert(kind == 0 || kind == SYMBOL_PACKAGE || kind == SYMBOL_SERVICE ||
            kind == FieldDescriptorProto::TYPE_MESSAGE ||
            kind == FieldDescriptorProto::TYPE_ENUM);
     SymbolEntry entry;
@@ -510,6 +513,28 @@ enum ResolveOutcome
     RESOLVE_NOT_A_TYPE,
     RESOLVE_MAP_ENTRY
 };
+
+// protoc's `Symbol::IsType()` (descriptor.cc:676): the declarations a field
+// type may name, and therefore the only kinds that may win a WHOLE-name
+// reference.
+bool is_type_kind(int kind)
+{
+    return kind == FieldDescriptorProto::TYPE_MESSAGE ||
+           kind == FieldDescriptorProto::TYPE_ENUM;
+}
+
+// protoc's `Symbol::IsAggregate()` (descriptor.cc:677-679): the declarations
+// whose scope commits the first component of a COMPOUND relative name -
+// IsType() plus a package scope plus a service. A service has no members, so
+// a committed service head fails the member lookup, and that failure is what
+// protoc reports for the shape (fix round r10, oracle case
+// `head01_service_compound`: "Q.R" is resolved to "inner.Q.R", which is not
+// defined).
+bool is_aggregate_kind(int kind)
+{
+    return is_type_kind(kind) || kind == SYMBOL_PACKAGE ||
+           kind == SYMBOL_SERVICE;
+}
 
 // Splits a relative reference into its first component and the remainder.
 void split_reference(const std::string& raw, std::string& first, std::string& rest)
@@ -665,11 +690,20 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
 // An absolute name is looked up whole, with visibility still applied. A
 // relative name resolves its FIRST component from the innermost enclosing
 // scope outward, and the walk continues past a candidate that is invisible
-// (B6/B10) or is not an aggregate (B8/B13): visibility filters the walk
-// instead of judging its result (A9). A winning aggregate - a message, an
-// enum, or a package scope - commits the rest of the name, so the remainder
-// must resolve strictly underneath it with no outward fallback
-// (B1/B7/B11/B12/B14).
+// (B6/B10) or that cannot take the name (B8/B13): visibility filters the
+// walk instead of judging its result (A9). What "can take the name" means is
+// TWO rules, because protoc's own predicates differ (`descriptor.cc:676-679`,
+// `LookupSymbolNoPlaceholder` at `descriptor.cc:5046-5112`): a COMPOUND
+// reference commits on an AGGREGATE head - a message, an enum, a package
+// scope, or a service - so the remainder must resolve strictly underneath it
+// with no outward fallback (B1/B7/B11/B12/B14), while a WHOLE-name reference
+// lands on the name itself, so only a TYPE (a message or an enum) wins and
+// every other declaration keeps the walk moving outward (B8/B13 for fields
+// and enum values, fix round r10's `head03`/`head04` oracle cases for
+// services and package scopes). Before fix round r10 a single `kind != 0`
+// test served both shapes, so a package won a whole name (a false rejection
+// when an outer type existed) and a service never committed a compound name
+// (a false acceptance when an outer type carried the member); `D-21`.
 //
 // Visibility is always the same question about the symbol the name lands on: a
 // package node is visible when ANY visible file declares exactly that package
@@ -721,8 +755,9 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
             *outcome = RESOLVE_INVISIBLE;
             return 0;
         }
-        // A package is a lookup aggregate but never a type.
-        if (found->second.kind == SYMBOL_PACKAGE || found->second.kind == 0) {
+        // A package scope and a service are lookup aggregates but never
+        // types; so is every other kind-excluded declaration.
+        if (!is_type_kind(found->second.kind)) {
             *outcome = RESOLVE_NOT_A_TYPE;
             return 0;
         }
@@ -738,7 +773,11 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
     std::string rest;
     split_reference(raw, first, rest);
 
-    // Pass 1: the innermost VISIBLE AGGREGATE candidate wins the head.
+    // Pass 1: the innermost VISIBLE candidate that can take the name wins
+    // the head. Which candidates can is the two-filter rule the doc comment
+    // above states: an aggregate for a compound reference, a type for a
+    // whole-name reference (fix round r10).
+    const bool compound_reference = !rest.empty();
     std::string candidate_scope = scope;
     std::string winning_head;
     const SymbolEntry* winner = 0;
@@ -746,7 +785,9 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
         const std::string head = scope_candidate(candidate_scope, first);
         const std::map<std::string, SymbolEntry>::const_iterator found =
             symbols.symbols.find(head);
-        if (found != symbols.symbols.end() && found->second.kind != 0 &&
+        if (found != symbols.symbols.end() &&
+            (compound_reference ? is_aggregate_kind(found->second.kind)
+                                : is_type_kind(found->second.kind)) &&
             candidate_is_visible(found->second, visible_files, head)) {
             winning_head = head;
             winner = &found->second;
@@ -759,7 +800,10 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
 
     if (winner != 0) {
         if (rest.empty()) {
-            if (winner->kind == SYMBOL_PACKAGE) {
+            // The whole-name filter admits only types already; the check is
+            // kept so that a future edit of that filter cannot land a
+            // non-type symbol in a field's `type` (fix round r10).
+            if (!is_type_kind(winner->kind)) {
                 *outcome = RESOLVE_NOT_A_TYPE;
                 *matched_name = winning_head;
                 return 0;
@@ -791,12 +835,13 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
             *outcome = RESOLVE_INVISIBLE;
             return 0;
         }
-        if (member->second.kind == 0 || member->second.kind == SYMBOL_PACKAGE) {
-            // Found, but not a type: mirror the whole-name branch above
-            // instead of collapsing it into "not defined", which would give
-            // the same declaration two codes depending on how it is spelled
-            // (E1/A3). `*matched_name` already names the compound path, so the
-            // diagnostic still says which member was reached.
+        if (!is_type_kind(member->second.kind)) {
+            // Found, but not a type (a field, an enum value, a oneof, a
+            // service, or a package scope): mirror the whole-name branch
+            // above instead of collapsing it into "not defined", which would
+            // give the same declaration two codes depending on how it is
+            // spelled (E1/A3). `*matched_name` already names the compound
+            // path, so the diagnostic still says which member was reached.
             *outcome = RESOLVE_NOT_A_TYPE;
             return 0;
         }
@@ -810,17 +855,28 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
 
     // Pass 2: nothing won, so classify the failure. The same scope walk runs
     // again without the visibility filter; the first candidate the index
-    // knows decides between "not a type" and "not visible". A candidate that
-    // is visible AND an aggregate cannot appear here: pass 1 would have
-    // returned it.
+    // knows decides between "not a type" and "not visible". A candidate the
+    // walk would have accepted if it were visible cannot appear here: pass 1
+    // would have returned it.
     candidate_scope = scope;
     for (;;) {
         const std::string head = scope_candidate(candidate_scope, first);
         const std::map<std::string, SymbolEntry>::const_iterator found =
             symbols.symbols.find(head);
         if (found != symbols.symbols.end()) {
-            *outcome = found->second.kind == 0 ? RESOLVE_NOT_A_TYPE
-                                               : RESOLVE_INVISIBLE;
+            // A declaration that is not a type - a field, an enum value, a
+            // oneof, a service, or a package scope - is the NOT_A_TYPE
+            // category the `kind == 0` reading gave it before fix round r10;
+            // the r10 walk now also reaches a VISIBLE package here (the
+            // whole-name filter skips it, D-21's mirror half), and a
+            // non-type the index knows answers the same. Only a type the
+            // requesting file cannot see is "not visible".
+            const bool visible = candidate_is_visible(found->second,
+                                                      visible_files, head);
+            const bool not_a_type =
+                !is_type_kind(found->second.kind) &&
+                (visible || found->second.kind != SYMBOL_PACKAGE);
+            *outcome = not_a_type ? RESOLVE_NOT_A_TYPE : RESOLVE_INVISIBLE;
             *matched_name = head;
             return 0;
         }
@@ -948,6 +1004,7 @@ std::string declaration_category(const SchemaFile& file,
                                  const DescriptorPath& path, int kind)
 {
     if (kind == SYMBOL_PACKAGE) return "a package scope";
+    if (kind == SYMBOL_SERVICE) return "a service";
     if (path.size() >= 2 && path[path.size() - 2] == 8) return "a oneof";
     if (path.size() >= 2 && path[path.size() - 2] == 2) {
         const DescriptorPath container(path.begin(), path.end() - 2);
@@ -1624,7 +1681,8 @@ bool index_file(SchemaFile& file, SymbolIndex& symbols, Diagnostic& error)
     for (std::size_t i = 0; i < file.file.service.size(); ++i) {
         if (!add_symbol(file, symbols,
                         prefix + "." + view_text(file.file.service[i].name),
-                        0, file_service_path(static_cast<int>(i)), error)) {
+                        SYMBOL_SERVICE, file_service_path(static_cast<int>(i)),
+                        error)) {
             return false;
         }
     }

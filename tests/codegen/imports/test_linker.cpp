@@ -1168,6 +1168,154 @@ void test_non_type_heads_do_not_shadow()
     }
 }
 
+// Fix round r10, D-21: the head rule is TWO filters, because protoc's
+// `Symbol::IsAggregate()` and `Symbol::IsType()` differ. A SERVICE may commit
+// the head of a COMPOUND reference (it is an aggregate) and then fails the
+// member lookup - that failure is protoc's verdict for the shape (oracle
+// `head01`); it may never win a WHOLE-name reference (it is not a type), so
+// an outer message of the same name still wins (`head03`). The same split is
+// what makes a visible PACKAGE scope skip a whole name instead of shadowing
+// an outer type (`head04`, the mirror half a single `kind != 0` predicate got
+// wrong in both directions).
+void test_service_and_package_heads_follow_the_two_filters()
+{
+    // head01: package inner; import dep.proto; service Q; optional Q.R f = 1.
+    // The dependency declares the global message Q with the nested R, so an
+    // outward fallback would ACCEPT; the committed service head must not
+    // reach it.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& dep = make_simple_file(set, "dep.proto", 0);
+        {
+            DescriptorProto q;
+            q.name = dep.strings.save("Q");
+            q.has_name = true;
+            add_nested(dep, q, "R");
+            dep.file.message_type.push_back(q);
+        }
+        easypb_schema::SchemaFile& root = make_file(
+            set, "root.proto", std::vector<std::string>(1, "dep.proto"),
+            std::vector<std::int32_t>(), std::vector<std::int32_t>());
+        set_package(root, "inner");
+        add_service(root, "Q");
+        {
+            DescriptorProto use;
+            use.name = root.strings.save("Use");
+            use.has_name = true;
+            add_field(root, use, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                      "Q.R");
+            root.file.message_type.push_back(use);
+        }
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find("unresolved type Q.R in ") != std::string::npos);
+        CHECK(error.message.find("\".inner.Q.R\"") != std::string::npos);
+        CHECK(error.message.find("resolved to") != std::string::npos);
+        CHECK(error.message.find("not defined") != std::string::npos);
+
+        // Control: the absolute spelling reaches the outer message directly
+        // and links - the refusal above is the committed service head, not a
+        // missing symbol.
+        root.file.message_type[0].field[0].type_name =
+            root.strings.save(".Q.R");
+        root.file.message_type[0].field[0].has_type_name = true;
+        error = easypb_schema::Diagnostic();
+        CHECK(link_verdict(set, error));
+        CHECK(text(root.file.message_type[0].field[0].type_name) == ".Q.R");
+    }
+
+    // head03: the same two files with a WHOLE-name reference. The nearer
+    // service is not a type, so the walk continues to the outer message and
+    // the reference links (protoc accepts).
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& dep = make_simple_file(set, "dep.proto", 0);
+        add_message(dep, "Q");
+        easypb_schema::SchemaFile& root = make_file(
+            set, "root.proto", std::vector<std::string>(1, "dep.proto"),
+            std::vector<std::int32_t>(), std::vector<std::int32_t>());
+        set_package(root, "inner");
+        add_service(root, "Q");
+        {
+            DescriptorProto use;
+            use.name = root.strings.save("Use");
+            use.has_name = true;
+            add_field(root, use, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                      "Q");
+            root.file.message_type.push_back(use);
+        }
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        CHECK(text(root.file.message_type[0].field[0].type_name) == ".Q");
+        CHECK(root.file.message_type[0].field[0].type ==
+              FieldDescriptorProto::TYPE_MESSAGE);
+    }
+
+    // head04: a visible PACKAGE scope must not shadow an outer message either.
+    // `package acme.core.bar` is a nearer candidate than the message
+    // `.acme.bar`, and the whole-name reference has to skip it (protoc
+    // accepts and even reports the nearer file's import as unused).
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& main = make_simple_file(set, "main.proto",
+                                                          "acme");
+        add_message(main, "bar");
+        easypb_schema::SchemaFile& deep = make_simple_file(
+            set, "deep.proto", "acme.core.bar");
+        (void)deep;
+        std::vector<std::string> deps;
+        deps.push_back("deep.proto");
+        deps.push_back("main.proto");
+        easypb_schema::SchemaFile& root = make_file(
+            set, "root.proto", deps, std::vector<std::int32_t>(),
+            std::vector<std::int32_t>());
+        set_package(root, "acme.core");
+        {
+            DescriptorProto uses;
+            uses.name = root.strings.save("Uses");
+            uses.has_name = true;
+            add_field(root, uses, "b", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                      "bar");
+            root.file.message_type.push_back(uses);
+        }
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        CHECK(text(root.file.message_type[0].field[0].type_name) ==
+              ".acme.bar");
+    }
+
+    // head05: without the outer declarer the same reference is refused, and
+    // the first candidate the failure walk knows is the visible package
+    // scope: the plan's category for a whole-name non-type match stays
+    // NOT_A_TYPE. protoc's verdict agrees; its wording is "is not defined", a
+    // wording divergence our one-code-per-outcome rule keeps (E1/A3, the
+    // B9/B15 pattern).
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& deep = make_simple_file(
+            set, "deep.proto", "acme.core.bar");
+        (void)deep;
+        easypb_schema::SchemaFile& root = make_file(
+            set, "root.proto", std::vector<std::string>(1, "deep.proto"),
+            std::vector<std::int32_t>(), std::vector<std::int32_t>());
+        set_package(root, "acme.core");
+        {
+            DescriptorProto uses;
+            uses.name = root.strings.save("Uses");
+            uses.has_name = true;
+            add_field(root, uses, "b", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                      "bar");
+            root.file.message_type.push_back(uses);
+        }
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
+        CHECK(error.message.find("a package scope") != std::string::npos);
+    }
+}
+
 // An invisible nearer candidate does not shadow either (B6/B10), while making
 // its file a direct import makes the same head win and commit (B7/B11) - which
 // is what tells a walk that filters candidates from one that resolves first
@@ -3048,12 +3196,13 @@ void test_invisible_nearer_non_type_keeps_the_not_a_type_category()
     CHECK(error.message.find("an enum value") != std::string::npos);
 }
 
-// Fix round r5, H-2: the kind domain every lookup reads. Pass 1 reads
-// `kind != 0` as "a type or a package scope"; the failure walk reads
-// `kind == 0` as "a declaration that is not a type". `add_symbol` is the
-// single point that writes a kind (its debug assert states the domain), and
-// this test measures the PUBLISHED index, so the guarantee is visible in a
-// release build too.
+// Fix round r5 (H-2), extended by fix round r10 (D-21): the kind domain every
+// lookup reads. The head filter reads `is_type_kind` (a message or an enum may
+// win a whole name) and `is_aggregate_kind` (those plus a package scope and a
+// service may commit a compound head); the failure walk reads `is_type_kind`
+// plus the package question. `add_symbol` is the single point that writes a
+// kind (its debug assert states the domain), and this test measures the
+// PUBLISHED index, so the guarantee is visible in a release build too.
 void test_indexed_symbol_kinds_stay_in_the_documented_domain()
 {
     easypb_schema::SchemaSet set;
@@ -3068,17 +3217,24 @@ void test_indexed_symbol_kinds_stay_in_the_documented_domain()
 
     std::size_t non_types = 0;
     std::size_t packages = 0;
+    std::size_t services = 0;
     std::size_t messages = 0;
     std::size_t enums = 0;
+    bool service_key_seen = false;
     for (std::map<std::string, easypb_schema::SymbolEntry>::const_iterator it =
              linked.symbols.symbols.begin();
          it != linked.symbols.symbols.end(); ++it) {
         const int kind = it->second.kind;
         CHECK(kind == 0 || kind == easypb_schema::SYMBOL_PACKAGE ||
+              kind == easypb_schema::SYMBOL_SERVICE ||
               kind == FieldDescriptorProto::TYPE_MESSAGE ||
               kind == FieldDescriptorProto::TYPE_ENUM);
         if (kind == 0) ++non_types;
         else if (kind == easypb_schema::SYMBOL_PACKAGE) ++packages;
+        else if (kind == easypb_schema::SYMBOL_SERVICE) {
+            ++services;
+            if (it->first == ".pkg.Svc") service_key_seen = true;
+        }
         else if (kind == FieldDescriptorProto::TYPE_MESSAGE) ++messages;
         else if (kind == FieldDescriptorProto::TYPE_ENUM) ++enums;
     }
@@ -3086,6 +3242,8 @@ void test_indexed_symbol_kinds_stay_in_the_documented_domain()
     // single-category index.
     CHECK(non_types > 0);
     CHECK(packages > 0);
+    CHECK(services > 0);
+    CHECK(service_key_seen);
     CHECK(messages > 0);
     CHECK(enums > 0);
 }
@@ -4266,6 +4424,7 @@ int main(int argc, char** argv)
     test_resolution_separates_invisible_from_missing();
     test_shadowing_commits_the_matched_aggregate();
     test_non_type_heads_do_not_shadow();
+    test_service_and_package_heads_follow_the_two_filters();
     test_invisible_candidates_do_not_shadow();
     test_merged_package_is_visible_when_any_declaring_file_is();
     test_sub_package_does_not_make_the_parent_visible();
