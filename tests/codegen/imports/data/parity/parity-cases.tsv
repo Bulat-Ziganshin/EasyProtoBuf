@@ -45,3 +45,9 @@ d-invalid-import-public-index-accept	descriptor	accept	accept	pair
 d-invalid-import-public-index-out-of-range-reject	descriptor	reject	DIAGNOSTIC_INVALID_IMPORT	pair	
 d-invalid-import-public-index-duplicate-inverse	descriptor	accept	DIAGNOSTIC_INVALID_IMPORT	inverse	protoc 30.1 accepts this shape; bind_import_edges refuses it by A18 (a public/weak index that repeats a dependency is malformed, and allow_missing relaxes missing targets only) - ledger D-29, rejected 2026-09-27, pinned by test_bind_rejects_duplicate_and_overlapping_indexes
 d-invalid-import-public-and-weak-inverse	descriptor	accept	DIAGNOSTIC_INVALID_IMPORT	inverse	protoc 30.1 accepts this shape; bind_import_edges refuses it by A18 (a public/weak index that repeats a dependency is malformed, and allow_missing relaxes missing targets only) - ledger D-29, rejected 2026-09-27, pinned by test_bind_rejects_duplicate_and_overlapping_indexes
+d-proto3-required-field-accept	descriptor	accept	accept	pair	
+d-proto3-required-field-reject	descriptor	reject	DIAGNOSTIC_PROTO3_REQUIRED_FIELD	pair	
+d-proto3-explicit-default-accept	descriptor	accept	accept	pair	
+d-proto3-explicit-default-reject	descriptor	reject	DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT	pair	
+d-unresolved-type-trailing-dot-reject	descriptor	reject	DIAGNOSTIC_UNRESOLVED_TYPE	pair	
+d-invisible-type-nearer-non-type-reject	descriptor	reject	DIAGNOSTIC_INVISIBLE_TYPE	pair	

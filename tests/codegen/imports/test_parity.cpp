@@ -148,6 +148,10 @@ const CodeName kCodeNames[] = {
      easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER},
     {"DIAGNOSTIC_EMPTY_ONEOF", easypb_schema::DIAGNOSTIC_EMPTY_ONEOF},
     {"DIAGNOSTIC_EMPTY_ENUM", easypb_schema::DIAGNOSTIC_EMPTY_ENUM},
+    {"DIAGNOSTIC_PROTO3_REQUIRED_FIELD",
+     easypb_schema::DIAGNOSTIC_PROTO3_REQUIRED_FIELD},
+    {"DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT",
+     easypb_schema::DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT},
 };
 
 const std::size_t kCodeNameCount = sizeof(kCodeNames) / sizeof(kCodeNames[0]);
@@ -263,7 +267,10 @@ bool read_rows(const std::string& path, std::vector<Row>& rows)
 
 void check_table(const std::vector<Row>& rows)
 {
-    CHECK(kCodeNameCount == 17);
+    // One entry per `DiagnosticCode` value (fix round r17 moved 17 -> 19), so a
+    // value appended to the enum cannot be missing from the name table the tsv
+    // rows are resolved through.
+    CHECK(kCodeNameCount == 19);
     CHECK(!rows.empty());
 
     std::set<std::string> names;

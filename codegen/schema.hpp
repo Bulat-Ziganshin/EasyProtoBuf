@@ -102,7 +102,27 @@ enum DiagnosticCode
     // early return: an empty enum that writes the option is still refused by
     // protoc, so the option cannot licence an empty list. Descriptor-origin
     // only - the parser cannot produce the shape.
-    DIAGNOSTIC_EMPTY_ENUM
+    DIAGNOSTIC_EMPTY_ENUM,
+    // Plan 4 Step 5.1 (contract clause 12, the 0927-mimo review's F2): a
+    // descriptor-origin file that declares `syntax = "proto3"` carries a field
+    // with the `required` label, which proto3 does not have. protoc refuses the
+    // shape when it builds the file from the same bytes (`ValidateProto3Field`,
+    // descriptor.cc:7917, "Required fields are not allowed in proto3.") and our
+    // parser refuses its source twin (codegen/parser/proto_parser.cpp:1233), so
+    // this is the descriptor-origin half of that frontend parity rule. The gate
+    // is the field's OWN file: proto2 gives the label a meaning, so reading the
+    // wrong file here would refuse legal input. Descriptor-origin only - the
+    // parser cannot produce the shape.
+    DIAGNOSTIC_PROTO3_REQUIRED_FIELD,
+    // Plan 4 Step 5.1 (contract clause 12, the 0927-mimo review's F2): the same
+    // gate for a proto3 field that carries an explicit `default_value`, which
+    // proto3 does not allow. protoc refuses it at the same site
+    // (descriptor.cc:7922, "Explicit default values are not allowed in
+    // proto3.") and the parser refuses the source twin
+    // (codegen/parser/proto_parser.cpp:1124), so the two codes are one rule
+    // asked of two shapes: the shape, not the file class, is what the message
+    // names. Descriptor-origin only.
+    DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT
 };
 
 struct Diagnostic

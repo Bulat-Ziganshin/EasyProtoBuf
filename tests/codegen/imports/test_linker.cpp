@@ -3442,34 +3442,143 @@ void test_relative_package_head_reference_rejections()
     }
 }
 
-// Fix round r5, H-1 - re-derived, not applied. The review asked for pass 2 to
-// classify through `candidate_is_visible` "because both passes ask the same
-// pure question". They do not: pass 1 skips kind-0 entries and invisible
-// entries, while pass 2's kind test deliberately answers NOT_A_TYPE for a
-// nearer DECLARATION THAT IS NOT A TYPE even when the file declaring it is
-// invisible (B9/B15: the category is about what the name IS, not who declares
-// it) - and `candidate_is_visible` would answer INVISIBLE for exactly that
-// shape. This test pins the measured difference, so a later "consistency"
-// edit has to be a deliberate, test-breaking decision with an oracle behind
-// it: `.app.VALUE` is an enum value (kind 0) owned by a file the requester
-// does not import.
-void test_invisible_nearer_non_type_keeps_the_not_a_type_category()
+// Fix round r17 (the 0927-mimo review's F8): the failure walk asks VISIBILITY
+// before the kind, so one declaration answers one code however it is spelled.
+//
+// Review round r5's H-1 pinned the opposite order deliberately ("the category
+// is about what the name IS, not who declares it"), so this is the
+// "deliberate, test-breaking decision with an oracle behind it" that test
+// asked for. The oracle supersedes it: protoc's `FindSymbol` filters a symbol
+// whose file is not a dependency BEFORE its caller may look at the kind
+// (`descriptor.cc:5019-5043`), which is why an invisible service answers the
+// undeclared-dependency class in BOTH spellings (`"p.S" seems to be defined
+// in "dep.proto", which is not imported by "root.proto"`), and why the
+// absolute spelling of that declaration already answered INVISIBLE while the
+// relative one answered NOT_A_TYPE - ledger `D-06`'s class ("two codes
+// depending on how it is spelled") in the one branch that still had it.
+// Measured this round on both readers for an enum value and for a service,
+// relative and absolute: `code=6` everywhere (build/plan4/fix-r17/probe/).
+//
+// The visible controls below keep NOT_A_TYPE: the fix moved the order, not the
+// category. Note that the compatibility mode cannot witness the invisible
+// shape at all - its precondition links exactly one descriptor-origin file, so
+// a two-file set answers `DIAGNOSTIC_GENERIC` before any resolution
+// (`test_compat_preconditions_are_exact`) - which is why these rows assert
+// complete mode only.
+void test_invisible_non_type_answers_one_code_in_both_spellings()
 {
-    easypb_schema::SchemaSet set;
-    easypb_schema::SchemaFile& hidden =
-        make_simple_file(set, "hidden.proto", "app");
-    add_enum(hidden, "E", "VALUE");
+    const std::vector<std::int32_t> no_indexes;
+    // (a) The nearest candidate is an enum value in a file the requester does
+    // not import: both spellings answer INVISIBLE, and the sentence names the
+    // declaring file.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& hidden =
+            make_simple_file(set, "hidden.proto", "app");
+        add_enum(hidden, "E", "VALUE");
 
-    easypb_schema::SchemaFile& root =
-        make_simple_file(set, "root.proto", "app");
-    add_message(root, "M");
-    add_field(root, root.file.message_type[0], "f", 1,
-              FieldDescriptorProto::LABEL_OPTIONAL, "VALUE");
+        easypb_schema::SchemaFile& root =
+            make_simple_file(set, "root.proto", "app");
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "f", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "VALUE");
 
-    easypb_schema::Diagnostic error;
-    CHECK(!link_verdict(set, error));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
-    CHECK(error.message.find("an enum value") != std::string::npos);
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+        CHECK(error.message.find("hidden.proto") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& hidden =
+            make_simple_file(set, "hidden.proto", "app");
+        add_enum(hidden, "E", "VALUE");
+
+        easypb_schema::SchemaFile& root =
+            make_simple_file(set, "root.proto", "app");
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "f", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, ".app.VALUE");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+    }
+    // (b) A service: the same rule and the same code, for the kind protoc's
+    // own wording separates as an undeclared dependency.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& hidden =
+            make_simple_file(set, "hidden.proto", "app");
+        add_service(hidden, "S");
+
+        easypb_schema::SchemaFile& root =
+            make_simple_file(set, "root.proto", "app");
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "f", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "S");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& hidden =
+            make_simple_file(set, "hidden.proto", "app");
+        add_service(hidden, "S");
+
+        easypb_schema::SchemaFile& root =
+            make_simple_file(set, "root.proto", "app");
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "f", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, ".app.S");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+    }
+    // (c) The visible controls: with the import in place the same two
+    // declarations answer NOT_A_TYPE in both spellings, so the fix cannot have
+    // swallowed the category the walk exists for.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& hidden =
+            make_simple_file(set, "hidden.proto", "app");
+        add_enum(hidden, "E", "VALUE");
+
+        std::vector<std::string> deps(1, "hidden.proto");
+        easypb_schema::SchemaFile& root =
+            make_file(set, "root.proto", deps, no_indexes, no_indexes);
+        set_package(root, "app");
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "f", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "VALUE");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
+        CHECK(error.message.find("an enum value") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& hidden =
+            make_simple_file(set, "hidden.proto", "app");
+        add_service(hidden, "S");
+
+        std::vector<std::string> deps(1, "hidden.proto");
+        easypb_schema::SchemaFile& root =
+            make_file(set, "root.proto", deps, no_indexes, no_indexes);
+        set_package(root, "app");
+        add_message(root, "M");
+        add_field(root, root.file.message_type[0], "f", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, ".app.S");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
+        CHECK(error.message.find("a service") != std::string::npos);
+    }
 }
 
 // Fix round r5 (H-2), extended by fix round r10 (D-21): the kind domain every
@@ -5397,6 +5506,218 @@ void test_descriptor_origin_empty_enum_is_refused()
     }
 }
 
+// Contract clause 12 (fix round r17, the 0927-mimo review's F2): a
+// descriptor-origin file that declares `syntax = "proto3"` must obey the
+// proto3 FIELD rules. protoc asks both questions of every field of a proto3
+// message when it builds the file from the same bytes (`ValidateProto3Field`,
+// `descriptor.cc:7917/7922`), and the parser refuses both as source text, so
+// the two codes are the descriptor-origin half of the frontend parity rule.
+// Measured before this round on both readers: `proto3-required` and
+// `proto3-default` were ACCEPTED while protoc refused them
+// (`build/plan4/fix-r17/probe/results-before.tsv`); the review's own third row
+// - an open enum whose first value is not zero - stays out of scope on purpose
+// (`D-33`, the contract sweep's row B6).
+void test_descriptor_origin_proto3_field_rules_are_refused()
+{
+    // (a) `required` in a proto3 file: refused in both modes with the appended
+    // code, and the sentence names the field.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "required3.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a", 1,
+                  FieldDescriptorProto::LABEL_REQUIRED, 0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_PROTO3_REQUIRED_FIELD);
+        CHECK(error.message.find("field \"a\" is required") !=
+              std::string::npos);
+    }
+    // (b) The gate is the field's OWN file: the identical shape in a proto2 file
+    // is legal, so a rule that read the wrong syntax class would refuse it.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "required2.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto2");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a", 1,
+                  FieldDescriptorProto::LABEL_REQUIRED, 0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+    // (c) An explicit default in a proto3 file, refused in both modes.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "default3.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_field(file, message, "a", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        message.field[0].default_value = file.strings.save("5");
+        message.field[0].has_default_value = true;
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT);
+        CHECK(error.message.find("explicit default value") !=
+              std::string::npos);
+    }
+    // (d) ... and the proto2 control of that shape links, with the default
+    // validated as before.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "default2.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto2");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_field(file, message, "a", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        message.field[0].default_value = file.strings.save("5");
+        message.field[0].has_default_value = true;
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+    // (e) Accept controls in a proto3 file: an optional scalar, a repeated
+    // field and a field whose label is ABSENT (the decoder's zero is not
+    // LABEL_REQUIRED, and protoc's label defaulting reads it as optional), so
+    // the rule cannot pass by refusing proto3 fields in general.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "plain3.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_field(file, message, "a", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        add_field(file, message, "b", 2,
+                  FieldDescriptorProto::LABEL_REPEATED, 0);
+        add_field(file, message, "c", 3, 0, 0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+    // (f) Precedence: the clause-12 field-structure checks are asked first, so
+    // a required proto3 field that also carries a named kind with no type_name
+    // answers the structure code, exactly as it did before this round.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "both-bad.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        FieldDescriptorProto field;
+        field.name = file.strings.save("m");
+        field.has_name = true;
+        field.number = 1;
+        field.has_number = true;
+        field.label = FieldDescriptorProto::LABEL_REQUIRED;
+        field.has_label = true;
+        field.type = FieldDescriptorProto::TYPE_MESSAGE;
+        field.has_type = true;
+        message.field.push_back(field);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_TYPE_NAME);
+    }
+}
+
+// The 0927-mimo review's F7: a relative reference with a trailing dot.
+// `split_reference("N.")` returns an empty remainder, so the raw text used to
+// be classified as a WHOLE-name reference to `N` - and when a message `N`
+// existed, the field LINKED where protoc refuses it
+// (`"N." is resolved to "p.N.", which is not defined`, measured this round).
+// That is a false accept on crafted descriptor input, not merely a silent
+// classification. No symbol can be indexed under a trailing dot, so the shape
+// is MISSING by construction, and the absolute twin (`.p.N.`) already answered
+// that way.
+void test_trailing_dot_reference_is_unresolved_in_both_modes()
+{
+    // (a) The relative spelling. Both modes refuse it with the same code, and
+    // the compatibility mode adds its policy sentence because a RELATIVE name
+    // is not a classified external reference (D-25), so this row asks the two
+    // modes separately - `refused_in_both_modes` demands identical sentences
+    // and would fail on that documented difference rather than on a defect.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "dot.pbs", "p");
+        file.from_descriptor_set = true;
+        add_message(file, "N");
+        easypb_schema::SchemaFile& root = file;
+        add_message(root, "M");
+        add_field(root, root.file.message_type[1], "m", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "N.");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.message.find("N.") != std::string::npos);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic compat_error;
+        CHECK(!easypb_schema::link_schema(
+            set, easypb_schema::LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY, linked,
+            compat_error));
+        CHECK(compat_error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(compat_error.message.find("N.") != std::string::npos);
+    }
+    // (b) The absolute twin: the same refusal, and it was already the code
+    // this shape answered before the fix.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "dot-abs.pbs", "p");
+        file.from_descriptor_set = true;
+        add_message(file, "N");
+        add_message(file, "M");
+        add_field(file, file.file.message_type[1], "m", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, ".p.N.");
+
+        easypb_schema::Diagnostic error;
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    }
+    // (c) The accept control: the same reference without the trailing dot
+    // still resolves, so the guard cannot have disabled whole-name resolution.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "nodot.pbs", "p");
+        file.from_descriptor_set = true;
+        add_message(file, "N");
+        add_message(file, "M");
+        add_field(file, file.file.message_type[1], "m", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, "N");
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+    }
+}
+
 // The oneof half: every declaration needs a field. The index-RANGE check
 // refuses a field pointing outside the list, so a declaration nothing points at
 // used to be invisible while protoc refuses it ("Oneof must have at least one
@@ -5570,7 +5891,7 @@ int main(int argc, char** argv)
     test_seeded_prefix_warning_survives_the_link();
     test_relative_package_head_reference_resolves();
     test_relative_package_head_reference_rejections();
-    test_invisible_nearer_non_type_keeps_the_not_a_type_category();
+    test_invisible_non_type_answers_one_code_in_both_spellings();
     test_indexed_symbol_kinds_stay_in_the_documented_domain();
     test_package_prefix_needs_a_dot_boundary();
     test_proto3_field_may_not_use_a_proto2_enum();
@@ -5600,6 +5921,8 @@ int main(int argc, char** argv)
     test_descriptor_origin_field_without_a_declared_kind_links();
     test_descriptor_origin_duplicate_enum_number_is_refused();
     test_descriptor_origin_empty_enum_is_refused();
+    test_descriptor_origin_proto3_field_rules_are_refused();
+    test_trailing_dot_reference_is_unresolved_in_both_modes();
     test_descriptor_origin_empty_oneof_is_rejected();
 
     if (failures != 0) {

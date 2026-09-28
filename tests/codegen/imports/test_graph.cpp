@@ -255,7 +255,9 @@ void test_diagnostic_codes_stay_distinct()
         easypb_schema::DIAGNOSTIC_MISSING_TYPE_NAME,
         easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER,
         easypb_schema::DIAGNOSTIC_EMPTY_ONEOF,
-        easypb_schema::DIAGNOSTIC_EMPTY_ENUM
+        easypb_schema::DIAGNOSTIC_EMPTY_ENUM,
+        easypb_schema::DIAGNOSTIC_PROTO3_REQUIRED_FIELD,
+        easypb_schema::DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT
     };
     const easypb_schema::DiagnosticCode earlier[] = {
         easypb_schema::DIAGNOSTIC_GENERIC,

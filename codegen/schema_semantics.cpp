@@ -749,12 +749,25 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
 // and `Holder.V`, "resolved to ... which is not defined" for `Holder.E.V`,
 // whose value is indexed in the containing scope rather than under the enum.
 //
-// When nothing wins, a second walk over the same candidates without the
-// visibility filter decides why: a declaration that is not a type is
-// RESOLVE_NOT_A_TYPE (B9/B15), any other found candidate is RESOLVE_INVISIBLE
-// (B3), and a reference the index does not know at all is RESOLVE_MISSING
-// (B5). Every outcome except RESOLVE_OK is named, never guessed from a
-// message text, and the reason is recorded in *outcome.
+// When nothing wins, a second walk over the same candidates decides why, and
+// it asks VISIBILITY first: a candidate the requesting file cannot see is
+// RESOLVE_INVISIBLE whatever its kind (R4; protoc's own order, because
+// FindSymbol filters by dependency before the caller may look at the symbol's
+// kind), and a candidate it CAN see which is not a type is RESOLVE_NOT_A_TYPE
+// (B9/B15 - pass 1 would have returned any visible candidate that can take the
+// reference, so a visible candidate here is always a non-type, exactly as in
+// the absolute branch). A reference the index does not know at all is
+// RESOLVE_MISSING (B5). Every outcome except RESOLVE_OK is named, never
+// guessed from a message text, and the reason is recorded in *outcome.
+//
+// Fix round r17 (the 0927-mimo review's F8) moved the failure walk's order: it
+// used to answer NOT_A_TYPE for a nearer non-type that was not a package even
+// when its file was invisible, so ONE declaration got two codes depending on
+// the spelling (the relative `VALUE` answered NOT_A_TYPE, the absolute
+// `.p.VALUE` answered INVISIBLE) - ledger `D-06`'s class, whose own rule is
+// "visibility is asked before the kind is classified". Review round r5's H-1
+// had pinned the old order deliberately; the oracle measurement supersedes it
+// in the direction of the absolute branch and of protoc's filter.
 //
 // *matched_name carries the fully qualified name the diagnostic must name:
 // the resolved symbol on success, the resolved compound path when its member
@@ -796,6 +809,19 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
         *outcome = RESOLVE_OK;
         return &found->second;
     }
+
+    // A relative reference whose last component is empty (a trailing dot) can
+    // never name a symbol: every spelling in the index is built from real
+    // names. protoc walks it as a compound name and refuses it - `"N." is
+    // resolved to "p.N.", which is not defined` (measured, fix round r17) -
+    // while `split_reference("N.")` returns an empty remainder, which used to
+    // classify the raw text as a WHOLE-name reference to `N`, so a message of
+    // that name LINKED where protoc refuses (the 0927-mimo review's F7: a false
+    // accept on crafted descriptor input, not merely a silent classification).
+    // The absolute spelling already lands here as RESOLVE_MISSING (`".p.N."`
+    // is not indexed), so both spellings answer one code; *matched_name stays
+    // empty so the refusal names the raw text.
+    if (!raw.empty() && raw[raw.size() - 1] == '.') return 0;
 
     std::string first;
     std::string rest;
@@ -892,19 +918,23 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
         const std::map<std::string, SymbolEntry>::const_iterator found =
             symbols.symbols.find(head);
         if (found != symbols.symbols.end()) {
-            // A declaration that is not a type - a field, an enum value, a
-            // oneof, a service, or a package scope - is the NOT_A_TYPE
-            // category the `kind == 0` reading gave it before fix round r10;
-            // the r10 walk now also reaches a VISIBLE package here (the
-            // whole-name filter skips it, D-21's mirror half), and a
-            // non-type the index knows answers the same. Only a type the
-            // requesting file cannot see is "not visible".
+            // Visibility first, then the kind (fix round r17, the review's
+            // F8): this is the order the absolute branch asks, the order the
+            // compound-member branch asks, and protoc's own order - FindSymbol
+            // filters a symbol whose file is not a dependency BEFORE its
+            // caller may look at the kind (descriptor.cc:5019-5043), which is
+            // why a service in an unimported file answers its
+            // undeclared-dependency class in both spellings (measured this
+            // round: `"p.S" seems to be defined in "dep.proto", which is not
+            // imported by "root.proto"`). A VISIBLE candidate reached here is
+            // always a non-type - pass 1 would have returned any visible
+            // candidate that can take this reference - so it keeps
+            // NOT_A_TYPE, which is what lets the whole-name filter skip a
+            // visible package (D-21's mirror half) and still name it a
+            // non-type.
             const bool visible = candidate_is_visible(found->second,
                                                       visible_files, head);
-            const bool not_a_type =
-                !is_type_kind(found->second.kind) &&
-                (visible || found->second.kind != SYMBOL_PACKAGE);
-            *outcome = not_a_type ? RESOLVE_NOT_A_TYPE : RESOLVE_INVISIBLE;
+            *outcome = visible ? RESOLVE_NOT_A_TYPE : RESOLVE_INVISIBLE;
             *matched_name = head;
             return 0;
         }
@@ -1500,6 +1530,14 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
         // A26's entry-shape precedent. The number rule mirrors the parser's
         // source-path refusals; the named-kind rule has no source twin, since
         // a source field always carries the type its declaration gave it.
+        // Both are asked in EVERY mode, which is what the compatibility mode
+        // needs - and it is why fix round r12's compatibility-only block for
+        // the named-kind shape was provably DEAD (fix round r17, the 0927-mimo
+        // review's F1): a field whose declared kind is named and which carries
+        // no type_name can never be classified as an external reference,
+        // because the mode's single "maybe external" door is an ABSOLUTE type
+        // name and this shape has no name at all. The rationale r12 recorded
+        // lives here now, beside the check that actually answers it.
         if (field.number <= 0 || field.number > kMaxFieldNumber) {
             return fail_at_code(
                 file,
@@ -1529,6 +1567,46 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                 declaration_location(file, field_path), field_path,
                 DIAGNOSTIC_MISSING_TYPE_NAME, error);
         }
+        // Clause 12 (fix round r17, the 0927-mimo review's F2): a
+        // descriptor-origin file that declares `syntax = "proto3"` must obey
+        // the proto3 FIELD rules, asked at the same site and for the same
+        // reason as the checks above - the shape is provable from the
+        // descriptor alone, so both modes and every available field, before
+        // anything is resolved. protoc asks both questions of every field of a
+        // proto3 message when it builds the file from the same bytes
+        // (`ValidateProto3Field`, descriptor.cc:7912-7930, reached from
+        // `ValidateProto3Message`), and our parser refuses both as source text
+        // ("required fields are not allowed in proto3",
+        // codegen/parser/proto_parser.cpp:1233, and "explicit default values
+        // are not allowed in proto3", :1124), so this is the descriptor-origin
+        // half of that frontend parity rule. The gate is the field's OWN file:
+        // proto2 gives both shapes a meaning, so reading the wrong file here
+        // would refuse legal input (the proto2 controls in
+        // test_descriptor_origin_proto3_field_rules_are_refused).
+        //
+        // The open-enum first-value rule is the same family and NOT here: the
+        // contract sweep's row B6 assigns open-enum semantics to plan 2/5, and
+        // ledger `D-33` records that scope decision (rejected), re-raised by
+        // the same review rather than reversed by this round.
+        if (classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3) {
+            if (field.label == FieldDescriptorProto::LABEL_REQUIRED) {
+                return fail_at_code(
+                    file,
+                    "field \"" + view_text(field.name) +
+                        "\" is required, and a proto3 field may not be",
+                    declaration_location(file, field_path), field_path,
+                    DIAGNOSTIC_PROTO3_REQUIRED_FIELD, error);
+            }
+            if (field.has_default_value) {
+                return fail_at_code(
+                    file,
+                    "field \"" + view_text(field.name) +
+                        "\" carries an explicit default value, which proto3 "
+                        "does not allow",
+                    field_default_location(file, field_path), field_path,
+                    DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT, error);
+            }
+        }
 
         bool unknown = false;
         // Set when the compatibility policy permitted an external reference:
@@ -1536,26 +1614,6 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
         // not validated, because the external definition cannot answer and the
         // A5 warning already states that defaults were not validated.
         bool external_reference = false;
-        if (!field.has_type_name &&
-            unresolved_policy.external_warned_types != 0 &&
-            field.has_type && is_named_kind(field.type)) {
-            // fix round r12 (ledger D-25): the compatibility mode's
-            // single "maybe external" door is an ABSOLUTE type name,
-            // so a named-kind field with no type_name at all cannot be
-            // classified by the descriptor and is refused here instead
-            // of tolerated - the same shape clause 12 refuses in
-            // resolve mode, at the same site. Source origin cannot
-            // produce it (every field carries its declared type), and
-            // a source field naming a type outside the visible set
-            // stays the plain invisible/missing refusal below.
-            return fail_at_code(
-                file,
-                "field \"" + view_text(field.name) + "\" declares " +
-                    descriptor_kind_name(field.type) +
-                    " type but carries no type_name",
-                declaration_location(file, field_path), field_path,
-                DIAGNOSTIC_MISSING_TYPE_NAME, error);
-        }
         if (field.has_type_name) {
             if (!link_types) {
                 // Deferred: never resolve locally. The resolved kind is
