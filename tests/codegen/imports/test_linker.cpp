@@ -5645,6 +5645,193 @@ void test_descriptor_origin_proto3_field_rules_are_refused()
     }
 }
 
+// Contract clause 13 (fix round r18, the 0927-mimo review's F9 / ledger
+// D-39): a descriptor-origin declaration name must be a legal protobuf symbol
+// name - non-empty and made only of `[A-Za-z0-9_]` - which is protoc's own
+// `ValidateSymbolName` rule (`descriptor.cc:5419-5438`, measured this round:
+// every name shape protoc refuses, and only those). The source path cannot
+// produce either shape (its tokenizer only yields identifier tokens), so what
+// lands here is crafted `.pbs` input. protoc imposes NO first-character rule,
+// so a digit-leading name stays ACCEPTED even though no C++ generator could
+// emit it: that is the generator's question, not the linker's (clause 11).
+void test_descriptor_origin_symbol_names_are_validated()
+{
+    // (a) An empty name and an illegal character are one category with one code
+    // (E1/A3), and the sentence says which of the two it is.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "empty-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "");
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+        CHECK(error.message.find("has no name") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "bad-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "foo-bar");
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+        CHECK(error.message.find("is not a valid identifier") !=
+              std::string::npos);
+    }
+    // (b) No first-character rule: protoc ACCEPTS a name that starts with a
+    // digit, so the linker must too - the over-refusal P-19/F3 warned about.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "digit-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "1abc");
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (c) Every modeled declaration kind is covered: enum, enum value, field,
+    // oneof, service, nested message and a package component. Each row is a
+    // single defect so the reported code is unambiguous.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "enum-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_enum(file, "", "A");
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "enum-value-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_enum(file, "E", "a b");
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "field-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a.b", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "oneof-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_field(file, message, "a", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        add_oneof_decl(file, message, "o-1");
+        claim_oneof(message, 0, 0);
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "service-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_service(file, "");
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "nested-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_nested(file, file.file.message_type[0], "n-1");
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "package-name.pbs", "p-x");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+        CHECK(error.message.find("package component") != std::string::npos);
+    }
+    // (d) The rule is reference-free and runs before the neighbouring sweeps: a
+    // file carrying BOTH a malformed message name and an empty enum reports the
+    // NAME, because a name that is not a symbol name must not be indexed.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "both-defects.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "foo-bar");
+        add_enum(file, "E", 0);
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+    }
+    // (e) Accept control: a fully valid descriptor with every kind present and
+    // a dotted package links in both modes, so the rule cannot pass by refusing
+    // the file shape in general.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "valid.pbs", "p.q");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_field(file, message, "a", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  0);
+        add_oneof_decl(file, message, "o");
+        claim_oneof(message, 0, 0);
+        add_nested(file, message, "N");
+        add_enum(file, "E", "ZERO");
+        add_service(file, "S");
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (f) The file's OWN name is a logical path, not a symbol: one no identifier
+    // rule would accept is still legal, because protoc validates paths
+    // separately and the linker must not invent a rule the reference lacks.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "not--an-identifier.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // NOTE: the "name field entirely absent" variant of a message, field or
+    // service cannot be reached through `link_schema` on the `.pbs` path -
+    // `codegen/descriptor.pb.hpp` throws `missing_required_field` while it
+    // DECODES those three structs, before the linker sees them (the round's
+    // instrument records it as DECODE_THROW). That guard is a pre-existing
+    // layer boundary outside plan 4's scope; the lexical rule owns the name
+    // VALUE for every kind, and protoc refuses the absent variant too, so
+    // verdict parity holds either way.
+}
+
 // The 0927-mimo review's F7: a relative reference with a trailing dot.
 // `split_reference("N.")` returns an empty remainder, so the raw text used to
 // be classified as a WHOLE-name reference to `N` - and when a message `N`
@@ -5922,6 +6109,7 @@ int main(int argc, char** argv)
     test_descriptor_origin_duplicate_enum_number_is_refused();
     test_descriptor_origin_empty_enum_is_refused();
     test_descriptor_origin_proto3_field_rules_are_refused();
+    test_descriptor_origin_symbol_names_are_validated();
     test_trailing_dot_reference_is_unresolved_in_both_modes();
     test_descriptor_origin_empty_oneof_is_rejected();
 

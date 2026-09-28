@@ -145,6 +145,24 @@ bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
 // enum or the first repeated number, in declaration order.
 bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error);
 
+// Validates every declaration name in the file lexically, over the available
+// descriptor alone (contract clause 13; fix round r18, ledger D-39): a name must
+// be non-empty and carry only `[A-Za-z0-9_]`, which is protoc's own
+// `ValidateSymbolName` rule (`descriptor.cc:5419-5438`). It applies to every
+// modeled declaration - message (top-level and nested), field, enum, enum value,
+// oneof and service - and to every package component; the file's own `name` is a
+// logical path and is NOT a symbol, so it is not checked. Both shapes carry
+// DIAGNOSTIC_INVALID_SYMBOL_NAME, because they are one category. The check is
+// reference-free and runs before any resolution, in both linking modes, beside
+// the entry-shape and enum-number sweeps (A26's precedent): a malformed name is
+// provable from the descriptor alone and an unreferenced declaration still
+// reaches the generator. The source path cannot produce either shape (its
+// tokenizer only yields identifier tokens), so this is the descriptor-origin
+// half of the same frontend parity D-23/D-28/D-32/D-36 carry. protoc imposes no
+// first-character rule, so neither does this. Returns false and fills error at
+// the first malformed name, in declaration order.
+bool validate_symbol_names(SchemaFile& file, Diagnostic& error);
+
 // True for the paired companion of an unresolved-type warning: the generic
 // warning the standalone pass records when it cannot validate the default of a
 // type it has not resolved. Complete linking resolves the type and validates the

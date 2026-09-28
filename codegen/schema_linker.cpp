@@ -221,7 +221,9 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
     // available descriptor, not a by-product of a reference, and
     // `maps/data/malformed_map.pbs` is the fixture consumed here. D-28's
     // enum-number rule rides the same reference-free stage for the same reason,
-    // and so does D-32's empty-enum rule (Step 7.2 repeats all three).
+    // D-32's empty-enum rule rides it too, and so does D-39's lexical name rule
+    // (Step 7.2 repeats all four).
+    if (!validate_symbol_names(file, error)) return false;
     if (!validate_map_entry_shapes(file, error)) return false;
     if (!validate_enum_value_numbers(file, error)) return false;
 
@@ -317,7 +319,14 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // refuses. D-32 (fix round r16) rides it too - the same enum, asked whether
     // it declares any value at all. Every check here is provable from the
     // descriptor alone.
+    // D-39 (fix round r18) rides the same stage: every declaration name is
+    // checked lexically, because a malformed name is a fact about the
+    // descriptor and an unreferenced declaration still reaches the generator
+    // (contract clause 13). It is asked FIRST so the reported failure is the
+    // most fundamental one, and because a name that is not a symbol name should
+    // not be indexed, compared for collisions or walked as an entry.
     for (std::size_t i = 0; i < ordered.size(); ++i) {
+        if (!validate_symbol_names(*ordered[i], error)) return false;
         if (!validate_map_entry_shapes(*ordered[i], error)) return false;
         if (!validate_enum_value_numbers(*ordered[i], error)) return false;
     }

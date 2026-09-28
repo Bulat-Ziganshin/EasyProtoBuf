@@ -51,3 +51,7 @@ d-proto3-explicit-default-accept	descriptor	accept	accept	pair
 d-proto3-explicit-default-reject	descriptor	reject	DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT	pair	
 d-unresolved-type-trailing-dot-reject	descriptor	reject	DIAGNOSTIC_UNRESOLVED_TYPE	pair	
 d-invisible-type-nearer-non-type-reject	descriptor	reject	DIAGNOSTIC_INVISIBLE_TYPE	pair	
+d-invalid-symbol-name-accept	descriptor	accept	accept	pair	
+d-invalid-symbol-name-reject	descriptor	reject	DIAGNOSTIC_INVALID_SYMBOL_NAME	pair	
+d-empty-symbol-name-accept	descriptor	accept	accept	pair	
+d-empty-symbol-name-reject	descriptor	reject	DIAGNOSTIC_INVALID_SYMBOL_NAME	pair	

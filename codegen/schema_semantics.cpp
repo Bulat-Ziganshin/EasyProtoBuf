@@ -1035,6 +1035,106 @@ bool fail_at(const SchemaFile& file, const std::string& message,
     return fail_at_code(file, message, location, path, DIAGNOSTIC_GENERIC, error);
 }
 
+// True when `name` is a legal protobuf symbol name in protoc's own sense
+// (`ValidateSymbolName`, descriptor.cc:5419-5438): non-empty and every character
+// in `[A-Za-z0-9_]`. The reference imposes NO first-character rule - it accepts a
+// name starting with a digit - so neither does this: whether a name is usable as
+// a C++ name is the generator's question, not the linker's (contract clause 11,
+// and the same lesson `P-19`/F3 recorded for the field-kind rule).
+bool is_valid_symbol_name(const std::string& name)
+{
+    if (name.empty()) return false;
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        const char character = name[i];
+        const bool letter = (character >= 'a' && character <= 'z') ||
+                            (character >= 'A' && character <= 'Z');
+        const bool digit = character >= '0' && character <= '9';
+        if (!letter && !digit && character != '_') return false;
+    }
+    return true;
+}
+
+// The one site that turns a malformed declaration name into a diagnostic, so
+// every kind reports the same category with the same code (E1/A3). The message
+// mirrors protoc's two wordings - an empty name is "missing", an illegal
+// character is "not a valid identifier" - while the code stays DIAGNOSTIC_
+// INVALID_SYMBOL_NAME for both, because they are one category: the name is not a
+// symbol name. `scope` names the containing scope in the message; the location
+// and descriptor path are the declaration's own.
+bool check_symbol_name(const SchemaFile& file, const std::string& name,
+                       const std::string& kind, const std::string& scope,
+                       const DescriptorPath& path, Diagnostic& error)
+{
+    if (is_valid_symbol_name(name)) return true;
+    const std::string where =
+        scope.empty() ? std::string("the global scope") : scope;
+    std::string message;
+    if (name.empty()) {
+        message = kind + " in " + where + " has no name";
+    } else {
+        message = kind + " name \"" + name +
+                  "\" in " + where + " is not a valid identifier";
+    }
+    return fail_at_code(file, message, declaration_location(file, path), path,
+                        DIAGNOSTIC_INVALID_SYMBOL_NAME, error);
+}
+
+// The recursive half of validate_symbol_names: the message's own name, then its
+// fields, nested messages, nested enums (with their values) and oneofs, in the
+// order validate_message_scope_names uses, so a file with several malformed
+// names reports the first one in declaration order.
+bool validate_message_symbol_names(const SchemaFile& file,
+                                   const DescriptorProto& message,
+                                   const DescriptorPath& message_path,
+                                   const std::string& parent,
+                                   Diagnostic& error)
+{
+    const std::string scope = parent + "." + view_text(message.name);
+    if (!check_symbol_name(file, view_text(message.name), "message", parent,
+                           message_path, error)) {
+        return false;
+    }
+    for (std::size_t i = 0; i < message.field.size(); ++i) {
+        if (!check_symbol_name(
+                file, view_text(message.field[i].name), "field", scope,
+                message_field_path(message_path, static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_symbol_names(
+                file, message.nested_type[i],
+                message_nested_path(message_path, static_cast<int>(i)), scope,
+                error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
+        const DescriptorPath enum_path =
+            message_enum_path(message_path, static_cast<int>(i));
+        if (!check_symbol_name(file, view_text(message.enum_type[i].name),
+                               "nested enum type", scope, enum_path, error)) {
+            return false;
+        }
+        for (std::size_t j = 0; j < message.enum_type[i].value.size(); ++j) {
+            if (!check_symbol_name(
+                    file, view_text(message.enum_type[i].value[j].name),
+                    "enum value", scope,
+                    enum_value_path(enum_path, static_cast<int>(j)), error)) {
+                return false;
+            }
+        }
+    }
+    for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
+        if (!check_symbol_name(
+                file, view_text(message.oneof_decl[i].name), "oneof", scope,
+                message_oneof_path(message_path, static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The diagnostic code one lookup outcome maps to (Step 4.1's table). Every
 // enumerator is listed explicitly and there is no `default:` label on purpose:
 // a new outcome added to ResolveOutcome then has to be given a code here
@@ -1961,6 +2061,71 @@ bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error)
                 file, file.file.message_type[i],
                 prefix + "." + view_text(file.file.message_type[i].name),
                 file_message_path(static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
+{
+    // protoc validates every declaration name lexically while it builds the
+    // file (`ValidateSymbolName`, descriptor.cc:5419-5438): an empty name is
+    // "Missing name." and any character outside `[A-Za-z0-9_]` is `"<name>" is
+    // not a valid identifier.`. The reference calls it at every build site -
+    // package components (`:5400`/`:5404`), messages (`:6325`), fields
+    // (`:6604`), oneofs (`:6942`), enums (`:7032`), enum values (`:7147`),
+    // services (`:7208`) - and imposes no first-character rule, so neither does
+    // this. The check rides the same reference-free stage as A26's entry shape
+    // and D-28's enum numbers: a malformed name is provable from the available
+    // descriptor alone and an unreferenced declaration still reaches the
+    // generator, so it runs before any resolution in BOTH modes (fix round r18,
+    // ledger `D-39`, contract clause 13). The file's own `name` is a logical
+    // path, not a symbol, and is NOT checked here.
+    const std::string prefix = package_prefix(file);
+    const std::string package = view_text(file.file.package);
+    if (file.file.has_package && !package.empty()) {
+        std::size_t start = 0;
+        for (;;) {
+            const std::size_t dot = package.find('.', start);
+            const std::string component =
+                package.substr(start, (dot == std::string::npos
+                                           ? package.size()
+                                           : dot) - start);
+            if (!check_symbol_name(file, component, "package component",
+                                   std::string(), DescriptorPath(), error)) {
+                return false;
+            }
+            if (dot == std::string::npos) break;
+            start = dot + 1;
+        }
+    }
+    for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
+        const DescriptorPath enum_path = file_enum_path(static_cast<int>(i));
+        if (!check_symbol_name(file, view_text(file.file.enum_type[i].name),
+                               "enum type", prefix, enum_path, error)) {
+            return false;
+        }
+        for (std::size_t j = 0; j < file.file.enum_type[i].value.size(); ++j) {
+            if (!check_symbol_name(
+                    file, view_text(file.file.enum_type[i].value[j].name),
+                    "enum value", prefix,
+                    enum_value_path(enum_path, static_cast<int>(j)), error)) {
+                return false;
+            }
+        }
+    }
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!validate_message_symbol_names(
+                file, file.file.message_type[i],
+                file_message_path(static_cast<int>(i)), prefix, error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < file.file.service.size(); ++i) {
+        if (!check_symbol_name(file, view_text(file.file.service[i].name),
+                               "service", prefix,
+                               file_service_path(static_cast<int>(i)), error)) {
             return false;
         }
     }

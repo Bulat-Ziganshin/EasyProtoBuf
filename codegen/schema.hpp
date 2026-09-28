@@ -122,7 +122,22 @@ enum DiagnosticCode
     // (codegen/parser/proto_parser.cpp:1124), so the two codes are one rule
     // asked of two shapes: the shape, not the file class, is what the message
     // names. Descriptor-origin only.
-    DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT
+    DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT,
+    // Plan 4 clause 13 (ledger `D-39`, the 0927-mimo review's F9): a declaration
+    // name the descriptor carries is not a legal protobuf symbol name - empty,
+    // or carrying a character outside `[A-Za-z0-9_]`. protoc refuses both while
+    // it builds the file (`ValidateSymbolName`, descriptor.cc:5419-5438:
+    // "Missing name." for the empty one, `"<name>" is not a valid identifier.`
+    // otherwise) and applies the rule to every declaration and to every package
+    // component; the SOURCE path cannot produce either shape (the tokenizer
+    // only yields identifier tokens), so this is the descriptor-origin half of
+    // the same frontend parity `D-23`/`D-28`/`D-32`/`D-36` carry. protoc imposes
+    // NO first-character rule (a name starting with a digit is accepted there),
+    // so this code must not add one: whether a name is usable as a C++ name is
+    // the generator's question, not the linker's (contract clause 11). The two
+    // messages share one code because they are one category - the name is not a
+    // symbol name - and one rule asked of two values (E1/A3).
+    DIAGNOSTIC_INVALID_SYMBOL_NAME
 };
 
 struct Diagnostic
