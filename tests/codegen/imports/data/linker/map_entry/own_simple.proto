@@ -1,0 +1,9 @@
+// map_entry - Appendix C A2: the owning message names its OWN synthetic entry
+// by simple name. protoc: `map_entry should not be set explicitly. Use
+// map<KeyType, ValueType> instead.`
+syntax = "proto3";
+package pkg;
+message M {
+  map<string, int32> foo = 1;
+  FooEntry e = 2;
+}

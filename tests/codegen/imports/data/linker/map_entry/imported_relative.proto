@@ -1,0 +1,6 @@
+// map_entry - Appendix C A6: the same imported entry, named relatively, so the
+// guard cannot be keyed on the spelling of the name.
+syntax = "proto3";
+package pkg;
+import "dep.proto";
+message User { pkg.Other.BarEntry e = 1; }

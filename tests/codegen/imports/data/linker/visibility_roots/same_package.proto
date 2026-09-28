@@ -1,0 +1,7 @@
+// visibility_roots - case 1: the requester shares `pkg` with the declarer and
+// never imports it. The name IS indexed (other.proto is a second root), so the
+// refusal must be the invisibility outcome, not "unresolved": absent and
+// "could not verify" are different outcomes with different diagnostics (E1-E3).
+syntax = "proto2";
+package pkg;
+message Uses { optional Hidden h = 1; }

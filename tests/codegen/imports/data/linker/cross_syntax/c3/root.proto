@@ -1,0 +1,6 @@
+// cross_syntax/c3 - the accepting half of the same rule: protoc accepts and
+// the linker must link `msg2.Holder` for a proto3 field.
+syntax = "proto3";
+package app;
+import "msg2.proto";
+message U { msg2.Holder h = 1; }

@@ -1,0 +1,9 @@
+// map_entry - Appendix C A11: an absolute, repeated reference to a DIFFERENT
+// entry than the field's own (`foo_bar` owns `FooBarEntry`), which is the
+// shape that separates ownership from the reference's shape.
+syntax = "proto3";
+package pkg;
+message M {
+  map<string, int32> foo_bar = 1;
+  repeated .pkg.M.FooBarEntry e = 2;
+}

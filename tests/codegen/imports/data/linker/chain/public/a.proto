@@ -1,0 +1,7 @@
+// chain/public - the root of the public variant: the same reference links
+// because the middle edge is public. The pair is the visibility closure's
+// accepting and rejecting halves, kept as directories rather than an option.
+syntax = "proto2";
+package a;
+import "b.proto";
+message Root { optional c.Leaf leaf = 1; }

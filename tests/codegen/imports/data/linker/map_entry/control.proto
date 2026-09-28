@@ -1,0 +1,6 @@
+// map_entry - the control: the owning map field itself links, so the family
+// has an accepting half and the differential compares the synthetic entry the
+// field's own type resolves to.
+syntax = "proto3";
+package pkg;
+message M { map<string, int32> foo = 1; }

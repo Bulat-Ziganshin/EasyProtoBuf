@@ -1,0 +1,8 @@
+// service_as_type - a field whose type name is a retained `service` name must
+// fail with the not-a-type code (R6). Services participate in package-scope
+// collision validation and in a compound head's aggregate test (D-21), but
+// they are never a resolved TYPE.
+syntax = "proto2";
+package svc;
+service Delivery { }
+message M { optional Delivery d = 1; }

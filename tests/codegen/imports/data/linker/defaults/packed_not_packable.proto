@@ -1,0 +1,6 @@
+// defaults - R13a's rejecting side: `packed = true` on a field whose type is
+// not packable. A string is not a packable element type, so protoc refuses:
+// `[packed = true] can only be specified for repeated primitive fields.`
+syntax = "proto2";
+package defaults;
+message M { repeated string s = 1 [packed = true]; }

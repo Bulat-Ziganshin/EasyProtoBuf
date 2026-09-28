@@ -1,0 +1,8 @@
+// map_entry - Appendix C A10: the descriptor-level twin of A2 with a REPEATED
+// user field, so `repeated` cannot be read as "this is the map field".
+syntax = "proto3";
+package pkg;
+message M {
+  map<string, int32> foo = 1;
+  repeated FooEntry e = 2;
+}

@@ -1,0 +1,7 @@
+// shadowing - the outer declarer every counter-fixture aims at: a nearer head
+// must not commit the name when the walk would otherwise reach `pkg.Choice.Item`.
+syntax = "proto2";
+package pkg;
+message Choice {
+  message Item { optional int32 v = 1; }
+}

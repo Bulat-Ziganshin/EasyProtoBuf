@@ -1,0 +1,12 @@
+// shadowing - Appendix C B13: an enum VALUE named `Choice` injected into the
+// enclosing scope is a non-type too (protobuf puts enum values beside their
+// enum), so it must not commit the head either. protoc accepts and resolves
+// the outer `pkg.Choice.Item`.
+syntax = "proto2";
+package pkg;
+import "dep.proto";
+message Encloser {
+  enum E { Choice = 0; }
+
+  message Req { optional Choice.Item item = 1; }
+}

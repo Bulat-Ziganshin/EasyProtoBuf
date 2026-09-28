@@ -1,0 +1,7 @@
+// cross_syntax/c2 - protoc: `Enum type "base2.State" is not an open enum, but
+// is used in "app.U" which is a proto3 message type.` The linker refuses with
+// its own sentence naming the enum, both files and the rule (Step 6).
+syntax = "proto3";
+package app;
+import "base2.proto";
+message U { base2.State s = 1; }

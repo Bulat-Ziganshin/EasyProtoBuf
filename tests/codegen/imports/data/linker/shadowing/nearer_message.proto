@@ -1,0 +1,11 @@
+// shadowing - the fixture itself. A nearer, empty `Choice` inside the
+// requester's enclosing scope commits the head of the compound reference and
+// then fails the member lookup, so `Choice.Item` is refused with the resolved
+// compound path - exactly protoc's verdict (Appendix C B1/B2, contract Task 2).
+syntax = "proto2";
+package pkg;
+import "dep.proto";
+message Encloser {
+  message Choice {}
+  optional Choice.Item item = 1;
+}

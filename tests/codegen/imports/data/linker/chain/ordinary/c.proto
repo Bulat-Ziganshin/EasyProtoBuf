@@ -1,0 +1,6 @@
+// chain/ordinary - the a -> b -> c edge variant with an ORDINARY import.
+// `a` reaches `c.Leaf` only through `b`'s private import, so protoc refuses it
+// (visibility R3): the chain is the fixture, the refusal is the verdict.
+syntax = "proto2";
+package c;
+message Leaf { optional int32 x = 1; }

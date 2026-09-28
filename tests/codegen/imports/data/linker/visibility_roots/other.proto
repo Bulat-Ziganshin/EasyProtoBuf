@@ -1,0 +1,9 @@
+// visibility_roots - sweep row R3's two cases, which the tracked `.pbs` corpus
+// cannot express at all (descriptor-set input is self-contained): a
+// same-package definition that is never imported, and a definition reachable
+// only from a second root, which grants nothing. This file is the definition;
+// it is loaded as a SECOND root beside each fixture below and is never
+// imported by them.
+syntax = "proto2";
+package pkg;
+message Hidden { optional int32 v = 1; }

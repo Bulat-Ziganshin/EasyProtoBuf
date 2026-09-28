@@ -1,0 +1,11 @@
+// cross_syntax/c4 - Appendix C C4's map case, with the enum the sweep note
+// requires (Step 6 decision table row 6.2): a proto2 enum whose FIRST value is
+// 0. The step's own oracle case used 7/9 and therefore proved two rules at
+// once (`Enum value in map must define 0 as the first value.`); this fixture
+// isolates the cross-syntax rule so a refusal here can only be that one.
+syntax = "proto2";
+package base2;
+enum State {
+  READY = 0;
+  STOPPED = 1;
+}

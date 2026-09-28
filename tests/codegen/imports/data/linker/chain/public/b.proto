@@ -1,0 +1,6 @@
+// chain/public - the middle edge re-exports `c`, which is what makes `a`'s
+// transitive reference visible.
+syntax = "proto2";
+package b;
+import public "c.proto";
+message Node { optional c.Leaf leaf = 1; }

@@ -1,0 +1,5 @@
+// map_entry - Appendix C A5: an imported entry, named absolutely.
+syntax = "proto3";
+package pkg;
+import "dep.proto";
+message User { .pkg.Other.BarEntry e = 1; }

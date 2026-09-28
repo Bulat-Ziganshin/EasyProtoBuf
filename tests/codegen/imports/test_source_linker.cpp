@@ -196,26 +196,78 @@ void test_source_locations_point_at_the_type_token(
 // (`tests/codegen/imports/data/linker/README.md`): the fixture is compiled with
 // the directory that OWNS it as `--proto_path`, one invocation, never
 // `--include_imports`, and the artifact's existence is that verdict re-derived
-// at run time.
+// at run time. `extra_root` is a second file loaded WITH the fixture - a
+// fixture named on the command line but never imported, which is the only way
+// Step 8.2's "a second root grants nothing" shapes (and Appendix C B6/B10's
+// nearer invisible head) can exist in a compilation at all.
 struct DifferentialCase {
     const char* fixture;
     bool accepts;
+    const char* extra_root;
 };
 
 const DifferentialCase kDifferentialCases[] = {
-    {"dep_outer_q.proto", true},
-    {"h01_service_head_compound.proto", false},
-    {"h02_service_head_whole_name.proto", true},
-    {"report.proto", true},
-    {"state.proto", true},
-    {"relative/dep_ab.proto", true},
-    {"relative/dep_pub.proto", true},
-    {"relative/dep_shared.proto", true},
-    {"relative/r01_nopkg_to_subpkg.proto", true},
-    {"relative/r03_same_pkg.proto", true},
-    {"relative/r05_partial_visible.proto", false},
-    {"relative/r06_pub_import.proto", true},
-    {"relative/r08_no_import.proto", false},
+    // The corpus root: the plan-4 regression pair and the head-filter pair.
+    {"dep_outer_q.proto", true, 0},
+    {"h01_service_head_compound.proto", false, 0},
+    {"h02_service_head_whole_name.proto", true, 0},
+    {"report.proto", true, 0},
+    {"state.proto", true, 0},
+    // chain/ - the ordinary edge hides the leaf, the public edge re-exports it.
+    {"chain/ordinary/a.proto", false, 0},
+    {"chain/ordinary/b.proto", true, 0},
+    {"chain/ordinary/c.proto", true, 0},
+    {"chain/public/a.proto", true, 0},
+    {"chain/public/b.proto", true, 0},
+    {"chain/public/c.proto", true, 0},
+    // shadowing/ - the Choice.Item fixture and its three counter-fixtures.
+    {"shadowing/dep.proto", true, 0},
+    {"shadowing/nearer_message.proto", false, 0},
+    {"shadowing/nearer_field.proto", true, 0},
+    {"shadowing/nearer_enum_value.proto", true, 0},
+    {"shadowing/hidden.proto", true, 0},
+    {"shadowing/vis.proto", true, 0},
+    {"shadowing/nearer_invisible.proto", true, "hidden.proto"},
+    // cross_syntax/ - C2 rejects, C3 accepts, C4 (zero-first enum) rejects.
+    {"cross_syntax/c2/base2.proto", true, 0},
+    {"cross_syntax/c2/root.proto", false, 0},
+    {"cross_syntax/c3/msg2.proto", true, 0},
+    {"cross_syntax/c3/root.proto", true, 0},
+    {"cross_syntax/c4/base2.proto", true, 0},
+    {"cross_syntax/c4/root.proto", false, 0},
+    // map_entry/ - the control accepts, every user reference to an entry rejects.
+    {"map_entry/control.proto", true, 0},
+    {"map_entry/dep.proto", true, 0},
+    {"map_entry/own_simple.proto", false, 0},
+    {"map_entry/own_compound.proto", false, 0},
+    {"map_entry/other_entry.proto", false, 0},
+    {"map_entry/imported_absolute.proto", false, 0},
+    {"map_entry/imported_relative.proto", false, 0},
+    {"map_entry/repeated_simple.proto", false, 0},
+    {"map_entry/repeated_absolute.proto", false, 0},
+    // nested/ - an imported nested message and an imported nested enum.
+    {"nested/dep.proto", true, 0},
+    {"nested/root.proto", true, 0},
+    // service_as_type/ - a retained service name is not a type.
+    {"service_as_type/root.proto", false, 0},
+    // visibility_roots/ - R3's two cases, each with the declarer as a second root.
+    {"visibility_roots/other.proto", true, 0},
+    {"visibility_roots/same_package.proto", false, "other.proto"},
+    {"visibility_roots/second_root.proto", false, "other.proto"},
+    // defaults/ - the accepting control and R13's three rejecting shapes.
+    {"defaults/legal.proto", true, 0},
+    {"defaults/enum_default_absent.proto", false, 0},
+    {"defaults/message_default.proto", false, 0},
+    {"defaults/packed_not_packable.proto", false, 0},
+    // relative/ - fix round r5's source-path reference family.
+    {"relative/dep_ab.proto", true, 0},
+    {"relative/dep_pub.proto", true, 0},
+    {"relative/dep_shared.proto", true, 0},
+    {"relative/r01_nopkg_to_subpkg.proto", true, 0},
+    {"relative/r03_same_pkg.proto", true, 0},
+    {"relative/r05_partial_visible.proto", false, 0},
+    {"relative/r06_pub_import.proto", true, 0},
+    {"relative/r08_no_import.proto", false, 0},
 };
 
 // Recursively compares a linked message tree against the oracle's. Every field
@@ -291,10 +343,27 @@ void run_differential_case(const std::string& corpus,
 
     easypb_proto::SourceLoaderOptions options;
     options.proto_paths.push_back(directory);
-    const std::vector<std::string> roots(1, root);
+    std::vector<std::string> roots(1, root);
+    // The second root is named on the command line and never imported: it puts
+    // the declaration in the index without granting visibility.
+    if (item.extra_root != 0) roots.push_back(std::string(item.extra_root));
     easypb_schema::SchemaSet set;
     easypb_schema::Diagnostic error;
-    CHECK(easypb_proto::load_source_files(options, roots, set, error));
+    const bool loaded =
+        easypb_proto::load_source_files(options, roots, set, error);
+    if (!loaded) {
+        // The frontend owns this refusal - a malformed default, `packed` on a
+        // non-packable field: there is nothing to link, so the load's own
+        // verdict is the fixture's and no mode is entered. A fixture the
+        // reference compiler ACCEPTS may never take this path, and that is the
+        // only thing this branch asserts.
+        if (item.accepts) {
+            std::cerr << "load refused an accepting fixture " << fixture
+                      << ": " << error.message << '\n';
+        }
+        CHECK(!item.accepts);
+        return;
+    }
 
     easypb_schema::LinkedSchema linked;
     const bool accepted = easypb_schema::link_schema(
@@ -322,6 +391,32 @@ void run_differential_case(const std::string& corpus,
     compare_messages(mine->file.message_type, decoded.file[0].message_type,
                      logical);
     ++compared;
+}
+
+// unsupported_syntax/ - A25's source half, and the one corpus fixture
+// deliberately OUTSIDE the differential table: protoc 30.1 ACCEPTS
+// `edition = "2023";` (it models `syntax: "editions"`), while plan 4 refuses
+// it by decision, so the relation is an inverse and not a comparison.
+//
+// What is asserted is the refusal itself. MEASURED, and recorded in the
+// inventory README rather than assumed: the SOURCE frontend refuses the file as
+// a parse error carrying DIAGNOSTIC_GENERIC (`expected a top-level .proto
+// statement` at the `edition` line), while A25's own code path
+// (DIAGNOSTIC_UNSUPPORTED_SYNTAX) is the DESCRIPTOR-origin rule - the
+// divergence Step 11's section 11.6 already records for `edition = "2023";`.
+// The parser has no `edition` keyword to name, so the pack's 8.1 phrase "with a
+// message naming editions" does not hold on this origin.
+void test_editions_fixture_is_refused(const std::string& corpus)
+{
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(corpus + "/unsupported_syntax");
+    const std::vector<std::string> roots(1, std::string("editions.proto"));
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_proto::load_source_files(options, roots, set, error));
+    CHECK(!error.message.empty());
+    std::cout << "INVERSE: unsupported_syntax/editions.proto refused - "
+              << error.message.substr(0, 120) << '\n';
 }
 
 void test_differential_against_protoc(const std::string& corpus,
@@ -361,6 +456,7 @@ int main(int argc, char** argv)
     test_relative_references_match_protoc(data_dir + "/relative");
     test_service_head_cases_match_protoc(data_dir);
     test_source_locations_point_at_the_type_token(data_dir + "/relative");
+    test_editions_fixture_is_refused(data_dir);
     test_differential_against_protoc(data_dir, oracle_dir);
 
     if (failures != 0) {

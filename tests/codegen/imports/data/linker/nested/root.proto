@@ -1,0 +1,10 @@
+// nested - both nested declarations resolve to their absolute names
+// (`.outer.Outer.Inner` and `.outer.Outer.E`), which is what the differential
+// compares field by field.
+syntax = "proto2";
+package app;
+import "dep.proto";
+message Uses {
+  optional outer.Outer.Inner inner = 1;
+  optional outer.Outer.E e = 2;
+}

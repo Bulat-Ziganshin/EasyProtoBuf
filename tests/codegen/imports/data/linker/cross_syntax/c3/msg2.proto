@@ -1,0 +1,9 @@
+// cross_syntax/c3 - Appendix C C3: a proto3 field of a proto2 MESSAGE that
+// carries proto2 enums inside is accepted; the rule keys on the referenced
+// type's own file, not on anything transitively reachable.
+syntax = "proto2";
+package msg2;
+message Holder {
+  enum E { A = 0; }
+  optional E e = 1;
+}

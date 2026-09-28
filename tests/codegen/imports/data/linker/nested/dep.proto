@@ -1,0 +1,9 @@
+// nested - plan 4's exit criteria name imported nested types explicitly, and
+// no other fixture covers them: a nested message AND a nested enum inside one
+// imported message, both referenced from another file.
+syntax = "proto2";
+package outer;
+message Outer {
+  message Inner { optional int32 v = 1; }
+  enum E { A = 0; B = 1; }
+}

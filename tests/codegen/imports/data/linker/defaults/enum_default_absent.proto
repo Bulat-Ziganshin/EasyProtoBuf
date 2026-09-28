@@ -1,0 +1,7 @@
+// defaults - R13b's rejecting side: an enum default naming an enumerator the
+// enum does not declare. protoc: `Enum type "defaults.E" has no value named
+// "MISSING".` at the default token.
+syntax = "proto2";
+package defaults;
+enum E { A = 0; B = 1; }
+message M { optional E e = 1 [default = MISSING]; }
