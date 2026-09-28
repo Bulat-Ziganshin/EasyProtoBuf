@@ -40,7 +40,8 @@ descriptor.pb.hpp decoder|
 - [`cpp_names.hpp`](cpp_names.hpp) / [`cpp_names.cpp`](cpp_names.cpp) — validate package namespace names and convert absolute Protobuf identities to C++ spellings.
 - [`descriptor.pb.hpp`](descriptor.pb.hpp) — internal trimmed C++ representation and EasyProtoBuf decoders for [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto). Besides messages, enums, and fields it carries file dependency lists (`dependency`, `public_dependency`, `weak_dependency`) and minimal service names.
 - [`schema.hpp`](schema.hpp) / [`schema.cpp`](schema.cpp) — parser-independent schema storage: string pool, diagnostics, `SchemaFile`/`SchemaSet` ownership, descriptor paths, source metadata, and the common import-edge binder (`bind_import_edges`). Builds without the source parser.
-- [`schema_semantics.hpp`](schema_semantics.hpp) / [`schema_semantics.cpp`](schema_semantics.cpp) — shared symbol indexing (`SymbolIndex`, `index_file`) and local/strict field resolution (`resolve_file`) used by the parser, the import linker, and the compatibility pass. Builds without the source parser.
+- [`schema_semantics.hpp`](schema_semantics.hpp) / [`schema_semantics.cpp`](schema_semantics.cpp) — shared symbol indexing (`SymbolIndex`, `index_file`) and local/strict field resolution (`resolve_file`) used by the parser, the import linker (`schema_linker.*`), and the compatibility pass. Builds without the source parser.
+- [`schema_linker.hpp`](schema_linker.hpp) / [`schema_linker.cpp`](schema_linker.cpp) — import linking (`link_schema`): the deterministic name-sorted walk over edge binding, the one shared index, visibility, resolution and warning hygiene, the publish-on-success rule, and the non-owning `LinkedSchema` view. Carries both modes (`LINK_COMPLETE` and the thin-descriptor compatibility pass). Builds without the source parser.
 - [`logical_paths.hpp`](logical_paths.hpp) / [`logical_paths.cpp`](logical_paths.cpp) — pure logical import-name validation shared by every frontend. No filesystem calls or platform headers, so descriptor-set and future plugin input reuse the same spelling rules.
 - [`file_paths.hpp`](file_paths.hpp) / [`file_paths.cpp`](file_paths.cpp) — native physical-path operations for standalone source input: joining, byte-wise root-prefix mapping, lexical absolute normalization, file status and reads. Owns every filesystem call and Windows path rule; never linked into the common schema core.
 - [`proto_loader.hpp`](proto_loader.hpp) / [`proto_loader.cpp`](proto_loader.cpp) — source-only discovery, caching, deferred parsing, and root selection in `easypb_proto`. Built as `easypb_proto_loader` in full builds only; descriptor-only and future plugin targets never link it.
@@ -58,7 +59,32 @@ The reusable parser library consists of [`parser/proto_parser.cpp`](parser/proto
 
 The parser returns an owned `easypb_schema::SchemaFile` (aliased as `ParsedProto`): the same trimmed descriptor structures that descriptor-set input decodes into, plus source provenance (`field_sources`, `declaration_locations`, location-bearing `imports`). Generation after the frontend boundary does not depend on whether the original input was `.proto` or `.pbs`.
 
-Imports are parsed and recorded — in both the `imports` vector and the authoritative `FileDescriptorProto` dependency lists — but are not loaded yet. Unresolved imported types are therefore a frontend diagnostic; `main.cpp` refuses to pass such source schemas to the generator. The deferred `parse_proto` overload additionally leaves every named type unresolved without warnings so the loader can link a set of files. See [the parser documentation](parser/README.md) for the parser-level behavior.
+Imports are parsed and recorded — in both the `imports` vector and the authoritative `FileDescriptorProto` dependency lists — but are not loaded yet. Unresolved imported types are therefore a frontend diagnostic; `main.cpp` refuses to pass such source schemas to the generator. The deferred `parse_proto` overload additionally leaves every named type unresolved without warnings so `link_schema` can resolve a whole loaded set. See [the parser documentation](parser/README.md) for the parser-level behavior and [Deferred and linked descriptor states](#deferred-and-linked-descriptor-states) for what the two states contain.
+
+## Deferred and linked descriptor states
+
+A `SchemaFile` produced by the source frontend in deferred mode (`ParseOptions::defer_type_resolution`, the mode `load_source_files` uses) is an **unlinked** descriptor: named types are still raw, and `link_schema` owns making them final. The two states are what every consumer has to know before it reads a schema:
+
+| Descriptor state | Raw (deferred parse, before linking) | Linked (after a successful `link_schema`) |
+| --- | --- | --- |
+| scalar field | already final: the parser sets `type` and `has_type` | unchanged |
+| named field (message, enum, group, or map value) | `type == 0`, `has_type == false`, and the source spelling kept in `type_name` (`has_type_name == true`), mirrored by `FieldSource::raw_type_name` for source input | `type_name` rewritten to the index's **absolute** spelling, with `type` and `has_type` set to the resolved kind; a proto2 group keeps its declared `TYPE_GROUP`, so a linked set no longer matches the bytes it was loaded from (one set, one link) |
+| synthetic map-entry reference | unresolved like any other named type even though its entry is in the same file | resolved to the entry; the entry itself stays indexed and resolvable for the field the parser synthesized |
+| kind-dependent checks (`packed` legality, enum defaults) | deferred, because a shadowing import may still change the resolved type | validated against the resolved kind |
+| imports | recorded in the descriptor dependency lists **and** in the location-bearing `imports` list; no target is bound yet (`edges` is empty) | bound by `bind_import_edges`, whose result drives visibility (`PublicExports`/`Visible(F)`) |
+| warnings | a standalone parse may carry `DIAGNOSTIC_UNRESOLVED_TYPE` and deferred-default warnings | a successful complete link drops those stale warnings for the references it resolved and leaves every other code alone |
+
+Descriptor-origin input is never raw: `.pbs` bytes carry `type` and `type_name` themselves, and that metadata is authoritative, so the linker compares it with what the name resolves to (`DIAGNOSTIC_KIND_MISMATCH`) instead of rewriting it.
+
+`link_schema` runs the six stages of the end-state map — edge binding, one shared index, visibility, resolution, warning hygiene, publication — walking the files in an order that is a function of the logical file names alone (never of insertion order or pointer values), so the first reported failure is identical for every input order. Everything is built into a local `LinkedSchema` and assigned once at the end, so a failed link leaves the caller's result in its documented invalid empty state (`files == 0`) instead of a partial view. Linking *is* mutation of the caller's set: the resolved fields are overwritten in place.
+
+The two modes share those stages and differ in their preconditions and in what the result reports:
+
+- **`LINK_COMPLETE`** requires every import target to exist and every reference to resolve; on success `LinkedSchema::complete` is `true`.
+- **`LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY`** is the thin single-descriptor workflow: exactly one descriptor-origin file (a zero-file set and a two-file set fail the same precondition), missing dependency targets become null-target edges, and a reference the descriptor classifies itself is tolerated with one warning per external type name. `complete` then describes the input — it stays `true` only when every dependency edge resolved and nothing external was tolerated — which is what tells a consumer whether the generated output rests on local information alone. The tolerance is a bounded compatibility guarantee, not a general unresolved-type escape hatch.
+- A file whose `syntax` is neither absent, `"proto2"`, nor `"proto3"` is refused with `DIAGNOSTIC_UNSUPPORTED_SYNTAX` in stage 1 for **both** modes, before any resolution work, because the project cannot model editions semantics.
+
+Ownership: `SchemaSet` owns the files, their descriptors and every retained string; `LinkedSchema` owns only its name keys and sets and borrows everything else, so the set must outlive the view and every generator call that reads it. The caller must not clear a member of a linked set while a view into it still exists.
 
 ## Source loader and logical names
 
@@ -117,4 +143,4 @@ Recognized EasyProtoBuf field options are preserved in this common descriptor mo
 
 ## Tests
 
-Codegen tests live under [`../tests/codegen/`](../tests/codegen/), grouped by generated-code feature (`maps`, `enums`, `packages`, `nested`), parser/input behavior (`parser`), shared schema storage/semantics (`schema`), and package/import support (`imports` with `test_graph.cpp` for the common binder plus `test_loader.cpp` and `data/loader/` for filesystem discovery). See [BUILDING.md](BUILDING.md#testing) for the user-facing test commands and test-suite overview.
+Codegen tests live under [`../tests/codegen/`](../tests/codegen/), grouped by generated-code feature (`maps`, `enums`, `packages`, `nested`), parser/input behavior (`parser`), shared schema storage/semantics (`schema`), and package/import support (`imports` with `test_graph.cpp` for the common binder, `test_loader.cpp` and `data/loader/` for filesystem discovery, `test_linker.cpp` for descriptor-origin linking, `test_source_linker.cpp` for the source-driven path with the `data/linker/` fixtures and the `protoc` differential, and `test_parity.cpp` with `data/parity/` for the two-way oracle lane). See [BUILDING.md](BUILDING.md#testing) for the user-facing test commands and test-suite overview.
