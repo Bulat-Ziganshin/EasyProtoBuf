@@ -26,6 +26,8 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -438,6 +440,138 @@ void test_differential_against_protoc(const std::string& corpus,
     std::cout << '\n';
 }
 
+// ---------------------------------------------------------------------------
+// Step 9 - the non-owning contract on the source path (A12)
+//
+// Both checks below need load_source_files, which is why they live here and
+// not in test_linker.cpp: that file links easypb_schema alone and must keep
+// running in the parser-free profile.
+// ---------------------------------------------------------------------------
+
+bool visible_to(const easypb_schema::LinkedSchema& linked,
+                const easypb_schema::SchemaFile& file,
+                const easypb_schema::SchemaFile& candidate)
+{
+    const std::map<const easypb_schema::SchemaFile*,
+                   std::set<const easypb_schema::SchemaFile*> >::const_iterator
+        found = linked.visible_files.find(&file);
+    if (found == linked.visible_files.end()) return false;
+    return found->second.count(&candidate) == 1;
+}
+
+// O1/O5 (Step 9): load_source_files parses each file through a temporary source
+// buffer, which it destroys before returning, and every name it keeps is
+// interned into the CALLER'S set. This test takes the ownership question one
+// step past that guarantee: the loader options - the last object holding the
+// input paths - are destroyed after the load and before the link, so by the
+// time the view is read nothing that took part in reading the sources exists
+// any more. Names, visibility sets and resolved fields must all still read
+// correctly off the set alone.
+void test_buffers_and_options_destroyed_before_the_link(
+    const std::string& directory)
+{
+    easypb_schema::SchemaSet set;
+    {
+        easypb_proto::SourceLoaderOptions options;
+        options.proto_paths.push_back(directory);
+        const std::vector<std::string> roots = { "state.proto",
+                                                "report.proto" };
+        easypb_schema::Diagnostic load_error;
+        CHECK(easypb_proto::load_source_files(options, roots, set, load_error));
+        options.proto_paths.clear();
+    }
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                     linked, error));
+    CHECK(linked.files == &set);
+    CHECK(linked.complete);
+
+    easypb_schema::SchemaFile* const report = set.find_file("report.proto");
+    easypb_schema::SchemaFile* const state = set.find_file("state.proto");
+    CHECK(report != 0);
+    CHECK(state != 0);
+    CHECK(linked.visible_files.size() == 2);
+    CHECK(linked.visible_files.count(report) == 1);
+    CHECK(linked.visible_files.count(state) == 1);
+    CHECK(visible_to(linked, *report, *report));
+    CHECK(visible_to(linked, *report, *state));
+    CHECK(!visible_to(linked, *state, *report));
+
+    // The Task 2 pair, read after every source buffer is gone: both fields
+    // resolve to the imported enum, spelled absolutely.
+    CHECK(report->file.message_type.size() == 1);
+    CHECK(report->file.message_type[0].field.size() == 2);
+    CHECK(text(report->file.message_type[0].field[0].type_name) ==
+          ".shared.State");
+    CHECK(report->file.message_type[0].field[0].type ==
+          FieldDescriptorProto::TYPE_ENUM);
+    CHECK(text(report->file.message_type[0].field[1].type_name) ==
+          ".shared.State");
+    CHECK(report->file.message_type[0].field[1].type ==
+          FieldDescriptorProto::TYPE_ENUM);
+    CHECK(text(state->file.name) == "state.proto");
+    CHECK(linked.symbols.symbols.count(".shared.State") == 1);
+
+    std::cout << "LIFETIME: names, visibility sets and resolved fields read "
+                 "after the loader options were destroyed\n";
+}
+
+// O5 (Step 9): the positions recorded while parsing belong to the CALLER'S set
+// (field_sources and declaration_locations), not to the buffer the token was
+// read from, so a linked field still reports its own line and column once every
+// source buffer is gone. The numbers are the ones Step 8.2 measures on this
+// fixture - report.proto's two type tokens are at 10:12 and 11:12 - and naming
+// them is what the pack requires instead of "not (0,0)": a parser that reported
+// the statement's start or unknown_location() fails here.
+void test_real_locations_survive_the_sources_going_away(
+    const std::string& directory)
+{
+    easypb_schema::SchemaSet set;
+    {
+        easypb_proto::SourceLoaderOptions options;
+        options.proto_paths.push_back(directory);
+        const std::vector<std::string> roots = { "state.proto",
+                                                "report.proto" };
+        easypb_schema::Diagnostic load_error;
+        CHECK(easypb_proto::load_source_files(options, roots, set, load_error));
+        options.proto_paths.clear();
+    }
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                     linked, error));
+
+    easypb_schema::SchemaFile* const report = set.find_file("report.proto");
+    CHECK(report != 0);
+    CHECK(report->field_sources.size() == 2);
+    CHECK(report->field_sources[0].type_location.line == 10);
+    CHECK(report->field_sources[0].type_location.column == 12);
+    CHECK(report->field_sources[1].type_location.line == 11);
+    CHECK(report->field_sources[1].type_location.column == 12);
+    // The descriptor path the same entry carries, which is what the diagnostic
+    // side falls back to when there is no position at all: the two halves agree
+    // about which field they describe.
+    CHECK(report->field_sources[0].path.size() == 4);
+    CHECK(report->field_sources[0].path[0] == 4);
+    CHECK(report->field_sources[0].path[1] == 0);
+    CHECK(report->field_sources[0].path[2] == 2);
+    CHECK(report->field_sources[0].path[3] == 0);
+    CHECK(report->field_sources[1].path[3] == 1);
+    // The declaration map is not field-only - it also carries the file's
+    // package and message declarations - so the check names the two field
+    // paths rather than guessing a total.
+    CHECK(report->declaration_locations.count(
+              report->field_sources[0].path) == 1);
+    CHECK(report->declaration_locations.count(
+              report->field_sources[1].path) == 1);
+
+    std::cout << "LOCATIONS: report.proto 10:12 and 11:12 after the sources "
+                 "were destroyed\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -458,6 +592,8 @@ int main(int argc, char** argv)
     test_source_locations_point_at_the_type_token(data_dir + "/relative");
     test_editions_fixture_is_refused(data_dir);
     test_differential_against_protoc(data_dir, oracle_dir);
+    test_buffers_and_options_destroyed_before_the_link(data_dir);
+    test_real_locations_survive_the_sources_going_away(data_dir);
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

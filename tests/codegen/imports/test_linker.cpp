@@ -6004,6 +6004,475 @@ void test_descriptor_origin_empty_oneof_is_rejected()
     }
 }
 
+// ---------------------------------------------------------------------------
+// Step 9 - lifetime, determinism, and both language standards
+//
+// Which file each check goes in is part of the step (A12): everything below
+// links `easypb_schema` alone, so this whole group runs in the parser-free
+// `cxx11-nodesc` profile as well. The two checks that need
+// `load_source_files` - buffer destruction and the source locations that
+// outlive it - live in test_source_linker.cpp.
+// ---------------------------------------------------------------------------
+
+// Decimal text without std::to_string: this file is also compiled by the
+// legacy lane's GCC 4.7 / Clang 3.1-class toolchains, where that overload is a
+// library-version question rather than a language one (the `D-18` class), and
+// the fingerprints below only ever need digits.
+std::string digits(int value)
+{
+    if (value == 0) return "0";
+    const bool negative = value < 0;
+    if (negative) value = -value;
+    std::string text;
+    while (value != 0) {
+        text.insert(text.begin(), static_cast<char>('0' + value % 10));
+        value /= 10;
+    }
+    if (negative) text.insert(text.begin(), '-');
+    return text;
+}
+
+// A whole-view fingerprint: every file (in name order), its visible set, and
+// every top-level field's resolved absolute name and kind. The repeated-run and
+// set-growth checks compare entire views this way rather than one field, so a
+// difference anywhere in the published set shows up in the comparison. Files
+// are listed by logical name and the lines are sorted, because no output may
+// depend on pointer identity (A2).
+std::string view_fingerprint(const easypb_schema::SchemaSet& set,
+                             const easypb_schema::LinkedSchema& linked)
+{
+    const std::vector<std::unique_ptr<easypb_schema::SchemaFile> >& files =
+        set.files();
+    std::vector<std::string> lines;
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        std::string line = text(files[i]->file.name);
+        line += " [";
+        line += visible_names(linked, *files[i]);
+        line += "]";
+        for (std::size_t m = 0; m < files[i]->file.message_type.size(); ++m) {
+            const DescriptorProto& message = files[i]->file.message_type[m];
+            for (std::size_t f = 0; f < message.field.size(); ++f) {
+                const FieldDescriptorProto& field = message.field[f];
+                line += " ";
+                line += text(message.name);
+                line += ".";
+                line += text(field.name);
+                line += "=";
+                line += text(field.type_name);
+                line += ":";
+                line += digits(field.has_type ? field.type : -1);
+            }
+        }
+        lines.push_back(line);
+    }
+    std::sort(lines.begin(), lines.end());
+    std::string joined;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        joined += lines[i];
+        joined += "\n";
+    }
+    return joined;
+}
+
+// O1/O5 (Step 9): LinkedSchema is a non-owning view, and the one name it
+// writes is interned into the OWNING file's StringPool - a resolved field's
+// type_name is `file.strings.save(...)` for the file being resolved
+// (schema_semantics.cpp:1828). The pool hands out pointers into fixed blocks
+// and starts a new block when the current one is full, so interning more
+// strings after the link must not disturb a single published name. A view
+// holding a pointer into a moved buffer - the bug this looks for - fails here.
+void test_pool_growth_after_link_keeps_every_published_name()
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+
+    easypb_schema::SchemaSet set;
+    // The reference is spelled RELATIVELY on purpose: the link is what interns
+    // the absolute `.shared.Value` into a.proto's pool, so the name under test
+    // is one the pool received after the fixture was built.
+    easypb_schema::SchemaFile& a = make_file(
+        set, "a.proto", std::vector<std::string>(1, "b.proto"),
+        no_indexes, no_indexes);
+    set_package(a, "app");
+    add_message_with_field(a, "A", "v", 1, "shared.Value");
+    easypb_schema::SchemaFile& b = make_file(set, "b.proto", no_deps,
+                                             no_indexes, no_indexes);
+    set_package(b, "shared");
+    add_message(b, "Value");
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                     linked, error));
+    CHECK(linked.complete);
+
+    // The address is read from the MEMBER, never through a local `str_view`:
+    // under C++17 `str_view` is std::string_view (descriptor.pb.hpp), so this
+    // address is the pool's and the assertion below is the one that catches a
+    // view into a freed or moved pool; under C++11/14 `str_view` is
+    // std::string, the field owns a copy, and only the text and size assertions
+    // carry weight. The cxx17 tree is where this check bites.
+    CHECK(text(a.file.message_type[0].field[0].type_name) == ".shared.Value");
+    const char* const data_before =
+        a.file.message_type[0].field[0].type_name.data();
+    const std::size_t size_before =
+        a.file.message_type[0].field[0].type_name.size();
+    const std::string visible_before = visible_names(linked, a);
+    CHECK(visible_before == "a.proto,b.proto");
+
+    // Force the growth path in BOTH pools: the referencing file's, which owns
+    // the resolved spelling, and the declaring file's, whose descriptor the
+    // index entry points at. The first block is 4096 bytes, so 5000 bytes
+    // always allocate another one, and the second save lands in that new block
+    // exactly as a later interning pass would.
+    const std::string filler(5000, 'x');
+    a.strings.save(filler);
+    b.strings.save(filler);
+    a.strings.save("after-growth");
+    b.strings.save("after-growth");
+
+    // The same view, re-read after the growth: same bytes, same address, same
+    // size - not merely "a string that still compares equal".
+    CHECK(text(a.file.message_type[0].field[0].type_name) == ".shared.Value");
+    CHECK(a.file.message_type[0].field[0].type_name.data() == data_before);
+    CHECK(a.file.message_type[0].field[0].type_name.size() == size_before);
+    // The owned half of the view - the index keys and the visibility sets -
+    // is untouched too: it stores no pointer into a pool.
+    CHECK(linked.symbols.symbols.count(".shared.Value") == 1);
+    CHECK(visible_names(linked, a) == visible_before);
+}
+
+// O2/O6 (Step 9): index and visibility entries borrow `SchemaFile*`, and files
+// live on the heap, so a pointer taken before the owning vector grew still
+// names the same file afterwards. Growth is the normal case - a set is built
+// file by file - so what is pinned here is that a link performed AFTER many
+// more files were added still publishes the same pointers for the files that
+// were already there, and that the view published earlier still reads through
+// them.
+void test_set_growth_keeps_file_addresses_and_the_published_view()
+{
+    easypb_schema::SchemaSet set;
+    make_chain_fixture(set, false, false);
+
+    easypb_schema::SchemaFile* const a_before = set.find_file("a.proto");
+    easypb_schema::SchemaFile* const b_before = set.find_file("b.proto");
+    CHECK(a_before != 0 && b_before != 0);
+
+    easypb_schema::LinkedSchema first;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                     first, error));
+    CHECK(visible_names(first, *a_before) == "a.proto,b.proto");
+
+    // Now grow the set well past several reallocations of the owning vector
+    // and rehashes of the name index. Each filler carries its own message, so
+    // the index has real work to do and no two declarations collide.
+    std::vector<easypb_schema::SchemaFile*> fillers;
+    for (int i = 0; i < 32; ++i) {
+        const std::string suffix = digits(i);
+        const std::string file_name = "filler" + suffix + ".proto";
+        const std::string message_name = "F" + suffix;
+        easypb_schema::SchemaFile& filler =
+            make_simple_file(set, file_name.c_str(), 0);
+        add_message(filler, message_name.c_str());
+        fillers.push_back(&filler);
+    }
+
+    // The same objects are still reachable by name: the vector moved its
+    // unique_ptr elements, never the files they own.
+    CHECK(set.find_file("a.proto") == a_before);
+    CHECK(set.find_file("b.proto") == b_before);
+    CHECK(set.find_file("filler0.proto") == fillers[0]);
+    CHECK(set.find_file("filler31.proto") == fillers[31]);
+
+    // The view published BEFORE the growth still reads through the recorded
+    // pointers: if the addresses had moved, this would dereference a stale
+    // file and the names would not come back.
+    CHECK(first.visible_files.count(a_before) == 1);
+    CHECK(visible_names(first, *a_before) == "a.proto,b.proto");
+    CHECK(visible_names(first, *b_before) == "b.proto,c.proto");
+
+    // A fresh link after the growth publishes the same pointers for the old
+    // files and one entry per new one.
+    easypb_schema::LinkedSchema second;
+    easypb_schema::Diagnostic second_error;
+    CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                     second, second_error));
+    CHECK(second.visible_files.count(a_before) == 1);
+    CHECK(visible_names(second, *a_before) == "a.proto,b.proto");
+    for (std::size_t i = 0; i < fillers.size(); ++i) {
+        CHECK(second.visible_files.count(fillers[i]) == 1);
+        CHECK(visible_names(second, *fillers[i]) ==
+              text(fillers[i]->file.name));
+    }
+}
+
+// O4/R21 + Step 5.1 (Step 9): the descriptor-only half of the isolation
+// contract. This suite links `easypb_schema` and nothing else, which is the
+// structural half (a `cxx11-nodesc` run); the diagnostic half is what the
+// cases below pin. A descriptor-origin file has no FieldSource at all and no
+// physical identity, so a missing reference must be reported from its
+// descriptor path and a missing dependency from its logical name - never by
+// looking for a source position or falling back to a source read.
+void test_descriptor_only_isolation_reports_a_descriptor_path()
+{
+    // (a) an unresolved reference: logical file plus the field's descriptor
+    // path, with the file carrying no provenance and no physical name.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "iso.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.physical_name.clear();
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  "shared.Value");
+        file.file.message_type.push_back(holder);
+
+        // Step 5.1's shape, asserted rather than assumed: no FieldSource
+        // exists, so nothing in the failure path may depend on one.
+        CHECK(file.field_sources.empty());
+        CHECK(file.physical_name.empty());
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+        CHECK(error.file == "iso.pbs");
+        CHECK(error.message.find("at [4, 0, 2, 0]") != std::string::npos);
+        CHECK(linked.files == 0);
+        CHECK(!linked.complete);
+    }
+    // (b) a declared dependency the set does not contain: an in-memory graph
+    // error naming the importing logical file and the missing logical import,
+    // with nothing to read from disk even if a source fallback were attempted.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = make_file(
+            set, "iso.pbs", std::vector<std::string>(1, "absent.proto"),
+            std::vector<std::int32_t>(), std::vector<std::int32_t>());
+        file.from_descriptor_set = true;
+        file.physical_name.clear();
+        add_message(file, "Holder");
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+        CHECK(error.file == "iso.pbs");
+        CHECK(error.message.find("absent.proto") != std::string::npos);
+        CHECK(linked.files == 0);
+    }
+    // (c) the control: the very same descriptor-only shape links once the
+    // definition is in the set, so (a) is about the missing definition and not
+    // about the descriptor origin.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "iso.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.physical_name.clear();
+        DescriptorProto holder;
+        holder.name = file.strings.save("Holder");
+        holder.has_name = true;
+        add_field(file, holder, "f", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  "shared.Value");
+        file.file.message_type.push_back(holder);
+
+        easypb_schema::SchemaFile& dep = make_simple_file(set, "dep.pbs", "shared");
+        dep.from_descriptor_set = true;
+        dep.physical_name.clear();
+        add_message(dep, "Value");
+        // The reference is absolute, and the dependency index is what makes
+        // dep.pbs visible at all.
+        file.file.dependency.push_back(file.strings.save("dep.pbs"));
+        file.file.public_dependency.push_back(0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(link_verdict(set, error));
+        CHECK(text(file.file.message_type[0].field[0].type_name) ==
+              ".shared.Value");
+    }
+}
+
+// The repeated-run fixture: root.proto (app) references deep.Leaf, which
+// mid.proto (deep) declares; mid.proto public-imports leaf.proto, which gives
+// every file a different visible set and gives the fingerprint something to
+// compare. `reverse` builds the identical set in the opposite insertion order.
+void make_repeat_fixture(easypb_schema::SchemaSet& set, bool reverse)
+{
+    const std::vector<std::string> no_deps;
+    const std::vector<std::int32_t> no_indexes;
+    const std::vector<std::int32_t> index_zero(1, 0);
+
+    for (int pass = 0; pass < 3; ++pass) {
+        const int which = reverse ? 2 - pass : pass;
+        if (which == 0) {
+            easypb_schema::SchemaFile& root = make_file(
+                set, "root.proto", std::vector<std::string>(1, "mid.proto"),
+                no_indexes, no_indexes);
+            set_package(root, "app");
+            add_message_with_field(root, "Root", "v", 1, "deep.Leaf");
+        } else if (which == 1) {
+            easypb_schema::SchemaFile& mid = make_file(
+                set, "mid.proto", std::vector<std::string>(1, "leaf.proto"),
+                index_zero, no_indexes);
+            set_package(mid, "deep");
+            add_enum(mid, "Leaf", "A");
+        } else {
+            easypb_schema::SchemaFile& leaf = make_file(
+                set, "leaf.proto", no_deps, no_indexes, no_indexes);
+            set_package(leaf, "deep");
+            add_message(leaf, "Other");
+        }
+    }
+}
+
+// O6 (Step 9): the same set linked twice, each time into a fresh LinkedSchema,
+// must publish an identical view - the same resolved names and kinds and the
+// same visibility sets. The second run resolves an input whose type_names the
+// first run already rewrote to their absolute spelling, which
+// test_already_resolved_input_is_resolved_again pins separately; here the
+// question is determinism, not the reference spelling. The third run builds the
+// same fixture in the reverse insertion order: Step 5.2's
+// test_input_order_and_targets_do_not_decide_the_verdict already pins the
+// verdict and the resolved names across six permutations of a three-file set,
+// so this adds the published visibility sets and kinds rather than repeating it.
+void test_repeated_runs_publish_identical_views()
+{
+    {
+        easypb_schema::SchemaSet set;
+        make_repeat_fixture(set, false);
+
+        easypb_schema::LinkedSchema first;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                         first, error));
+        CHECK(first.files == &set);
+        CHECK(first.complete);
+        const std::string first_view = view_fingerprint(set, first);
+        // Lines are sorted by logical name, so the root's line is the last
+        // one; what matters is that it names the resolved absolute type and
+        // its kind (TYPE_ENUM == 14), with the transitively public leaf in
+        // the visible set.
+        CHECK(first_view.find("root.proto [leaf.proto,mid.proto,root.proto] "
+                              "Root.v=.deep.Leaf:14") != std::string::npos);
+
+        easypb_schema::LinkedSchema second;
+        easypb_schema::Diagnostic second_error;
+        CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                         second, second_error));
+        CHECK(second.files == &set);
+        CHECK(second.complete);
+        CHECK(view_fingerprint(set, second) == first_view);
+        // The visibility sets are compared directly too, key for key: the
+        // fingerprints above compare the names they resolve to, this compares
+        // the entries themselves.
+        CHECK(second.visible_files == first.visible_files);
+        CHECK(second.symbols.symbols.size() == first.symbols.symbols.size());
+    }
+    {
+        easypb_schema::SchemaSet forward_set;
+        make_repeat_fixture(forward_set, false);
+        easypb_schema::LinkedSchema forward;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::link_schema(forward_set, easypb_schema::LINK_COMPLETE,
+                                         forward, error));
+
+        easypb_schema::SchemaSet backward_set;
+        make_repeat_fixture(backward_set, true);
+        easypb_schema::LinkedSchema backward;
+        easypb_schema::Diagnostic backward_error;
+        CHECK(easypb_schema::link_schema(backward_set,
+                                         easypb_schema::LINK_COMPLETE,
+                                         backward, backward_error));
+        CHECK(backward.complete);
+        CHECK(view_fingerprint(backward_set, backward) ==
+              view_fingerprint(forward_set, forward));
+    }
+}
+
+// A2/R5 (Step 9): for one name with three candidate kinds along the walk - a
+// nearer NON-TYPE head, a nearer head whose owner is invisible, and the visible
+// aggregate that actually owns the member - the answer must be the same
+// whichever order the three files were added. The rule pair itself is pinned by
+// test_non_type_heads_do_not_shadow (a field head) and
+// test_invisible_candidates_do_not_shadow (the B10/B11 message head, whose
+// second half makes the hidden file a dependency and expects the refusal); what
+// this adds is that no insertion order can select a different candidate.
+//
+// The requester is a.proto (package pkg, message M importing vis.proto):
+// `sub` is a FIELD inside M (non-type, nearest), `.pkg.sub` is a MESSAGE owned
+// by hid.proto, which a.proto does not import (invisible), and `.sub.X` is the
+// message vis.proto declares under package `sub` (visible).
+void test_iterator_rules_stability_across_file_order()
+{
+    const char* const orders[6][3] = {
+        { "a.proto", "vis.proto", "hid.proto" },
+        { "a.proto", "hid.proto", "vis.proto" },
+        { "vis.proto", "a.proto", "hid.proto" },
+        { "vis.proto", "hid.proto", "a.proto" },
+        { "hid.proto", "a.proto", "vis.proto" },
+        { "hid.proto", "vis.proto", "a.proto" }
+    };
+
+    std::string first_view;
+    for (int order = 0; order < 6; ++order) {
+        const std::vector<std::string> no_deps;
+        const std::vector<std::int32_t> no_indexes;
+        easypb_schema::SchemaSet set;
+        for (int slot = 0; slot < 3; ++slot) {
+            const std::string name = orders[order][slot];
+            if (name == "a.proto") {
+                easypb_schema::SchemaFile& a = make_file(
+                    set, "a.proto", std::vector<std::string>(1, "vis.proto"),
+                    no_indexes, no_indexes);
+                set_package(a, "pkg");
+                DescriptorProto m;
+                m.name = a.strings.save("M");
+                m.has_name = true;
+                add_field(a, m, "sub", 1, FieldDescriptorProto::LABEL_OPTIONAL, 0);
+                add_field(a, m, "f", 2, FieldDescriptorProto::LABEL_OPTIONAL,
+                          "sub.X");
+                a.file.message_type.push_back(m);
+            } else if (name == "vis.proto") {
+                easypb_schema::SchemaFile& vis =
+                    make_file(set, "vis.proto", no_deps, no_indexes, no_indexes);
+                set_package(vis, "sub");
+                add_message(vis, "X");
+            } else {
+                easypb_schema::SchemaFile& hid =
+                    make_file(set, "hid.proto", no_deps, no_indexes, no_indexes);
+                set_package(hid, "pkg");
+                add_message(hid, "sub");
+            }
+        }
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                         linked, error));
+        CHECK(linked.complete);
+        const easypb_schema::SchemaFile* const a = set.find_file("a.proto");
+        CHECK(a != 0);
+        CHECK(text(a->file.message_type[0].field[1].type_name) == ".sub.X");
+        CHECK(a->file.message_type[0].field[1].type ==
+              FieldDescriptorProto::TYPE_MESSAGE);
+        CHECK(visible_names(linked, *a) == "a.proto,vis.proto");
+
+        const std::string view = view_fingerprint(set, linked);
+        if (order == 0) {
+            first_view = view;
+        } else {
+            CHECK(view == first_view);
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -6112,6 +6581,11 @@ int main(int argc, char** argv)
     test_descriptor_origin_symbol_names_are_validated();
     test_trailing_dot_reference_is_unresolved_in_both_modes();
     test_descriptor_origin_empty_oneof_is_rejected();
+    test_pool_growth_after_link_keeps_every_published_name();
+    test_set_growth_keeps_file_addresses_and_the_published_view();
+    test_descriptor_only_isolation_reports_a_descriptor_path();
+    test_repeated_runs_publish_identical_views();
+    test_iterator_rules_stability_across_file_order();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";
