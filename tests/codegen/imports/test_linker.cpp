@@ -6032,12 +6032,21 @@ std::string digits(int value)
     return text;
 }
 
-// A whole-view fingerprint: every file (in name order), its visible set, and
-// every top-level field's resolved absolute name and kind. The repeated-run and
-// set-growth checks compare entire views this way rather than one field, so a
-// difference anywhere in the published set shows up in the comparison. Files
-// are listed by logical name and the lines are sorted, because no output may
-// depend on pointer identity (A2).
+// A whole-view fingerprint: every file (in name order), its visible set, every
+// top-level field's resolved absolute name and kind, and every entry of the
+// published index - its key, its kind, and the LOGICAL NAME of the file that
+// owns the entry. Files are listed by logical name and the file lines are
+// sorted, because no output may depend on pointer identity (A2).
+//
+// The index half is what makes the WALK ORDER observable in a successful link.
+// A package scope merges across files instead of colliding, and the merged node
+// keeps the record of the first file that declared it (`add_symbol` only fills
+// an absent key), so the owner of a package two files share is a function of the
+// walk order and of nothing else. With the name-sorted walk (A2) every insertion
+// order yields the same owner; an implementation that walked in insertion order
+// would print a different owner per order. Measured, not argued: dropping the
+// `stable_sort` in `files_by_logical_name` reddens the two order twins below
+// (ledger `D-46`).
 std::string view_fingerprint(const easypb_schema::SchemaSet& set,
                              const easypb_schema::LinkedSchema& linked)
 {
@@ -6071,34 +6080,73 @@ std::string view_fingerprint(const easypb_schema::SchemaSet& set,
         joined += lines[i];
         joined += "\n";
     }
+    // The index half: `std::map` iterates its keys in order, so this block is a
+    // function of the names alone. The owner is named by LOGICAL NAME, never by
+    // address.
+    joined += "index:\n";
+    for (std::map<std::string, easypb_schema::SymbolEntry>::const_iterator entry =
+             linked.symbols.symbols.begin();
+         entry != linked.symbols.symbols.end(); ++entry) {
+        joined += entry->first;
+        joined += "=";
+        joined += digits(entry->second.kind);
+        joined += "@";
+        joined += entry->second.owner != 0
+                      ? text(entry->second.owner->file.name)
+                      : std::string("<no owner>");
+        joined += "\n";
+    }
     return joined;
 }
 
-// O1/O5 (Step 9): LinkedSchema is a non-owning view, and the one name it
-// writes is interned into the OWNING file's StringPool - a resolved field's
-// type_name is `file.strings.save(...)` for the file being resolved
-// (schema_semantics.cpp:1828). The pool hands out pointers into fixed blocks
-// and starts a new block when the current one is full, so interning more
-// strings after the link must not disturb a single published name. A view
-// holding a pointer into a moved buffer - the bug this looks for - fails here.
+// O1/O5 (Step 9): LinkedSchema is a non-owning view, and the names it writes
+// are interned into the OWNING file's StringPool - a resolved field's type_name
+// is `file.strings.save(...)` for the file being resolved
+// (schema_semantics.cpp:1828). The pool hands out pointers into fixed blocks and
+// starts a new block when the current one is full, so interning more strings
+// after the link must not disturb a single published name. A view holding a
+// pointer into a freed or moved block - the bug this looks for - fails here.
+//
+// What bites, and what does not, is measured on two defect shapes built on a
+// copy of this revision (ledger `D-47`): the RE-READ TEXT of a published name
+// and the re-read visibility set are what fail. The stored address and size do
+// not, and could not: `data()` and `size()` return the field's own recorded
+// values, which change only when something WRITES the field, so reading them
+// twice is a tautology whatever the pool does - the earlier version of this test
+// asserted them and neither shape fired it. The profile split is measured too:
+// in C++11/14 `str_view` is std::string (descriptor.pb.hpp), the field owns a
+// copy of the name, and the pool's storage is not observable through a
+// descriptor at all - so this check is a lifetime check in the C++17 tree and a
+// growth-path exercise in the C++11/14 ones.
 void test_pool_growth_after_link_keeps_every_published_name()
 {
     const std::vector<std::string> no_deps;
     const std::vector<std::int32_t> no_indexes;
 
     easypb_schema::SchemaSet set;
-    // The reference is spelled RELATIVELY on purpose: the link is what interns
-    // the absolute `.shared.Value` into a.proto's pool, so the name under test
-    // is one the pool received after the fixture was built.
+    // The references are spelled RELATIVELY on purpose: the link is what interns
+    // the absolute names into a.proto's pool, so the names under test are ones
+    // the pool received after the fixture was built.
     easypb_schema::SchemaFile& a = make_file(
         set, "a.proto", std::vector<std::string>(1, "b.proto"),
         no_indexes, no_indexes);
     set_package(a, "app");
-    add_message_with_field(a, "A", "v", 1, "shared.Value");
+    // TWO published names in one file, deliberately: a pool that hands every
+    // name the same buffer collapses them into one answer, and the pair of reads
+    // below then disagrees with itself as well as with the expected text.
+    DescriptorProto holder;
+    holder.name = a.strings.save("A");
+    holder.has_name = true;
+    add_field(a, holder, "v", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+              "shared.Value");
+    add_field(a, holder, "w", 2, FieldDescriptorProto::LABEL_OPTIONAL,
+              "shared.Other");
+    a.file.message_type.push_back(holder);
     easypb_schema::SchemaFile& b = make_file(set, "b.proto", no_deps,
                                              no_indexes, no_indexes);
     set_package(b, "shared");
     add_message(b, "Value");
+    add_message(b, "Other");
 
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
@@ -6106,24 +6154,15 @@ void test_pool_growth_after_link_keeps_every_published_name()
                                      linked, error));
     CHECK(linked.complete);
 
-    // The address is read from the MEMBER, never through a local `str_view`:
-    // under C++17 `str_view` is std::string_view (descriptor.pb.hpp), so this
-    // address is the pool's and the assertion below is the one that catches a
-    // view into a freed or moved pool; under C++11/14 `str_view` is
-    // std::string, the field owns a copy, and only the text and size assertions
-    // carry weight. The cxx17 tree is where this check bites.
     CHECK(text(a.file.message_type[0].field[0].type_name) == ".shared.Value");
-    const char* const data_before =
-        a.file.message_type[0].field[0].type_name.data();
-    const std::size_t size_before =
-        a.file.message_type[0].field[0].type_name.size();
+    CHECK(text(a.file.message_type[0].field[1].type_name) == ".shared.Other");
     const std::string visible_before = visible_names(linked, a);
     CHECK(visible_before == "a.proto,b.proto");
 
     // Force the growth path in BOTH pools: the referencing file's, which owns
-    // the resolved spelling, and the declaring file's, whose descriptor the
-    // index entry points at. The first block is 4096 bytes, so 5000 bytes
-    // always allocate another one, and the second save lands in that new block
+    // the resolved spellings, and the declaring file's, whose descriptors the
+    // index entries point at. The first block is 4096 bytes, so 5000 bytes
+    // always allocate another one, and the save after it lands in that new block
     // exactly as a later interning pass would.
     const std::string filler(5000, 'x');
     a.strings.save(filler);
@@ -6131,14 +6170,25 @@ void test_pool_growth_after_link_keeps_every_published_name()
     a.strings.save("after-growth");
     b.strings.save("after-growth");
 
-    // The same view, re-read after the growth: same bytes, same address, same
-    // size - not merely "a string that still compares equal".
+    // The FIRST bytes a pool ever saved for a file are its logical name, and a
+    // block the growth abandons is clobbered at its start (the allocator writes
+    // its own free-list bookkeeping there before anything the fixture saves
+    // later), so these two reads are the growth check's sharpest edge: measured
+    // on the freed-blocks shape, `a.proto` is the string that comes back wrong.
+    // Stated directly here, not only through `visible_names` below, so the
+    // assertion that reports the shape names the string it lost.
+    CHECK(text(a.file.name) == "a.proto");
+    CHECK(text(b.file.name) == "b.proto");
+    // Both published names, re-read after the growth: each must still read its
+    // own text, and the two must not have collapsed into one buffer.
     CHECK(text(a.file.message_type[0].field[0].type_name) == ".shared.Value");
-    CHECK(a.file.message_type[0].field[0].type_name.data() == data_before);
-    CHECK(a.file.message_type[0].field[0].type_name.size() == size_before);
+    CHECK(text(a.file.message_type[0].field[1].type_name) == ".shared.Other");
+    CHECK(text(a.file.message_type[0].field[0].type_name) !=
+          text(a.file.message_type[0].field[1].type_name));
     // The owned half of the view - the index keys and the visibility sets -
     // is untouched too: it stores no pointer into a pool.
     CHECK(linked.symbols.symbols.count(".shared.Value") == 1);
+    CHECK(linked.symbols.symbols.count(".shared.Other") == 1);
     CHECK(visible_names(linked, a) == visible_before);
 }
 
@@ -6332,16 +6382,25 @@ void make_repeat_fixture(easypb_schema::SchemaSet& set, bool reverse)
     }
 }
 
-// O6 (Step 9): the same set linked twice, each time into a fresh LinkedSchema,
-// must publish an identical view - the same resolved names and kinds and the
-// same visibility sets. The second run resolves an input whose type_names the
-// first run already rewrote to their absolute spelling, which
-// test_already_resolved_input_is_resolved_again pins separately; here the
-// question is determinism, not the reference spelling. The third run builds the
-// same fixture in the reverse insertion order: Step 5.2's
-// test_input_order_and_targets_do_not_decide_the_verdict already pins the
-// verdict and the resolved names across six permutations of a three-file set,
-// so this adds the published visibility sets and kinds rather than repeating it.
+// O6/A2 (Step 9): the same set linked twice, each time into a fresh
+// LinkedSchema, must publish an identical view - the same resolved names and
+// kinds, the same visibility sets, and the same index, entry for entry. The
+// second run resolves an input whose type_names the first run already rewrote
+// to their absolute spelling, which test_already_resolved_input_is_resolved_again
+// pins separately; here the question is determinism, not the reference
+// spelling. The twin builds the same fixture in the reverse insertion order,
+// and the whole-view fingerprint includes the OWNER of every index entry: a
+// package scope declared by two files keeps the first declarer it saw, which is
+// where the walk order becomes observable in a successful link. This fixture's
+// `deep` package is declared by both mid.proto and leaf.proto, so an
+// insertion-ordered walk would record mid.proto for one insertion order and
+// leaf.proto for the other and the comparison below would fail; the name-sorted
+// walk (A2) gives leaf.proto in both. The first-reported-failure half of the
+// same rule is Step 5.2's
+// test_input_order_and_targets_do_not_decide_the_verdict, which pins the
+// verdict and the resolved names across six permutations of a three-file set - so
+// that half is inherited rather than repeated here. `D-46`'s measurement:
+// dropping the name-sorted walk reddens the assertions below.
 void test_repeated_runs_publish_identical_views()
 {
     {
@@ -6393,6 +6452,27 @@ void test_repeated_runs_publish_identical_views()
         CHECK(backward.complete);
         CHECK(view_fingerprint(backward_set, backward) ==
               view_fingerprint(forward_set, forward));
+
+        // The order claim, asserted rather than implied: `.deep` is declared by
+        // mid.proto and leaf.proto, so the merged package node keeps whichever
+        // declarer the walk reached first - leaf.proto under the name-sorted
+        // walk (A2), in BOTH insertion orders, and mid.proto for the forward
+        // one under an insertion-ordered walk. The whole-view comparison above
+        // is what catches that; the pair here makes the observable explicit, so
+        // the comparison cannot go vacuous if the fingerprint ever stops
+        // carrying the owner.
+        const std::map<std::string, easypb_schema::SymbolEntry>::const_iterator
+            forward_deep = forward.symbols.symbols.find(".deep");
+        CHECK(forward_deep != forward.symbols.symbols.end());
+        if (forward_deep != forward.symbols.symbols.end()) {
+            CHECK(text(forward_deep->second.owner->file.name) == "leaf.proto");
+        }
+        const std::map<std::string, easypb_schema::SymbolEntry>::const_iterator
+            backward_deep = backward.symbols.symbols.find(".deep");
+        CHECK(backward_deep != backward.symbols.symbols.end());
+        if (backward_deep != backward.symbols.symbols.end()) {
+            CHECK(text(backward_deep->second.owner->file.name) == "leaf.proto");
+        }
     }
 }
 
@@ -6404,6 +6484,14 @@ void test_repeated_runs_publish_identical_views()
 // test_invisible_candidates_do_not_shadow (the B10/B11 message head, whose
 // second half makes the hidden file a dependency and expects the refusal); what
 // this adds is that no insertion order can select a different candidate.
+//
+// The loop is also the delta's discriminating order check (`D-46`): `pkg` is
+// declared by BOTH a.proto and hid.proto, and the whole-view fingerprint carries
+// each index entry's owner, so the merged `.pkg` node records the name-sorted
+// first declarer whatever the insertion order - while an insertion-ordered walk
+// records hid.proto for the three orders that insert it before a.proto and the
+// per-order assertions plus the fingerprint comparison go red. Measured by
+// dropping `files_by_logical_name`'s `stable_sort`.
 //
 // The requester is a.proto (package pkg, message M importing vis.proto):
 // `sub` is a FIELD inside M (non-type, nearest), `.pkg.sub` is a MESSAGE owned
@@ -6463,6 +6551,18 @@ void test_iterator_rules_stability_across_file_order()
         CHECK(a->file.message_type[0].field[1].type ==
               FieldDescriptorProto::TYPE_MESSAGE);
         CHECK(visible_names(linked, *a) == "a.proto,vis.proto");
+
+        // The walk order's observable for this fixture, asserted per order:
+        // `.pkg` is declared by a.proto and by hid.proto, the merged node keeps
+        // the first declarer it saw, and the walk is name-sorted, so it is
+        // a.proto in every one of the six orders. An insertion-ordered walk
+        // names hid.proto whenever hid.proto came first.
+        const std::map<std::string, easypb_schema::SymbolEntry>::const_iterator pkg =
+            linked.symbols.symbols.find(".pkg");
+        CHECK(pkg != linked.symbols.symbols.end());
+        if (pkg != linked.symbols.symbols.end()) {
+            CHECK(text(pkg->second.owner->file.name) == "a.proto");
+        }
 
         const std::string view = view_fingerprint(set, linked);
         if (order == 0) {
