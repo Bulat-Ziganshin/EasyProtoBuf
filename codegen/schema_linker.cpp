@@ -220,8 +220,8 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
     // complete mode: the malformed shape is a structural fact about an
     // available descriptor, not a by-product of a reference, and
     // `maps/data/malformed_map.pbs` is the fixture consumed here. D-28's
-    // enum-number rule rides the same reference-free stage for the same reason
-    // (Step 7.2 repeats both).
+    // enum-number rule rides the same reference-free stage for the same reason,
+    // and so does D-32's empty-enum rule (Step 7.2 repeats all three).
     if (!validate_map_entry_shapes(file, error)) return false;
     if (!validate_enum_value_numbers(file, error)) return false;
 
@@ -314,7 +314,9 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // D-28 (fix round r13) rides the same stage: every enum's value numbers are
     // checked per file, referenced or not, because an enum no field names never
     // enters resolution and would otherwise be accepted with a shape protoc
-    // refuses. Both checks are provable from the descriptor alone.
+    // refuses. D-32 (fix round r16) rides it too - the same enum, asked whether
+    // it declares any value at all. Every check here is provable from the
+    // descriptor alone.
     for (std::size_t i = 0; i < ordered.size(); ++i) {
         if (!validate_map_entry_shapes(*ordered[i], error)) return false;
         if (!validate_enum_value_numbers(*ordered[i], error)) return false;

@@ -766,7 +766,13 @@ void test_index_message_vs_enum_across_files()
     easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", 0);
     add_message(a, "Mix");
     easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", 0);
-    add_enum(b, "Mix", 0);
+    // The enum carries a value since fix round r16: `add_enum(b, "Mix", 0)`
+    // declared an enum with no values, which is a shape protoc refuses and
+    // D-32 closed - the reference-free enum sweep now refuses it BEFORE the
+    // stage-3 index this test is about, so the fixture had to become a shape
+    // protoc would build. The collision under test is unchanged: the enum VALUE
+    // lives in the containing scope, the enum TYPE collides with a's message.
+    add_enum(b, "Mix", "MIX_VALUE");
 
     check_duplicate_failure(set, "duplicate type name .Mix", "b.proto");
 }
@@ -5172,8 +5178,13 @@ void test_descriptor_origin_duplicate_enum_number_is_refused()
         easypb_schema::Diagnostic error;
         CHECK(accepted_in_both_modes(set, error));
     }
-    // (f) A one-value enum and an enum with no values at all are not this
-    // rule's business: neither repeats a number.
+    // (f) A one-value enum is not this rule's business: it repeats no number.
+    // The empty-enum half of this row used to be accepted here as well - it
+    // moved to `test_descriptor_origin_empty_enum_is_refused` in fix round r16,
+    // because an enum with no values is a shape protoc refuses and `D-32`
+    // closed that acceptance (the row's own note, "an enum with no values at
+    // all are not this rule's business", was true of THIS rule and false of
+    // the file's validity).
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
@@ -5189,13 +5200,200 @@ void test_descriptor_origin_duplicate_enum_number_is_refused()
         value.has_number = true;
         single.value.push_back(value);
         file.file.enum_type.push_back(single);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
+// The enum's OTHER own-shape question (fix round r16, ledger D-32, contract
+// clause 12): an enum must DECLARE a value. protoc refuses an enum with no
+// value when it builds a descriptor ("Enums must contain at least one
+// value.") and our parser refuses the source twin as text, so the shape is
+// descriptor input only - a hand-built or mutated `.pbs`, which is what this
+// mode exists for. The check lives in the same reference-free sweep the
+// duplicate-number rule uses, and it is asked BEFORE that rule's `allow_alias`
+// early return, which is what row (c) below pins.
+void test_descriptor_origin_empty_enum_is_refused()
+{
+    // (a) The reported shape: a top-level enum with no value. The sentence
+    // states the rule and names the enum; the descriptor path is appended
+    // because a thin descriptor carries no source location.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "empty.pbs", "pkg");
+        file.from_descriptor_set = true;
         EnumDescriptorProto empty;
-        empty.name = file.strings.save("Nothing");
+        empty.name = file.strings.save("E");
         empty.has_name = true;
         file.file.enum_type.push_back(empty);
 
         easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_EMPTY_ENUM);
+        CHECK(error.file == "empty.pbs");
+        CHECK(error.message.find(
+                  "enum \".pkg.E\" contains no values; an enum must contain "
+                  "at least one value") == 0);
+        CHECK(error.message.find(" at [") != std::string::npos);
+    }
+    // (b) The rule is about the value list, not about the syntax class: the
+    // same empty enum in a file that declares proto3 is refused identically.
+    // (D-33 records the open-enum rule this shape's sibling would need; the
+    // two are separate questions and this check does not answer that one.)
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "empty3.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        EnumDescriptorProto empty;
+        empty.name = file.strings.save("E");
+        empty.has_name = true;
+        file.file.enum_type.push_back(empty);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_EMPTY_ENUM);
+    }
+    // (c) `option allow_alias = true` is not a licence for the empty list -
+    // protoc refuses this shape too (measured this round as
+    // `enum-empty-aliased`), so the question is asked before the option's
+    // early return. This is the row that fails if the check is placed after it.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "empty-alias.pbs", "pkg");
+        file.from_descriptor_set = true;
+        EnumDescriptorProto empty;
+        empty.name = file.strings.save("E");
+        empty.has_name = true;
+        empty.options.allow_alias = true;
+        empty.options.has_allow_alias = true;
+        empty.has_options = true;
+        file.file.enum_type.push_back(empty);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_EMPTY_ENUM);
+    }
+    // (d) The nested walk: a message's own enum and a deeper nested type's
+    // enum are both reached, so an unreferenced declaration cannot carry the
+    // shape past the gate.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "nested-empty.pbs", "pkg");
+        file.from_descriptor_set = true;
+        DescriptorProto outer;
+        outer.name = file.strings.save("Outer");
+        outer.has_name = true;
+        EnumDescriptorProto own;
+        own.name = file.strings.save("Own");
+        own.has_name = true;
+        outer.enum_type.push_back(own);
+        file.file.message_type.push_back(outer);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_EMPTY_ENUM);
+        CHECK(error.message.find("enum \".pkg.Outer.Own\"") !=
+              std::string::npos);
+
+        easypb_schema::SchemaSet deep_set;
+        easypb_schema::SchemaFile& deep =
+            make_simple_file(deep_set, "deep-empty.pbs", "pkg");
+        deep.from_descriptor_set = true;
+        DescriptorProto mid;
+        mid.name = deep.strings.save("Outer");
+        mid.has_name = true;
+        DescriptorProto inner;
+        inner.name = deep.strings.save("Inner");
+        inner.has_name = true;
+        EnumDescriptorProto deep_enum;
+        deep_enum.name = deep.strings.save("E");
+        deep_enum.has_name = true;
+        inner.enum_type.push_back(deep_enum);
+        mid.nested_type.push_back(inner);
+        deep.file.message_type.push_back(mid);
+
+        easypb_schema::Diagnostic deep_error;
+        CHECK(refused_in_both_modes(deep_set, deep_error));
+        CHECK(deep_error.code == easypb_schema::DIAGNOSTIC_EMPTY_ENUM);
+        CHECK(deep_error.message.find("enum \".pkg.Outer.Inner.E\"") !=
+              std::string::npos);
+    }
+    // (e) Accept controls, so the new rule cannot pass by refusing enums in
+    // general: a one-value enum, a nested enum with a value, and - the D-28
+    // direction this round must not disturb - the aliased two-value enum.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "values.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.enum_type.push_back(make_enum_with_numbers(file, "E", 1, 2, -1));
+        DescriptorProto outer;
+        outer.name = file.strings.save("Outer");
+        outer.has_name = true;
+        EnumDescriptorProto nested;
+        nested.name = file.strings.save("N");
+        nested.has_name = true;
+        EnumValueDescriptorProto value;
+        value.name = file.strings.save("ONLY");
+        value.has_name = true;
+        value.number = 4;
+        value.has_number = true;
+        nested.value.push_back(value);
+        outer.enum_type.push_back(nested);
+        file.file.message_type.push_back(outer);
+
+        easypb_schema::Diagnostic error;
         CHECK(accepted_in_both_modes(set, error));
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "aliased.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.enum_type.push_back(make_enum_with_numbers(file, "E", 1, 1, 1));
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (f) The two rules are one sweep: a file carrying BOTH a repeated number
+    // and an empty enum still reports the enum a reader meets first, in
+    // declaration order - the duplicate-number row keeps its own sentence.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "both.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.enum_type.push_back(make_enum_with_numbers(file, "D", 1, 1, -1));
+        EnumDescriptorProto empty;
+        empty.name = file.strings.save("E");
+        empty.has_name = true;
+        file.file.enum_type.push_back(empty);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
+
+        easypb_schema::SchemaSet second;
+        easypb_schema::SchemaFile& other =
+            make_simple_file(second, "both2.pbs", "pkg");
+        other.from_descriptor_set = true;
+        EnumDescriptorProto first_empty;
+        first_empty.name = other.strings.save("E");
+        first_empty.has_name = true;
+        other.file.enum_type.push_back(first_empty);
+        other.file.enum_type.push_back(
+            make_enum_with_numbers(other, "D", 1, 1, -1));
+
+        easypb_schema::Diagnostic second_error;
+        CHECK(refused_in_both_modes(second, second_error));
+        CHECK(second_error.code == easypb_schema::DIAGNOSTIC_EMPTY_ENUM);
     }
 }
 
@@ -5401,6 +5599,7 @@ int main(int argc, char** argv)
     test_underscore_map_fields_collide_on_the_shared_entry_name();
     test_descriptor_origin_field_without_a_declared_kind_links();
     test_descriptor_origin_duplicate_enum_number_is_refused();
+    test_descriptor_origin_empty_enum_is_refused();
     test_descriptor_origin_empty_oneof_is_rejected();
 
     if (failures != 0) {

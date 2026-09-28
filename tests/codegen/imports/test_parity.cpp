@@ -147,6 +147,7 @@ const CodeName kCodeNames[] = {
     {"DIAGNOSTIC_DUPLICATE_ENUM_NUMBER",
      easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER},
     {"DIAGNOSTIC_EMPTY_ONEOF", easypb_schema::DIAGNOSTIC_EMPTY_ONEOF},
+    {"DIAGNOSTIC_EMPTY_ENUM", easypb_schema::DIAGNOSTIC_EMPTY_ENUM},
 };
 
 const std::size_t kCodeNameCount = sizeof(kCodeNames) / sizeof(kCodeNames[0]);
@@ -262,7 +263,7 @@ bool read_rows(const std::string& path, std::vector<Row>& rows)
 
 void check_table(const std::vector<Row>& rows)
 {
-    CHECK(kCodeNameCount == 16);
+    CHECK(kCodeNameCount == 17);
     CHECK(!rows.empty());
 
     std::set<std::string> names;

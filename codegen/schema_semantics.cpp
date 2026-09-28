@@ -1159,20 +1159,39 @@ bool validate_message_map_entries(const SchemaFile& file,
 // because no resolution pass walks a top-level enum's values and an enum
 // nothing references is still descriptor input.
 //
-// Two values may share a number only when the enum declares
-// `option allow_alias = true`; that is protoc's own rule when it builds a
-// descriptor, and the source path refuses the same shape as text
-// (`proto_parser.cpp`'s duplicate-number rule). The option travels in the
-// model (`EnumOptions`) since this round, which is what lets an intentional
-// alias - `tests/codegen/enums/data/enum_codegen.proto`'s
-// `STARTED = 1; ACTIVE = 1;` - link, so refusing an aliased enum would be the
-// same divergence D-28 closed, in the other direction.
+// Two questions about the same entity, both answerable from the descriptor
+// alone: the enum must DECLARE a value (D-32, fix round r16), and two values
+// may share a number only when the enum declares `option allow_alias = true`
+// (D-28). The second is protoc's own rule when it builds a descriptor, and the
+// source path refuses the same shape as text (`proto_parser.cpp`'s
+// duplicate-number rule). The option travels in the model (`EnumOptions`) since
+// fix round r13, which is what lets an intentional alias -
+// `tests/codegen/enums/data/enum_codegen.proto`'s `STARTED = 1; ACTIVE = 1;` -
+// link, so refusing an aliased enum would be the same divergence D-28 closed,
+// in the other direction.
 bool validate_enum_value_numbers_in_enum(const SchemaFile& file,
                                          const EnumDescriptorProto& enumeration,
                                          const std::string& enum_name,
                                          const DescriptorPath& enum_path,
                                          Diagnostic& error)
 {
+    // The empty list is the rule's subject, not the option's: protoc refuses an
+    // enum with no value even when the enum writes `option allow_alias = true`
+    // (`Enums must contain at least one value.`, measured this round on
+    // `enum-empty-aliased`), so this question is asked BEFORE the option's
+    // early return below. The parser refuses the source twin as text, so the
+    // shape is descriptor input only - a hand-built or mutated `.pbs`, which is
+    // what this mode exists for; an enum nothing references is still descriptor
+    // input, so the walk does not need a reference (A26's precedent).
+    if (enumeration.value.empty()) {
+        return fail_at_code(
+            file,
+            "enum \"" + enum_name +
+                "\" contains no values; an enum must contain at least one "
+                "value",
+            declaration_location(file, enum_path), enum_path,
+            DIAGNOSTIC_EMPTY_ENUM, error);
+    }
     if (enumeration.options.has_allow_alias &&
         enumeration.options.allow_alias) {
         return true;

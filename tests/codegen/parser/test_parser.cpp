@@ -360,6 +360,12 @@ void test_rejects_invalid_enum_defaults()
     CHECK(error.message.find("no value named B") != std::string::npos);
 }
 
+// D-32 (fix round r16): the source half of the empty-enum rule. The parser
+// refuses the shape as text, which is why the descriptor-origin half is what
+// the linker owns; the option-only body is still an empty list, and that row is
+// the parity control for the descriptor-origin `allow_alias` case - protoc
+// refuses an empty enum that writes the option as well, so the option is not a
+// licence on either origin.
 void test_rejects_empty_enums()
 {
     easypb_proto::ParsedProto parsed;
@@ -367,6 +373,13 @@ void test_rejects_empty_enums()
     CHECK(!easypb_proto::parse_proto(
         "empty-enum.proto", "syntax=\"proto2\"; enum E {}", parsed, error));
     CHECK(error.message.find("at least one value") != std::string::npos);
+
+    easypb_proto::ParsedProto option_only;
+    easypb_proto::Diagnostic option_error;
+    CHECK(!easypb_proto::parse_proto("empty-enum-alias.proto",
+        "syntax=\"proto2\"; enum E { option allow_alias = true; }",
+        option_only, option_error));
+    CHECK(option_error.message.find("at least one value") != std::string::npos);
 }
 
 void test_rejects_duplicate_oneof_names()

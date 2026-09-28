@@ -35,6 +35,8 @@ d-duplicate-enum-number-accept	descriptor	accept	accept	pair
 d-duplicate-enum-number-reject	descriptor	reject	DIAGNOSTIC_DUPLICATE_ENUM_NUMBER	pair	
 d-empty-oneof-accept	descriptor	accept	accept	pair	
 d-empty-oneof-reject	descriptor	reject	DIAGNOSTIC_EMPTY_ONEOF	pair	
+d-empty-enum-accept	descriptor	accept	accept	pair	
+d-empty-enum-reject	descriptor	reject	DIAGNOSTIC_EMPTY_ENUM	pair	
 d-missing-import-accept	descriptor	accept	accept	pair	
 d-missing-import-reject	descriptor	reject	DIAGNOSTIC_MISSING_IMPORT	pair	
 d-invalid-import-accept	descriptor	accept	accept	pair	

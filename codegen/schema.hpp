@@ -92,7 +92,17 @@ enum DiagnosticCode
     // have at least one field.`); the index-RANGE check beside this one only
     // refuses a field pointing outside the list, so a declaration nothing
     // points at is invisible to it.
-    DIAGNOSTIC_EMPTY_ONEOF
+    DIAGNOSTIC_EMPTY_ONEOF,
+    // Plan 4 Step 5.1 (contract clause 12, D-32): an enum declares no value at
+    // all, so the type has no member and no number to resolve. protoc refuses
+    // the shape when it builds a descriptor (`Enums must contain at least one
+    // value.`) and our parser refuses the source twin as text ("enum must
+    // contain at least one value"), so this is the descriptor-origin half of
+    // that frontend parity rule. The check runs BEFORE the `allow_alias`
+    // early return: an empty enum that writes the option is still refused by
+    // protoc, so the option cannot licence an empty list. Descriptor-origin
+    // only - the parser cannot produce the shape.
+    DIAGNOSTIC_EMPTY_ENUM
 };
 
 struct Diagnostic
