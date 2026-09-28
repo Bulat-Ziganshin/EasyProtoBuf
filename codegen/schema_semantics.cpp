@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <limits>
 #include <sstream>
+#include <utility>
 
 namespace easypb_schema {
 
@@ -385,8 +386,22 @@ bool add_symbol(const SchemaFile& file, SymbolIndex& symbols,
     entry.kind = kind;
     entry.owner = &file;
     entry.path = path;
+    // One value-type temporary with the entry MOVED into it, and the node
+    // built from an rvalue: `insert(std::make_pair(name, entry))` copied the
+    // key and the descriptor path into the pair, again into the value type
+    // `insert(const value_type&)` takes, and a third time into the node - the
+    // only redundant copy the 2026-09-28 codegen performance audit's
+    // index-phase numbers actually contain (the audit's `view_text` half is
+    // SSO-sized and allocates nothing; measured, `build/plan4/fix-r19/`).
+    //
+    // `emplace` is the idiomatic C++11 spelling of this and is NOT usable:
+    // the supported GCC 4.7 toolchain's libstdc++ has no `map::emplace`
+    // (`D-18`'s class, measured before the edit in
+    // `build/plan4/fix-r19/alloc/preflight-gcc47.txt`). This form compiles and
+    // runs under GCC 4.7.3 and GCC 15 alike.
     const std::pair<std::map<std::string, SymbolEntry>::iterator, bool> inserted =
-        symbols.symbols.insert(std::make_pair(name, entry));
+        symbols.symbols.insert(
+            std::map<std::string, SymbolEntry>::value_type(name, std::move(entry)));
     if (!inserted.second) {
         const int existing_kind = inserted.first->second.kind;
         // Package scopes merge across files instead of conflicting.
