@@ -547,9 +547,14 @@ if(BUILD_TESTING)
             ${PROJECT_SOURCE_DIR}/codegen/parser)
         target_link_libraries(codegen_imports_source_linker_test
             PRIVATE easypb_proto_loader)
+        # Step 8.3: the corpus directory and the oracle directory the
+        # differential lane generates. The second argument is optional to the
+        # binary - without it every accepting fixture prints a `SKIP:` line and
+        # the run still succeeds on a machine that has not generated the sets.
         add_test(NAME codegen.imports.source
             COMMAND codegen_imports_source_linker_test
-                ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/linker)
+                ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/linker
+                ${PROJECT_SOURCE_DIR}/build/package-imports/oracle)
         set_tests_properties(codegen.imports.source PROPERTIES
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 

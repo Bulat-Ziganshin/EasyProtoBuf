@@ -1,0 +1,12 @@
+// The plan-4 Task 2 regression pair, verbatim from the contract
+// (04-import-linker.md, "Keep linking out of two neighbouring rules").
+// `states` is a repeated imported enum behind `packed = true` and `state`
+// carries an imported enum default; Step 8.3 compares both linked fields'
+// absolute type_name and kind against this file's protoc descriptor set.
+syntax = "proto2";
+package app;
+import "state.proto";
+message Report {
+  repeated shared.State states = 1 [packed = true];
+  optional shared.State state = 2 [default = STOPPED];
+}
