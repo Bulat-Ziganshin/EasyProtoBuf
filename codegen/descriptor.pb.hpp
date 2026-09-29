@@ -151,6 +151,19 @@ struct DescriptorProto
     std::vector<EnumDescriptorProto> enum_type;
     std::vector<OneofDescriptorProto> oneof_decl;
     MessageOptions options;
+    // Wire fields 5 (`extension_range`) and 6 (`extension`). NEITHER is
+    // modelled: no component here reads extension metadata, and validating it
+    // is outside the linker's scope (contract clause 12). Only the PRESENCE of
+    // each is counted, because protoc's `ValidateMapEntry` refuses a map entry
+    // that declares either (`descriptor.cc:8448-8452`: "must not contain
+    // extensions, extension range or nested message or enums"), and without
+    // the counts a crafted synthetic entry's extension data is invisible to the
+    // sweep that rule needs (ledger `D-62`, fix round r26). Counts rather than
+    // decoded members: a declaration's contents are none of this model's
+    // business, and a count cannot throw on a required member of a shape
+    // nothing else reads.
+    int32_t extension_range_count = 0;  // field 5, occurrence count
+    int32_t extension_count = 0;        // field 6, occurrence count
 
     bool has_name = false;
     bool has_options = false;
@@ -348,6 +361,11 @@ inline void decode(easypb::Decoder pb, DescriptorProto &x)
             case 2: pb.get_repeated_message(&x.field); break;
             case 3: pb.get_repeated_message(&x.nested_type); break;
             case 4: pb.get_repeated_message(&x.enum_type); break;
+            // Fields 5 and 6 are counted, not decoded (see the struct): the
+            // skip is the whole read, and the count is what A26's sweep asks
+            // (ledger `D-62`).
+            case 5: ++x.extension_range_count; pb.skip_field(); break;
+            case 6: ++x.extension_count; pb.skip_field(); break;
             case 8: pb.get_repeated_message(&x.oneof_decl); break;
             case 7: pb.get_message(&x.options, &x.has_options); break;
             default: pb.skip_field();

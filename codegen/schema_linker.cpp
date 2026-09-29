@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -101,15 +103,41 @@ std::vector<SchemaFile*> files_by_logical_name(const SchemaSet& files)
 // would silently downgrade an editions file to a semantics it does not have
 // (measured: oracle E8 accepts where E9, the proto2 twin, rejects).
 //
-// No descriptor path suffix: the file itself is the subject, and the value is
-// quoted so the message names what was actually read.
+// No descriptor path suffix: the file itself is the subject, and the value the
+// sentence quotes is the one that DECIDED the class, so the message names what
+// was actually read. Since `classify_file_syntax` consults `has_edition()`
+// first, that value is the edition whenever the field is present: quoting
+// `syntax` there named a string the file may not even carry, and described an
+// `edition = "2023"` file as `declares syntax ""` (ledger `D-61`, introduced
+// by fix round r25's `D-52` change, which made the edition path reach this
+// message while the string sentence stayed unconditional). The string sentence
+// is kept for the files the string decided, exactly as A25 wrote it.
+std::string unsupported_edition_text(int32_t edition)
+{
+    // The editions protobuf 30.1 names (descriptor.proto: EDITION_2023 = 1000,
+    // EDITION_2024 = 1001) are named by year; any other value is named by its
+    // number, because the point is to report what was read, not to guess a name
+    // for it. EDITION_PROTO2/EDITION_PROTO3 never arrive here - the classifier
+    // accepts them. `std::ostringstream` rather than `std::to_string`, which
+    // some legacy MinGW libstdc++ implementations lack (codegen/utils.cpp).
+    if (edition == kEdition2023) return "2023";
+    if (edition == kEdition2024) return "2024";
+    std::ostringstream output;
+    output << edition;
+    return output.str();
+}
+
 bool fail_unsupported_syntax(const SchemaFile& file, Diagnostic& error)
 {
     error = Diagnostic();
     error.file = view_text(file.file.name);
     error.location = unknown_location();
-    error.message = "file \"" + view_text(file.file.name) + "\" declares syntax \"" +
-                    view_text(file.file.syntax) + "\", which is not supported: " +
+    const std::string decided =
+        file.file.has_edition
+            ? "edition " + unsupported_edition_text(file.file.edition)
+            : "syntax \"" + view_text(file.file.syntax) + "\"";
+    error.message = "file \"" + view_text(file.file.name) + "\" declares " +
+                    decided + ", which is not supported: " +
                     "only absent, \"proto2\", and \"proto3\" are accepted";
     error.warning = false;
     error.code = DIAGNOSTIC_UNSUPPORTED_SYNTAX;

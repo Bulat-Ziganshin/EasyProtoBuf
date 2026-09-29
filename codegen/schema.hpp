@@ -173,11 +173,15 @@ enum FileSyntax
 // classified like the reference instead of being silently downgraded to
 // proto2 (ledger `D-52`). Only these two editions are modeled; EDITION_2023
 // and every other value are an unsupported input, exactly as the string
-// "editions" is (A25).
+// "editions" is (A25). The two editions protobuf 30.1 can write beyond them
+// are named here so A25's refusal can say which edition it read instead of
+// quoting an absent `syntax` string (ledger `D-61`).
 enum
 {
     kEditionProto2 = 998,
-    kEditionProto3 = 999
+    kEditionProto3 = 999,
+    kEdition2023 = 1000,
+    kEdition2024 = 1001
 };
 
 FileSyntax classify_file_syntax(const FileDescriptorProto& file);

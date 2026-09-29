@@ -6744,6 +6744,106 @@ void test_descriptor_origin_editions_field_decides_the_class()
     }
 }
 
+// D-61: A25's refusal names the value that DECIDED the class. The classifier
+// consults `has_edition()` first, so a crafted file carrying an unsupported
+// edition and no syntax string was described as `declares syntax ""` - a string
+// it does not have - and one carrying `syntax = "proto3"` beside an unsupported
+// edition was described as unsupported SYNTAX while "proto3" is listed as
+// accepted in the same sentence. The two sentences are pinned here; the string
+// sentence stays exactly as A25 wrote it for the files the string decided.
+void test_unsupported_syntax_refusal_names_what_decided()
+{
+    // (a) the edition field decided, and protobuf 30.1 has a year for it.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "edition2023.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.has_edition = true;
+        file.file.edition = easypb_schema::kEdition2023;
+        add_message(file, "M");
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+        CHECK(error.message ==
+              "file \"edition2023.pbs\" declares edition 2023, which is not "
+              "supported: only absent, \"proto2\", and \"proto3\" are "
+              "accepted");
+    }
+    // (b) the same file also carries `syntax = "proto3"`: the edition decided,
+    // so the sentence names the edition and does not quote the string.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "edition2023-proto3.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.has_edition = true;
+        file.file.edition = easypb_schema::kEdition2023;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.message ==
+              "file \"edition2023-proto3.pbs\" declares edition 2023, which "
+              "is not supported: only absent, \"proto2\", and \"proto3\" "
+              "are accepted");
+        CHECK(error.message.find("declares syntax") == std::string::npos);
+    }
+    // (c) an edition protobuf 30.1 has no year for is named by its number: the
+    // sentence reports what was read instead of inventing a name for it.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "edition1002.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.has_edition = true;
+        file.file.edition = 1002;
+        add_message(file, "M");
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.message.find("declares edition 1002") !=
+              std::string::npos);
+        CHECK(error.message.find("declares syntax") == std::string::npos);
+    }
+    // (d) the STRING decided: no edition field, so the sentence is A25's own,
+    // with the string that was read quoted.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "editions-string.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("editions");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+        CHECK(error.message ==
+              "file \"editions-string.pbs\" declares syntax \"editions\", "
+              "which is not supported: only absent, \"proto2\", and "
+              "\"proto3\" are accepted");
+    }
+    // (e) control: the two editions this model DOES read never reach the
+    // sentence, so no refusal may name them.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "edition2.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.has_edition = true;
+        file.file.edition = easypb_schema::kEditionProto2;
+        add_message(file, "M");
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
 // D-51: `packed` is gated on its VALUE, not on presence. protoc refuses only
 // `[packed = true]` on a non-packable field and accepts `[packed = false]`
 // anywhere, writing `has_packed = true, packed = false`; a presence-only gate
@@ -6815,10 +6915,11 @@ void test_descriptor_origin_packed_false_is_accepted()
     }
 }
 
-// D-53: A26's sweep asks for the whole `ValidateMapEntry` shape, not just the
-// two field numbers. Each row mutates one member of a clean entry and requires
-// the dedicated code in both modes; the controls at the end keep the rule from
-// refusing every entry.
+// D-53 (fix round r25) and D-62 (fix round r26): A26's sweep asks the clause
+// groups of protoc's `ValidateMapEntry` that a descriptor alone can answer, not
+// just the two field numbers. Each row mutates one member of a clean entry and
+// requires the dedicated code in both modes; the controls at the end keep the
+// rule from refusing every entry.
 enum MapEntryShape {
     MAP_SHAPE_BYTES_KEY,
     MAP_SHAPE_FLOAT_KEY,
@@ -6828,7 +6929,9 @@ enum MapEntryShape {
     MAP_SHAPE_VALUE_RENAMED,
     MAP_SHAPE_REPEATED_KEY,
     MAP_SHAPE_NESTED_TYPE,
-    MAP_SHAPE_NESTED_ENUM
+    MAP_SHAPE_NESTED_ENUM,
+    MAP_SHAPE_EXTENSION_RANGE,
+    MAP_SHAPE_EXTENSION_MEMBER
 };
 
 void build_map_entry_shape(easypb_schema::SchemaFile& file,
@@ -6884,6 +6987,16 @@ void build_map_entry_shape(easypb_schema::SchemaFile& file,
             entry.enum_type.push_back(nested_enum);
             break;
         }
+        case MAP_SHAPE_EXTENSION_RANGE:
+            // D-62: the counters stand for DescriptorProto's wire fields 5 and
+            // 6, which no other reader of this model wants. The decode-level
+            // twin - that these counters can only be filled by those fields -
+            // is test_map_entry_extension_data_is_counted_and_refused.
+            entry.extension_range_count = 1;
+            break;
+        case MAP_SHAPE_EXTENSION_MEMBER:
+            entry.extension_count = 1;
+            break;
     }
 }
 
@@ -6892,7 +7005,8 @@ void test_malformed_map_entry_shape_is_rejected()
     const MapEntryShape shapes[] = {
         MAP_SHAPE_BYTES_KEY,   MAP_SHAPE_FLOAT_KEY,    MAP_SHAPE_ENUM_KEY,
         MAP_SHAPE_THIRD_FIELD, MAP_SHAPE_KEY_RENAMED,  MAP_SHAPE_VALUE_RENAMED,
-        MAP_SHAPE_REPEATED_KEY, MAP_SHAPE_NESTED_TYPE, MAP_SHAPE_NESTED_ENUM
+        MAP_SHAPE_REPEATED_KEY, MAP_SHAPE_NESTED_TYPE, MAP_SHAPE_NESTED_ENUM,
+        MAP_SHAPE_EXTENSION_RANGE, MAP_SHAPE_EXTENSION_MEMBER
     };
     for (std::size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); ++i) {
         easypb_schema::SchemaSet set;
@@ -6916,6 +7030,176 @@ void test_malformed_map_entry_shape_is_rejected()
         file.from_descriptor_set = true;
         add_message(file, "M");
         add_map_entry(file, file.file.message_type[0], "ItemsEntry", 0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
+// D-62: a synthetic entry's extension data is COUNTED by the decoder, and the
+// sweep refuses what the count shows. The bytes below are the review round's
+// own crafted counter-example (`map_entry_extension_range`), rebuilt here for
+// the suite: `DescriptorProto` carries no extension member at all before the
+// fix, so a model-level row alone would leave the decoder's half unproven - a
+// counter that never left zero makes the sweep unreachable while every other
+// row still passes.
+//
+// The encoder is hand-written rather than the library's Writer so the bytes are
+// an independent input: a helper shared with the decoder could cancel a wrong
+// field number out. Field numbers and enum values are descriptor.proto's own
+// (LABEL_OPTIONAL = 1, LABEL_REPEATED = 3, TYPE_INT32 = 5, TYPE_MESSAGE = 11,
+// DescriptorProto.extension_range = 5, .extension = 6, .options = 7,
+// FileDescriptorProto.message_type = 4).
+void wire_varint(std::string& out, std::uint64_t value)
+{
+    while (value >= 0x80) {
+        out.push_back(char((value & 0x7F) | 0x80));
+        value >>= 7;
+    }
+    out.push_back(char(value));
+}
+
+std::string wire_tag(int field, unsigned wire)
+{
+    std::string out;
+    wire_varint(out, (std::uint64_t(field) << 3) | wire);
+    return out;
+}
+
+std::string wire_varint_field(int field, std::uint64_t value)
+{
+    std::string out = wire_tag(field, 0);
+    wire_varint(out, value);
+    return out;
+}
+
+std::string wire_text_field(int field, const char* text)
+{
+    const std::string payload(text);
+    std::string out = wire_tag(field, 2);
+    wire_varint(out, payload.size());
+    out += payload;
+    return out;
+}
+
+std::string wire_message_field(int field, const std::string& payload)
+{
+    std::string out = wire_tag(field, 2);
+    wire_varint(out, payload.size());
+    out += payload;
+    return out;
+}
+
+// One FieldDescriptorProto: name, extendee, number, label, type, type_name.
+// `type_name` is field 6 and `extendee` field 2 - the two are different wire
+// fields, which is why they are two parameters.
+std::string wire_field(const char* name, int number, int label, int type,
+                       const char* type_name, const char* extendee = 0)
+{
+    std::string out = wire_text_field(1, name);
+    if (extendee != 0) out += wire_text_field(2, extendee);
+    out += wire_varint_field(3, std::uint64_t(number));
+    out += wire_varint_field(4, std::uint64_t(label));
+    out += wire_varint_field(5, std::uint64_t(type));
+    if (type_name != 0) out += wire_text_field(6, type_name);
+    return out;
+}
+
+// `p.BrokenMap` with a `repeated ItemsEntry items = 1` field, the synthetic
+// `ItemsEntry` that field implies, and the extension member `shape` selects:
+// 0 none (control), 1 an extension range, 2 an extension field.
+std::string map_entry_extension_set(int shape)
+{
+    std::string entry = wire_text_field(1, "ItemsEntry");
+    entry += wire_message_field(2, wire_field("key", 1, 1, 5, 0));
+    entry += wire_message_field(2, wire_field("value", 2, 1, 5, 0));
+    if (shape == 1) {
+        std::string range = wire_varint_field(1, 10);   // start
+        range += wire_varint_field(2, 20);              // end (exclusive)
+        entry += wire_message_field(5, range);
+    } else if (shape == 2) {
+        entry += wire_message_field(
+            6, wire_field("e", 100, 1, 5, 0, ".p.BrokenMap"));
+    }
+    entry += wire_message_field(7, wire_varint_field(7, 1));  // map_entry
+
+    std::string owner = wire_text_field(1, "BrokenMap");
+    owner += wire_message_field(
+        2, wire_field("items", 1, 3, 11, ".p.BrokenMap.ItemsEntry"));
+    owner += wire_message_field(3, entry);
+
+    std::string file = wire_text_field(1, "root.proto");
+    file += wire_text_field(2, "p");
+    file += wire_message_field(4, owner);
+    return wire_message_field(1, file);  // the FileDescriptorSet wrapper
+}
+
+void test_map_entry_extension_data_is_counted_and_refused()
+{
+    for (int shape = 0; shape <= 2; ++shape) {
+        const std::string bytes = map_entry_extension_set(shape);
+        const FileDescriptorSet decoded =
+            easypb::decode<FileDescriptorSet>(bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() != 1) return;
+        CHECK(decoded.file[0].message_type.size() == 1);
+        if (decoded.file[0].message_type.size() != 1) return;
+        const DescriptorProto& entry =
+            decoded.file[0].message_type[0].nested_type[0];
+        // The decoder's own read of wire fields 5 and 6 - and the sweep asks
+        // exactly these two counters.
+        CHECK(entry.extension_range_count == (shape == 1 ? 1 : 0));
+        CHECK(entry.extension_count == (shape == 2 ? 1 : 0));
+
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = set.add_file("root.proto");
+        file.physical_name.clear();
+        file.from_descriptor_set = true;
+        // The decoded views point into `bytes`, which outlives the link below.
+        file.file = decoded.file[0];
+
+        easypb_schema::Diagnostic error;
+        if (shape == 0) {
+            // Control: the same bytes with no extension member link in both
+            // modes, so the rule cannot pass by refusing every entry.
+            CHECK(accepted_in_both_modes(set, error));
+        } else {
+            CHECK(refused_in_both_modes(set, error));
+            CHECK(error.code == easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY);
+            CHECK(error.message.find("Malformed map entry") !=
+                  std::string::npos);
+            CHECK(error.message.find("extension") != std::string::npos);
+        }
+    }
+    // Neighbour: a message that is NOT a map entry may declare both members as
+    // far as THIS rule is concerned. The rule rides the `map_entry` marker, so
+    // the counters cannot refuse a plain proto2 message's extension
+    // declarations. (Whether an extension declaration's NUMBER lies in a
+    // declared extension range is a different check protoc makes and this
+    // linker does not - extension metadata stays out of scope, clause 12 - so
+    // the assertion here is about this rule alone.)
+    {
+        std::string owner = wire_text_field(1, "Plain");
+        owner += wire_message_field(2, wire_field("a", 1, 1, 5, 0));
+        std::string range = wire_varint_field(1, 10);
+        range += wire_varint_field(2, 20);
+        owner += wire_message_field(5, range);
+        owner += wire_message_field(
+            6, wire_field("e", 100, 1, 5, 0, ".p.Plain"));
+
+        std::string file = wire_text_field(1, "plain.proto");
+        file += wire_text_field(2, "p");
+        file += wire_message_field(4, owner);
+        const std::string bytes = wire_message_field(1, file);
+
+        const FileDescriptorSet decoded =
+            easypb::decode<FileDescriptorSet>(bytes);
+        CHECK(decoded.file.size() == 1);
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& target = set.add_file("plain.proto");
+        target.physical_name.clear();
+        target.from_descriptor_set = true;
+        target.file = decoded.file[0];
 
         easypb_schema::Diagnostic error;
         CHECK(accepted_in_both_modes(set, error));
@@ -7262,8 +7546,10 @@ int main(int argc, char** argv)
     test_trailing_dot_reference_is_unresolved_in_both_modes();
     test_descriptor_origin_empty_oneof_is_rejected();
     test_descriptor_origin_editions_field_decides_the_class();
+    test_unsupported_syntax_refusal_names_what_decided();
     test_descriptor_origin_packed_false_is_accepted();
     test_malformed_map_entry_shape_is_rejected();
+    test_map_entry_extension_data_is_counted_and_refused();
     test_descriptor_origin_repeated_default_is_refused();
     test_descriptor_origin_oneof_member_label_is_refused();
     test_descriptor_origin_bytes_default_escape_is_validated();

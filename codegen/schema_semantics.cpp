@@ -1296,16 +1296,28 @@ bool validate_message_map_entries(const SchemaFile& file,
     // lookup, and a reference-driven check would accept the corpus fixture
     // `tests/codegen/maps/data/malformed_map.pbs`.
     if (message.options.has_map_entry && message.options.map_entry) {
-        // D-53 (fix round r25): ask for the WHOLE shape protoc's
-        // `ValidateMapEntry` requires (descriptor.cc:8445-8478), not merely the
-        // two field numbers. protoc applies that rule to every field whose type
-        // is a map entry, so a crafted descriptor's synthetic entry used to
-        // link in both modes with a bytes/float/enum key, a renamed key or
-        // value, a repeated member, a third field, or a nested declaration.
+        // D-53 (fix round r25) and D-62 (fix round r26): ask protoc's
+        // `ValidateMapEntry` (descriptor.cc:8445-8478) for every clause a
+        // descriptor alone can answer - its first group, "must not contain
+        // extensions, extension range or nested message or enums" (:8448-8452),
+        // and the key/value shape (:8462-8471) - not merely the two field
+        // numbers. protoc applies that rule to every field whose type is a map
+        // entry, so a crafted descriptor's synthetic entry used to link in both
+        // modes with a bytes/float/enum key, a renamed key or value, a repeated
+        // member, a third field, a nested declaration, or an extension range.
         // The reference-free domain is kept on purpose - the shape is provable
         // from the descriptor alone, which is A26's own reason for running this
         // before resolution - and the key-type rule reuses the very helper the
         // parser calls (`valid_map_key_type`), so the two frontends agree.
+        // What this sweep deliberately does NOT ask, so that no reader takes
+        // "the whole shape" for more than it is: the entry-name and
+        // containing-type clauses (`ValidateMapEntry`:8460-8461) are A22's
+        // reference check and are refused as `DIAGNOSTIC_MAP_ENTRY_TYPE`, the
+        // value-enum-key clause is `D-33`'s recorded class, and the extension
+        // members are refused by their PRESENCE alone (the declaration's own
+        // numbers are the reference compiler's business, contract clause 12),
+        // which is why `DescriptorProto` counts fields 5 and 6 instead of
+        // modelling them (ledger `D-62`).
         const FieldDescriptorProto* key = 0;
         const FieldDescriptorProto* value = 0;
         for (std::size_t i = 0; i < message.field.size(); ++i) {
@@ -1343,6 +1355,13 @@ bool validate_message_map_entries(const SchemaFile& file,
         if (!message.nested_type.empty() || !message.enum_type.empty()) {
             return fail_map_entry_shape(file, qualified_name,
                                         "no nested messages or enums", error);
+        }
+        if (message.extension_range_count != 0 ||
+            message.extension_count != 0) {
+            return fail_map_entry_shape(file, qualified_name,
+                                        "no extension ranges or extension "
+                                        "fields",
+                                        error);
         }
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
