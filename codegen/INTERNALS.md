@@ -74,6 +74,23 @@ A `SchemaFile` produced by the source frontend in deferred mode (`ParseOptions::
 | imports | recorded in the descriptor dependency lists **and** in the location-bearing `imports` list; after a bare `parse_proto` no target is bound yet (`edges` is empty), and [`load_source_files`](proto_loader.cpp) binds them before returning, so a loaded set already carries `edges` (the every-frontend rule: `bind_import_edges`, [`schema.hpp`](schema.hpp)) | bound by `bind_import_edges`, whose result drives visibility (`PublicExports`/`Visible(F)`) |
 | warnings | a standalone parse may carry `DIAGNOSTIC_UNRESOLVED_TYPE` and deferred-default warnings | a successful complete link drops those stale warnings for the references it resolved and leaves every other code alone |
 
+Two refusals in this layer are **deliberate divergences** from the reference
+compiler, recorded here so a later round does not file them as defects (the
+parity lane's `inverse` class, `tests/codegen/imports/data/parity/`):
+
+- **Editions.** `edition = "2023"` is refused with `DIAGNOSTIC_UNSUPPORTED_SYNTAX`
+  where libprotoc 30.1 accepts it, because this model carries no editions
+  semantics and the classification refuses what it cannot model (A25); the
+  parity lane pins it as `d-unsupported-syntax-editions-inverse`, and plan 5's
+  editions support is its owner.
+- **The map-entry shape sweep is reference-free.** A26's check runs on the
+  descriptor alone, so an entry **no field references** is checked as well.
+  protoc validates a map entry only through the referencing field's `is_map()`,
+  so it ACCEPTS an unreferenced entry with an illegal (bytes) key that this layer
+  refuses as `DIAGNOSTIC_MALFORMED_MAP_ENTRY` — the same deliberate strictness
+  A26 already carried for an unreferenced entry missing its value member, now
+  extended to the whole `ValidateMapEntry` shape (fix round r25, ledger `D-53`).
+
 Descriptor-origin input is never raw: `.pbs` bytes carry `type` and `type_name` themselves, and that metadata is authoritative, so the linker compares it with what the name resolves to (`DIAGNOSTIC_KIND_MISMATCH`) instead of rewriting it.
 
 `link_schema` runs the six stages of the end-state map — edge binding, one shared index, visibility, resolution, warning hygiene, publication — walking the files in an order that is a function of the logical file names alone (never of insertion order or pointer values), so the first reported failure is identical for every input order. Everything is built into a local `LinkedSchema` and assigned once at the end, so a failed link leaves the caller's result in its documented invalid empty state (`files == 0`) instead of a partial view. Linking *is* mutation of the caller's set: the resolved fields are overwritten in place.
