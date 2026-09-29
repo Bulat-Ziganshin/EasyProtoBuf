@@ -4802,6 +4802,26 @@ void test_corpus_compatibility_mode(const std::string& fixture_dir)
 
         const FileDescriptorSet decoded =
             easypb::decode<FileDescriptorSet>(bytes);
+        // P-33 (the standing form of the round r27 corpus sweep): the tracked
+        // corpus is the regression input for the D-62 decoder half. The sweep
+        // must never fire on a fixture the repository tracks - the clause is
+        // for CRAFTED synthetic entries - so every map entry here must read
+        // both extension counters as zero. A non-zero counter means either the
+        // model started counting wire fields 5/6 for another purpose or a
+        // fixture grew extension data; both need a decision, and a silent one
+        // would move corpus verdicts without a green flag moving.
+        for (std::size_t j = 0; j < decoded.file.size(); ++j) {
+            const FileDescriptorProto& corpus_file = decoded.file[j];
+            for (std::size_t k = 0; k < corpus_file.message_type.size(); ++k) {
+                const DescriptorProto& message = corpus_file.message_type[k];
+                const bool entry = message.options.has_map_entry &&
+                                   message.options.map_entry;
+                if (entry) {
+                    CHECK(message.extension_range_count == 0);
+                    CHECK(message.extension_count == 0);
+                }
+            }
+        }
         easypb_schema::SchemaSet set;
         for (std::size_t j = 0; j < decoded.file.size(); ++j) {
             const std::string logical = text(decoded.file[j].name);
