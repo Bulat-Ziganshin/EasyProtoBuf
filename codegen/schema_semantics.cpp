@@ -1034,7 +1034,10 @@ bool fail_at_code(const SchemaFile& file, const std::string& message,
                   DiagnosticCode code, Diagnostic& error)
 {
     std::string text = message;
-    if (location.line == 0) text += " at " + format_path(path);
+    // An empty path is not a location: rendering it as " at []" would put an
+    // empty descriptor path into the message (ledger `D-59`). Every caller that
+    // passes a real path keeps the suffix.
+    if (location.line == 0 && !path.empty()) text += " at " + format_path(path);
     error.file = view_text(file.file.name);
     error.location = location;
     error.message = text;
@@ -1251,6 +1254,22 @@ bool fail_malformed_map_entry(const SchemaFile& file,
     return false;
 }
 
+// The shape failures of A26's sweep other than the missing-member one above
+// (ledger `D-53`): the entry exists but does not match the key/value pair
+// protoc's `ValidateMapEntry` requires. The code is the same category
+// (`DIAGNOSTIC_MALFORMED_MAP_ENTRY` - an entry not of the required shape),
+// while A26's exact sentence stays with that helper, because the generator's
+// CLI-visible check matches its text.
+bool fail_map_entry_shape(const SchemaFile& file, const std::string& entry_name,
+                          const std::string& requirement, Diagnostic& error)
+{
+    return fail_at_code(file,
+                        "Malformed map entry " + entry_name + ": " +
+                            requirement + " is required",
+                        unknown_location(), DescriptorPath(),
+                        DIAGNOSTIC_MALFORMED_MAP_ENTRY, error);
+}
+
 // The one sentence validate_default's unknown-kind branch records. It lives
 // here, beside the call that writes it, so the predicate below and the
 // producer cannot drift and no other translation unit has to match on message
@@ -1277,14 +1296,53 @@ bool validate_message_map_entries(const SchemaFile& file,
     // lookup, and a reference-driven check would accept the corpus fixture
     // `tests/codegen/maps/data/malformed_map.pbs`.
     if (message.options.has_map_entry && message.options.map_entry) {
-        bool has_key = false;
-        bool has_value = false;
+        // D-53 (fix round r25): ask for the WHOLE shape protoc's
+        // `ValidateMapEntry` requires (descriptor.cc:8445-8478), not merely the
+        // two field numbers. protoc applies that rule to every field whose type
+        // is a map entry, so a crafted descriptor's synthetic entry used to
+        // link in both modes with a bytes/float/enum key, a renamed key or
+        // value, a repeated member, a third field, or a nested declaration.
+        // The reference-free domain is kept on purpose - the shape is provable
+        // from the descriptor alone, which is A26's own reason for running this
+        // before resolution - and the key-type rule reuses the very helper the
+        // parser calls (`valid_map_key_type`), so the two frontends agree.
+        const FieldDescriptorProto* key = 0;
+        const FieldDescriptorProto* value = 0;
         for (std::size_t i = 0; i < message.field.size(); ++i) {
-            if (message.field[i].number == 1) has_key = true;
-            if (message.field[i].number == 2) has_value = true;
+            if (message.field[i].number == 1) key = &message.field[i];
+            if (message.field[i].number == 2) value = &message.field[i];
         }
-        if (!has_key || !has_value) {
+        if (key == 0 || value == 0) {
             return fail_malformed_map_entry(file, qualified_name, error);
+        }
+        if (message.field.size() != 2) {
+            return fail_map_entry_shape(file, qualified_name,
+                                        "exactly two fields", error);
+        }
+        // An absent label is read as LABEL_OPTIONAL, because that is protoc's
+        // own default for the field (`proto.label()`), so only a label the
+        // descriptor actually declared can disagree here.
+        if ((key->has_label &&
+             key->label != FieldDescriptorProto::LABEL_OPTIONAL) ||
+            view_text(key->name) != "key" ||
+            !valid_map_key_type(key->type)) {
+            return fail_map_entry_shape(
+                file, qualified_name,
+                "a key field named \"key\" numbered 1, LABEL_OPTIONAL, with a "
+                "legal key type",
+                error);
+        }
+        if ((value->has_label &&
+             value->label != FieldDescriptorProto::LABEL_OPTIONAL) ||
+            view_text(value->name) != "value") {
+            return fail_map_entry_shape(
+                file, qualified_name,
+                "a value field named \"value\" numbered 2, LABEL_OPTIONAL",
+                error);
+        }
+        if (!message.nested_type.empty() || !message.enum_type.empty()) {
+            return fail_map_entry_shape(file, qualified_name,
+                                        "no nested messages or enums", error);
         }
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
@@ -1475,6 +1533,89 @@ std::string external_reference_message(const std::string& type_name)
            "dependency visibility were not validated";
 }
 
+// True when the character is an ASCII hexadecimal digit (the C-escape grammar
+// below is ASCII-only, exactly as `absl::CUnescape` and the parser are).
+bool is_hex_digit(char c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+           (c >= 'A' && c <= 'F');
+}
+
+// True when `text` is a C-escape sequence `absl::CUnescape` accepts, which is
+// the grammar a descriptor-origin bytes default must carry: protoc applies
+// CUnescape to `default_value` while it builds a bytes field and reports
+// `Invalid escaping in default value.` when it fails (descriptor.cc:6728-6740),
+// and the value then reaches the generator verbatim (ledger `D-58`).
+//
+// The accepted set was measured against libprotoc 30.1 through
+// `--descriptor_set_in` on the crafted strings in
+// `build/plan4/fix-r25/probe/escape_probe{,2}.py`: the simple escapes
+// `a b f n r t v \ \' " ?`, an octal escape of one to three digits whose
+// value is at most 255, a hex escape of one or more digits whose value is at
+// most 255, and `\u`/`\U` of exactly four/eight hex digits naming a
+// non-surrogate code point at most U+10FFFF. Everything else - an unknown
+// letter, a bare `\x`, a trailing backslash - is refused, which is the source
+// parser's own rule too (codegen/parser/proto_parser.cpp:371-433), so the two
+// frontends agree on the shape instead of diverging on it.
+bool valid_bytes_default_escape(const std::string& text)
+{
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '\\') continue;
+        if (i + 1 == text.size()) return false;
+        const char escaped = text[++i];
+        if (escaped == 'a' || escaped == 'b' || escaped == 'f' ||
+            escaped == 'n' || escaped == 'r' || escaped == 't' ||
+            escaped == 'v' || escaped == '\\' || escaped == '\'' ||
+            escaped == '"' || escaped == '?') {
+            continue;
+        }
+        if (escaped == 'x') {
+            std::uint32_t value = 0;
+            std::size_t digits = 0;
+            while (i + 1 < text.size() && is_hex_digit(text[i + 1])) {
+                const char c = text[++i];
+                value = value * 16u +
+                        (c <= '9' ? static_cast<std::uint32_t>(c - '0')
+                                  : static_cast<std::uint32_t>((c | 0x20) - 'a' + 10));
+                ++digits;
+                if (value > 255u) return false;
+            }
+            if (digits == 0) return false;
+            continue;
+        }
+        if (escaped == 'u' || escaped == 'U') {
+            const std::size_t digits = escaped == 'u' ? 4u : 8u;
+            std::uint32_t value = 0;
+            for (std::size_t d = 0; d < digits; ++d) {
+                if (i + 1 == text.size() || !is_hex_digit(text[i + 1])) {
+                    return false;
+                }
+                const char c = text[++i];
+                value = value * 16u +
+                        (c <= '9' ? static_cast<std::uint32_t>(c - '0')
+                                  : static_cast<std::uint32_t>((c | 0x20) - 'a' + 10));
+            }
+            if (value > 0x10FFFFu || (value >= 0xD800u && value < 0xE000u)) {
+                return false;
+            }
+            continue;
+        }
+        if (escaped >= '0' && escaped <= '7') {
+            std::uint32_t value = static_cast<std::uint32_t>(escaped - '0');
+            std::size_t digits = 1;
+            while (digits < 3 && i + 1 < text.size() &&
+                   text[i + 1] >= '0' && text[i + 1] <= '7') {
+                value = value * 8u + static_cast<std::uint32_t>(text[++i] - '0');
+                ++digits;
+            }
+            if (value > 255u) return false;
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
 // Type-dependent semantic validation for the textual default_value stored
 // during parsing. Unknown kinds are the caller's responsibility: the caller
 // passes unknown == true when the named type could not be resolved, in which
@@ -1503,7 +1644,19 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
     }
     switch (field.type) {
         case FieldDescriptorProto::TYPE_STRING:
+            return true;
+        // D-58 (fix round r25): a bytes default is a C-escaped string, and
+        // protoc validates its escape grammar while it builds the field. An
+        // unchecked value reaches the generator verbatim, which is how
+        // `[default = "\q"]` emitted `::std::string b = "\q";` into the
+        // generated C++. The source path already refuses the twin as text
+        // (`proto_parser.cpp:433`), so this is the descriptor-origin half of
+        // that frontend parity rule.
         case FieldDescriptorProto::TYPE_BYTES:
+            if (!valid_bytes_default_escape(value)) {
+                return fail_at(file, "invalid escaping in bytes default value",
+                               where, field_path, error);
+            }
             return true;
         case FieldDescriptorProto::TYPE_BOOL:
             if (value != "true" && value != "false") {
@@ -1682,6 +1835,24 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                 declaration_location(file, field_path), field_path,
                 DIAGNOSTIC_MISSING_TYPE_NAME, error);
         }
+        // D-55 (fix round r25): a repeated field may not carry a default, which
+        // protoc refuses while it builds a descriptor ("Repeated fields can't
+        // have default values.", descriptor.cc:6652-6655) and our parser
+        // refuses as source text ("default value is not allowed on repeated or
+        // oneof fields", proto_parser.cpp:1128). Reference-free and asked in
+        // BOTH modes: no resolution can turn a repeated field into a singular
+        // one. It is asked BEFORE the proto3 block below, because protoc
+        // reports this shape first - the repeated-default check lives in the
+        // field build, the proto3 field rules in the later options validation.
+        // Only a label the descriptor actually declared can be repeated here,
+        // because protoc's own default for an absent label is OPTIONAL.
+        if (field.has_default_value && field.has_label &&
+            field.label == FieldDescriptorProto::LABEL_REPEATED) {
+            return fail_at(file,
+                           "repeated fields cannot have default values",
+                           field_default_location(file, field_path), field_path,
+                           error);
+        }
         // Clause 12 (fix round r17, the 0927-mimo review's F2): a
         // descriptor-origin file that declares `syntax = "proto3"` must obey
         // the proto3 FIELD rules, asked at the same site and for the same
@@ -1720,6 +1891,23 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                         "does not allow",
                     field_default_location(file, field_path), field_path,
                     DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT, error);
+            }
+            // D-54 (fix round r25): proto3 has no groups, which protoc refuses
+            // from the same bytes ("Groups are not supported in proto3
+            // syntax.", ValidateProto3Field, descriptor.cc:7936-7938). Our
+            // source parser refuses the keyword in ANY syntax
+            // (proto_parser.cpp:1240), so the shape arrives only as crafted
+            // descriptor input, and the gate is the field's OWN file exactly as
+            // its two siblings above. No dedicated code exists among the frozen
+            // plan-4 values and adding one is a contract amendment, so the
+            // failure carries DIAGNOSTIC_GENERIC like the other
+            // kind-independent verdicts.
+            if (field.type == FieldDescriptorProto::TYPE_GROUP) {
+                return fail_at(file,
+                               "field \"" + view_text(field.name) +
+                                   "\" is a group, and proto3 has no groups",
+                               declaration_location(file, field_path), field_path,
+                               error);
             }
         }
 
@@ -1938,7 +2126,15 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
         // optional field into a repeated one, so reject packed on
         // non-repeated fields immediately. Whether the type itself admits
         // packed encoding is checked only for known kinds.
-        if (field.options.has_packed) {
+        //
+        // D-51 (fix round r25): the gate is protoc's `field->options().packed()`
+        // - presence AND value - not `has_packed` alone. protoc refuses exactly
+        // one shape, `[packed = true]` on a non-packable field
+        // (descriptor.cc:7977), and writes `has_packed = true, packed = false`
+        // for `[packed = false]`, so a presence-only gate refused the sets
+        // protoc itself emits for an optional field, a repeated string and a
+        // repeated message.
+        if (field.options.has_packed && field.options.packed) {
             if (field.label != FieldDescriptorProto::LABEL_REPEATED) {
                 return fail_at(file,
                                "packed option is valid only on repeated primitive or enum fields",
@@ -1957,6 +2153,21 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
              static_cast<std::size_t>(field.oneof_index) >= message.oneof_decl.size())) {
             return fail_at(file, "invalid oneof_index in message " + scope,
                            declaration_location(file, field_path), field_path, error);
+        }
+        // D-56 (fix round r25): a field claimed by a oneof must itself be
+        // OPTIONAL, which protoc reports as "Fields of oneofs must themselves
+        // have label LABEL_OPTIONAL." (descriptor.cc:7471-7475) - a shape only a
+        // manually built descriptor can carry, because the .proto parser cannot
+        // write it. The range check above keeps its own message by running
+        // first; an ABSENT label is read as OPTIONAL, exactly as protoc's
+        // `proto.label()` default is, so only a declared label can disagree.
+        if (field.has_oneof_index && field.has_label &&
+            field.label != FieldDescriptorProto::LABEL_OPTIONAL) {
+            return fail_at(file,
+                           "a field of a oneof must have label "
+                           "LABEL_OPTIONAL",
+                           declaration_location(file, field_path), field_path,
+                           error);
         }
         // Scalar kinds are known without linking; named kinds are validated
         // only when linking (link_types) so a shadowed local match cannot
@@ -2100,6 +2311,14 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
     const std::string prefix = package_prefix(file);
     const std::string package = view_text(file.file.package);
     if (file.file.has_package && !package.empty()) {
+        // D-59 (fix round r25): a package component belongs to the package, so
+        // its scope is the package's own name, and its location is the
+        // package field's descriptor path ([2], the path
+        // `index_package_scopes` already uses) rather than an empty one. The
+        // old call passed `std::string()` and `DescriptorPath()`, which read as
+        // "in the global scope ... at []".
+        DescriptorPath package_path;
+        package_path.push_back(2);
         std::size_t start = 0;
         for (;;) {
             const std::size_t dot = package.find('.', start);
@@ -2108,7 +2327,7 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
                                            ? package.size()
                                            : dot) - start);
             if (!check_symbol_name(file, component, "package component",
-                                   std::string(), DescriptorPath(), error)) {
+                                   prefix, package_path, error)) {
                 return false;
             }
             if (dot == std::string::npos) break;
@@ -2138,10 +2357,38 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
         }
     }
     for (std::size_t i = 0; i < file.file.service.size(); ++i) {
-        if (!check_symbol_name(file, view_text(file.file.service[i].name),
-                               "service", prefix,
-                               file_service_path(static_cast<int>(i)), error)) {
+        const ServiceDescriptorProto& service = file.file.service[i];
+        const DescriptorPath service_path = file_service_path(static_cast<int>(i));
+        if (!check_symbol_name(file, view_text(service.name), "service", prefix,
+                               service_path, error)) {
             return false;
+        }
+        // D-57 (fix round r25): a method declaration is a declaration name and
+        // protoc checks it like any other - `ValidateSymbolName` for the name
+        // (descriptor.cc:7208/7228) and the service's own scope for a duplicate
+        // (`"go" is already defined in "p.S".`). The decoder used to drop the
+        // field entirely, so neither shape was ever seen. The names live only
+        // here: a method is not a type and is deliberately not indexed, so the
+        // duplicate is answered by this local set rather than by `add_symbol`.
+        const std::string service_scope =
+            prefix + "." + view_text(service.name);
+        std::set<std::string> method_names;
+        for (std::size_t j = 0; j < service.method.size(); ++j) {
+            const std::string method_name = view_text(service.method[j].name);
+            const DescriptorPath method_path =
+                service_method_path(service_path, static_cast<int>(j));
+            if (!check_symbol_name(file, method_name, "method", service_scope,
+                                   method_path, error)) {
+                return false;
+            }
+            if (!method_names.insert(method_name).second) {
+                return fail_at_code(
+                    file,
+                    "duplicate method name \"" + method_name + "\" in " +
+                        service_scope,
+                    declaration_location(file, method_path), method_path,
+                    DIAGNOSTIC_DUPLICATE_SYMBOL, error);
+            }
         }
     }
     return true;

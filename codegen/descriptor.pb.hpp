@@ -157,12 +157,28 @@ struct DescriptorProto
 };
 
 
-// Single .proto service. Only the name is retained: EasyProtoBuf Codegen
-// generates message codecs rather than RPC client/server APIs, but service
-// names participate in package-scope collision validation.
+// Single .proto method. Only the NAME is retained, and only so the lexical
+// name sweep can check it (ledger `D-57`): EasyProtoBuf Codegen generates
+// message codecs rather than RPC client/server APIs, and nothing resolves an
+// input/output type. protoc validates a method name like any other declaration
+// name (`ValidateSymbolName`, descriptor.cc:7208/7228) and records it in its
+// service's scope, so dropping the field left a malformed or duplicated method
+// name invisible to every check.
+struct MethodDescriptorProto
+{
+    str_view name;
+
+    bool has_name = false;
+};
+
+
+// Single .proto service. The name is retained so it participates in
+// package-scope collision validation; the method names are retained so the
+// lexical name sweep can cover them, which is what closes `D-57`.
 struct ServiceDescriptorProto
 {
     str_view name;
+    std::vector<MethodDescriptorProto> method;
 
     bool has_name = false;
 };
@@ -177,6 +193,13 @@ struct FileDescriptorProto
     std::vector<EnumDescriptorProto> enum_type;
     std::vector<ServiceDescriptorProto> service;
     str_view syntax;
+    // Field 14: the edition a file declares (`edition = "2023";`). protoc 30.1
+    // writes it for editions files only, beside `syntax = "editions"`; the
+    // classifier consults it FIRST, mirroring `BuildFileImpl`
+    // (descriptor.cc:5952-5971), so a crafted set that carries the field with
+    // no syntax string is classified like the reference and not downgraded to
+    // proto2 (ledger `D-52`).
+    int32_t edition = 0;
     std::vector<str_view> dependency;
     std::vector<int32_t> public_dependency;
     std::vector<int32_t> weak_dependency;
@@ -184,6 +207,7 @@ struct FileDescriptorProto
     bool has_name = false;
     bool has_package = false;
     bool has_syntax = false;
+    bool has_edition = false;
 };
 
 
@@ -336,6 +360,19 @@ inline void decode(easypb::Decoder pb, DescriptorProto &x)
 }
 
 
+inline void decode(easypb::Decoder pb, MethodDescriptorProto &x)
+{
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 1: pb.get_string(&x.name, &x.has_name); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
 inline void decode(easypb::Decoder pb, ServiceDescriptorProto &x)
 {
     while(pb.get_next_field())
@@ -343,6 +380,7 @@ inline void decode(easypb::Decoder pb, ServiceDescriptorProto &x)
         switch(pb.field_num)
         {
             case 1: pb.get_string(&x.name, &x.has_name); break;
+            case 2: pb.get_repeated_message(&x.method); break;
             default: pb.skip_field();
         }
     }
@@ -368,6 +406,7 @@ inline void decode(easypb::Decoder pb, FileDescriptorProto &x)
             case 10: pb.get_repeated_int32(&x.public_dependency); break;
             case 11: pb.get_repeated_int32(&x.weak_dependency); break;
             case 12: pb.get_string(&x.syntax, &x.has_syntax); break;
+            case 14: pb.get_enum  (&x.edition, &x.has_edition); break;
             default: pb.skip_field();
         }
     }

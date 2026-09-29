@@ -2655,12 +2655,12 @@ void test_malformed_map_entry_is_rejected_without_a_reference()
     }
 }
 
-// A25's classification table: absent is proto2 (the parser writes the field
-// only for an explicit declaration), the two known values classify as
-// themselves, and every other value is refused instead of being read as
-// proto2. The explicit empty value is in that last group on purpose - "not
-// proto3" is not "proto2", and has_syntax with an empty string is not the
-// absence of a declaration.
+// A25's classification table, extended by D-52: absent is proto2, the two
+// known string values classify as themselves, an explicitly EMPTY string is
+// proto2 (protoc's `BuildFileImpl` reads `proto.syntax().empty()` as proto2,
+// descriptor.cc:5956, so it is not a third state), and every other string value
+// is refused instead of being read as proto2. The edition field, when present,
+// decides BEFORE the string, exactly as `BuildFileImpl` does.
 void test_file_syntax_classification()
 {
     FileDescriptorProto file;
@@ -2676,14 +2676,40 @@ void test_file_syntax_classification()
     file.syntax = "editions";
     CHECK(easypb_schema::classify_file_syntax(file) ==
           easypb_schema::FILE_SYNTAX_UNSUPPORTED);
+    // D-52: an empty string is proto2, not a third class.
     file.syntax = "";
     CHECK(easypb_schema::classify_file_syntax(file) ==
-          easypb_schema::FILE_SYNTAX_UNSUPPORTED);
+          easypb_schema::FILE_SYNTAX_PROTO2);
     // Absence wins over whatever the string field happens to hold.
     file.has_syntax = false;
     file.syntax = "editions";
     CHECK(easypb_schema::classify_file_syntax(file) ==
           easypb_schema::FILE_SYNTAX_PROTO2);
+    // D-52: the edition field, when present, decides before the string.
+    FileDescriptorProto edition_only;
+    edition_only.has_edition = true;
+    edition_only.edition = easypb_schema::kEditionProto2;
+    CHECK(easypb_schema::classify_file_syntax(edition_only) ==
+          easypb_schema::FILE_SYNTAX_PROTO2);
+    edition_only.edition = easypb_schema::kEditionProto3;
+    CHECK(easypb_schema::classify_file_syntax(edition_only) ==
+          easypb_schema::FILE_SYNTAX_PROTO3);
+    edition_only.edition = 1000;   // EDITION_2023
+    CHECK(easypb_schema::classify_file_syntax(edition_only) ==
+          easypb_schema::FILE_SYNTAX_UNSUPPORTED);
+    // ... and it wins over a contradictory syntax string, as protoc's own
+    // `has_edition()`-first order does.
+    FileDescriptorProto contradictory;
+    contradictory.has_edition = true;
+    contradictory.edition = easypb_schema::kEditionProto2;
+    contradictory.has_syntax = true;
+    contradictory.syntax = "proto3";
+    CHECK(easypb_schema::classify_file_syntax(contradictory) ==
+          easypb_schema::FILE_SYNTAX_PROTO2);
+    contradictory.edition = easypb_schema::kEditionProto3;
+    contradictory.syntax = "";
+    CHECK(easypb_schema::classify_file_syntax(contradictory) ==
+          easypb_schema::FILE_SYNTAX_PROTO3);
 }
 
 // A25 at the link's entry point: an editions file is refused in complete mode
@@ -5643,6 +5669,46 @@ void test_descriptor_origin_proto3_field_rules_are_refused()
         CHECK(refused_in_both_modes(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_TYPE_NAME);
     }
+    // (g) D-54: a proto3 GROUP is refused in both modes, while a plain message
+    // field of the same nested type is not - the rule reads the field KIND, not
+    // the file class alone.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "group3.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_nested(file, message, "G");
+        add_field(file, message, "g", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  ".pkg.M.G");
+        message.field[0].type = FieldDescriptorProto::TYPE_GROUP;
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
+        CHECK(error.message.find("group") != std::string::npos);
+    }
+    // (h) The proto2 control of that shape still links, group kind and all.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "group2.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("proto2");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_nested(file, message, "G");
+        add_field(file, message, "g", 1, FieldDescriptorProto::LABEL_OPTIONAL,
+                  ".pkg.M.G");
+        message.field[0].type = FieldDescriptorProto::TYPE_GROUP;
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
 }
 
 // Contract clause 13 (fix round r18, the 0927-mimo review's F9 / ledger
@@ -6575,6 +6641,520 @@ void test_iterator_rules_stability_across_file_order()
 
 } // namespace
 
+// Records a `[packed = ...]` option on a field, the way the parser stores it:
+// presence and value are separate questions, which is the whole subject of
+// D-51.
+void set_field_packed(FieldDescriptorProto& field, bool packed)
+{
+    field.options.packed = packed;
+    field.options.has_packed = true;
+    field.has_options = true;
+}
+
+// A reference to the service just appended, so a method can be declared in it.
+ServiceDescriptorProto& add_service_named(
+    easypb_schema::SchemaFile& file, const char* name)
+{
+    ServiceDescriptorProto service;
+    service.name = file.strings.save(name);
+    service.has_name = true;
+    file.file.service.push_back(service);
+    return file.file.service.back();
+}
+
+void add_method(easypb_schema::SchemaFile& file,
+                ServiceDescriptorProto& service, const char* name)
+{
+    MethodDescriptorProto method;
+    method.name = file.strings.save(name);
+    method.has_name = true;
+    service.method.push_back(method);
+}
+
+// D-52 at the link's entry point: the edition field decides the class before
+// the syntax string, so all three measured shapes get protoc's classification
+// instead of the pre-fix "read the string" answer.
+void test_descriptor_origin_editions_field_decides_the_class()
+{
+    // (a) edition = EDITION_PROTO3 with a `required` field: the file is proto3,
+    // so clause 12's proto3 rule fires.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "edition3.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.has_edition = true;
+        file.file.edition = easypb_schema::kEditionProto3;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a", 1,
+                  FieldDescriptorProto::LABEL_REQUIRED, 0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_PROTO3_REQUIRED_FIELD);
+    }
+    // (b) edition = EDITION_PROTO2 beside `syntax = "proto3"`: the edition
+    // wins, so the required field is legal (protoc's `has_edition()` order).
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "edition2.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.has_edition = true;
+        file.file.edition = easypb_schema::kEditionProto2;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a", 1,
+                  FieldDescriptorProto::LABEL_REQUIRED, 0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (c) `syntax = ""` with no edition is proto2, so the same required field
+    // lives where it used to be refused as unsupported syntax.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "empty-syntax.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.syntax = file.strings.save("");
+        file.file.has_syntax = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a", 1,
+                  FieldDescriptorProto::LABEL_REQUIRED, 0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (d) EDITION_2023 is still refused loudly, by the A25 stage rather than by
+    // a classifier that read the file as proto2.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "edition2023.pbs", "pkg");
+        file.from_descriptor_set = true;
+        file.file.has_edition = true;
+        file.file.edition = 1000;
+        add_message(file, "M");
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+    }
+}
+
+// D-51: `packed` is gated on its VALUE, not on presence. protoc refuses only
+// `[packed = true]` on a non-packable field and accepts `[packed = false]`
+// anywhere, writing `has_packed = true, packed = false`; a presence-only gate
+// refused the sets protoc itself writes.
+void test_descriptor_origin_packed_false_is_accepted()
+{
+    // (a) `[packed = false]` on an optional field.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "packed-false-optional.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        set_field_packed(file.file.message_type[0].field[0], false);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (b) `[packed = false]` on a repeated string.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "packed-false-string.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "s", 1,
+                  FieldDescriptorProto::LABEL_REPEATED, 0);
+        file.file.message_type[0].field[0].type =
+            FieldDescriptorProto::TYPE_STRING;
+        set_field_packed(file.file.message_type[0].field[0], false);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (c) `[packed = false]` on a repeated message.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "packed-false-message.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_nested(file, message, "N");
+        add_field(file, message, "n", 1, FieldDescriptorProto::LABEL_REPEATED,
+                  ".pkg.M.N");
+        set_field_packed(message.field[0], false);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    // (d) Control: `[packed = true]` on a repeated string is still refused.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "packed-true-string.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "s", 1,
+                  FieldDescriptorProto::LABEL_REPEATED, 0);
+        file.file.message_type[0].field[0].type =
+            FieldDescriptorProto::TYPE_STRING;
+        set_field_packed(file.file.message_type[0].field[0], true);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.message.find("packed") != std::string::npos);
+    }
+}
+
+// D-53: A26's sweep asks for the whole `ValidateMapEntry` shape, not just the
+// two field numbers. Each row mutates one member of a clean entry and requires
+// the dedicated code in both modes; the controls at the end keep the rule from
+// refusing every entry.
+enum MapEntryShape {
+    MAP_SHAPE_BYTES_KEY,
+    MAP_SHAPE_FLOAT_KEY,
+    MAP_SHAPE_ENUM_KEY,
+    MAP_SHAPE_THIRD_FIELD,
+    MAP_SHAPE_KEY_RENAMED,
+    MAP_SHAPE_VALUE_RENAMED,
+    MAP_SHAPE_REPEATED_KEY,
+    MAP_SHAPE_NESTED_TYPE,
+    MAP_SHAPE_NESTED_ENUM
+};
+
+void build_map_entry_shape(easypb_schema::SchemaFile& file,
+                           DescriptorProto& owner, MapEntryShape shape)
+{
+    add_map_entry(file, owner, "ItemsEntry", 0);
+    DescriptorProto& entry = owner.nested_type[0];
+    switch (shape) {
+        case MAP_SHAPE_BYTES_KEY:
+            entry.field[0].type = FieldDescriptorProto::TYPE_BYTES;
+            break;
+        case MAP_SHAPE_FLOAT_KEY:
+            entry.field[0].type = FieldDescriptorProto::TYPE_FLOAT;
+            break;
+        case MAP_SHAPE_ENUM_KEY:
+            entry.field[0].type = FieldDescriptorProto::TYPE_ENUM;
+            break;
+        case MAP_SHAPE_THIRD_FIELD: {
+            FieldDescriptorProto extra;
+            extra.name = file.strings.save("extra");
+            extra.has_name = true;
+            extra.number = 3;
+            extra.has_number = true;
+            extra.label = FieldDescriptorProto::LABEL_OPTIONAL;
+            extra.has_label = true;
+            extra.type = FieldDescriptorProto::TYPE_INT32;
+            extra.has_type = true;
+            entry.field.push_back(extra);
+            break;
+        }
+        case MAP_SHAPE_KEY_RENAMED:
+            entry.field[0].name = file.strings.save("k");
+            break;
+        case MAP_SHAPE_VALUE_RENAMED:
+            entry.field[1].name = file.strings.save("v");
+            break;
+        case MAP_SHAPE_REPEATED_KEY:
+            entry.field[0].label = FieldDescriptorProto::LABEL_REPEATED;
+            break;
+        case MAP_SHAPE_NESTED_TYPE:
+            add_nested(file, entry, "N");
+            break;
+        case MAP_SHAPE_NESTED_ENUM: {
+            EnumDescriptorProto nested_enum;
+            nested_enum.name = file.strings.save("E");
+            nested_enum.has_name = true;
+            EnumValueDescriptorProto value;
+            value.name = file.strings.save("ZERO");
+            value.has_name = true;
+            value.number = 0;
+            value.has_number = true;
+            nested_enum.value.push_back(value);
+            entry.enum_type.push_back(nested_enum);
+            break;
+        }
+    }
+}
+
+void test_malformed_map_entry_shape_is_rejected()
+{
+    const MapEntryShape shapes[] = {
+        MAP_SHAPE_BYTES_KEY,   MAP_SHAPE_FLOAT_KEY,    MAP_SHAPE_ENUM_KEY,
+        MAP_SHAPE_THIRD_FIELD, MAP_SHAPE_KEY_RENAMED,  MAP_SHAPE_VALUE_RENAMED,
+        MAP_SHAPE_REPEATED_KEY, MAP_SHAPE_NESTED_TYPE, MAP_SHAPE_NESTED_ENUM
+    };
+    for (std::size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); ++i) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "map_shape.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        build_map_entry_shape(file, file.file.message_type[0], shapes[i]);
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY);
+        CHECK(error.message.find("Malformed map entry") != std::string::npos);
+    }
+    // Control: a clean entry links, referenced or not, so the extended sweep
+    // cannot pass by refusing every entry.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "map_shape.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_map_entry(file, file.file.message_type[0], "ItemsEntry", 0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
+// D-55: a repeated field may not carry a default, which protoc refuses while it
+// builds a descriptor and our parser refuses as source text.
+void test_descriptor_origin_repeated_default_is_refused()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "rep-default.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a", 1,
+                  FieldDescriptorProto::LABEL_REPEATED, 0);
+        FieldDescriptorProto& field = file.file.message_type[0].field[0];
+        field.default_value = file.strings.save("5");
+        field.has_default_value = true;
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
+        CHECK(error.message.find("repeated") != std::string::npos);
+    }
+    // Controls: the same default on a singular field, and a repeated field with
+    // no default, both link.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "rep-default-ok.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "a", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        FieldDescriptorProto& field = file.file.message_type[0].field[0];
+        field.default_value = file.strings.save("5");
+        field.has_default_value = true;
+        add_field(file, file.file.message_type[0], "b", 2,
+                  FieldDescriptorProto::LABEL_REPEATED, 0);
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
+// D-56: a field claimed by a oneof must be OPTIONAL. The range check keeps its
+// own message by running first, and an ABSENT label is read as OPTIONAL because
+// that is protoc's own default for the field.
+void test_descriptor_origin_oneof_member_label_is_refused()
+{
+    const int bad_labels[] = {FieldDescriptorProto::LABEL_REPEATED,
+                              FieldDescriptorProto::LABEL_REQUIRED};
+    for (std::size_t i = 0; i < sizeof(bad_labels) / sizeof(bad_labels[0]);
+         ++i) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "oneof-label.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_field(file, message, "a", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        add_oneof_decl(file, message, "pick");
+        claim_oneof(message, 0, 0);
+        message.field[0].label = bad_labels[i];
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
+        CHECK(error.message.find("oneof") != std::string::npos);
+    }
+    // Controls: the OPTIONAL member, and the same member with its label absent
+    // (protoc's default reads it as optional), both link.
+    for (int absent = 0; absent < 2; ++absent) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "oneof-label-ok.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        DescriptorProto& message = file.file.message_type[0];
+        add_field(file, message, "a", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        add_oneof_decl(file, message, "pick");
+        claim_oneof(message, 0, 0);
+        if (absent == 1) {
+            message.field[0].has_label = false;
+            message.field[0].label = 0;
+        }
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
+// D-58: a bytes default's escape grammar is checked in the descriptor path, the
+// way protoc's `absl::CUnescape` does before the value reaches the generator.
+void test_descriptor_origin_bytes_default_escape_is_validated()
+{
+    const char* bad[] = {"\\q", "abc\\", "\\400", "\\777", "\\x123",
+                         "\\8"};
+    for (std::size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "bytes-default.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "b", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        FieldDescriptorProto& field = file.file.message_type[0].field[0];
+        field.type = FieldDescriptorProto::TYPE_BYTES;
+        field.default_value = file.strings.save(bad[i]);
+        field.has_default_value = true;
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
+        CHECK(error.message.find("escaping") != std::string::npos);
+    }
+    // Accept controls: the canonical forms protoc itself writes, plus the
+    // string twin of a bad escape (a string default is not C-unescaped).
+    const char* good[] = {"\\001", "\\377", "\\x41", "plain text", "\\n"};
+    for (std::size_t i = 0; i < sizeof(good) / sizeof(good[0]); ++i) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "bytes-default-ok.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "b", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        FieldDescriptorProto& field = file.file.message_type[0].field[0];
+        field.type = FieldDescriptorProto::TYPE_BYTES;
+        field.default_value = file.strings.save(good[i]);
+        field.has_default_value = true;
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "string-default.pbs", "pkg");
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+        add_field(file, file.file.message_type[0], "s", 1,
+                  FieldDescriptorProto::LABEL_OPTIONAL, 0);
+        FieldDescriptorProto& field = file.file.message_type[0].field[0];
+        field.type = FieldDescriptorProto::TYPE_STRING;
+        field.default_value = file.strings.save("\\q");
+        field.has_default_value = true;
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
+// D-57: method names are decoded and checked like every other declaration
+// name, and a duplicate method inside one service is a symbol collision.
+void test_descriptor_origin_method_names_are_validated()
+{
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "method-name.pbs", "pkg");
+        file.from_descriptor_set = true;
+        ServiceDescriptorProto& service = add_service_named(file, "S");
+        add_method(file, service, "bad$name");
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+        CHECK(error.message.find("method") != std::string::npos);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "method-name-empty.pbs", "pkg");
+        file.from_descriptor_set = true;
+        ServiceDescriptorProto& service = add_service_named(file, "S");
+        add_method(file, service, "");
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+    }
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "method-duplicate.pbs", "pkg");
+        file.from_descriptor_set = true;
+        ServiceDescriptorProto& service = add_service_named(file, "S");
+        add_method(file, service, "go");
+        add_method(file, service, "go");
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+        CHECK(error.message.find("go") != std::string::npos);
+    }
+    // Control: a well-formed service with two distinct method names links.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "method-ok.pbs", "pkg");
+        file.from_descriptor_set = true;
+        ServiceDescriptorProto& service = add_service_named(file, "S");
+        add_method(file, service, "go");
+        add_method(file, service, "stop");
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
+// D-59: a malformed package component is reported in the package's own scope
+// with the package field's descriptor path, not "in the global scope ... at []".
+void test_package_component_diagnostic_names_the_package()
+{
+    const char* packages[] = {"a..b", "a."};
+    for (std::size_t i = 0; i < sizeof(packages) / sizeof(packages[0]); ++i) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file =
+            make_simple_file(set, "package-dot.pbs", packages[i]);
+        file.from_descriptor_set = true;
+        add_message(file, "M");
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME);
+        CHECK(error.message.find("package component") != std::string::npos);
+        CHECK(error.message.find(packages[i]) != std::string::npos);
+        CHECK(error.message.find(" at [2]") != std::string::npos);
+        CHECK(error.message.find("the global scope") == std::string::npos);
+        CHECK(error.message.find("[]") == std::string::npos);
+    }
+}
+
 int main(int argc, char** argv)
 {
     if (argc < 2 || argv[1][0] == '\0') {
@@ -6681,6 +7261,14 @@ int main(int argc, char** argv)
     test_descriptor_origin_symbol_names_are_validated();
     test_trailing_dot_reference_is_unresolved_in_both_modes();
     test_descriptor_origin_empty_oneof_is_rejected();
+    test_descriptor_origin_editions_field_decides_the_class();
+    test_descriptor_origin_packed_false_is_accepted();
+    test_malformed_map_entry_shape_is_rejected();
+    test_descriptor_origin_repeated_default_is_refused();
+    test_descriptor_origin_oneof_member_label_is_refused();
+    test_descriptor_origin_bytes_default_escape_is_validated();
+    test_descriptor_origin_method_names_are_validated();
+    test_package_component_diagnostic_names_the_package();
     test_pool_growth_after_link_keeps_every_published_name();
     test_set_growth_keeps_file_addresses_and_the_published_view();
     test_descriptor_only_isolation_reports_a_descriptor_path();

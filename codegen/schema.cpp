@@ -276,11 +276,25 @@ FileSyntax classify_file_syntax(const FileDescriptorProto& file)
 {
     // This function is the ONE place the project classifies a file's syntax,
     // and the only place the literal "proto3" may decide a file's class (E7).
-    // An absent value and the explicit "proto2" value are the same thing - the
-    // parser writes the field only when the source declared it - and any other
-    // value, editions above all, is refused instead of being read as proto2.
-    if (!file.has_syntax) return FILE_SYNTAX_PROTO2;
-    if (file.syntax == "proto2") return FILE_SYNTAX_PROTO2;
+    //
+    // The edition field, when present, decides BEFORE the string, exactly as
+    // protoc's `BuildFileImpl` does (descriptor.cc:5952-5971): EDITION_PROTO2
+    // and EDITION_PROTO3 classify as themselves, and any other edition - the
+    // 2023+ editions this model cannot read - is refused instead of being read
+    // as proto2 (A25). protoc 30.1 writes `edition` only for an editions file,
+    // so a protoc-written proto2/proto3 set is unaffected; the crafted set
+    // that carries the field with no syntax string is the shape ledger `D-52`
+    // was filed for. The string is consulted only when the field is absent, and
+    // an absent OR explicitly empty string is proto2, because protoc reads
+    // `proto.syntax().empty()` as proto2 rather than as a third state.
+    if (file.has_edition) {
+        if (file.edition == kEditionProto2) return FILE_SYNTAX_PROTO2;
+        if (file.edition == kEditionProto3) return FILE_SYNTAX_PROTO3;
+        return FILE_SYNTAX_UNSUPPORTED;
+    }
+    if (!file.has_syntax || file.syntax.empty() || file.syntax == "proto2") {
+        return FILE_SYNTAX_PROTO2;
+    }
     if (file.syntax == "proto3") return FILE_SYNTAX_PROTO3;
     return FILE_SYNTAX_UNSUPPORTED;
 }

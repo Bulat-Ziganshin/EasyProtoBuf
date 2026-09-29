@@ -166,6 +166,20 @@ enum FileSyntax
     FILE_SYNTAX_UNSUPPORTED    // any other value, including "editions"
 };
 
+// descriptor.proto's Edition enum values the classifier can read as a file
+// class (`FileDescriptorProto.edition`, field 14). protoc's `BuildFileImpl`
+// consults `has_edition()` BEFORE the `syntax` string (descriptor.cc:5952-
+// 5971), so a crafted set carrying the field with no syntax string is
+// classified like the reference instead of being silently downgraded to
+// proto2 (ledger `D-52`). Only these two editions are modeled; EDITION_2023
+// and every other value are an unsupported input, exactly as the string
+// "editions" is (A25).
+enum
+{
+    kEditionProto2 = 998,
+    kEditionProto3 = 999
+};
+
 FileSyntax classify_file_syntax(const FileDescriptorProto& file);
 
 struct ImportInfo
@@ -312,6 +326,18 @@ inline DescriptorPath file_service_path(int service_index)
     DescriptorPath path;
     path.push_back(6);
     path.push_back(service_index);
+    return path;
+}
+
+// `ServiceDescriptorProto.method` is field 2, and a method's name is field 1 of
+// that message (descriptor.proto). Used by the lexical name sweep, which covers
+// method declarations too (ledger `D-57`).
+inline DescriptorPath service_method_path(const DescriptorPath& service_path,
+                                          int method_index)
+{
+    DescriptorPath path = service_path;
+    path.push_back(2);
+    path.push_back(method_index);
     return path;
 }
 

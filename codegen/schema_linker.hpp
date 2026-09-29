@@ -44,6 +44,13 @@ struct LinkedSchema {
 // keeps its declared TYPE_GROUP, because that is what its wire encoding
 // needs), so a set that was linked once no longer matches the bytes it was
 // loaded from. One set, one link (H-6).
+//
+// A FAILED link mutates too (ledger `D-60`): the stages that ran before the
+// failure have already rewritten the fields they walked and bound the import
+// edges, so "link failed" must not be read as "the input is unchanged". A
+// retry is convergent - the same set linked again reaches the same verdict,
+// and a link that succeeds is idempotent - so a caller that needs the original
+// bytes must reload them rather than rely on the failure having left them.
 bool link_schema(SchemaSet& files, LinkMode mode,
                  LinkedSchema& result, Diagnostic& error);
 

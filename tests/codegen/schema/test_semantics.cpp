@@ -246,6 +246,37 @@ void test_packed_rules_need_a_known_kind()
         CHECK(easypb_schema::resolve_file(file, symbols, visible, true, error));
         CHECK(file.warnings.size() == 1);
     }
+    // D-51: `[packed = false]` is a VALUE, not a refusal. The parsed
+    // representation carries has_packed = true with packed = false, and that is
+    // legal on a singular field and on a repeated string - the exact shape
+    // protoc writes into the descriptor it emits.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto optional_field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        optional_field.options.packed = false;
+        optional_field.options.has_packed = true;
+        optional_field.has_options = true;
+        message.field.push_back(optional_field);
+        FieldDescriptorProto repeated_string =
+            make_scalar_field(file, "s", 2, FieldDescriptorProto::TYPE_STRING);
+        repeated_string.label = FieldDescriptorProto::LABEL_REPEATED;
+        repeated_string.options.packed = false;
+        repeated_string.options.has_packed = true;
+        repeated_string.has_options = true;
+        message.field.push_back(repeated_string);
+        file.file.message_type.push_back(message);
+
+        easypb_schema::SymbolIndex symbols;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::index_file(file, symbols, error));
+        std::set<const easypb_schema::SchemaFile*> visible;
+        visible.insert(&file);
+        CHECK(easypb_schema::resolve_file(file, symbols, visible, true, error));
+    }
 }
 
 void test_repeated_resolution_warns_once_per_field()
