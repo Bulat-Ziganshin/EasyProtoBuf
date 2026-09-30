@@ -459,6 +459,24 @@ MapTypeByName collect_map_types(const DescriptorProto& message_type,
                     myformat("Malformed map entry {0}: fields 1 and 2 are required", qualified_name));
             }
 
+            // The index is keyed by the entry's absolute Protobuf type name, so
+            // two nested entries of ONE message cannot both be indexed under
+            // it. Such a pair is a duplicate declaration of a single nested
+            // type, which the LINKER refuses in both modes as a name collision
+            // (`DIAGNOSTIC_DUPLICATE_SYMBOL`), and this CLI never links, so it
+            // must refuse the same shape here rather than silently pick one of
+            // the two and generate C++ for it (defect-ledger `D-65`). The pick
+            // is what the check removes: the pre-2026-09-29 spelling
+            // (`result[qualified_name] = map_type`) kept the LAST entry and the
+            // `insert` it became keeps the FIRST, so the same bytes generated
+            // different C++ - `put_map_string_int32` against
+            // `put_map_bytes_string` - depending on the spelling alone.
+            if (result.find(qualified_name) != result.end()) {
+                throw std::runtime_error(
+                    myformat("Duplicate map entry {0}: a nested map entry with this name is already declared",
+                             qualified_name));
+            }
+
             result.insert(MapTypeByName::value_type(std::move(qualified_name),
                                                    map_type));
         }

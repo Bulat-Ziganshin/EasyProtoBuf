@@ -7226,6 +7226,168 @@ void test_map_entry_extension_data_is_counted_and_refused()
     }
 }
 
+// `D-65` (fix round r28): a message declaring two nested map entries of the SAME
+// name is one nested type declared twice, and the linker refuses it in both
+// modes as a name collision (`DIAGNOSTIC_DUPLICATE_SYMBOL`). Both entries are
+// LEGAL map entries (string/int32, then int64/string), so the refusal cannot be
+// credited to the A26 key-type clause - which is what a crafted set with a
+// `bytes` key answers first, and why review round r28 read the shape as refused
+// for a different reason. The controls in the same test show what the rule is
+// about: the same two entry shapes under distinct names link, and the same entry
+// name in two different message scopes links.
+//
+// Why it is pinned here at all: the counter-example was found on the GENERATOR
+// path, where `collect_map_types` kept the FIRST of the two same-named entries
+// (`result.insert`) while the previous revision kept the LAST (`operator[]`), so
+// the same bytes generated different C++ (`put_map_string_int32` against
+// `put_map_bytes_string`). That path is the CLI, which never links, so the
+// generator's half of the remedy - refuse the shape instead of silently picking
+// one of the two entries - is asserted in `codegen.maps`
+// (`tests/codegen/maps/data/duplicate_map_entry.pbs`). This test is the
+// LINKER's half: the declaration-level refusal the generator's remedy rests on,
+// measured with both entries legal.
+// One `DescriptorProto.nested_type` (field 3 of a message): a synthetic map
+// entry named `name` whose key and value are the two given kinds.
+std::string wire_nested_map_entry(const char* name, int key_type, int value_type)
+{
+    std::string entry = wire_text_field(1, name);
+    entry += wire_message_field(2, wire_field("key", 1, 1, key_type, 0));
+    entry += wire_message_field(2, wire_field("value", 2, 1, value_type, 0));
+    entry += wire_message_field(7, wire_varint_field(7, 1));  // map_entry
+    return wire_message_field(3, entry);
+}
+
+// `p.Holder` with the given nested declarations and fields, wrapped as the
+// one-file descriptor set the linker is handed.
+std::string wire_holder_set(const std::string& nested, const std::string& fields,
+                            const char* file_name)
+{
+    std::string owner = wire_text_field(1, "Holder");
+    owner += fields;
+    owner += nested;
+    std::string file = wire_text_field(1, file_name);
+    file += wire_text_field(2, "p");
+    file += wire_message_field(4, owner);
+    return wire_message_field(1, file);
+}
+
+void test_duplicate_map_entry_name_is_a_name_collision()
+{
+    // The shape: two `ItemsEntry` in one scope, both legal map entries.
+    {
+        const std::string bytes = wire_holder_set(
+            wire_nested_map_entry("ItemsEntry", 9, 5) +  // key string, value int32
+                wire_nested_map_entry("ItemsEntry", 3, 9),  // key int64, value string
+            wire_message_field(
+                2, wire_field("items", 1, 3, 11, ".p.Holder.ItemsEntry")),
+            "duplicate_map_entry.proto");
+        const FileDescriptorSet decoded =
+            easypb::decode<FileDescriptorSet>(bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() != 1) return;
+        CHECK(decoded.file[0].message_type.size() == 1);
+        if (decoded.file[0].message_type.size() != 1) return;
+        const DescriptorProto& holder = decoded.file[0].message_type[0];
+        CHECK(holder.nested_type.size() == 2);
+        if (holder.nested_type.size() != 2) return;
+        // Both same-named declarations, both marked as map entries, and the
+        // two key kinds are LEGAL (string then int64): the A26 key-type clause
+        // has nothing to say about this set.
+        CHECK(holder.nested_type[0].name == "ItemsEntry");
+        CHECK(holder.nested_type[1].name == "ItemsEntry");
+        CHECK(holder.nested_type[0].options.map_entry);
+        CHECK(holder.nested_type[1].options.map_entry);
+        CHECK(holder.nested_type[0].field[0].type ==
+              FieldDescriptorProto::TYPE_STRING);
+        CHECK(holder.nested_type[1].field[0].type ==
+              FieldDescriptorProto::TYPE_INT64);
+
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& seeded =
+            set.add_file(std::string(decoded.file[0].name.data(),
+                                     decoded.file[0].name.size()));
+        seeded.physical_name.clear();
+        seeded.from_descriptor_set = true;
+        // The decoded views point into `bytes`, which outlives the link below.
+        seeded.file = decoded.file[0];
+
+        easypb_schema::Diagnostic error;
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+        // The sentence names the colliding declaration:
+        // `name collision in .p.Holder: nested message ItemsEntry conflicts
+        // with nested message at [4, 0, 3, 1]`.
+        CHECK(error.message.find("name collision") != std::string::npos);
+        CHECK(error.message.find("ItemsEntry") != std::string::npos);
+        CHECK(error.message.find("conflict") != std::string::npos);
+    }
+
+    // Control 1: the same two entry SHAPES under distinct names link in both
+    // modes, so the refusal above is the collision and not "two entries". Each
+    // entry keeps the field-name convention its owner is derived from
+    // (`items` -> `ItemsEntry`, `others` -> `OthersEntry`), which A22's
+    // ownership rule reads.
+    {
+        const std::string bytes = wire_holder_set(
+            wire_nested_map_entry("ItemsEntry", 9, 5) +
+                wire_nested_map_entry("OthersEntry", 3, 9),
+            wire_message_field(
+                2, wire_field("items", 1, 3, 11, ".p.Holder.ItemsEntry")) +
+                wire_message_field(
+                    2, wire_field("others", 2, 3, 11,
+                                  ".p.Holder.OthersEntry")),
+            "distinct_map_entries.proto");
+        const FileDescriptorSet decoded =
+            easypb::decode<FileDescriptorSet>(bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() != 1) return;
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& seeded =
+            set.add_file(std::string(decoded.file[0].name.data(),
+                                     decoded.file[0].name.size()));
+        seeded.physical_name.clear();
+        seeded.from_descriptor_set = true;
+        seeded.file = decoded.file[0];
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+
+    // Control 2: the same entry NAME in two different message scopes links in
+    // both modes - the collision is per scope, not per file.
+    {
+        std::string holder = wire_text_field(1, "Holder");
+        holder += wire_message_field(
+            2, wire_field("items", 1, 3, 11, ".p.Holder.ItemsEntry"));
+        holder += wire_nested_map_entry("ItemsEntry", 9, 5);
+        std::string other = wire_text_field(1, "Other");
+        other += wire_message_field(
+            2, wire_field("items", 1, 3, 11, ".p.Other.ItemsEntry"));
+        other += wire_nested_map_entry("ItemsEntry", 3, 9);
+        std::string file = wire_text_field(1, "scoped_map_entries.proto");
+        file += wire_text_field(2, "p");
+        file += wire_message_field(4, holder);
+        file += wire_message_field(4, other);
+        const std::string bytes = wire_message_field(1, file);
+
+        const FileDescriptorSet decoded =
+            easypb::decode<FileDescriptorSet>(bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() != 1) return;
+        CHECK(decoded.file[0].message_type.size() == 2);
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& seeded =
+            set.add_file(std::string(decoded.file[0].name.data(),
+                                     decoded.file[0].name.size()));
+        seeded.physical_name.clear();
+        seeded.from_descriptor_set = true;
+        seeded.file = decoded.file[0];
+
+        easypb_schema::Diagnostic error;
+        CHECK(accepted_in_both_modes(set, error));
+    }
+}
+
 // D-55: a repeated field may not carry a default, which protoc refuses while it
 // builds a descriptor and our parser refuses as source text.
 void test_descriptor_origin_repeated_default_is_refused()
@@ -7570,6 +7732,7 @@ int main(int argc, char** argv)
     test_descriptor_origin_packed_false_is_accepted();
     test_malformed_map_entry_shape_is_rejected();
     test_map_entry_extension_data_is_counted_and_refused();
+    test_duplicate_map_entry_name_is_a_name_collision();
     test_descriptor_origin_repeated_default_is_refused();
     test_descriptor_origin_oneof_member_label_is_refused();
     test_descriptor_origin_bytes_default_escape_is_validated();
