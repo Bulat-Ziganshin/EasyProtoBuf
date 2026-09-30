@@ -12,6 +12,21 @@ namespace easypb_schema {
 
 namespace {
 
+// Build "parent.leaf" with ONE allocation. The chained form it replaces built
+// two intermediates per name - `parent + "."` copied the parent, then the
+// second '+' copied that again together with the leaf - and every declaration
+// of a file is named this way, so the index phase paid it once per field, enum
+// value, oneof and nested type.
+std::string joined_name(const std::string& parent, const str_view& leaf)
+{
+    std::string result;
+    result.reserve(parent.size() + 1 + leaf.size());
+    result.append(parent);
+    result.push_back('.');
+    result.append(leaf.data(), leaf.size());
+    return result;
+}
+
 std::string view_text(const str_view& value)
 {
     return std::string(value.data(), value.size());
@@ -277,7 +292,7 @@ bool validate_message_scope_names(const SchemaFile& file,
                                   const std::string& parent,
                                   Diagnostic& error)
 {
-    const std::string scope = parent + "." + view_text(message.name);
+    const std::string scope = joined_name(parent, message.name);
     std::map<std::string, std::string> names;
     for (std::size_t i = 0; i < message.field.size(); ++i) {
         if (!add_scope_name(file, names, view_text(message.field[i].name),
@@ -454,13 +469,13 @@ bool index_message(SchemaFile& file, SymbolIndex& symbols,
                    const DescriptorProto& message, const std::string& parent,
                    const DescriptorPath& message_path, Diagnostic& error)
 {
-    const std::string name = parent + "." + view_text(message.name);
+    const std::string name = joined_name(parent, message.name);
     if (!add_symbol(file, symbols, name, FieldDescriptorProto::TYPE_MESSAGE,
                     message_path, error)) {
         return false;
     }
     for (std::size_t i = 0; i < message.field.size(); ++i) {
-        if (!add_symbol(file, symbols, name + "." + view_text(message.field[i].name),
+        if (!add_symbol(file, symbols, joined_name(name, message.field[i].name),
                         0, message_field_path(message_path, static_cast<int>(i)),
                         error)) {
             return false;
@@ -468,7 +483,7 @@ bool index_message(SchemaFile& file, SymbolIndex& symbols,
     }
     for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
         if (!add_symbol(file, symbols,
-                        name + "." + view_text(message.oneof_decl[i].name),
+                        joined_name(name, message.oneof_decl[i].name),
                         0, message_oneof_path(message_path, static_cast<int>(i)),
                         error)) {
             return false;
@@ -478,14 +493,14 @@ bool index_message(SchemaFile& file, SymbolIndex& symbols,
         const DescriptorPath enum_path =
             message_enum_path(message_path, static_cast<int>(i));
         const std::string enum_name =
-            name + "." + view_text(message.enum_type[i].name);
+            joined_name(name, message.enum_type[i].name);
         if (!add_symbol(file, symbols, enum_name, FieldDescriptorProto::TYPE_ENUM,
                         enum_path, error)) {
             return false;
         }
         for (std::size_t j = 0; j < message.enum_type[i].value.size(); ++j) {
             if (!add_symbol(file, symbols,
-                            name + "." + view_text(message.enum_type[i].value[j].name),
+                            joined_name(name, message.enum_type[i].value[j].name),
                             0, enum_value_path(enum_path, static_cast<int>(j)),
                             error)) {
                 return false;
@@ -1059,7 +1074,7 @@ bool fail_at(const SchemaFile& file, const std::string& message,
 // name starting with a digit - so neither does this: whether a name is usable as
 // a C++ name is the generator's question, not the linker's (contract clause 11,
 // and the same lesson `P-19`/F3 recorded for the field-kind rule).
-bool is_valid_symbol_name(const std::string& name)
+bool is_valid_symbol_name(const str_view& name)
 {
     if (name.empty()) return false;
     for (std::size_t i = 0; i < name.size(); ++i) {
@@ -1079,7 +1094,12 @@ bool is_valid_symbol_name(const std::string& name)
 // INVALID_SYMBOL_NAME for both, because they are one category: the name is not a
 // symbol name. `scope` names the containing scope in the message; the location
 // and descriptor path are the declaration's own.
-bool check_symbol_name(const SchemaFile& file, const std::string& name,
+// `name` is borrowed, not owned: every caller passes either a `view_text(...)`
+// temporary - whose lifetime covers the call - or a view into the descriptor,
+// and the name is only read here.  Taking a std::string forced the one caller
+// that had the view in hand to materialize a copy of it first.  On the legacy
+// lane `str_view` IS `std::string`, so this parameter is what it always was.
+bool check_symbol_name(const SchemaFile& file, const str_view& name,
                        const std::string& kind, const std::string& scope,
                        const DescriptorPath& path, Diagnostic& error)
 {
@@ -1090,7 +1110,7 @@ bool check_symbol_name(const SchemaFile& file, const std::string& name,
     if (name.empty()) {
         message = kind + " in " + where + " has no name";
     } else {
-        message = kind + " name \"" + name +
+        message = kind + " name \"" + std::string(name) +
                   "\" in " + where + " is not a valid identifier";
     }
     return fail_at_code(file, message, declaration_location(file, path), path,
@@ -1107,7 +1127,7 @@ bool validate_message_symbol_names(const SchemaFile& file,
                                    const std::string& parent,
                                    Diagnostic& error)
 {
-    const std::string scope = parent + "." + view_text(message.name);
+    const std::string scope = joined_name(parent, message.name);
     if (!check_symbol_name(file, view_text(message.name), "message", parent,
                            message_path, error)) {
         return false;
@@ -1367,7 +1387,7 @@ bool validate_message_map_entries(const SchemaFile& file,
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
         if (!validate_message_map_entries(
                 file, message.nested_type[i],
-                qualified_name + "." + view_text(message.nested_type[i].name),
+                joined_name(qualified_name, message.nested_type[i].name),
                 error)) {
             return false;
         }
@@ -1454,7 +1474,7 @@ bool validate_message_enum_value_numbers(const SchemaFile& file,
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
         if (!validate_enum_value_numbers_in_enum(
                 file, message.enum_type[i],
-                qualified_name + "." + view_text(message.enum_type[i].name),
+                joined_name(qualified_name, message.enum_type[i].name),
                 message_enum_path(message_path, static_cast<int>(i)), error)) {
             return false;
         }
@@ -1462,7 +1482,7 @@ bool validate_message_enum_value_numbers(const SchemaFile& file,
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
         if (!validate_message_enum_value_numbers(
                 file, message.nested_type[i],
-                qualified_name + "." + view_text(message.nested_type[i].name),
+                joined_name(qualified_name, message.nested_type[i].name),
                 message_nested_path(message_path, static_cast<int>(i)),
                 error)) {
             return false;
@@ -1794,7 +1814,7 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                      const std::string& parent, const DescriptorPath& message_path,
                      Diagnostic& error)
 {
-    const std::string scope = parent + "." + view_text(message.name);
+    const std::string scope = joined_name(parent, message.name);
     std::set<std::string> names;
     std::set<std::int32_t> numbers;
     for (std::size_t i = 0; i < message.field.size(); ++i) {
@@ -2276,7 +2296,7 @@ bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error)
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
         if (!validate_message_map_entries(
                 file, file.file.message_type[i],
-                prefix + "." + view_text(file.file.message_type[i].name),
+                joined_name(prefix, file.file.message_type[i].name),
                 error)) {
             return false;
         }
@@ -2296,7 +2316,7 @@ bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error)
     for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
         if (!validate_enum_value_numbers_in_enum(
                 file, file.file.enum_type[i],
-                prefix + "." + view_text(file.file.enum_type[i].name),
+                joined_name(prefix, file.file.enum_type[i].name),
                 file_enum_path(static_cast<int>(i)), error)) {
             return false;
         }
@@ -2304,7 +2324,7 @@ bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error)
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
         if (!validate_message_enum_value_numbers(
                 file, file.file.message_type[i],
-                prefix + "." + view_text(file.file.message_type[i].name),
+                joined_name(prefix, file.file.message_type[i].name),
                 file_message_path(static_cast<int>(i)), error)) {
             return false;
         }
@@ -2336,8 +2356,11 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
         // `index_package_scopes` already uses) rather than an empty one. The
         // old call passed `std::string()` and `DescriptorPath()`, which read as
         // "in the global scope ... at []".
-        DescriptorPath package_path;
-        package_path.push_back(2);
+        // One read-only vector for every call, not one rebuilt per file: the
+        // per-file form cost a 4-byte allocation for every file that declares a
+        // package, whether or not this check ever has anything to report, and
+        // `check_symbol_name` only reads the path.
+        static const DescriptorPath package_path(1, 2);
         std::size_t start = 0;
         for (;;) {
             const std::size_t dot = package.find('.', start);
@@ -2389,11 +2412,14 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
         // field entirely, so neither shape was ever seen. The names live only
         // here: a method is not a type and is deliberately not indexed, so the
         // duplicate is answered by this local set rather than by `add_symbol`.
-        const std::string service_scope =
-            prefix + "." + view_text(service.name);
-        std::set<std::string> method_names;
+        const std::string service_scope = joined_name(prefix, service.name);
+        // Views, not owned strings: the set only has to answer "seen this name
+        // before", and the names live in the descriptor this function owns, so
+        // a node per method is enough - the baseline also stored a std::string
+        // copy inside every node.
+        std::set<str_view> method_names;
         for (std::size_t j = 0; j < service.method.size(); ++j) {
-            const std::string method_name = view_text(service.method[j].name);
+            const str_view method_name = service.method[j].name;
             const DescriptorPath method_path =
                 service_method_path(service_path, static_cast<int>(j));
             if (!check_symbol_name(file, method_name, "method", service_scope,
@@ -2403,8 +2429,8 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
             if (!method_names.insert(method_name).second) {
                 return fail_at_code(
                     file,
-                    "duplicate method name \"" + method_name + "\" in " +
-                        service_scope,
+                    "duplicate method name \"" + std::string(method_name) +
+                            "\" in " + service_scope,
                     declaration_location(file, method_path), method_path,
                     DIAGNOSTIC_DUPLICATE_SYMBOL, error);
             }
@@ -2437,15 +2463,14 @@ bool index_file(SchemaFile& file, SymbolIndex& symbols, Diagnostic& error)
     for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
         const DescriptorPath enum_path = file_enum_path(static_cast<int>(i));
         const std::string enum_name =
-            prefix + "." + view_text(file.file.enum_type[i].name);
+            joined_name(prefix, file.file.enum_type[i].name);
         if (!add_symbol(file, symbols, enum_name, FieldDescriptorProto::TYPE_ENUM,
                         enum_path, error)) {
             return false;
         }
         for (std::size_t j = 0; j < file.file.enum_type[i].value.size(); ++j) {
             if (!add_symbol(file, symbols,
-                            prefix + "." +
-                            view_text(file.file.enum_type[i].value[j].name),
+                            joined_name(prefix, file.file.enum_type[i].value[j].name),
                             0, enum_value_path(enum_path, static_cast<int>(j)),
                             error)) {
                 return false;
@@ -2454,7 +2479,7 @@ bool index_file(SchemaFile& file, SymbolIndex& symbols, Diagnostic& error)
     }
     for (std::size_t i = 0; i < file.file.service.size(); ++i) {
         if (!add_symbol(file, symbols,
-                        prefix + "." + view_text(file.file.service[i].name),
+                        joined_name(prefix, file.file.service[i].name),
                         SYMBOL_SERVICE, file_service_path(static_cast<int>(i)),
                         error)) {
             return false;

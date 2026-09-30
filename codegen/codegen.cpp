@@ -3,6 +3,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <easypb.hpp>
@@ -266,7 +267,17 @@ std::string protobuf_type_as_str(const FieldDescriptorProto& field, const MapTyp
 // Keep generated type spellings accepted by that compiler by separating the tokens.
 std::string cpp_type_legacy_safe(std::string type)
 {
-    return string_replace_all(type, "<::", "< ::");
+    // The parameter is an owned buffer this call is free to rewrite, and the
+    // caller's temporary was moved into it, so the replacement is done in
+    // place: string_replace_all built a SECOND string and filled it with the
+    // same bytes one character longer.
+    const std::string find = "<::";
+    std::size_t pos = type.find(find);
+    while (pos != std::string::npos) {
+        type.replace(pos, find.size(), "< ::");
+        pos = type.find(find, pos + 4);
+    }
+    return type;
 }
 
 
@@ -325,24 +336,29 @@ std::string generate_enum(const EnumDescriptorProto& enum_type,
 // Encoder code for a single field
 std::string generate_field_encoder(const FieldDescriptorProto& field, const MapType* map_type)
 {
-    return myformat("    pb.put_{0}{1}({2}, {3});\n",
+    // "x." belongs to the literal: as an argument it cost a temporary
+    // std::string of the name plus a second one for the concatenation, once
+    // per field, and both were discarded immediately.
+    return myformat("    pb.put_{0}{1}({2}, x.{3});\n",
     /* 0 */ ! map_type && is_repeated(field)
                 ? (write_as_packed(field)? "packed_" : "repeated_")
                 : "",
     /* 1 */ protobuf_type_as_str(field, map_type),
     /* 2 */ number_to_string(field.number),
-    /* 3 */ "x." + std::string(field.name));
+    /* 3 */ field.name);
 }
 
 
 // Decoder code for a single field
 std::string generate_field_decoder(const FieldDescriptorProto& field, const MapType* map_type)
 {
-    return myformat("            case {0}: pb.get_{1}{2}(&{3}{4}); break;\n",
+    // Same as the encoder: the receiver spelling comes from the literal
+    // instead of two temporaries per field.
+    return myformat("            case {0}: pb.get_{1}{2}(&x.{3}{4}); break;\n",
     /* 0 */ number_to_string(field.number),
     /* 1 */ ! map_type && is_repeated(field)? "repeated_" : "",
     /* 2 */ protobuf_type_as_str(field, map_type),
-    /* 3 */ "x." + std::string(field.name),
+    /* 3 */ field.name,
     /* 4 */ hasfield_enabled(field)
                 ? myformat(", &x.has_{0}", field.name)
                 : "");
@@ -430,14 +446,21 @@ MapTypeByName collect_map_types(const DescriptorProto& message_type,
                 }
             }
 
-            auto qualified_name = message_proto_name + PB_TYPE_DELIMITER + std::string(nested_msgtype.name);
+            // Three strings became one: `std::string(nested_msgtype.name)` was a
+            // copy of a view, the first '+' built another temporary, and the
+            // node then copied the key again. Growing one buffer in place and
+            // moving it into the node leaves a single allocation.
+            std::string qualified_name = message_proto_name;
+            qualified_name += PB_TYPE_DELIMITER;
+            qualified_name += nested_msgtype.name;
 
             if (! map_type.key_field || ! map_type.value_field) {
                 throw std::runtime_error(
                     myformat("Malformed map entry {0}: fields 1 and 2 are required", qualified_name));
             }
 
-            result[qualified_name] = map_type;
+            result.insert(MapTypeByName::value_type(std::move(qualified_name),
+                                                   map_type));
         }
     }
 
@@ -571,10 +594,22 @@ void collect_message_infos(MessageInfo& info, std::vector<MessageInfo*>& output)
 // A nested C++ type is declared inside its ancestor.  If it stores that ancestor
 // by value, no declaration order can make the C++ type complete, so this is a
 // recursive value dependency even before general graph-cycle detection.
+// True when `name` lies strictly under the lexical scope `prefix`, that is when
+// `prefix` is its own head followed by the component separator. The
+// `prefix + PB_TYPE_DELIMITER` this replaces built a fresh string on every
+// call, and `containing_unit` asks the question once per lexical unit per
+// dependency - the widest loop in the graph pass.
+bool is_under_proto_scope(const std::string& name, const std::string& prefix)
+{
+    return name.size() > prefix.size() &&
+           name.compare(0, prefix.size(), prefix) == 0 &&
+           name[prefix.size()] == '.';
+}
+
 bool is_ancestor_message(const MessageInfo& ancestor, const MessageInfo& message)
 {
     return message.proto_name != ancestor.proto_name &&
-           starts_with(message.proto_name, ancestor.proto_name + PB_TYPE_DELIMITER);
+           is_under_proto_scope(message.proto_name, ancestor.proto_name);
 }
 
 
@@ -743,7 +778,7 @@ MessageInfo* containing_unit(const std::vector<MessageInfo*>& units,
 {
     for (auto* unit: units) {
         if (message.proto_name == unit->proto_name ||
-            starts_with(message.proto_name, unit->proto_name + PB_TYPE_DELIMITER)) {
+            is_under_proto_scope(message.proto_name, unit->proto_name)) {
             return unit;
         }
     }
@@ -994,8 +1029,24 @@ std::string generator(const FileDescriptorProto& file)
         class_defs += generate_message(*root, "", enum_index, encoders, decoders);
     }
 
-    const std::string body = enum_defs + class_defs + encoders + decoders;
+    // One buffer instead of the chain of temporaries the '+' operators built:
+    // each one held the whole text accumulated so far, so a header of N bytes
+    // was copied about five times before it was returned.
+    std::string body;
+    body.reserve(enum_defs.size() + class_defs.size() + encoders.size() +
+                 decoders.size());
+    body += enum_defs;
+    body += class_defs;
+    body += encoders;
+    body += decoders;
     if (current_package.empty() || body.empty()) return body;
-    return open_package_namespaces(current_package) + body +
-           close_package_namespaces(current_package);
+    const std::string open_namespaces = open_package_namespaces(current_package);
+    const std::string close_namespaces = close_package_namespaces(current_package);
+    std::string result;
+    result.reserve(open_namespaces.size() + body.size() +
+                   close_namespaces.size());
+    result += open_namespaces;
+    result += body;
+    result += close_namespaces;
+    return result;
 }

@@ -68,8 +68,13 @@ std::string string_replace_all(
 // Use format_str to format remaining arguments similar to std::format.
 // All arguments should be convertible to str_view, and the only
 // formatting templates supported are {} and {\d}.
+// Arguments are taken by reference on purpose. The by-value pack copied every
+// lvalue argument into the parameter first - and the callers pass exactly the
+// strings that must not be copied: the generator's own accumulation buffers
+// (`nested_defs`, `field_defs`, `encoder`, `decoder`, `check_required_fields`)
+// and its long qualified names.
 template <typename... Args>
-std::string myformat(str_view format_str, Args... args)
+std::string myformat(str_view format_str, const Args&... args)
 {
     std::initializer_list<str_view> arg_list{args...};
     auto arg = arg_list.begin();

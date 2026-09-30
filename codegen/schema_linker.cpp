@@ -77,7 +77,10 @@ std::set<const SchemaFile*> visible_files(const SchemaFile* file,
 
 bool less_by_logical_name(const SchemaFile* left, const SchemaFile* right)
 {
-    return view_text(left->file.name) < view_text(right->file.name);
+    // Two borrowed views, not two std::strings: the sort compares every pair
+    // (n log n of them) and the old form materialized both logical names per
+    // comparison - one allocation each for the long paths plan 4 exists for.
+    return left->file.name < right->file.name;
 }
 
 // The deterministic walk order of stages 1-6: a function of the logical file
