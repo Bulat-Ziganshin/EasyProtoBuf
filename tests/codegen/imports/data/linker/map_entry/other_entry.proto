@@ -1,0 +1,7 @@
+// map_entry - Appendix C A4: a user field names ANOTHER message's synthetic
+// entry in the same file. The entry exists and is visible, and is still not a
+// type a field may name.
+syntax = "proto3";
+package pkg;
+message Other { map<string, int32> bar = 1; }
+message User { Other.BarEntry e = 1; }

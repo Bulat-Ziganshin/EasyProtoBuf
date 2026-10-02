@@ -272,6 +272,58 @@ const FieldSource* find_field_source(const SchemaFile& file,
     return 0;
 }
 
+FileSyntax classify_file_syntax(const FileDescriptorProto& file)
+{
+    // This function is the ONE place the project classifies a file's syntax,
+    // and the only place the literal "proto3" may decide a file's class (E7).
+    //
+    // The edition field, when present, decides BEFORE the string, exactly as
+    // protoc's `BuildFileImpl` does (descriptor.cc:5952-5971): EDITION_PROTO2
+    // and EDITION_PROTO3 classify as themselves, and any other edition - the
+    // 2023+ editions this model cannot read - is refused instead of being read
+    // as proto2 (A25). protoc 30.1 writes `edition` only for an editions file,
+    // so a protoc-written proto2/proto3 set is unaffected; the crafted set
+    // that carries the field with no syntax string is the shape ledger `D-52`
+    // was filed for. The string is consulted only when the field is absent, and
+    // an absent OR explicitly empty string is proto2, because protoc reads
+    // `proto.syntax().empty()` as proto2 rather than as a third state.
+    if (file.has_edition) {
+        if (file.edition == kEditionProto2) return FILE_SYNTAX_PROTO2;
+        if (file.edition == kEditionProto3) return FILE_SYNTAX_PROTO3;
+        return FILE_SYNTAX_UNSUPPORTED;
+    }
+    if (!file.has_syntax || file.syntax.empty() || file.syntax == "proto2") {
+        return FILE_SYNTAX_PROTO2;
+    }
+    if (file.syntax == "proto3") return FILE_SYNTAX_PROTO3;
+    return FILE_SYNTAX_UNSUPPORTED;
+}
+
+std::string map_entry_name(const std::string& field_name)
+{
+    std::string output;
+    bool capitalize = true;
+    for (std::size_t i = 0; i < field_name.size(); ++i) {
+        const char c = field_name[i];
+        if (c == '_') {
+            capitalize = true;
+            continue;
+        }
+        if (capitalize && c >= 'a' && c <= 'z') {
+            output.push_back(static_cast<char>(c - 'a' + 'A'));
+        } else {
+            output.push_back(c);
+        }
+        capitalize = false;
+    }
+    // The suffix belongs to the rule and not to a call site: what the linker
+    // compares against an entry's simple name is the complete entry name.
+    // An all-underscore field leaves output empty, so the name is "Entry" - a
+    // name protoc produces itself (amendment A14), never a fallback we invent.
+    output += "Entry";
+    return output;
+}
+
 bool bind_import_edges(SchemaSet& files, bool allow_missing,
                        Diagnostic& error)
 {
@@ -321,6 +373,18 @@ bool bind_import_edges(SchemaSet& files, bool allow_missing,
 
         // Index/modifier validation. The descriptor lists are authoritative
         // for graph meaning; imports supplies positions only.
+        //
+        // Three shapes below are refused although libprotoc 30.1 BUILDS them -
+        // measured on 2026-09-27 with both readers over the same bytes (a
+        // repeated public dependency index, a repeated weak one, and an index
+        // that is both public and weak; `build/plan4/step-11-oracle-parity/`
+        // `p21/VERDICT.md`). That is a decision and not an oversight: A18 gives
+        // malformed indexes their own row and nothing there lets
+        // `allow_missing` relax them - it relaxes missing TARGETS only
+        // (`plan4/steps/04-task3-compat.md`) - and no `protoc`-written set can
+        // carry either shape, because the compiler emits each index at most
+        // once. Ledger `D-29` records the divergence so that a later session
+        // measuring it again reads the verdict instead of refiling it.
         std::set<std::int32_t> public_indexes;
         std::set<std::int32_t> weak_indexes;
         for (std::size_t i = 0; i < importer.file.public_dependency.size(); ++i) {

@@ -1,0 +1,19 @@
+file {
+  name: "dep.proto"
+  package: "p"
+  syntax: "proto3"
+  message_type { name: "D" }
+}
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto3"
+  dependency: "dep.proto"
+  message_type {
+    name: "Outer"
+    nested_type {
+      name: "Inner"
+      field { name: "d" number: 1 label: LABEL_OPTIONAL type: TYPE_MESSAGE type_name: ".p.D" }
+    }
+  }
+}

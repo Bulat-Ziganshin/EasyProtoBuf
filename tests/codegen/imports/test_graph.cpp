@@ -129,6 +129,42 @@ void test_logical_paths_invalid()
     }
 }
 
+// Checklist for the eleven plan-4 code values (A3, contract A3/A25/A26 and
+// clause 12); each one is asserted here by the step that appends it, because a
+// value that aliases an existing one is exactly the bug this test exists to
+// catch, and a code that does not exist yet cannot be named:
+//   DIAGNOSTIC_DUPLICATE_SYMBOL      appended by Step 3.1 (asserted below)
+//   DIAGNOSTIC_INVISIBLE_TYPE        appended by Step 4.1 (asserted below)
+//   DIAGNOSTIC_NOT_A_TYPE            appended by Step 4.1 (asserted below)
+//   DIAGNOSTIC_MAP_ENTRY_TYPE        appended by Step 4.2 (asserted below)
+//   DIAGNOSTIC_KIND_MISMATCH         appended by Step 5.1 (asserted below) -
+//                                    this checklist used to file it under
+//                                    Step 4.1, but Step 5.1 owns the
+//                                    descriptor-origin declared-kind check
+//                                    the code exists for, so it is appended
+//                                    by the step that first needs it
+//   DIAGNOSTIC_MALFORMED_MAP_ENTRY   appended by Step 5.1 (asserted below)
+//   DIAGNOSTIC_UNSUPPORTED_SYNTAX    appended by Step 5.1 (asserted below):
+//                                    A25's refusal at link_schema's entry
+//                                    point, which Step 5.2's test needs; Step
+//                                    6.1 consumes the value for the
+//                                    cross-syntax enum rule
+//   DIAGNOSTIC_INVALID_FIELD_NUMBER  appended by Step 5.1 (asserted below):
+//                                    contract clause 12's field-number rule
+//                                    for descriptor-origin input (D-23)
+//   DIAGNOSTIC_MISSING_TYPE_NAME     appended by Step 5.1 (asserted below):
+//                                    clause 12's named-kind-without-type_name
+//                                    shape (D-23)
+//   DIAGNOSTIC_DUPLICATE_ENUM_NUMBER appended by Step 5.1 in fix round r13
+//                                    (asserted below): clause 12's repeated
+//                                    enum value number without `allow_alias`
+//                                    (D-28)
+//   DIAGNOSTIC_EMPTY_ONEOF           appended by Step 5.1 in fix round r13
+//                                    (asserted below): clause 12's oneof
+//                                    declaration no field points at (D-28)
+//   DIAGNOSTIC_EMPTY_ENUM            appended by Step 5.1 in fix round r16
+//                                    (asserted below): clause 12's enum that
+//                                    declares no value at all (D-32)
 void test_diagnostic_codes_stay_distinct()
 {
     CHECK(easypb_schema::DIAGNOSTIC_GENERIC !=
@@ -145,6 +181,104 @@ void test_diagnostic_codes_stay_distinct()
           easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
     CHECK(easypb_schema::DIAGNOSTIC_MISSING_IMPORT !=
           easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    // Step 3.1: a conflicting declaration is never DIAGNOSTIC_GENERIC, and it
+    // is distinct from each import failure above.
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
+          easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
+          easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
+          easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
+          easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL !=
+          easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    // Step 4.1/4.2: the four lookup outcomes are told apart by code, not by
+    // message text, so none of the three appended values may alias any earlier
+    // one - or another.
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_IMPORT_CYCLE);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE !=
+          easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE !=
+          easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
+    CHECK(easypb_schema::DIAGNOSTIC_NOT_A_TYPE !=
+          easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
+    // Step 5.1: eight appended values - the descriptor-origin kind mismatch
+    // (A7), the malformed map entry (A26), the unsupported file syntax (A25),
+    // and clause 12's five descriptor-origin structure codes (D-23: the
+    // invalid field number and the named kind without a type_name; D-28: the
+    // repeated enum value number and the oneof declaration no field points
+    // at; D-32: the enum that declares no value at all). Each must differ from
+    // every earlier code and from its siblings: callers switch on these codes
+    // instead of reading message text, so an alias is exactly the bug this
+    // checklist exists to catch.
+    const easypb_schema::DiagnosticCode appended[] = {
+        easypb_schema::DIAGNOSTIC_KIND_MISMATCH,
+        easypb_schema::DIAGNOSTIC_MALFORMED_MAP_ENTRY,
+        easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX,
+        easypb_schema::DIAGNOSTIC_INVALID_FIELD_NUMBER,
+        easypb_schema::DIAGNOSTIC_MISSING_TYPE_NAME,
+        easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER,
+        easypb_schema::DIAGNOSTIC_EMPTY_ONEOF,
+        easypb_schema::DIAGNOSTIC_EMPTY_ENUM,
+        easypb_schema::DIAGNOSTIC_PROTO3_REQUIRED_FIELD,
+        easypb_schema::DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT,
+        easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME
+    };
+    const easypb_schema::DiagnosticCode earlier[] = {
+        easypb_schema::DIAGNOSTIC_GENERIC,
+        easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE,
+        easypb_schema::DIAGNOSTIC_INVALID_IMPORT,
+        easypb_schema::DIAGNOSTIC_MISSING_IMPORT,
+        easypb_schema::DIAGNOSTIC_IMPORT_CYCLE,
+        easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL,
+        easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE,
+        easypb_schema::DIAGNOSTIC_NOT_A_TYPE,
+        easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE
+    };
+    for (std::size_t i = 0; i < sizeof(appended) / sizeof(appended[0]); ++i) {
+        for (std::size_t j = 0; j < sizeof(earlier) / sizeof(earlier[0]); ++j) {
+            CHECK(appended[i] != earlier[j]);
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            CHECK(appended[i] != appended[j]);
+        }
+    }
 }
 
 void test_bind_simple_chain()
@@ -285,6 +419,12 @@ void test_bind_rejects_negative_weak_index()
     CHECK(error.message.find("weak dependency index") != std::string::npos);
 }
 
+// The three shapes below are refused by DECISION, not by parity: libprotoc
+// 30.1 builds all three from a descriptor set (measured 2026-09-27, both
+// readers over the same bytes; `build/plan4/step-11-oracle-parity/p21/`).
+// A18 is what requires the refusal - `allow_missing` relaxes missing targets
+// and never malformed indexes - and ledger `D-29` carries the divergence, so a
+// later session that re-measures it should read this comment first.
 void test_bind_rejects_duplicate_and_overlapping_indexes()
 {
     {

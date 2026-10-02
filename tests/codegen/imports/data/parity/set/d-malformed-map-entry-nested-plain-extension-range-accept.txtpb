@@ -1,0 +1,13 @@
+file {
+  name: "root.proto"
+  package: "p"
+  message_type {
+    name: "Outer"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+    nested_type {
+      name: "Inner"
+      field { name: "b" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+      extension_range { start: 10 end: 20 }
+    }
+  }
+}

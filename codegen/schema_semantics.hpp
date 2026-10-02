@@ -21,13 +21,24 @@ bool parse_signed_32(const std::string& text, std::int32_t& result);
 bool is_float_text(const std::string& text);
 
 // One indexed declaration. Message and enum entries use the matching
-// FieldDescriptorProto TYPE_* kind; package scopes use SYMBOL_PACKAGE;
-// every other declaration category (enum values, fields, oneofs, services)
-// uses kind 0 because field type names never resolve to them. Keys are
-// owned fully qualified names such as ".pkg.Outer.Inner". Package scopes
-// merge across files rather than conflict; any other collision is an error.
+// FieldDescriptorProto TYPE_* kind; package scopes use SYMBOL_PACKAGE and
+// service names SYMBOL_SERVICE; every other declaration category (enum
+// values, fields, oneofs) uses kind 0 because field type names never resolve
+// to them. Keys are owned fully qualified names such as ".pkg.Outer.Inner".
+// Package scopes merge across files rather than conflict; any other collision
+// is an error.
+//
+// The service value exists because protoc asks two questions about a service
+// and the lookup needs both answers (`descriptor.cc:676-679`):
+// `Symbol::IsAggregate()` counts a service, so a service may COMMIT the head
+// of a compound relative name (and then fails the member lookup, having no
+// members); `Symbol::IsType()` does not, so a service may never win a
+// whole-name reference. Appended, never inserted: `kind` is compared against
+// the FieldDescriptorProto TYPE_* values, whose numbers must keep their
+// identity (fix round r10, `D-21`).
 enum SymbolKind {
-    SYMBOL_PACKAGE = 100
+    SYMBOL_PACKAGE = 100,
+    SYMBOL_SERVICE = 101
 };
 struct SymbolEntry
 {
@@ -54,20 +65,116 @@ struct SymbolIndex
 // Validates declaration scopes and indexes one file's messages, enums, enum
 // values, fields, oneofs, and retained service names. Returns false and
 // fills error (with a recorded source position when the file carries one)
-// on conflicting declarations. Each file must be indexed once: re-indexing
-// the same file reports its own declarations as duplicates.
+// on conflicting declarations, reported as DIAGNOSTIC_DUPLICATE_SYMBOL with
+// both declarations named. The code is the same for both producers - a name
+// already taken inside this file's own scopes, which the scope validation
+// catches before anything is indexed and which names both declarations by
+// kind within the scope, and a name taken by an already indexed file, which
+// additionally names both logical file names - so no caller has to read a
+// message text to tell a redeclaration from a generic failure (E1/A3).
+// error.file is the file being indexed. Package scopes merge instead of
+// conflicting. Each file must be indexed once: re-indexing the same file
+// reports its own declarations as duplicates.
 bool index_file(SchemaFile& file, SymbolIndex& symbols, Diagnostic& error);
 
 // Resolves custom field type names against symbols, considering only files
 // in visible_files, and applies type-dependent validation (packed legality,
-// oneof bounds, default values). Fields whose type cannot be resolved are
-// reported once as DIAGNOSTIC_UNRESOLVED_TYPE warnings when allow_unresolved
-// is true, and as errors when it is false. Checks that do not need the
-// resolved kind are always applied. Returns false and fills error on the
-// first fatal problem.
+// oneof bounds, default values). A reference the index does not know at all
+// is reported once as DIAGNOSTIC_UNRESOLVED_TYPE when allow_unresolved is
+// true and as an error when it is false; an invisible declared type reports
+// DIAGNOSTIC_INVISIBLE_TYPE the same way, and a found non-type or a foreign
+// map entry is fatal in BOTH modes - no import can turn it into a legal
+// field type (the B9/B15 oracle rows). Checks that do not need the resolved
+// kind are always applied. Returns false and fills error on the first fatal
+// problem.
 bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
                   const std::set<const SchemaFile*>& visible_files,
                   bool allow_unresolved, Diagnostic& error);
+
+// The compatibility finish pass (plan 4 Task 3, amendments A5/A6): the one
+// descriptor-origin file of LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY is resolved
+// against its own declarations, and a reference that resolves nowhere is
+// tolerated ONLY when the descriptor classifies it itself - an explicit
+// TYPE_MESSAGE/TYPE_ENUM kind and an absolute type name. Every permitted
+// external reference records one warning per type name: the bound is the
+// caller-owned warned_types set (A5), while warn_once only keeps a repeated
+// pass idempotent, and the warning goes to the stable unknown location because
+// a thin descriptor carries no positions. missing_external is the pass's own
+// report that external information was absent (A4), and a field whose type
+// resolves locally is checked exactly as complete linking checks it - the
+// declared-kind comparison (A7) included. Unlike resolve_file's
+// allow_unresolved policy, this pass never accepts a relative source-style
+// name, and it never rewrites the metadata of a permitted external reference
+// (a refused reference keeps its metadata too, because every check runs before
+// the rewrite). Returns false and fills error on the first fatal problem.
+bool resolve_file_compat(SchemaFile& file, const SymbolIndex& symbols,
+                         const std::set<const SchemaFile*>& visible_files,
+                         std::set<std::string>& warned_types,
+                         bool& missing_external, Diagnostic& error);
+
+// Validates the shape of every synthetic map entry the file declares
+// (amendment A26): a message carrying options.map_entry == true must hold a
+// field numbered 1 and a field numbered 2, referenced or not, reported as
+// DIAGNOSTIC_MALFORMED_MAP_ENTRY with the message text the generator prints
+// today. An entry nobody references is still descriptor input, so the check is
+// unconditional and must not hide behind the map-entry ownership guard, which
+// only fires for a referencing field. Source origin cannot produce the shape
+// (the parser synthesizes both members), so this is a descriptor-origin check:
+// `link_schema` runs it in complete mode, and compatibility mode's own sweep is
+// Step 7's obligation, not this function's (review r4, style-only note).
+// Returns false and fills error at the first malformed entry, in declaration
+// order.
+bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
+
+// Validates every enum the file declares, top-level and nested, over the
+// available descriptor alone: an enum must declare at least one value, reported
+// as DIAGNOSTIC_EMPTY_ENUM (fix round r16, ledger D-32), and two values may
+// share a number only when the enum declares `option allow_alias = true`,
+// reported as DIAGNOSTIC_DUPLICATE_ENUM_NUMBER. The presence question is asked
+// first, so an empty enum that writes the option is still refused - protoc
+// refuses it. An enum nothing references is still
+// descriptor input, so the check is unconditional, reference-free and runs
+// before any resolution, beside the entry-shape sweep (A26's precedent) - the
+// top-level enum is the entity no resolution pass walks (fix round r13, ledger
+// D-28, contract clause 12). The source path refuses the same shape as text
+// (`codegen/parser/proto_parser.cpp`'s duplicate-number rule) and records the
+// option in the model, so this is the descriptor-origin half of that frontend
+// parity rule. `link_schema` runs it in complete mode and the compatibility
+// pass repeats it before its own finish pass, because neither mode consults a
+// reference for the answer. Returns false and fills error at the first empty
+// enum or the first repeated number, in declaration order.
+bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error);
+
+// Validates every declaration name in the file lexically, over the available
+// descriptor alone (contract clause 13; fix round r18, ledger D-39): a name must
+// be non-empty and carry only `[A-Za-z0-9_]`, which is protoc's own
+// `ValidateSymbolName` rule (`descriptor.cc:5419-5438`). It applies to every
+// modeled declaration - message (top-level and nested), field, enum, enum value,
+// oneof and service - and to every package component; the file's own `name` is a
+// logical path and is NOT a symbol, so it is not checked. Both shapes carry
+// DIAGNOSTIC_INVALID_SYMBOL_NAME, because they are one category. The check is
+// reference-free and runs before any resolution, in both linking modes, beside
+// the entry-shape and enum-number sweeps (A26's precedent): a malformed name is
+// provable from the descriptor alone and an unreferenced declaration still
+// reaches the generator. The source path cannot produce either shape (its
+// tokenizer only yields identifier tokens), so this is the descriptor-origin
+// half of the same frontend parity D-23/D-28/D-32/D-36 carry. protoc imposes no
+// first-character rule, so neither does this. Returns false and fills error at
+// the first malformed name, in declaration order.
+bool validate_symbol_names(SchemaFile& file, Diagnostic& error);
+
+// True for the paired companion of an unresolved-type warning: the generic
+// warning the standalone pass records when it cannot validate the default of a
+// type it has not resolved. Complete linking resolves the type and validates the
+// default, which makes it stale, so A10's warning hygiene removes it together
+// with the unresolved-type warning it was recorded with. The sentence itself
+// stays private to schema_semantics.cpp - callers ask this question instead of
+// matching on message text (fix round r4, ledger D-13). The match is a
+// contract, not a convenience: exactly one producer writes that sentence, no
+// other diagnostic may start with it, and a new droppable warning extends
+// this predicate and its test instead of reusing the prefix (ledger D-27,
+// fix round r12).
+bool is_deferred_default_warning(const Diagnostic& diagnostic);
 
 // Validates everything that needs no import linking: duplicate field
 // names/numbers, oneof bounds, packed labels, and scalar packed/default

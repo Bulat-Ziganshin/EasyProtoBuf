@@ -1,0 +1,5 @@
+// defaults - R13b: a MESSAGE field cannot carry an explicit default at all.
+syntax = "proto2";
+package defaults;
+message T { optional int32 x = 1; }
+message M { optional T t = 1 [default = 5]; }

@@ -1,0 +1,3 @@
+package a.b;
+import "dep_ab.proto";
+message M { optional a.b.Type t = 1; }

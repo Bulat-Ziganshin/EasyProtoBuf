@@ -1,0 +1,7 @@
+// chain/ordinary - the root. `c.Leaf` is hidden behind `b`'s ordinary import,
+// so this reference is not defined; protoc 30.1 rejects it and so must the
+// linker (the R3 hidden-dependency half).
+syntax = "proto2";
+package a;
+import "b.proto";
+message Root { optional c.Leaf leaf = 1; }

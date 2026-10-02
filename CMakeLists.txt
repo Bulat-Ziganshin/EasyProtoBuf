@@ -19,6 +19,12 @@ option(EASYPB_CODEGEN_WITH_PROTO_PARSER
 option(EASYPB_BUILD_DIFFERENTIAL_TESTS
        "Build the optional parser comparator used with an external protoc"
        OFF)
+
+# The external tool the opt-in lanes measure against. The corpus generator's
+# check (codegen.imports.parity.generator) is registered only when this is set
+# and an interpreter is found; nothing else in the build depends on it.
+set(EASYPB_PROTOC "" CACHE FILEPATH
+    "Path to the official protoc binary; enables the generator check")
 option(EASYPB_EXTENDED_TESTS
        "Build slower deterministic stress/property tests"
        OFF)
@@ -49,6 +55,35 @@ else()
 endif()
 
 
+# P-03: an unhandled enumerator must not compile.
+# `outcome_code` in codegen/schema_semantics.cpp switches over an internal enum
+# and has no `default:` label, so adding an outcome and forgetting its case has
+# to break the build instead of silently reading as DIAGNOSTIC_GENERIC. The flag
+# therefore sits on every target, the library included - the switch is library
+# code, and a flag on the test executables alone would guard the one place the
+# defect cannot be. `add_compile_options` is directory-scoped, so this governs
+# EasyProtoBuf's own targets (library, code generator, examples, tests) and not
+# a parent project that adds this directory as a subdirectory.
+# GNU and Clang only. MSVC is deliberately not set here: no MSVC lane in this
+# repository measures it, and the plan-4 package's verifier records that gap as
+# a note instead of pretending it is covered. A future MSVC lane needs BOTH
+# codes, because the two switch shapes differ: C4062 ("no default label that can
+# catch it") is this flag's analogue for `outcome_code`, which has no
+# `default:` label, while C4061 ("has a default case") covers a default-bearing
+# switch such as the ImportInfo modifier switch in codegen/schema.cpp. Both are
+# level 4 and off by default, so each needs its own /we (fix round r5, H-3).
+include(CheckCXXCompilerFlag)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    check_cxx_compiler_flag("-Werror=switch" EASYPB_HAS_WERROR_SWITCH)
+    if(EASYPB_HAS_WERROR_SWITCH)
+        add_compile_options("-Werror=switch")
+        message(STATUS "EasyProtoBuf: -Werror=switch is on (P-03: an unhandled enumerator fails the build)")
+    else()
+        message(WARNING "EasyProtoBuf: this compiler rejects -Werror=switch, so P-03's compile-time guarantee is not enforced")
+    endif()
+endif()
+
+
 add_executable(decoder examples/decoder/decoder.cpp)
 target_include_directories(decoder PRIVATE include)
 
@@ -64,7 +99,7 @@ add_executable(easypb_codegen codegen/main.cpp codegen/cpp_names.cpp)
 set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
 target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl codegen)
 
-add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp codegen/logical_paths.cpp)
+add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp codegen/logical_paths.cpp codegen/schema_linker.cpp)
 target_include_directories(easypb_schema
     PUBLIC include codegen)
 

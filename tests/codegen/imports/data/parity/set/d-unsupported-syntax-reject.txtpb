@@ -1,0 +1,5 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto4"
+}

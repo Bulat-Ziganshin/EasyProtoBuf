@@ -1,0 +1,5 @@
+// chain/public - the same a -> b -> c chain with a PUBLIC edge, where the
+// transitive reference is visible. Same bytes as the ordinary variant's leaf.
+syntax = "proto2";
+package c;
+message Leaf { optional int32 x = 1; }

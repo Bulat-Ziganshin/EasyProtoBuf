@@ -1,0 +1,5 @@
+message Q {
+  message R {
+    optional int32 x = 1;
+  }
+}

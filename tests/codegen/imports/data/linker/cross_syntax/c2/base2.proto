@@ -1,0 +1,8 @@
+// cross_syntax/c2 - Appendix C C2: a proto3 field of a proto2 enum is refused.
+// The provider declares proto2 explicitly; the enum is therefore closed.
+syntax = "proto2";
+package base2;
+enum State {
+  READY = 7;
+  STOPPED = 9;
+}

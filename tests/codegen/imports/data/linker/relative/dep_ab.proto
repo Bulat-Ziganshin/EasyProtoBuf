@@ -1,0 +1,2 @@
+package a.b;
+message Type { optional int32 x = 1; }

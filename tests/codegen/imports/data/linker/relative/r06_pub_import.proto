@@ -1,0 +1,2 @@
+import "dep_pub.proto";
+message M { optional a.b.Type t = 1; }

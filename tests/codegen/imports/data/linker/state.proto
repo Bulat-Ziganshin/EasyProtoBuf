@@ -1,0 +1,7 @@
+// The plan-4 Task 2 regression pair, verbatim from the contract
+// (04-import-linker.md, "Keep linking out of two neighbouring rules").
+// protoc 30.1 accepts it; the linker must resolve both fields to
+// `.shared.State` with kind TYPE_ENUM.
+syntax = "proto2";
+package shared;
+enum State { READY = 7; STOPPED = 9; }

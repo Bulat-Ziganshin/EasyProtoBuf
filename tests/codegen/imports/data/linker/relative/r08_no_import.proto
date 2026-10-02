@@ -1,0 +1,1 @@
+message M { optional a.b.Type t = 1; }

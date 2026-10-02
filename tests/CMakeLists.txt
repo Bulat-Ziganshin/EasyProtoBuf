@@ -471,6 +471,32 @@ if(BUILD_TESTING)
     target_link_libraries(codegen_imports_graph_test PRIVATE easypb_schema)
     add_test(NAME codegen.imports.graph COMMAND codegen_imports_graph_test)
 
+    # Descriptor-only linker suite: links easypb_schema alone, so it must keep
+    # building and passing when the proto parser is off. The tests source
+    # directory is a positional argument: the Step 7.4 corpus checkpoint links
+    # the tracked `.pbs` fixtures, which live under several data directories.
+    add_executable(codegen_imports_linker_test codegen/imports/test_linker.cpp)
+    target_link_libraries(codegen_imports_linker_test PRIVATE easypb_schema)
+    add_test(NAME codegen.imports.linker
+        COMMAND codegen_imports_linker_test ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Step 11's two-way oracle parity lane, the descriptor half. Both halves
+    # read codegen/imports/data/parity/parity-cases.tsv from this one source
+    # file and assert every row's verdict; they are two registrations rather
+    # than one because the A12 split makes "parser-free" and "parser-dependent"
+    # mutually exclusive target classes (verify-package's `iso:parser-free
+    # targets link nothing the parser owns`): a target outside the parser guard
+    # must link `easypb_schema` alone in every tree. So the descriptor rows are
+    # registered here, for every profile, and the binary NAMES each
+    # source-origin row it does not read with the pack's `SKIP:` marker; the
+    # source half sits inside the parser guard beside the other loader suites.
+    add_executable(codegen_imports_parity_test codegen/imports/test_parity.cpp)
+    target_link_libraries(codegen_imports_parity_test PRIVATE easypb_schema)
+    target_compile_definitions(codegen_imports_parity_test
+        PRIVATE EASYPB_PARITY_HALF_DESCRIPTOR=1)
+    add_test(NAME codegen.imports.parity
+        COMMAND codegen_imports_parity_test ${CMAKE_CURRENT_SOURCE_DIR})
+
     add_executable(codegen_imports_graph_exhaustive_test
         codegen/imports/test_graph_exhaustive.cpp)
     target_link_libraries(codegen_imports_graph_exhaustive_test PRIVATE easypb_schema)
@@ -509,6 +535,48 @@ if(BUILD_TESTING)
         set_tests_properties(codegen.imports.loader PROPERTIES
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
+        # Source-driven linker suite: needs load_source_files and the parser
+        # include directories, so it lives inside the parser guard. The data
+        # directory is a positional argument and the scratch directory is
+        # pinned, mirroring the loader suite above.
+        add_executable(codegen_imports_source_linker_test
+            codegen/imports/test_source_linker.cpp)
+        target_include_directories(codegen_imports_source_linker_test PRIVATE
+            ${easypb_test_include_dir}
+            ${PROJECT_SOURCE_DIR}/codegen
+            ${PROJECT_SOURCE_DIR}/codegen/parser)
+        target_link_libraries(codegen_imports_source_linker_test
+            PRIVATE easypb_proto_loader)
+        # Step 8.3: the corpus directory and the oracle directory the
+        # differential lane generates. The second argument is optional to the
+        # binary - without it every accepting fixture prints a `SKIP:` line and
+        # the run still succeeds on a machine that has not generated the sets.
+        add_test(NAME codegen.imports.source
+            COMMAND codegen_imports_source_linker_test
+                ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/linker
+                ${PROJECT_SOURCE_DIR}/build/package-imports/oracle)
+        set_tests_properties(codegen.imports.source PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+        # Step 11's parity lane, the source half: the same table's
+        # source-origin rows through the loader's own path (the pack's
+        # plan4/steps/06-oracle-parity.md, section 11.4). The descriptor half is
+        # registered above, outside this guard, so the two may not share one
+        # target (A12).
+        add_executable(codegen_imports_parity_source_test
+            codegen/imports/test_parity.cpp)
+        target_include_directories(codegen_imports_parity_source_test PRIVATE
+            ${easypb_test_include_dir}
+            ${PROJECT_SOURCE_DIR}/codegen
+            ${PROJECT_SOURCE_DIR}/codegen/parser)
+        target_link_libraries(codegen_imports_parity_source_test
+            PRIVATE easypb_proto_loader)
+        target_compile_definitions(codegen_imports_parity_source_test
+            PRIVATE EASYPB_PARITY_HALF_SOURCE=1)
+        add_test(NAME codegen.imports.parity.source
+            COMMAND codegen_imports_parity_source_test
+                ${CMAKE_CURRENT_SOURCE_DIR})
+
     endif()
 endif()
 
@@ -524,4 +592,40 @@ if(EASYPB_BUILD_DIFFERENTIAL_TESTS)
         ${PROJECT_SOURCE_DIR}/codegen
         ${PROJECT_SOURCE_DIR}/codegen/parser)
     target_link_libraries(parser_differential_compare PRIVATE easypb_proto_parser)
+
+    # The corpus generator's idempotence gate: the corpus README claims that
+    # tests/codegen/imports/data/parity is `generate.py`'s output, and this row
+    # checks it mechanically (hash every owned file, regenerate, hash again,
+    # fail naming every change). It is registered by name only when the
+    # toolchain is actually present - an interpreter and `EASYPB_PROTOC` -
+    # because a test that quietly skips is the failure mode the `SKIP:` rule
+    # exists for; the configure log names the missing half instead.
+    # Overridable: -DEASYPB_PYTHON=<path> wins over the search.
+    find_program(EASYPB_PYTHON NAMES python python3)
+    if(WIN32 AND EASYPB_PYTHON MATCHES "[/\\\\]usr[/\\\\]bin")
+        # An MSYS2 `usr/bin` interpreter (a POSIX build, unlike the
+        # project's ucrt64 toolchain) mishandles the `C:/...`
+        # arguments this script and protoc are addressed with; the row
+        # is registered only for a native Windows Python. On other
+        # platforms `/usr/bin/python3` is the normal interpreter.
+        set(EASYPB_PYTHON "EASYPB_PYTHON-NOTFOUND")
+    endif()
+    if(EASYPB_PYTHON AND EASYPB_PROTOC)
+        add_test(NAME codegen.imports.parity.generator
+            COMMAND ${EASYPB_PYTHON}
+                ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/parity/check_generator.py
+                --protoc ${EASYPB_PROTOC})
+        # The gate's path contract: a relative --descriptor-proto-path belongs
+        # to the directory the gate is invoked from (the generator itself runs
+        # with the corpus as its cwd), and a refusal names the spelling the
+        # caller typed. Reads and writes nothing.
+        add_test(NAME codegen.imports.parity.generator.paths
+            COMMAND ${EASYPB_PYTHON}
+                ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/parity/check_generator_paths.py
+                --protoc ${EASYPB_PROTOC})
+    else()
+        message(STATUS
+            "EasyProtoBuf: codegen.imports.parity.generator[.paths] not "
+            "registered (set EASYPB_PROTOC and put a native python on PATH)")
+    endif()
 endif()

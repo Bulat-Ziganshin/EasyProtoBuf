@@ -1,0 +1,13 @@
+// shadowing - Appendix C B8: a nearer head that is NOT a type (here a field
+// named `Choice`) must not commit the compound name, so the walk continues
+// outward to the visible `pkg.Choice` and `Choice.Item` links. protoc accepts;
+// without this counter-fixture the set could not tell the corrected resolver
+// from the old one.
+syntax = "proto2";
+package pkg;
+import "dep.proto";
+message Encloser {
+  optional int32 Choice = 1;
+
+  message Req { optional Choice.Item item = 1; }
+}

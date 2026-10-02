@@ -1,0 +1,7 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto3"
+  message_type { name: "M" }
+  message_type { name: "N" }
+}

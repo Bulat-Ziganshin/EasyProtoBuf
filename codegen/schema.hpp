@@ -39,7 +39,105 @@ enum DiagnosticCode
     DIAGNOSTIC_UNRESOLVED_TYPE,
     DIAGNOSTIC_INVALID_IMPORT,
     DIAGNOSTIC_MISSING_IMPORT,
-    DIAGNOSTIC_IMPORT_CYCLE
+    DIAGNOSTIC_IMPORT_CYCLE,
+    // Plan 4 (A3): a conflicting declaration, with both declarations named.
+    // New values are appended, never inserted: an existing value must keep
+    // its numeric identity for every caller that stores or compares codes.
+    DIAGNOSTIC_DUPLICATE_SYMBOL,
+    // Plan 4 Step 4.1 (A3, A9): the name exists in the compilation but its
+    // defining file is not visible from the requesting file.
+    DIAGNOSTIC_INVISIBLE_TYPE,
+    // Plan 4 Step 4.1 (A3, A9): the name resolves to a declaration that is
+    // not a type (a field, an enum value, a oneof, a service, or a package).
+    DIAGNOSTIC_NOT_A_TYPE,
+    // Plan 4 Step 4.2 (A3, A22/A24): a user field names a synthetic map-entry
+    // message instead of the map field that owns it.
+    DIAGNOSTIC_MAP_ENTRY_TYPE,
+    // Plan 4 Step 5.1 (A3, A7): a descriptor-origin field's declared kind
+    // disagrees with the definition its type_name resolves to. The declared
+    // kind is authoritative metadata, so it is compared, never rewritten.
+    DIAGNOSTIC_KIND_MISMATCH,
+    // Plan 4 Step 5.1 (A26): a descriptor carries a synthetic map entry whose
+    // shape is not the key/value pair protoc requires, referenced or not.
+    DIAGNOSTIC_MALFORMED_MAP_ENTRY,
+    // Plan 4 Step 5.1 (A25): a file's syntax value is neither proto2 nor
+    // proto3 (protoc 30.1 writes "editions" for an editions file), so the
+    // project cannot model its semantics. Refused loudly instead of being
+    // silently downgraded to proto2.
+    DIAGNOSTIC_UNSUPPORTED_SYNTAX,
+    // Plan 4 Step 5.1 (contract clause 12, D-23): a descriptor-origin field
+    // number outside 1..536870911 or inside the reserved 19000..19999 range.
+    // The parser refuses both shapes as source text
+    // (codegen/parser/proto_parser.cpp:1049-1060), so this is the
+    // descriptor-origin half of that frontend parity rule.
+    DIAGNOSTIC_INVALID_FIELD_NUMBER,
+    // Plan 4 Step 5.1 (contract clause 12, D-23): a field whose declared kind
+    // is a named kind (MESSAGE, ENUM, GROUP) but which carries no type_name,
+    // so the generator cannot name the type it must emit. protoc's own
+    // cross-link refuses the same shape (`Field with message or enum type
+    // missing type_name.`, descriptor.cc's CrossLinkField).
+    DIAGNOSTIC_MISSING_TYPE_NAME,
+    // Plan 4 Step 5.1 (contract clause 12, D-28): two values of one enum share
+    // a number and the enum does not declare `option allow_alias = true`.
+    // protoc refuses the shape when it builds a descriptor ("... uses the same
+    // enum value as ...") and our parser refuses it as source text
+    // (codegen/parser/proto_parser.cpp:1619-1624), which is why the option
+    // travels in the model (`EnumOptions`) - without it the linker could not
+    // tell an intentional alias from this defect. Descriptor-origin only: the
+    // parser cannot produce the shape.
+    DIAGNOSTIC_DUPLICATE_ENUM_NUMBER,
+    // Plan 4 Step 5.1 (contract clause 12, D-28): a message declares a oneof no
+    // field points at, so the declaration is unreachable rather than a choice
+    // set. protoc refuses the shape when it builds a descriptor (`Oneof must
+    // have at least one field.`); the index-RANGE check beside this one only
+    // refuses a field pointing outside the list, so a declaration nothing
+    // points at is invisible to it.
+    DIAGNOSTIC_EMPTY_ONEOF,
+    // Plan 4 Step 5.1 (contract clause 12, D-32): an enum declares no value at
+    // all, so the type has no member and no number to resolve. protoc refuses
+    // the shape when it builds a descriptor (`Enums must contain at least one
+    // value.`) and our parser refuses the source twin as text ("enum must
+    // contain at least one value"), so this is the descriptor-origin half of
+    // that frontend parity rule. The check runs BEFORE the `allow_alias`
+    // early return: an empty enum that writes the option is still refused by
+    // protoc, so the option cannot licence an empty list. Descriptor-origin
+    // only - the parser cannot produce the shape.
+    DIAGNOSTIC_EMPTY_ENUM,
+    // Plan 4 Step 5.1 (contract clause 12, the 0927-mimo review's F2): a
+    // descriptor-origin file that declares `syntax = "proto3"` carries a field
+    // with the `required` label, which proto3 does not have. protoc refuses the
+    // shape when it builds the file from the same bytes (`ValidateProto3Field`,
+    // descriptor.cc:7917, "Required fields are not allowed in proto3.") and our
+    // parser refuses its source twin (codegen/parser/proto_parser.cpp:1233), so
+    // this is the descriptor-origin half of that frontend parity rule. The gate
+    // is the field's OWN file: proto2 gives the label a meaning, so reading the
+    // wrong file here would refuse legal input. Descriptor-origin only - the
+    // parser cannot produce the shape.
+    DIAGNOSTIC_PROTO3_REQUIRED_FIELD,
+    // Plan 4 Step 5.1 (contract clause 12, the 0927-mimo review's F2): the same
+    // gate for a proto3 field that carries an explicit `default_value`, which
+    // proto3 does not allow. protoc refuses it at the same site
+    // (descriptor.cc:7922, "Explicit default values are not allowed in
+    // proto3.") and the parser refuses the source twin
+    // (codegen/parser/proto_parser.cpp:1124), so the two codes are one rule
+    // asked of two shapes: the shape, not the file class, is what the message
+    // names. Descriptor-origin only.
+    DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT,
+    // Plan 4 clause 13 (ledger `D-39`, the 0927-mimo review's F9): a declaration
+    // name the descriptor carries is not a legal protobuf symbol name - empty,
+    // or carrying a character outside `[A-Za-z0-9_]`. protoc refuses both while
+    // it builds the file (`ValidateSymbolName`, descriptor.cc:5419-5438:
+    // "Missing name." for the empty one, `"<name>" is not a valid identifier.`
+    // otherwise) and applies the rule to every declaration and to every package
+    // component; the SOURCE path cannot produce either shape (the tokenizer
+    // only yields identifier tokens), so this is the descriptor-origin half of
+    // the same frontend parity `D-23`/`D-28`/`D-32`/`D-36` carry. protoc imposes
+    // NO first-character rule (a name starting with a digit is accepted there),
+    // so this code must not add one: whether a name is usable as a C++ name is
+    // the generator's question, not the linker's (contract clause 11). The two
+    // messages share one code because they are one category - the name is not a
+    // symbol name - and one rule asked of two values (E1/A3).
+    DIAGNOSTIC_INVALID_SYMBOL_NAME
 };
 
 struct Diagnostic
@@ -52,6 +150,41 @@ struct Diagnostic
 
     Diagnostic() : warning(false), code(DIAGNOSTIC_GENERIC) {}
 };
+
+// Plan 4 amendment A25: one classification of a file's syntax, shared by every
+// component that must not guess. Absent and "proto2" are proto2; "proto3" is
+// proto3; anything else - protoc 30.1 writes "editions" for a file declared
+// with `edition = "2023";` - is an unsupported input, because enum openness and
+// field presence come from the edition's features, which this model does not
+// carry. Declared here and defined in schema.cpp so the parser-free profile can
+// refuse it too; link_schema refuses FILE_SYNTAX_UNSUPPORTED in both modes
+// before any resolution work.
+enum FileSyntax
+{
+    FILE_SYNTAX_PROTO2,        // syntax absent, or exactly "proto2"
+    FILE_SYNTAX_PROTO3,        // syntax exactly "proto3"
+    FILE_SYNTAX_UNSUPPORTED    // any other value, including "editions"
+};
+
+// descriptor.proto's Edition enum values the classifier can read as a file
+// class (`FileDescriptorProto.edition`, field 14). protoc's `BuildFileImpl`
+// consults `has_edition()` BEFORE the `syntax` string (descriptor.cc:5952-
+// 5971), so a crafted set carrying the field with no syntax string is
+// classified like the reference instead of being silently downgraded to
+// proto2 (ledger `D-52`). Only these two editions are modeled; EDITION_2023
+// and every other value are an unsupported input, exactly as the string
+// "editions" is (A25). The two editions protobuf 30.1 can write beyond them
+// are named here so A25's refusal can say which edition it read instead of
+// quoting an absent `syntax` string (ledger `D-61`).
+enum
+{
+    kEditionProto2 = 998,
+    kEditionProto3 = 999,
+    kEdition2023 = 1000,
+    kEdition2024 = 1001
+};
+
+FileSyntax classify_file_syntax(const FileDescriptorProto& file);
 
 struct ImportInfo
 {
@@ -200,6 +333,18 @@ inline DescriptorPath file_service_path(int service_index)
     return path;
 }
 
+// `ServiceDescriptorProto.method` is field 2, and a method's name is field 1 of
+// that message (descriptor.proto). Used by the lexical name sweep, which covers
+// method declarations too (ledger `D-57`).
+inline DescriptorPath service_method_path(const DescriptorPath& service_path,
+                                          int method_index)
+{
+    DescriptorPath path = service_path;
+    path.push_back(2);
+    path.push_back(method_index);
+    return path;
+}
+
 inline DescriptorPath message_field_path(const DescriptorPath& message_path,
                                          int field_index)
 {
@@ -255,6 +400,20 @@ const FieldDescriptorProto* find_field(const SchemaFile& file,
                                        const DescriptorPath& path);
 const FieldSource* find_field_source(const SchemaFile& file,
                                      const DescriptorPath& path);
+
+// protoc's own rule for naming the nested entry message a `map` field implies:
+// an underscore capitalizes the next character only when it is a lowercase
+// ASCII letter, every other character is copied through and clears the flag,
+// and the result carries the "Entry" suffix. There is deliberately no
+// empty-name fallback - `map<string, int32> _ = 1;` yields the entry `Entry`
+// in protoc, and any other answer is a divergence from the reference
+// compiler. Measured with libprotoc 30.1 against the naming table in
+// tests/codegen/schema/test_semantics.cpp (plan-4 amendments A14, A15).
+//
+// It lives here rather than in the parser because the linker also builds in
+// the descriptor-only profile, which links no parser, and because acceptance
+// must not depend on which frontend produced a descriptor (amendment A24).
+std::string map_entry_name(const std::string& field_name);
 
 // Rebuilds every file's import edges from its authoritative descriptor
 // dependency lists (dependency, public_dependency, weak_dependency) in

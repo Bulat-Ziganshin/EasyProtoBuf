@@ -1,0 +1,6 @@
+// chain/ordinary - the middle edge. `c` is imported privately, so it is
+// visible to `b` and to nobody further along the chain.
+syntax = "proto2";
+package b;
+import "c.proto";
+message Node { optional c.Leaf leaf = 1; }

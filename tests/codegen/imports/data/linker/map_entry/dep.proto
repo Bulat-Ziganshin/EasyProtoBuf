@@ -1,0 +1,6 @@
+// map_entry - the imported owner A5/A6 name their entry through. The entry is
+// `pkg.Other.BarEntry`, derived from the map field `bar` by protoc's own rule
+// (A22/A24: one shared `map_entry_name`).
+syntax = "proto3";
+package pkg;
+message Other { map<string, int32> bar = 1; }

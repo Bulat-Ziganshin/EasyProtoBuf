@@ -1,0 +1,14 @@
+// Fix round r10 (ledger D-21), the mirror half: a service is never a TYPE
+// (protoc's `Symbol::IsType()`), so it may not win a WHOLE-name reference -
+// the walk continues outward and the imported global message `Q` links.
+// protoc accepts (oracle head03, measured here as h02).
+package inner;
+
+import "dep_outer_q.proto";
+
+service Q {
+}
+
+message Use {
+  optional Q f = 1;
+}

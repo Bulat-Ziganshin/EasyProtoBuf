@@ -1,0 +1,6 @@
+// visibility_roots - case 2: the reference is absolute and its file is in the
+// compilation only because it was named as a second root. A second root does
+// not grant visibility, so the verdict is the same as case 1's.
+syntax = "proto2";
+package app;
+message Uses { optional .pkg.Hidden h = 1; }

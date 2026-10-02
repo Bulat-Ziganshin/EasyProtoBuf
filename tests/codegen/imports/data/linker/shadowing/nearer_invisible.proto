@@ -1,0 +1,8 @@
+// shadowing - Appendix C B10: `pkg.sub` (declared in hidden.proto, loaded as a
+// second root and never imported) is nearer than the outer `sub` package, and
+// an invisible candidate must not commit the name, so `sub.X` links from the
+// imported vis.proto. protoc accepts with the same bytes as its only root.
+syntax = "proto2";
+package pkg;
+import "vis.proto";
+message Req { optional sub.X f = 1; }

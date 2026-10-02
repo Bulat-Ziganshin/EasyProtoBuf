@@ -1,0 +1,4 @@
+syntax = "proto3";
+package s;
+import "dep.proto";
+message Wrap { message Inner { Dep d = 1; } Inner i = 1; }

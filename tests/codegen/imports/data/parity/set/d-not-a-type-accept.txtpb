@@ -1,0 +1,10 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto3"
+  service { name: "S" }
+  message_type {
+    name: "M"
+    field { name: "m" number: 1 label: LABEL_OPTIONAL type: TYPE_MESSAGE type_name: ".p.M" }
+  }
+}

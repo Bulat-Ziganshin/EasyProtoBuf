@@ -116,6 +116,54 @@ void test_rejects_proto3_required()
 }
 
 
+// D-23 (contract clause 12): the SOURCE half of the field-number rule - the
+// parser refuses 0, the reserved 19000..19999 range and anything above
+// 536870911, while both sides of the reserved range and the maximum itself
+// stay legal. These refusals had no test row before fix round r11, and they
+// are what the linker's DIAGNOSTIC_INVALID_FIELD_NUMBER mirrors on
+// descriptor-origin input: one rule, two frontends, the same numbers.
+void test_rejects_invalid_field_numbers()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    CHECK(!easypb_proto::parse_proto("num-zero.proto",
+        "message M { optional int32 x = 0; }", parsed, error));
+    CHECK(error.message.find("field number must be in range 1..536870911") !=
+          std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("num-reserved.proto",
+        "message M { optional int32 x = 19000; }", parsed, error));
+    CHECK(error.message.find("field numbers 19000..19999 are reserved") !=
+          std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("num-reserved-high.proto",
+        "message M { optional int32 x = 19999; }", parsed, error));
+    CHECK(error.message.find("field numbers 19000..19999 are reserved") !=
+          std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("num-big.proto",
+        "message M { optional int32 x = 536870912; }", parsed, error));
+    CHECK(error.message.find("field number must be in range 1..536870911") !=
+          std::string::npos);
+
+    CHECK(easypb_proto::parse_proto("num-ok.proto",
+        "message M { optional int32 a = 1; optional int32 b = 18999;"
+        " optional int32 c = 20000; optional int32 d = 536870911; }",
+        parsed, error));
+    if (parsed.file.message_type.size() == 1) {
+        const DescriptorProto& message = parsed.file.message_type[0];
+        CHECK(message.field.size() == 4);
+        if (message.field.size() == 4) {
+            CHECK(message.field[1].number == 18999);
+            CHECK(message.field[2].number == 20000);
+            CHECK(message.field[3].number == 536870911);
+        }
+    } else {
+        CHECK(parsed.file.message_type.size() == 1);
+    }
+}
+
 void test_map_keyword_can_be_a_type_name()
 {
     easypb_proto::ParsedProto parsed;
@@ -312,6 +360,12 @@ void test_rejects_invalid_enum_defaults()
     CHECK(error.message.find("no value named B") != std::string::npos);
 }
 
+// D-32 (fix round r16): the source half of the empty-enum rule. The parser
+// refuses the shape as text, which is why the descriptor-origin half is what
+// the linker owns; the option-only body is still an empty list, and that row is
+// the parity control for the descriptor-origin `allow_alias` case - protoc
+// refuses an empty enum that writes the option as well, so the option is not a
+// licence on either origin.
 void test_rejects_empty_enums()
 {
     easypb_proto::ParsedProto parsed;
@@ -319,6 +373,13 @@ void test_rejects_empty_enums()
     CHECK(!easypb_proto::parse_proto(
         "empty-enum.proto", "syntax=\"proto2\"; enum E {}", parsed, error));
     CHECK(error.message.find("at least one value") != std::string::npos);
+
+    easypb_proto::ParsedProto option_only;
+    easypb_proto::Diagnostic option_error;
+    CHECK(!easypb_proto::parse_proto("empty-enum-alias.proto",
+        "syntax=\"proto2\"; enum E { option allow_alias = true; }",
+        option_only, option_error));
+    CHECK(option_error.message.find("at least one value") != std::string::npos);
 }
 
 void test_rejects_duplicate_oneof_names()
@@ -329,6 +390,83 @@ void test_rejects_duplicate_oneof_names()
         "syntax=\"proto3\"; message M { oneof x { int32 a=1; } oneof x { int32 b=2; } }",
         parsed, error));
     CHECK(error.message.find("oneof") != std::string::npos);
+}
+
+// D-28 (fix round r13, contract clause 12): a oneof declaration no field points
+// at is refused by protoc as source text ("Oneof must have at least one
+// field."). The grammar accepts the body, so the refusal comes from the shared
+// reference-free pass the parser runs after parsing
+// (`easypb_schema::validate_deferred_file` -> `resolve_message`), which is also
+// where the descriptor-origin half of the rule lives - one rule, one place, and
+// the linker suite's `test_descriptor_origin_empty_oneof_is_rejected` pins the
+// other half. The neighbour with a member stays legal, so this is the empty
+// declaration and not the oneof keyword.
+void test_rejects_an_empty_oneof_body()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto("oneof-empty.proto",
+        "syntax=\"proto2\"; message M { oneof pick { } }", parsed, error));
+    CHECK(error.message.find("oneof") != std::string::npos);
+    CHECK(error.message.find("has no fields") != std::string::npos);
+
+    // An option-only body is still an empty one, and the control with a member
+    // parses.
+    easypb_proto::ParsedProto second;
+    easypb_proto::Diagnostic second_error;
+    CHECK(!easypb_proto::parse_proto("oneof-option.proto",
+        "syntax=\"proto2\"; message M { oneof pick { option (x) = 1; } }",
+        second, second_error));
+
+    easypb_proto::ParsedProto control;
+    easypb_proto::Diagnostic control_error;
+    CHECK(easypb_proto::parse_proto("oneof-ok.proto",
+        "syntax=\"proto2\"; message M { oneof pick { int32 a = 1; } }",
+        control, control_error));
+}
+
+// D-28 (fix round r13): the parser RECORDS `option allow_alias` in the
+// descriptor it emits, because the linker validates descriptor-origin enums for
+// repeated numbers and cannot tell an intentional alias from that defect
+// without it. The three states matter and are asserted separately: absent (the
+// parser's own duplicate-number refusal is the only guard), present and true
+// (an alias the linker must accept - the end-to-end fixture is
+// `tests/codegen/enums/data/enum_codegen.proto`, whose `STARTED = 1` and
+// `ACTIVE = 1` sit under the option), and present and false (not a licence).
+void test_records_allow_alias_in_the_model()
+{
+    easypb_proto::ParsedProto aliased;
+    easypb_proto::Diagnostic aliased_error;
+    CHECK(easypb_proto::parse_proto("alias.proto",
+        "syntax=\"proto2\"; enum E { option allow_alias = true; A = 1; B = 1; }",
+        aliased, aliased_error));
+    CHECK(aliased.file.enum_type.size() == 1);
+    if (aliased.file.enum_type.size() == 1) {
+        CHECK(aliased.file.enum_type[0].has_options);
+        CHECK(aliased.file.enum_type[0].options.has_allow_alias);
+        CHECK(aliased.file.enum_type[0].options.allow_alias);
+    }
+
+    easypb_proto::ParsedProto plain;
+    easypb_proto::Diagnostic plain_error;
+    CHECK(easypb_proto::parse_proto("plain.proto",
+        "syntax=\"proto2\"; enum E { A = 1; B = 2; }", plain, plain_error));
+    CHECK(plain.file.enum_type.size() == 1);
+    if (plain.file.enum_type.size() == 1) {
+        CHECK(!plain.file.enum_type[0].has_options);
+        CHECK(!plain.file.enum_type[0].options.has_allow_alias);
+    }
+
+    easypb_proto::ParsedProto explicit_false;
+    easypb_proto::Diagnostic false_error;
+    CHECK(easypb_proto::parse_proto("false.proto",
+        "syntax=\"proto2\"; enum E { option allow_alias = false; A = 1; B = 2; }",
+        explicit_false, false_error));
+    CHECK(explicit_false.file.enum_type.size() == 1);
+    if (explicit_false.file.enum_type.size() == 1) {
+        CHECK(explicit_false.file.enum_type[0].options.has_allow_alias);
+        CHECK(!explicit_false.file.enum_type[0].options.allow_alias);
+    }
 }
 
 
@@ -1033,6 +1171,7 @@ int main()
     test_complex_proto3();
     test_proto2_defaults_and_literals();
     test_rejects_proto3_required();
+    test_rejects_invalid_field_numbers();
     test_map_keyword_can_be_a_type_name();
     test_rejects_invalid_map_key();
     test_map_option_rejections_point_at_the_option();
@@ -1047,6 +1186,8 @@ int main()
     test_rejects_invalid_enum_defaults();
     test_rejects_empty_enums();
     test_rejects_duplicate_oneof_names();
+    test_rejects_an_empty_oneof_body();
+    test_records_allow_alias_in_the_model();
     test_buffer_api_owns_result_strings();
     test_full_custom_option_name_parts_are_consumed();
     test_easypb_cpp_field_options_are_retained();

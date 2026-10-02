@@ -1,0 +1,10 @@
+// defaults - the accepting control: an enum default that names a real
+// enumerator and `packed = true` on a repeated primitive field. The family's
+// other three fixtures are the rejecting side the tracked corpus cannot show.
+syntax = "proto2";
+package defaults;
+enum E { A = 0; B = 1; }
+message M {
+  optional E e = 1 [default = B];
+  repeated int32 xs = 2 [packed = true];
+}

@@ -1,0 +1,8 @@
+// cross_syntax/c4 - protoc refuses the map's synthetic entry for the same
+// closed-enum reason, naming `app.U.MEntry`; the linker refuses at the entry's
+// value member (Step 6). The enum is zero-first, so the refusal is the
+// cross-syntax rule and nothing else.
+syntax = "proto3";
+package app;
+import "base2.proto";
+message U { map<int32, base2.State> m = 1; }

@@ -1,0 +1,2 @@
+package shared;
+message S { optional int32 x = 1; }

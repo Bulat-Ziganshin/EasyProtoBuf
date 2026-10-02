@@ -139,6 +139,32 @@ require_contains(malformed_err
     "Malformed map entry .easypb.test.BrokenMap.ItemsEntry: fields 1 and 2 are required"
     "Malformed map-entry rejection")
 
+# Defect `D-65` (2026-09-30, fix round r28). One message declaring two nested map
+# entries of the SAME name is one nested type declared twice: the linker refuses
+# the pair in both modes as a name collision (`DIAGNOSTIC_DUPLICATE_SYMBOL`), and
+# this CLI never links, so it must refuse the shape too instead of silently
+# picking one of the two entries and generating C++ for it. Before the fix the
+# pick was the FIRST entry (`result.insert`, the 2026-09-29 rewrite) where the
+# revision before it kept the LAST (`result[qualified_name] = map_type`), so the
+# same bytes generated different code - `put_map_string_int32` against
+# `put_map_bytes_string` - depending on the spelling alone.
+#
+# `duplicate_map_entry.pbs` is hand-encoded, because no frontend can produce the
+# shape: libprotoc 30.1 refuses the equivalent source text ("ItemsEntry" is
+# already defined in "p.Holder"). Its content is `p.Holder` with two nested
+# `ItemsEntry` declarations, each a LEGAL map entry (key string 1 / value int32
+# 2, then key int64 1 / value string 2) and both carrying the `map_entry` option,
+# plus one `repeated ItemsEntry items = 1` field naming `.p.Holder.ItemsEntry` -
+# the two key kinds are legal on purpose, so the refusal cannot be credited to
+# the A26 key-type clause. The linker's half of the same finding is
+# `test_duplicate_map_entry_name_is_a_name_collision` in the linker suite.
+set(duplicate_map_entry_pbs "${DATA_DIR}/duplicate_map_entry.pbs")
+run_fail(duplicate_out duplicate_err
+    ${CODEGEN} --descriptor-set ${duplicate_map_entry_pbs})
+require_contains(duplicate_err
+    "Duplicate map entry .p.Holder.ItemsEntry: a nested map entry with this name is already declared"
+    "Duplicate map-entry rejection")
+
 if(FULL_BUILD)
     run_ok(scalar_proto_out scalar_proto_err ${CODEGEN} ${scalar_proto})
     normalize_source_comment(scalar_out scalar_pbs_normalized)

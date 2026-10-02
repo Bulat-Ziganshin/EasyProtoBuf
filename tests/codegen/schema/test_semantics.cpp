@@ -3,6 +3,7 @@
 // field resolution. Descriptors are built by hand so this test links only
 // easypb_schema and keeps passing in descriptor-set-only builds.
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <set>
@@ -244,6 +245,37 @@ void test_packed_rules_need_a_known_kind()
         // Repeated passes must not duplicate the warning.
         CHECK(easypb_schema::resolve_file(file, symbols, visible, true, error));
         CHECK(file.warnings.size() == 1);
+    }
+    // D-51: `[packed = false]` is a VALUE, not a refusal. The parsed
+    // representation carries has_packed = true with packed = false, and that is
+    // legal on a singular field and on a repeated string - the exact shape
+    // protoc writes into the descriptor it emits.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto optional_field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        optional_field.options.packed = false;
+        optional_field.options.has_packed = true;
+        optional_field.has_options = true;
+        message.field.push_back(optional_field);
+        FieldDescriptorProto repeated_string =
+            make_scalar_field(file, "s", 2, FieldDescriptorProto::TYPE_STRING);
+        repeated_string.label = FieldDescriptorProto::LABEL_REPEATED;
+        repeated_string.options.packed = false;
+        repeated_string.options.has_packed = true;
+        repeated_string.has_options = true;
+        message.field.push_back(repeated_string);
+        file.file.message_type.push_back(message);
+
+        easypb_schema::SymbolIndex symbols;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::index_file(file, symbols, error));
+        std::set<const easypb_schema::SchemaFile*> visible;
+        visible.insert(&file);
+        CHECK(easypb_schema::resolve_file(file, symbols, visible, true, error));
     }
 }
 
@@ -695,6 +727,11 @@ void test_duplicate_declarations_are_rejected()
         easypb_schema::SymbolIndex symbols;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::index_file(file, symbols, error));
+        // The code is part of the contract, not just the text (E1/A3): the
+        // same defect across two files carries this code too, and
+        // test_linker.cpp's test_conflicting_declaration_reports_one_code
+        // asserts the pair (D-05).
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
         CHECK(error.message.find("name collision") != std::string::npos);
         CHECK(error.location.line == 5);
     }
@@ -711,6 +748,7 @@ void test_duplicate_declarations_are_rejected()
         easypb_schema::SymbolIndex symbols;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::index_file(file, symbols, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
         CHECK(error.message.find("[4, 1]") != std::string::npos);
         CHECK(error.location.line == 0);
     }
@@ -734,6 +772,7 @@ void test_duplicate_declarations_are_rejected()
         easypb_schema::SymbolIndex symbols;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::index_file(file, symbols, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
         CHECK(error.message.find("name collision") != std::string::npos);
         CHECK(error.message.find("field x") != std::string::npos);
         CHECK(error.location.line == 4);
@@ -795,6 +834,111 @@ void test_message_defaults_are_rejected()
     CHECK(error.location.line == 4);
 }
 
+// protoc's rule for the entry name a `map` field implies, and the reason the
+// rule is one shared function: the parser synthesizes the entry with it and
+// the linker later derives the same name with no parser linked at all
+// (plan-4 amendments A22, A24). The expectations are measured, not inherited:
+// libprotoc 30.1 generated exactly these entry names from exactly these field
+// names, and plan-4 Appendix C records the same pairs as A1, A12, A14, A15.
+// The last four rows are why there is no empty-name fallback - an all-underscore
+// field must yield `Entry`, which the parser's old `Map` fallback got wrong -
+// and why a message carrying `_` beside `__` is refused rather than named
+// twice: both collapse onto `Entry`, exactly as they do in protoc (the pair's
+// verdict is pinned in test_linker.cpp, ledger P-18).
+void test_map_entry_name_follows_protoc()
+{
+    struct Case {
+        const char* field_name;
+        const char* entry_name;
+    };
+    const Case cases[] = {
+        {"foo", "FooEntry"},
+        {"foo_bar", "FooBarEntry"},
+        {"a_b_c", "ABCEntry"},
+        {"x__y", "XYEntry"},
+        {"A_1b", "A1bEntry"},
+        {"z9_9z", "Z99zEntry"},
+        {"_lead", "LeadEntry"},
+        {"Foo", "FooEntry"},
+        {"_", "Entry"},
+        {"__", "Entry"},
+        {"___", "Entry"}
+    };
+    for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        CHECK(easypb_schema::map_entry_name(cases[i].field_name) ==
+              cases[i].entry_name);
+    }
+}
+
+// The shared integer parser behind every descriptor-origin numeric default
+// (`parse_unsigned_integer` / `parse_signed_32`, both exported by
+// schema_semantics.hpp). Muse's 0927 review reported it accepting `"0x"` as 0
+// and the octal digits 8/9, and proposed exactly the `digit >= base` refusal
+// the code has carried since before the reviewed range - so the finding was
+// refuted by measurement (ledger P-18). These rows are that measurement kept
+// as a test: the whole reported set, each base's own edges, and the signed
+// wrapper, with the values asserted only where the parse succeeds (a failed
+// parse leaves `result` partially written by design).
+void test_integer_parsing_boundaries_follow_protoc()
+{
+    struct UnsignedCase {
+        const char* text;
+        bool ok;
+        std::uint64_t value;
+    };
+    const UnsignedCase cases[] = {
+        {"0", true, 0},
+        {"00", true, 0},
+        {"010", true, 8},            // octal, not decimal ten
+        {"8", true, 8},
+        {"0x0", true, 0},
+        {"0x10", true, 16},
+        {"536870911", true, 536870911ull},
+        {"09", false, 0},            // 9 is not an octal digit
+        {"08", false, 0},
+        {"019", false, 0},
+        {"0x", false, 0},            // the prefix alone is not a number
+        {"0X", false, 0},
+        {"0xG", false, 0},
+        {"", false, 0},
+        {"-1", false, 0}
+    };
+    for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        std::uint64_t value = 0;
+        const bool ok = easypb_schema::parse_unsigned_integer(cases[i].text,
+                                                              value);
+        CHECK(ok == cases[i].ok);
+        if (ok) CHECK(value == cases[i].value);
+    }
+
+    struct SignedCase {
+        const char* text;
+        bool ok;
+        std::int32_t value;
+    };
+    const SignedCase signed_cases[] = {
+        {"0", true, 0},
+        {"-0", true, 0},
+        {"010", true, 8},
+        {"0x10", true, 16},
+        {"-0x10", true, -16},
+        {"2147483647", true, 2147483647},
+        {"-2147483648", true, (-2147483647 - 1)},
+        {"2147483648", false, 0},    // one past INT32_MAX
+        {"-2147483649", false, 0},   // one past INT32_MIN
+        {"-09", false, 0},
+        {"-0x", false, 0}
+    };
+    for (std::size_t i = 0;
+         i < sizeof(signed_cases) / sizeof(signed_cases[0]); ++i) {
+        std::int32_t value = 0;
+        const bool ok = easypb_schema::parse_signed_32(signed_cases[i].text,
+                                                       value);
+        CHECK(ok == signed_cases[i].ok);
+        if (ok) CHECK(value == signed_cases[i].value);
+    }
+}
+
 } // namespace
 
 int main()
@@ -814,6 +958,8 @@ int main()
     test_cross_file_service_collision_names_symbol();
     test_cross_file_type_symbol_text_is_order_independent();
     test_message_defaults_are_rejected();
+    test_map_entry_name_follows_protoc();
+    test_integer_parsing_boundaries_follow_protoc();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

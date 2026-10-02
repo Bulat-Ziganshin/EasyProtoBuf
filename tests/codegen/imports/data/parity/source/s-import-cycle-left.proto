@@ -1,0 +1,4 @@
+syntax = "proto3";
+package s;
+import "s-import-cycle-reject.proto";
+message Left { int32 x = 1; }

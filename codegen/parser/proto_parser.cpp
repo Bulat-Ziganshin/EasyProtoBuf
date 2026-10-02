@@ -538,24 +538,6 @@ std::string escape_bytes(const std::string& bytes)
     return output.str();
 }
 
-std::string camel_case(const std::string& input)
-{
-    std::string output;
-    bool capitalize = true;
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        const char c = input[i];
-        if (c == '_') {
-            capitalize = true;
-            continue;
-        }
-        if (capitalize && c >= 'a' && c <= 'z') output.push_back(static_cast<char>(c - 'a' + 'A'));
-        else output.push_back(c);
-        capitalize = false;
-    }
-    if (output.empty()) output = "Map";
-    return output;
-}
-
 struct Constant
 {
     enum Kind {
@@ -1336,8 +1318,11 @@ private:
             throw ParseFailure(option_location, "map fields cannot have default or packed options");
         }
 
-        // Synthesize the nested map-entry descriptor expected by codegen.
-        const std::string entry_name = camel_case(field_name) + "Entry";
+        // Synthesize the nested map-entry descriptor expected by codegen. The
+        // entry's name follows protoc's rule, which is one shared function
+        // because the linker has to derive the same name without a parser
+        // (amendment A24).
+        const std::string entry_name = easypb_schema::map_entry_name(field_name);
         const DescriptorPath entry_path = easypb_schema::message_nested_path(
             message_path, static_cast<int>(message.nested_type.size()));
         DescriptorProto entry;
@@ -1569,6 +1554,16 @@ private:
                         throw ParseFailure(value.location, "allow_alias must be true or false");
                     }
                     allow_alias = value.text == "true";
+                    // D-28 (fix round r13): the option travels in the model,
+                    // because the linker validates descriptor-origin enums for
+                    // repeated numbers and cannot tell an intentional alias
+                    // from that defect without it. Source text is refused below
+                    // when the option is absent, so recording it here is what
+                    // keeps an aliased source file (`enum_codegen.proto`'s
+                    // `STARTED = 1; ACTIVE = 1;`) linking.
+                    result.options.allow_alias = allow_alias;
+                    result.options.has_allow_alias = true;
+                    result.has_options = true;
                 }
                 continue;
             }

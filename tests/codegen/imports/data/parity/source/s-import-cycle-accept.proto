@@ -1,0 +1,4 @@
+syntax = "proto3";
+package s;
+import "s-import-cycle-dep.proto";
+message Root { CycleDep d = 1; }

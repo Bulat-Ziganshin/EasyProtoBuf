@@ -1,0 +1,5 @@
+// shadowing - Appendix C B6/B10's outer declarer: a top-level `sub` package
+// that the requester imports.
+syntax = "proto2";
+package sub;
+message X { optional int32 v = 1; }

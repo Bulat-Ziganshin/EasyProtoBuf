@@ -1,0 +1,15 @@
+// Fix round r10 (ledger D-21): a SERVICE commits the head of a compound
+// reference (protoc's `Symbol::IsAggregate()`), and then fails the member
+// lookup - the committed head may NOT fall through to the global `Q.R` that
+// the import makes visible. protoc rejects: "Q.R" is resolved to "inner.Q.R",
+// which is not defined.
+package inner;
+
+import "dep_outer_q.proto";
+
+service Q {
+}
+
+message Use {
+  optional Q.R f = 1;
+}

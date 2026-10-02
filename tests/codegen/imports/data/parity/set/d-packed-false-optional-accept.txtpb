@@ -1,0 +1,9 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 options { packed: false } }
+  }
+}

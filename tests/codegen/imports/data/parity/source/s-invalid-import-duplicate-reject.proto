@@ -1,0 +1,5 @@
+syntax = "proto3";
+package s;
+import "dep.proto";
+import "dep.proto";
+message Root { int32 a = 1; }
