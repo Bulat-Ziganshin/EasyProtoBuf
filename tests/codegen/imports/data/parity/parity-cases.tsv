@@ -55,3 +55,41 @@ d-invalid-symbol-name-accept	descriptor	accept	accept	pair
 d-invalid-symbol-name-reject	descriptor	reject	DIAGNOSTIC_INVALID_SYMBOL_NAME	pair	
 d-empty-symbol-name-accept	descriptor	accept	accept	pair	
 d-empty-symbol-name-reject	descriptor	reject	DIAGNOSTIC_INVALID_SYMBOL_NAME	pair	
+d-malformed-map-entry-bytes-key-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-float-key-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-enum-key-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-third-field-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-key-renamed-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-value-renamed-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-key-repeated-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-nested-type-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-nested-enum-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-extension-range-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-extension-member-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-extension-both-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-extension-range-string-key-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-extension-range-missing-value-reject	descriptor	reject	DIAGNOSTIC_MALFORMED_MAP_ENTRY	pair	
+d-malformed-map-entry-bytes-key-unreferenced-inverse	descriptor	accept	DIAGNOSTIC_MALFORMED_MAP_ENTRY	inverse	protoc 30.1 accepts this shape; A26's sweep walks every nested map entry whether or not a field references it (the reference-free strictness, measured 2026-09-29 by fix round r25 and re-derived by fix round r26)
+d-malformed-map-entry-extension-range-unreferenced-inverse	descriptor	accept	DIAGNOSTIC_MALFORMED_MAP_ENTRY	inverse	protoc 30.1 accepts this shape; A26's sweep walks every nested map entry whether or not a field references it (the reference-free strictness, measured 2026-09-29 by fix round r25 and re-derived by fix round r26)
+d-malformed-map-entry-plain-extension-range-accept	descriptor	accept	accept	pair	
+d-malformed-map-entry-nested-plain-extension-range-accept	descriptor	accept	accept	pair	
+d-invalid-symbol-name-method-reject	descriptor	reject	DIAGNOSTIC_INVALID_SYMBOL_NAME	pair	
+d-duplicate-symbol-method-reject	descriptor	reject	DIAGNOSTIC_DUPLICATE_SYMBOL	pair	
+d-invalid-symbol-name-method-accept	descriptor	accept	accept	pair	
+d-packed-false-optional-accept	descriptor	accept	accept	pair	
+d-packed-false-string-accept	descriptor	accept	accept	pair	
+d-packed-false-message-accept	descriptor	accept	accept	pair	
+d-group-proto2-accept	descriptor	accept	accept	pair	
+d-oneof-member-optional-accept	descriptor	accept	accept	pair	
+d-unsupported-syntax-editions-only-reject	descriptor	reject	DIAGNOSTIC_UNSUPPORTED_SYNTAX	pair	
+d-unsupported-syntax-edition-2024-reject	descriptor	reject	DIAGNOSTIC_UNSUPPORTED_SYNTAX	pair	
+d-unsupported-syntax-edition-2023-only-inverse	descriptor	accept	DIAGNOSTIC_UNSUPPORTED_SYNTAX	inverse	protoc 30.1 accepts this shape; this project refuses it by A25 because the model carries no editions semantics - a recorded capability boundary whose owner is plan 5
+d-unsupported-syntax-edition-2023-proto3-inverse	descriptor	accept	DIAGNOSTIC_UNSUPPORTED_SYNTAX	inverse	protoc 30.1 accepts this shape; this project refuses it by A25 because the model carries no editions semantics - a recorded capability boundary whose owner is plan 5
+d-unsupported-syntax-empty-accept	descriptor	accept	accept	pair	
+d-unsupported-syntax-edition-proto2-accept	descriptor	accept	accept	pair	
+d-proto3-required-field-edition-proto3-reject	descriptor	reject	DIAGNOSTIC_PROTO3_REQUIRED_FIELD	pair	
+d-proto3-required-field-proto3-edition-proto2-accept	descriptor	accept	accept	pair	
+d-duplicate-symbol-entries-collision-reject	descriptor	reject	DIAGNOSTIC_DUPLICATE_SYMBOL	pair	
+d-duplicate-symbol-entry-and-plain-reject	descriptor	reject	DIAGNOSTIC_DUPLICATE_SYMBOL	pair	
+d-duplicate-symbol-distinct-entries-accept	descriptor	accept	accept	pair	
+d-duplicate-symbol-scoped-entries-accept	descriptor	accept	accept	pair	

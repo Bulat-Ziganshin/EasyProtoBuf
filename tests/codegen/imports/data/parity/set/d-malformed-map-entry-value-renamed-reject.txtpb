@@ -1,0 +1,15 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto3"
+  message_type {
+    name: "MapHolder"
+    nested_type {
+      name: "ItemsEntry"
+      options { map_entry: true }
+      field { name: "key" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+      field { name: "v" number: 2 label: LABEL_OPTIONAL type: TYPE_INT32 }
+    }
+    field { name: "items" number: 1 label: LABEL_REPEATED type: TYPE_MESSAGE type_name: ".p.MapHolder.ItemsEntry" }
+  }
+}

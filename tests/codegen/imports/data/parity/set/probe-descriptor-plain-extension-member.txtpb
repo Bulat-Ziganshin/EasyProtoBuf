@@ -1,0 +1,9 @@
+file {
+  name: "root.proto"
+  package: "p"
+  message_type {
+    name: "Plain"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+    extension { name: "e" number: 100 label: LABEL_OPTIONAL type: TYPE_INT32 extendee: ".p.Plain" }
+  }
+}

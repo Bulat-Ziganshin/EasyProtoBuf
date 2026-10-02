@@ -1,0 +1,10 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    oneof_decl { name: "pick" }
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 oneof_index: 0 }
+  }
+}

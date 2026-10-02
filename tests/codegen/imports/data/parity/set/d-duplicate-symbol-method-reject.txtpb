@@ -1,0 +1,12 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto2"
+  message_type { name: "Req" }
+  message_type { name: "Resp" }
+  service {
+    name: "S"
+    method { name: "go" input_type: ".p.Req" output_type: ".p.Resp" }
+    method { name: "go" input_type: ".p.Req" output_type: ".p.Resp" }
+  }
+}

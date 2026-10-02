@@ -23,6 +23,11 @@ argument), it prints `PARITY: compared <n> row(s)`, it names every row it could
 not run with the pack's `SKIP:` marker, and it records `protoc --version` - the
 version is the lane's arbiter and the lane must not depend on remembering it.
 
+Fixtures that carry no row (`set/probe-*`) hold the same text/binary invariant
+as a row's, and are swept too: under `--descriptor-proto-path` every tracked
+`.txtpb` that the table does not read is re-encoded and compared with its
+`.pbs`, and a `.pbs` without its `.txtpb` fails by name.
+
 The linker half of the same table is the CTest rows `codegen.imports.parity`
 (the descriptor-origin rows, every profile) and `codegen.imports.parity.source`
 (the source-origin rows, where the loader is available); see
@@ -140,6 +145,7 @@ def main():
     skipped = []
     failures = []
     try:
+        row_names = set(row[0] for row in rows)
         for case, origin, recorded, expected, kind, note in rows:
             if selected and case not in selected:
                 continue
@@ -180,6 +186,40 @@ def main():
                                 "(%s)" % (case, recorded, verdict, first))
             print("PARITY: %-52s recorded=%s re-derived=%s %s"
                   % (case, recorded, verdict, first[:80]))
+
+        # The fixtures without a row: `set/probe-*` are measured evidence, and
+        # the same invariant covers them - the tracked `.pbs` is protoc's own
+        # encoding of the tracked `.txtpb`. They are named one by one, so a
+        # sweep that read nothing is visible.
+        probe_count = 0
+        if descriptor_proto_path:
+            for entry in sorted(os.listdir(SETS)):
+                if not entry.endswith(".pbs"):
+                    continue
+                case = entry[:-len(".pbs")]
+                if case in row_names:
+                    continue
+                if not os.path.exists(os.path.join(SETS, case + ".txtpb")):
+                    failures.append(
+                        "%s: a tracked .pbs without its .txtpb" % case)
+                    continue
+                encoded, reason = reencode_bytes(
+                    args.protoc, case, descriptor_proto_path, scratch)
+                if encoded is None:
+                    failures.append("%s: probe re-encode failed: %s"
+                                    % (case, reason))
+                else:
+                    with io.open(os.path.join(SETS, case + ".pbs"),
+                                 "rb") as handle:
+                        tracked = handle.read()
+                    if tracked != encoded:
+                        failures.append(
+                            "%s: the tracked probe .pbs is not protoc's "
+                            "encoding of its .txtpb" % case)
+                probe_count += 1
+                print("PARITY: %-52s probe (no row), bytes compared" % case)
+        print("PARITY: %d fixture(s) without a row re-encoded beside the rows"
+              % probe_count)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

@@ -1,0 +1,10 @@
+file {
+  name: "root.proto"
+  package: "p"
+  syntax: "proto3"
+  message_type {
+    name: "M"
+    field { name: "g" number: 1 label: LABEL_OPTIONAL type: TYPE_GROUP type_name: ".p.M.G" }
+    nested_type { name: "G" }
+  }
+}
