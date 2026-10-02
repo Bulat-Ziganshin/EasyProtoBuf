@@ -119,6 +119,15 @@ Windows MSYS2 `usr/bin` one is refused, because it mishandles the `C:/...`
 arguments this lane is addressed with) - so the configure log names the missing
 half rather than registering a test that quietly skips.
 
+A second row, `codegen.imports.parity.generator.paths`, runs
+`check_generator_paths.py`: it pins the gate's path contract - a relative
+`--descriptor-proto-path` resolves against the directory the gate is INVOKED
+from (the generator itself runs with the corpus as its cwd), and a refusal
+names the spelling the caller typed next to the path it resolved to, never a
+corpus-joined path the caller never wrote. It reads and writes nothing, so it
+is cheap; `check_generator.py --resolve-only` prints the same resolution for a
+human debugging a tree, and touches nothing.
+
 ## The post-Step-11 shapes (fix rounds `r25`, `r26`, `r28`)
 
 The table was frozen with Step 11, and the fix rounds that followed measured

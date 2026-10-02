@@ -74,7 +74,10 @@ def find_descriptor_proto(protoc, proto_path=None):
     directory a protoc release ships beside its `bin/`, and the copy the
     repository already tracks for the parser differential lane (a flat
     `descriptor.proto`, not `google/protobuf/descriptor.proto`). An explicit
-    `proto_path` is used as given, with either spelling inside it.
+    `proto_path` is used with either spelling inside it, and a relative one
+    resolves against the process's current directory - the gate
+    (`check_generator.py`) resolves it against the INVOKING directory before
+    passing it on, because this generator runs with the corpus as its cwd.
     """
     candidates = [proto_path] if proto_path else [
         os.path.join(REPO, "build", "protobuf-30.1-src", "protobuf-30.1",
@@ -1168,8 +1171,15 @@ def main(argv=None):
     SRC, DESCRIPTOR_PROTO = find_descriptor_proto(PROTOC,
                                                   args.descriptor_proto_path)
     if not os.path.exists(os.path.join(SRC, DESCRIPTOR_PROTO)):
-        print("no %s under %s: pass --descriptor-proto-path"
-              % (DESCRIPTOR_PROTO, SRC))
+        if args.descriptor_proto_path:
+            # Name the spelling the caller typed next to the resolution, never
+            # only a path it did not write (the generator's cwd is the corpus).
+            print("no %s under %s (--descriptor-proto-path was given as "
+                  "'%s'): pass --descriptor-proto-path"
+                  % (DESCRIPTOR_PROTO, SRC, args.descriptor_proto_path))
+        else:
+            print("no %s under %s: pass --descriptor-proto-path"
+                  % (DESCRIPTOR_PROTO, SRC))
         return 2
 
     for path in (SOURCE, SETS, os.path.dirname(LOG)):

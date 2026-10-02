@@ -615,9 +615,17 @@ if(EASYPB_BUILD_DIFFERENTIAL_TESTS)
             COMMAND ${EASYPB_PYTHON}
                 ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/parity/check_generator.py
                 --protoc ${EASYPB_PROTOC})
+        # The gate's path contract: a relative --descriptor-proto-path belongs
+        # to the directory the gate is invoked from (the generator itself runs
+        # with the corpus as its cwd), and a refusal names the spelling the
+        # caller typed. Reads and writes nothing.
+        add_test(NAME codegen.imports.parity.generator.paths
+            COMMAND ${EASYPB_PYTHON}
+                ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/parity/check_generator_paths.py
+                --protoc ${EASYPB_PROTOC})
     else()
         message(STATUS
-            "EasyProtoBuf: codegen.imports.parity.generator not registered "
-            "(set EASYPB_PROTOC and put a native python on PATH)")
+            "EasyProtoBuf: codegen.imports.parity.generator[.paths] not "
+            "registered (set EASYPB_PROTOC and put a native python on PATH)")
     endif()
 endif()

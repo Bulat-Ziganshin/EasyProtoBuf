@@ -16,9 +16,16 @@ even where git would have seen nothing. The generator's own scratch log
 (`build/codegen-parity/protoc-verdicts.txt`) is not part of the corpus and is
 not compared.
 
+A relative `--descriptor-proto-path` is resolved against the directory this
+script is INVOKED from, not against this directory: the generator is spawned
+with the corpus directory as its cwd, so a path passed through verbatim would
+be looked up under the corpus - a path the caller never typed
+(`codegen.imports.parity.generator.paths` is the regression). `--resolve-only`
+prints what a full run would use and touches nothing.
+
 Usage:
     python tests/codegen/imports/data/parity/check_generator.py \
-        [--protoc <path>] [--descriptor-proto-path <dir>]
+        [--protoc <path>] [--descriptor-proto-path <dir>] [--resolve-only]
 """
 
 import argparse
@@ -32,6 +39,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GENERATOR = os.path.join(HERE, "generate.py")
 OWNED_DIRS = ("source", "set")
 OWNED_FILE = "parity-cases.tsv"
+
+
+def caller_absolute(value):
+    """A relative command-line path belongs to the INVOKING directory.
+
+    `run_generator` spawns the generator with `cwd=HERE`, so a relative
+    `--descriptor-proto-path` passed through verbatim would be resolved against
+    the corpus directory - a path the caller never typed, and not the one it
+    meant. Resolving it here, against this process's own working directory, is
+    the fix; the CTest row `codegen.imports.parity.generator.paths` is its
+    regression.
+    """
+    if not value:
+        return None
+    return os.path.abspath(value)
 
 
 def owned_files():
@@ -75,14 +97,43 @@ def run_generator(args):
     return done.returncode, text, last
 
 
+def resolve_only(args, given):
+    """Print the toolchain a full run would use; write nothing anywhere."""
+    sys.dont_write_bytecode = True  # the import must leave no __pycache__
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    import generate  # the single source of the resolution order
+    protoc = args.protoc or generate.PROTOC
+    src, name = generate.find_descriptor_proto(protoc, args.descriptor_proto_path)
+    print("PARITY-GEN: descriptor " + os.path.join(src, name))
+    if given:
+        print("PARITY-GEN: --descriptor-proto-path was given as '%s' and "
+              "resolved to %s" % (given, src))
+    if not os.path.exists(os.path.join(src, name)):
+        print("no %s under %s (--descriptor-proto-path was given as '%s'): "
+              "pass --descriptor-proto-path" % (name, src, given))
+        return 2
+    print("PARITY-GEN: resolve-only, nothing regenerated")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--protoc", default=None,
                         help="path to the official protoc executable; without "
                              "it generate.py resolves the default")
     parser.add_argument("--descriptor-proto-path", default=None,
-                        help="a proto path holding descriptor.proto")
+                        help="a proto path holding descriptor.proto; a "
+                             "relative path belongs to the directory this "
+                             "script is invoked from")
+    parser.add_argument("--resolve-only", action="store_true",
+                        help="resolve protoc and the descriptor source, print "
+                             "them and exit; nothing is read from or written "
+                             "to the corpus (exit 2 when the source is absent)")
     args = parser.parse_args()
+
+    given = args.descriptor_proto_path  # exactly as typed, for the messages
+    args.descriptor_proto_path = caller_absolute(given)
 
     protoc_line = "not named (generate.py resolves it)"
     if args.protoc:
@@ -93,10 +144,16 @@ def main():
     print("PARITY-GEN: protoc " + protoc_line)
     print("PARITY-GEN: generator " + GENERATOR)
 
+    if args.resolve_only:
+        return resolve_only(args, given)
+
     before = snapshot()
     code, text, last = run_generator(args)
     if code != 0:
         print(text)
+        if given:
+            print("FAIL: --descriptor-proto-path was given as '%s' and "
+                  "resolved to %s" % (given, args.descriptor_proto_path))
         print("FAIL: generate.py exited %d" % code)
         return 1
     after = snapshot()
