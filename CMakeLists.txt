@@ -19,6 +19,12 @@ option(EASYPB_CODEGEN_WITH_PROTO_PARSER
 option(EASYPB_BUILD_DIFFERENTIAL_TESTS
        "Build the optional parser comparator used with an external protoc"
        OFF)
+
+# The external tool the opt-in lanes measure against. The corpus generator's
+# check (codegen.imports.parity.generator) is registered only when this is set
+# and an interpreter is found; nothing else in the build depends on it.
+set(EASYPB_PROTOC "" CACHE FILEPATH
+    "Path to the official protoc binary; enables the generator check")
 option(EASYPB_EXTENDED_TESTS
        "Build slower deterministic stress/property tests"
        OFF)

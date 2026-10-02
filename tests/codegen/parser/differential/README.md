@@ -38,6 +38,12 @@ python3 tests/codegen/parser/differential/run.py \
   --compare build-differential/parser_differential_compare
 ```
 
+Passing `-DEASYPB_PROTOC=<path>` in the same configure also registers the
+corpus generator's idempotence check, the CTest row
+`codegen.imports.parity.generator`
+(`tests/codegen/imports/data/parity/README.md`); without it the row is not
+registered and the configure log says which half is missing.
+
 Run one file with `--case`, for example:
 
 ```sh

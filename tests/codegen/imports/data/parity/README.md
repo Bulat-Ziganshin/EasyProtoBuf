@@ -109,6 +109,16 @@ for the parser differential lane
 that order - so a fresh clone with its own protoc needs no external proto
 source.
 
+The idempotence claim above is also a gate: the CTest row
+`codegen.imports.parity.generator` runs `check_generator.py`, which hashes
+every file the generator owns, regenerates, hashes again, and fails naming each
+file that appeared, disappeared or changed. The row is registered only under
+`EASYPB_BUILD_DIFFERENTIAL_TESTS` and only when both halves of the toolchain are
+present - `EASYPB_PROTOC`, a protoc path, and a native Python interpreter (a
+Windows MSYS2 `usr/bin` one is refused, because it mishandles the `C:/...`
+arguments this lane is addressed with) - so the configure log names the missing
+half rather than registering a test that quietly skips.
+
 ## The post-Step-11 shapes (fix rounds `r25`, `r26`, `r28`)
 
 The table was frozen with Step 11, and the fix rounds that followed measured

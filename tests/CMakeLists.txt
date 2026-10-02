@@ -592,4 +592,32 @@ if(EASYPB_BUILD_DIFFERENTIAL_TESTS)
         ${PROJECT_SOURCE_DIR}/codegen
         ${PROJECT_SOURCE_DIR}/codegen/parser)
     target_link_libraries(parser_differential_compare PRIVATE easypb_proto_parser)
+
+    # The corpus generator's idempotence gate: the corpus README claims that
+    # tests/codegen/imports/data/parity is `generate.py`'s output, and this row
+    # checks it mechanically (hash every owned file, regenerate, hash again,
+    # fail naming every change). It is registered by name only when the
+    # toolchain is actually present - an interpreter and `EASYPB_PROTOC` -
+    # because a test that quietly skips is the failure mode the `SKIP:` rule
+    # exists for; the configure log names the missing half instead.
+    # Overridable: -DEASYPB_PYTHON=<path> wins over the search.
+    find_program(EASYPB_PYTHON NAMES python python3)
+    if(WIN32 AND EASYPB_PYTHON MATCHES "[/\\\\]usr[/\\\\]bin")
+        # An MSYS2 `usr/bin` interpreter (a POSIX build, unlike the
+        # project's ucrt64 toolchain) mishandles the `C:/...`
+        # arguments this script and protoc are addressed with; the row
+        # is registered only for a native Windows Python. On other
+        # platforms `/usr/bin/python3` is the normal interpreter.
+        set(EASYPB_PYTHON "EASYPB_PYTHON-NOTFOUND")
+    endif()
+    if(EASYPB_PYTHON AND EASYPB_PROTOC)
+        add_test(NAME codegen.imports.parity.generator
+            COMMAND ${EASYPB_PYTHON}
+                ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/parity/check_generator.py
+                --protoc ${EASYPB_PROTOC})
+    else()
+        message(STATUS
+            "EasyProtoBuf: codegen.imports.parity.generator not registered "
+            "(set EASYPB_PROTOC and put a native python on PATH)")
+    endif()
 endif()
