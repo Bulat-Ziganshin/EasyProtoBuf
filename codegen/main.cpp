@@ -13,7 +13,9 @@
 #include <vector>
 
 #include "popl.hpp"
-#include "codegen.cpp"
+#include "generation.hpp"
+#include "generation_options.hpp"
+#include "utils.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -51,6 +53,7 @@ struct CommandLine
     InputFormat input_format;
     unsigned benchmark_milliseconds;
     std::vector<std::string> filenames;
+    easypb_codegen::GenerationOptions generation_options;
     bool exit_after_help;
 
     CommandLine()
@@ -194,35 +197,35 @@ CommandLine parse_cmdline(int argc, char** argv)
 #endif
 
     auto no_class_option = parser.add<Switch>(
-        "c", "no-class", "don't generate C++ struct", &option.no_class);
+        "c", "no-class", "don't generate C++ struct", &command.generation_options.no_class);
     auto no_decoder_option = parser.add<Switch>(
-        "d", "no-decoder", "don't generate decoder", &option.no_decoder);
+        "d", "no-decoder", "don't generate decoder", &command.generation_options.no_decoder);
     auto no_encoder_option = parser.add<Switch>(
-        "e", "no-encoder", "don't generate encoder", &option.no_encoder);
+        "e", "no-encoder", "don't generate encoder", &command.generation_options.no_encoder);
     auto no_has_option = parser.add<Switch>(
-        "f", "no-has-fields", "don't generate has_* fields", &option.no_has_fields);
+        "f", "no-has-fields", "don't generate has_* fields", &command.generation_options.no_has_fields);
     auto no_required_option = parser.add<Switch>(
-        "", "no-required", "ignore 'required' attribute", &option.no_required);
+        "", "no-required", "ignore 'required' attribute", &command.generation_options.no_required);
     auto no_defaults_option = parser.add<Switch>(
-        "", "no-default-values", "ignore default values", &option.no_default_values);
+        "", "no-default-values", "ignore default values", &command.generation_options.no_default_values);
     auto packed_option = parser.add<Switch>(
-        "p", "packed", "make all repeated fields packed when allowed", &option.packed);
+        "p", "packed", "make all repeated fields packed when allowed", &command.generation_options.packed);
     auto no_packed_option = parser.add<Switch>(
-        "", "no-packed", "make all repeated fields non-packed", &option.no_packed);
+        "", "no-packed", "make all repeated fields non-packed", &command.generation_options.no_packed);
     auto allow_self_recursive_containers_option = parser.add<Switch>(
         "", "allow-self-recursive-containers",
         "allow direct self-recursive repeated/map message fields",
-        &option.allow_self_recursive_containers);
+        &command.generation_options.allow_self_recursive_containers);
 
     auto string_type_option = parser.add<Value<std::string> >(
         "s", "string-type", "C++ type for string/bytes fields",
-        "::std::string", &option.cpp_string_type);
+        "::std::string", &command.generation_options.cpp_string_type);
     auto repeated_type_option = parser.add<Value<std::string> >(
         "r", "repeated-type", "C++ container type for repeated fields",
-        "::std::vector", &option.cpp_repeated_type);
+        "::std::vector", &command.generation_options.cpp_repeated_type);
     auto map_type_option = parser.add<Value<std::string> >(
         "m", "map-type", "C++ container type for map fields",
-        "::std::map", &option.cpp_map_type);
+        "::std::map", &command.generation_options.cpp_map_type);
 
     parser.parse(argc, argv);
 
@@ -288,21 +291,12 @@ CommandLine parse_cmdline(int argc, char** argv)
     }
 #endif
 
-    if (option.no_has_fields) {
-        option.no_required = true;  // we can't check presence of a required field without employing the corresponding has_* field
-    }
-    if (option.cpp_repeated_type.find("{}") == std::string::npos &&
-        option.cpp_repeated_type.find("{0}") == std::string::npos) {
-        option.cpp_repeated_type += "<{}>";
-    }
-    if (option.cpp_map_type.find("{}") == std::string::npos &&
-        option.cpp_map_type.find("{0}") == std::string::npos &&
-        option.cpp_map_type.find("{1}") == std::string::npos) {
-        option.cpp_map_type += "<{0},{1}>";
-    }
-    if (option.packed && option.no_packed) {
-        throw std::runtime_error(
-            "Options --packed and --no-packed can't be used together");
+    // Derived behavior and validation live with the options, so a core-only
+    // caller gets the same normalization as the CLI (plan 5 S3/S4).
+    std::string options_error;
+    if (!easypb_codegen::finalize_generation_options(
+            command.generation_options, options_error)) {
+        throw std::runtime_error(options_error);
     }
 
     if (command.input_format == INPUT_AUTO) {
@@ -392,8 +386,8 @@ int main(int argc, char** argv)
                     continue;
                 }
 #endif
-                const std::string generated = generator(file);
-                std::cout << myformat(FILE_TEMPLATE, filename) << generated;
+                std::cout << easypb_codegen::generate_descriptor_header(
+                    file, filename, command.generation_options);
                 continue;
             }
 
@@ -413,8 +407,8 @@ int main(int argc, char** argv)
                     ": generation stopped because imported type linking is not implemented; "
                     "use protoc and codegen --descriptor-set for schemas with unresolved imports");
             }
-            const std::string generated = generator(parsed.file);
-            std::cout << myformat(FILE_TEMPLATE, filename) << generated;
+            std::cout << easypb_codegen::generate_descriptor_header(
+                parsed.file, filename, command.generation_options);
 #else
             (void)contents;
             throw std::runtime_error(

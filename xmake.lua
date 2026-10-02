@@ -34,6 +34,14 @@ target("easypb_schema")
     add_files("codegen/schema.cpp", "codegen/schema_semantics.cpp", "codegen/logical_paths.cpp", "codegen/schema_linker.cpp")
 target_end()
 
+target("easypb_codegen_core")
+    set_kind("static")
+    add_includedirs("codegen", {public = true})
+    add_files("codegen/codegen.cpp", "codegen/cpp_names.cpp",
+              "codegen/generation_options.cpp", "codegen/utils.cpp")
+    add_deps("easypb_schema")
+target_end()
+
 if has_config("codegen_parser") then
     target("easypb_proto_parser")
         set_kind("static")
@@ -53,8 +61,8 @@ end
 target("codegen")
     set_kind("binary")
     add_includedirs("3rd-party/popl", "codegen")
-    add_files("codegen/main.cpp", "codegen/cpp_names.cpp")
-    add_deps("easypb_schema")
+    add_files("codegen/main.cpp")
+    add_deps("easypb_codegen_core")
     if has_config("codegen_parser") then
         add_defines("EASYPB_CODEGEN_WITH_PROTO_PARSER=1")
         add_files("codegen/parser/pretty_printer.cpp",

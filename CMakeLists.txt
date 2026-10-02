@@ -95,13 +95,26 @@ target_include_directories(manual_example PRIVATE include)
 
 # "codegen" became a reserved target name in CMake 3.31. Keep the produced
 # executable name while using a non-reserved internal target name.
-add_executable(easypb_codegen codegen/main.cpp codegen/cpp_names.cpp)
+add_executable(easypb_codegen codegen/main.cpp)
 set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
 target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl codegen)
+target_link_libraries(easypb_codegen PRIVATE easypb_codegen_core)
 
 add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp codegen/logical_paths.cpp codegen/schema_linker.cpp)
 target_include_directories(easypb_schema
     PUBLIC include codegen)
+
+# Plan 5: the generation core. No CLI, parser, native file helper, publisher or
+# official Protobuf source belongs here; main.cpp includes only these public
+# headers and the parser-dependent sources stay on the executable.
+add_library(easypb_codegen_core STATIC
+    codegen/codegen.cpp
+    codegen/cpp_names.cpp
+    codegen/generation_options.cpp
+    codegen/utils.cpp)
+target_include_directories(easypb_codegen_core
+    PUBLIC include codegen)
+target_link_libraries(easypb_codegen_core PUBLIC easypb_schema)
 
 if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
     add_library(easypb_proto_parser STATIC codegen/parser/proto_parser.cpp)
@@ -117,12 +130,11 @@ if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
     target_sources(easypb_codegen PRIVATE
         codegen/parser/pretty_printer.cpp
         codegen/parser/parser_benchmark.cpp)
-    target_link_libraries(easypb_codegen PRIVATE easypb_proto_parser easypb_schema)
+    target_link_libraries(easypb_codegen PRIVATE easypb_proto_parser)
 
     target_compile_definitions(easypb_codegen PRIVATE
         EASYPB_CODEGEN_WITH_PROTO_PARSER=1)
 else()
-    target_link_libraries(easypb_codegen PRIVATE easypb_schema)
     target_compile_definitions(easypb_codegen PRIVATE
         EASYPB_CODEGEN_WITH_PROTO_PARSER=0)
 endif()
