@@ -10,6 +10,17 @@ endif()
 if(NOT DEFINED DESCRIPTOR_HPP)
     message(FATAL_ERROR "DESCRIPTOR_HPP is required")
 endif()
+if(NOT DEFINED DESCRIPTOR_ROOT)
+    message(FATAL_ERROR "DESCRIPTOR_ROOT is required")
+endif()
+
+# Plan 5's source loading follows imports, so every source run names the
+# search roots its closure lives in: the fixture data directory, the directory
+# holding `easypb/options.proto` (derived from the OPTIONS_PROTO argument), and
+# the test-only `google/protobuf/descriptor.proto` root.
+get_filename_component(easypb_options_root "${OPTIONS_PROTO}" DIRECTORY)
+get_filename_component(easypb_options_root "${easypb_options_root}" DIRECTORY)
+set(custom_type_roots -I "${DATA_DIR}" -I "${easypb_options_root}" -I "${DESCRIPTOR_ROOT}")
 if(NOT DEFINED FULL_BUILD)
     set(FULL_BUILD 1)
 endif()
@@ -190,7 +201,7 @@ require_contains(template_cases_global_out
     "Scalar/string map placeholders preserve global string customization")
 
 if(FULL_BUILD)
-    run_ok(source_out source_err ${CODEGEN} ${proto})
+    run_ok(source_out source_err ${CODEGEN} ${custom_type_roots} ${proto})
     normalize_source_comment(default_out pbs_normalized)
     normalize_source_comment(source_out source_normalized)
     if(NOT source_normalized STREQUAL pbs_normalized)
@@ -202,7 +213,7 @@ if(FULL_BUILD)
     # template_cases.proto deliberately uses the valid fully-qualified
     # `(.easypb.cpp).type` spelling for one field.  It must normalize to the
     # same descriptor semantics as `(easypb.cpp).type`.
-    run_ok(template_source_out template_source_err ${CODEGEN} ${template_cases_proto})
+    run_ok(template_source_out template_source_err ${CODEGEN} ${custom_type_roots} ${template_cases_proto})
     normalize_source_comment(template_source_out template_source_normalized)
     normalize_source_comment(template_cases_out template_pbs_normalized)
     if(NOT template_source_normalized STREQUAL template_pbs_normalized)
@@ -216,42 +227,42 @@ if(FULL_BUILD)
 
     file(WRITE "${tmp_dir}/duplicate.proto"
         "syntax=\"proto3\"; message M { int32 x=1 [(easypb.cpp).type=\"A\", (easypb.cpp).type=\"B\"]; }\n")
-    run_fail(duplicate_out duplicate_err ${CODEGEN} "${tmp_dir}/duplicate.proto")
+    run_fail(duplicate_out duplicate_err ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/duplicate.proto")
     if(NOT duplicate_err MATCHES "duplicate EasyProtoBuf C\\+\\+ type option")
         message(FATAL_ERROR "Duplicate custom type diagnostic is unclear: ${duplicate_err}")
     endif()
 
     file(WRITE "${tmp_dir}/non-string.proto"
         "syntax=\"proto3\"; message M { int32 x=1 [(easypb.cpp).type=123]; }\n")
-    run_fail(non_string_out non_string_err ${CODEGEN} "${tmp_dir}/non-string.proto")
+    run_fail(non_string_out non_string_err ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/non-string.proto")
     if(NOT non_string_err MATCHES "must be a string literal")
         message(FATAL_ERROR "Non-string custom type diagnostic is unclear: ${non_string_err}")
     endif()
 
     file(WRITE "${tmp_dir}/empty.proto"
         "syntax=\"proto3\"; message M { int32 x=1 [(easypb.cpp).type=\"\"]; }\n")
-    run_fail(empty_out empty_err ${CODEGEN} "${tmp_dir}/empty.proto")
+    run_fail(empty_out empty_err ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/empty.proto")
     if(NOT empty_err MATCHES "must not be empty")
         message(FATAL_ERROR "Empty custom type diagnostic is unclear: ${empty_err}")
     endif()
 
     file(WRITE "${tmp_dir}/unknown.proto"
         "syntax=\"proto3\"; message M { int32 x=1 [(easypb.cpp).typo=\"A\"]; }\n")
-    run_fail(unknown_out unknown_err ${CODEGEN} "${tmp_dir}/unknown.proto")
+    run_fail(unknown_out unknown_err ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/unknown.proto")
     if(NOT unknown_err MATCHES "unknown EasyProtoBuf C\\+\\+ field option")
         message(FATAL_ERROR "Unknown EasyProtoBuf sub-option diagnostic is unclear: ${unknown_err}")
     endif()
 
     file(WRITE "${tmp_dir}/unknown-leading-dot.proto"
         "syntax=\"proto3\"; message M { int32 x=1 [(.easypb.cpp).typo=\"A\"]; }\n")
-    run_fail(unknown_dot_out unknown_dot_err ${CODEGEN} "${tmp_dir}/unknown-leading-dot.proto")
+    run_fail(unknown_dot_out unknown_dot_err ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/unknown-leading-dot.proto")
     if(NOT unknown_dot_err MATCHES "unknown EasyProtoBuf C\\+\\+ field option")
         message(FATAL_ERROR "Leading-dot EasyProtoBuf sub-option diagnostic is unclear: ${unknown_dot_err}")
     endif()
 
     file(WRITE "${tmp_dir}/aggregate.proto"
         "syntax=\"proto3\"; message M { int32 x=1 [(easypb.cpp)={ type: \"AggregateWrapped<{}>\" }]; }\n")
-    run_fail(aggregate_out aggregate_err ${CODEGEN} "${tmp_dir}/aggregate.proto")
+    run_fail(aggregate_out aggregate_err ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/aggregate.proto")
     string(FIND "${aggregate_err}" "use (easypb.cpp).type" aggregate_hint_pos)
     if(aggregate_hint_pos EQUAL -1)
         message(FATAL_ERROR "Grouped EasyProtoBuf option diagnostic is unclear: ${aggregate_err}")
@@ -259,7 +270,7 @@ if(FULL_BUILD)
 
     file(WRITE "${tmp_dir}/other.proto"
         "syntax=\"proto3\"; message M { int32 x=1 [(other.pkg).type=\"A\"]; }\n")
-    run_ok(other_out other_err ${CODEGEN} "${tmp_dir}/other.proto")
+    run_ok(other_out other_err ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/other.proto")
     require_contains(other_out "::int32_t x = 0;" "Unrelated custom option remains ignored")
 
     # Per-field and global templates intentionally share myformat(), including
@@ -267,7 +278,7 @@ if(FULL_BUILD)
     file(WRITE "${tmp_dir}/bad-field-placeholder.proto"
         "syntax=\"proto3\"; message M { repeated int32 x=1 [(easypb.cpp).type=\"Bad<{1}>\"]; }\n")
     run_fail(field_placeholder_out field_placeholder_err
-        ${CODEGEN} "${tmp_dir}/bad-field-placeholder.proto")
+        ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/bad-field-placeholder.proto")
     if(NOT field_placeholder_err MATCHES "Not enough arguments for myformat")
         message(FATAL_ERROR "Per-field placeholder diagnostic is unexpected: ${field_placeholder_err}")
     endif()
@@ -275,7 +286,7 @@ if(FULL_BUILD)
     file(WRITE "${tmp_dir}/bad-global-placeholder.proto"
         "syntax=\"proto3\"; message M { repeated int32 x=1; }\n")
     run_fail(global_placeholder_out global_placeholder_err
-        ${CODEGEN} --repeated-type "Bad<{1}>" "${tmp_dir}/bad-global-placeholder.proto")
+        ${CODEGEN} -I "${tmp_dir}" --repeated-type "Bad<{1}>" "${tmp_dir}/bad-global-placeholder.proto")
     if(NOT global_placeholder_err MATCHES "Not enough arguments for myformat")
         message(FATAL_ERROR "Global placeholder diagnostic is unexpected: ${global_placeholder_err}")
     endif()
@@ -286,7 +297,7 @@ if(FULL_BUILD)
     file(WRITE "${tmp_dir}/custom-singular-recursive.proto"
         "syntax=\"proto3\"; message Node { Node next=1 [(easypb.cpp).type=\"Ptr<{}>\"]; }\n")
     run_fail(singular_recursive_out singular_recursive_err
-        ${CODEGEN} "${tmp_dir}/custom-singular-recursive.proto")
+        ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/custom-singular-recursive.proto")
     if(NOT singular_recursive_err MATCHES "recursive message value dependency")
         message(FATAL_ERROR "Custom singular recursion unexpectedly changed dependency semantics: ${singular_recursive_err}")
     endif()
@@ -294,12 +305,12 @@ if(FULL_BUILD)
     file(WRITE "${tmp_dir}/custom-repeated-recursive.proto"
         "syntax=\"proto3\"; message Node { repeated Node children=1 [(easypb.cpp).type=\"RecursiveVec<{}>\"]; }\n")
     run_fail(repeated_recursive_out repeated_recursive_err
-        ${CODEGEN} "${tmp_dir}/custom-repeated-recursive.proto")
+        ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/custom-repeated-recursive.proto")
     if(NOT repeated_recursive_err MATCHES "recursive message value dependency")
         message(FATAL_ERROR "Custom repeated recursion was accepted without opt-in: ${repeated_recursive_err}")
     endif()
     run_ok(repeated_recursive_allowed repeated_recursive_allowed_err
-        ${CODEGEN} --allow-self-recursive-containers "${tmp_dir}/custom-repeated-recursive.proto")
+        ${CODEGEN} -I "${tmp_dir}" --allow-self-recursive-containers "${tmp_dir}/custom-repeated-recursive.proto")
     require_contains(repeated_recursive_allowed
         "RecursiveVec< ::Node> children;"
         "Custom repeated recursion with explicit opt-in")

@@ -11,6 +11,7 @@
 #include "cpp_names.hpp"
 #include "generation.hpp"
 #include "generation_options.hpp"
+#include "header_paths.hpp"
 #include "schema.hpp"
 #include "utils.hpp"
 
@@ -604,19 +605,6 @@ void index_message_info(MessageInfo& info, MessageByProtoName& index)
 }
 
 
-// Add enums from one real-message subtree to the absolute-name index used by
-// default-value generation.
-void index_message_enums(const MessageInfo& info, EnumByProtoName& index)
-{
-    for (const auto& enum_type: info.descriptor->enum_type) {
-        index[info.proto_name + PB_TYPE_DELIMITER + std::string(enum_type.name)] = &enum_type;
-    }
-    for (const auto& child: info.children) {
-        index_message_enums(child, index);
-    }
-}
-
-
 // Flatten a MessageInfo subtree into pointers without changing source order.
 // Several graph operations use this instead of duplicating recursive walks.
 void collect_message_infos(MessageInfo& info, std::vector<MessageInfo*>& output)
@@ -1018,17 +1006,160 @@ std::string close_package_namespaces(const std::string& package)
 }
 
 
-// Generate one complete header for a single decoded descriptor file.
-//
-// This is the extraction's entry point; the linked `generate_header` frozen by
-// plan 5 replaces it when the descriptor adapter lands, and until then the
-// standalone adapter keeps calling it. `provenance` is the banner text, which
-// is why the header template lives here instead of in the CLI.
-std::string easypb_codegen::generate_descriptor_header(
-    const FileDescriptorProto& file,
-    const std::string& provenance,
+// --- plan 5, batch 3: the linked generation entry points -------------------
+
+std::string owned_descriptor_text(const str_view& value)
+{
+    return std::string(value.data(), value.size());
+}
+
+
+// The two imports the generator itself knows are usually option metadata only
+// (`(easypb.cpp).type` templates and descriptor options). The include planner
+// reconsiders these two names and nothing else (plan 5 I2's closed list).
+bool is_compiler_support_import(const std::string& logical_name)
+{
+    return logical_name == "easypb/options.proto" ||
+           logical_name == "google/protobuf/descriptor.proto";
+}
+
+
+// Does any field of `message`, map entries and nested messages included, name
+// a declaration the dependency file owns? The linker rewrote every resolved
+// type_name to its absolute spelling, so the symbol index answers with the
+// owning file - and a codec needs exactly the declarations its field names.
+bool message_names_owner(const DescriptorProto& message,
+                         const easypb_schema::SchemaFile& dependency,
+                         const easypb_schema::LinkedSchema& schema)
+{
+    for (std::size_t i = 0; i < message.field.size(); ++i) {
+        const FieldDescriptorProto& field = message.field[i];
+        if (field.type != FieldDescriptorProto::TYPE_MESSAGE &&
+            field.type != FieldDescriptorProto::TYPE_ENUM &&
+            field.type != FieldDescriptorProto::TYPE_GROUP) {
+            continue;
+        }
+        if (field.type_name.empty()) continue;
+        const std::map<std::string,
+                       easypb_schema::SymbolEntry>::const_iterator found =
+            schema.symbols.symbols.find(owned_descriptor_text(field.type_name));
+        if (found != schema.symbols.symbols.end() &&
+            found->second.owner == &dependency) {
+            return true;
+        }
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (message_names_owner(message.nested_type[i], dependency, schema)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+bool file_names_owner(const FileDescriptorProto& file,
+                      const easypb_schema::SchemaFile& dependency,
+                      const easypb_schema::LinkedSchema& schema)
+{
+    for (std::size_t i = 0; i < file.message_type.size(); ++i) {
+        if (message_names_owner(file.message_type[i], dependency, schema)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+// One include per direct dependency, in source declaration order, public and
+// weak dependencies included (I1). An ordinary import keeps its include even
+// when nothing references it: this header may be included by a translation
+// unit that needs the name, and only the two known support files have a
+// documented metadata-only reading (I2). A public re-export always restores
+// the include (I3).
+std::string dependency_includes(const easypb_schema::SchemaFile& target,
+                                const easypb_schema::LinkedSchema& schema)
+{
+    const FileDescriptorProto& file = target.file;
+    std::string includes;
+    for (std::size_t i = 0; i < file.dependency.size(); ++i) {
+        const std::string logical = owned_descriptor_text(file.dependency[i]);
+        bool needed = true;
+        if (is_compiler_support_import(logical)) {
+            needed = false;
+            for (std::size_t j = 0; j < file.public_dependency.size(); ++j) {
+                if (file.public_dependency[j] == static_cast<int32_t>(i)) {
+                    needed = true;
+                    break;
+                }
+            }
+            if (!needed) {
+                const easypb_schema::SchemaFile* dependency =
+                    schema.files == 0 ? 0 : schema.files->find_file(logical);
+                // A dependency the set does not carry cannot be proven to be
+                // metadata-only, so its include stays.
+                needed = dependency == 0 ||
+                         file_names_owner(file, *dependency, schema);
+            }
+        }
+        if (needed) {
+            includes += "#include \"";
+            includes += easypb_codegen::generated_header_path(logical);
+            includes += "\"\n";
+        }
+    }
+    return includes;
+}
+
+
+void index_message_enums_of(const DescriptorProto& message,
+                            const std::string& proto_name,
+                            EnumByProtoName& index)
+{
+    for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
+        index.insert(std::make_pair(
+            proto_name + "." + owned_descriptor_text(message.enum_type[i].name),
+            &message.enum_type[i]));
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        index_message_enums_of(
+            message.nested_type[i],
+            proto_name + "." +
+                owned_descriptor_text(message.nested_type[i].name),
+            index);
+    }
+}
+
+
+// Index every enum of one file (top-level and nested) by its absolute
+// Protobuf name, so `default_value_str` finds imported owners exactly the way
+// it finds local ones. Imported definitions are complete by construction, and
+// nothing here infers a value from zero or from an enum's name.
+void index_file_enums(const FileDescriptorProto& file, EnumByProtoName& index)
+{
+    const std::string prefix =
+        file.package.empty()
+            ? std::string(".")
+            : "." + owned_descriptor_text(file.package) + ".";
+    for (std::size_t i = 0; i < file.enum_type.size(); ++i) {
+        index.insert(std::make_pair(
+            prefix + owned_descriptor_text(file.enum_type[i].name),
+            &file.enum_type[i]));
+    }
+    for (std::size_t i = 0; i < file.message_type.size(); ++i) {
+        index_message_enums_of(
+            file.message_type[i],
+            prefix + owned_descriptor_text(file.message_type[i].name), index);
+    }
+}
+
+
+// Generate one complete header for a linked target (plan 5 Task 2).
+std::string easypb_codegen::generate_header(
+    const easypb_schema::SchemaFile& target,
+    const easypb_schema::LinkedSchema& schema,
     const easypb_codegen::GenerationOptions& options)
 {
+    const FileDescriptorProto& file = target.file;
     // Per-invocation state: nothing here survives the call, and the
     // classification is made exactly once (plan 5 A25).
     const GenerationContext context(options, file);
@@ -1049,13 +1180,22 @@ std::string easypb_codegen::generate_descriptor_header(
     for (auto& root: roots) resolve_message_dependencies(root, index, context);
     detect_dependency_cycles(roots);
 
-    // Index every local enum once so implicit defaults and type-qualified
-    // initializers do not depend on declaration order.
+    // Index the target's enums plus every visible file's, so an imported
+    // enum's first declared value initializes a field the same way a local
+    // one does. Duplicate absolute names cannot reach here: conflicting
+    // declarations were refused by the linker before publish.
     EnumByProtoName enum_index;
-    for (const auto& enum_type: file.enum_type) {
-        enum_index[context.package_name_prefix + std::string(enum_type.name)] = &enum_type;
+    index_file_enums(file, enum_index);
+    const std::map<const easypb_schema::SchemaFile*,
+                   std::set<const easypb_schema::SchemaFile*> >::const_iterator
+        visible = schema.visible_files.find(&target);
+    if (visible != schema.visible_files.end()) {
+        for (std::set<const easypb_schema::SchemaFile*>::const_iterator it =
+                 visible->second.begin();
+             it != visible->second.end(); ++it) {
+            if (*it != &target) index_file_enums((*it)->file, enum_index);
+        }
     }
-    for (const auto& root: roots) index_message_enums(root, enum_index);
 
     std::string enum_defs, class_defs, encoders, decoders;
     // Top-level enums must be complete before any message field uses them.
@@ -1092,8 +1232,92 @@ std::string easypb_codegen::generate_descriptor_header(
     }
 
     // The banner is applied here, not by the CLI, so every frontend that
-    // reaches the core emits the same header shape.
+    // reaches the core emits the same header shape. The logical name is the
+    // normal provenance; only the anonymous single-file `.pbs` compatibility
+    // path, which has no logical name, falls back to its container spelling.
+    const std::string provenance = file.name.empty()
+        ? target.physical_name
+        : owned_descriptor_text(file.name);
     std::string header = myformat(FILE_TEMPLATE, provenance);
+    // Dependency includes belong outside package namespaces, exactly like the
+    // fixed runtime includes above them; thin compatibility omits them all.
+    if (schema.complete) {
+        const std::string includes = dependency_includes(target, schema);
+        if (!includes.empty()) {
+            header += includes;
+            header += "\n";
+        }
+    }
     header += body;
     return header;
+}
+
+
+bool easypb_codegen::generate_files(
+    const easypb_schema::LinkedSchema& schema,
+    const easypb_codegen::GenerationOptions& options,
+    std::vector<GeneratedFile>& result,
+    easypb_schema::Diagnostic& error)
+{
+    result.clear();
+    error = easypb_schema::Diagnostic();
+    if (schema.files == 0) {
+        error.location = easypb_schema::unknown_location();
+        error.message =
+            "generate_files needs a linked schema; this one is the invalid "
+            "empty state";
+        return false;
+    }
+    const std::vector<easypb_schema::SchemaFile*>& targets =
+        schema.files->targets();
+    if (targets.empty()) {
+        error.location = easypb_schema::unknown_location();
+        error.message = "no generation targets were selected";
+        return false;
+    }
+
+    std::vector<GeneratedFile> generated;
+    generated.reserve(targets.size());
+    std::set<std::string> mapped_names;
+    for (std::size_t i = 0; i < targets.size(); ++i) {
+        const easypb_schema::SchemaFile& target = *targets[i];
+        const std::string logical = owned_descriptor_text(target.file.name);
+        if (logical.empty()) {
+            error.file = target.physical_name;
+            error.location = easypb_schema::unknown_location();
+            error.message =
+                target.physical_name +
+                ": this target has no logical name, so it has no output name; "
+                "only the single-target stdout compatibility path may "
+                "generate an anonymous descriptor";
+            return false;
+        }
+        GeneratedFile entry;
+        try {
+            entry.name = generated_header_path(logical);
+        } catch (const std::exception& problem) {
+            error.file = logical;
+            error.location = easypb_schema::unknown_location();
+            error.message = problem.what();
+            return false;
+        }
+        if (!mapped_names.insert(entry.name).second) {
+            error.file = logical;
+            error.location = easypb_schema::unknown_location();
+            error.message = "two targets map to one output file \"" +
+                            entry.name + "\"";
+            return false;
+        }
+        try {
+            entry.content = generate_header(target, schema, options);
+        } catch (const std::exception& problem) {
+            error.file = logical;
+            error.location = easypb_schema::unknown_location();
+            error.message = problem.what();
+            return false;
+        }
+        generated.push_back(entry);
+    }
+    result.swap(generated);
+    return true;
 }

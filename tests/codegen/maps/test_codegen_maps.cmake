@@ -140,14 +140,15 @@ require_contains(malformed_err
     "Malformed map-entry rejection")
 
 # Defect `D-65` (2026-09-30, fix round r28). One message declaring two nested map
-# entries of the SAME name is one nested type declared twice: the linker refuses
-# the pair in both modes as a name collision (`DIAGNOSTIC_DUPLICATE_SYMBOL`), and
-# this CLI never links, so it must refuse the shape too instead of silently
-# picking one of the two entries and generating C++ for it. Before the fix the
-# pick was the FIRST entry (`result.insert`, the 2026-09-29 rewrite) where the
-# revision before it kept the LAST (`result[qualified_name] = map_type`), so the
-# same bytes generated different code - `put_map_string_int32` against
-# `put_map_bytes_string` - depending on the spelling alone.
+# entries of the SAME name is one nested type declared twice. Plan 5 makes the
+# standalone CLI link first, so the refusal the CLI surfaces is now the
+# linker's `DIAGNOSTIC_DUPLICATE_SYMBOL` name collision, which names both
+# declaration paths; the generator keeps its own duplicate-entry guard for a
+# direct (core-only) caller. Before the r28 fix the generator silently picked
+# one of the two entries - the FIRST after the 2026-09-29 rewrite
+# (`result.insert`), the LAST before it (`result[qualified_name] = map_type`) -
+# so the same bytes generated different code (`put_map_string_int32` against
+# `put_map_bytes_string`) depending on the spelling alone.
 #
 # `duplicate_map_entry.pbs` is hand-encoded, because no frontend can produce the
 # shape: libprotoc 30.1 refuses the equivalent source text ("ItemsEntry" is
@@ -162,11 +163,11 @@ set(duplicate_map_entry_pbs "${DATA_DIR}/duplicate_map_entry.pbs")
 run_fail(duplicate_out duplicate_err
     ${CODEGEN} --descriptor-set ${duplicate_map_entry_pbs})
 require_contains(duplicate_err
-    "Duplicate map entry .p.Holder.ItemsEntry: a nested map entry with this name is already declared"
+    "name collision in .p.Holder: nested message ItemsEntry"
     "Duplicate map-entry rejection")
 
 if(FULL_BUILD)
-    run_ok(scalar_proto_out scalar_proto_err ${CODEGEN} ${scalar_proto})
+    run_ok(scalar_proto_out scalar_proto_err ${CODEGEN} -I ${DATA_DIR} ${scalar_proto})
     normalize_source_comment(scalar_out scalar_pbs_normalized)
     normalize_source_comment(scalar_proto_out scalar_proto_normalized)
     if(NOT scalar_proto_normalized STREQUAL scalar_pbs_normalized)
@@ -174,7 +175,7 @@ if(FULL_BUILD)
             "Scalar map .proto and .pbs generated outputs differ")
     endif()
 
-    run_ok(enum_proto_out enum_proto_err ${CODEGEN} ${enum_proto})
+    run_ok(enum_proto_out enum_proto_err ${CODEGEN} -I ${DATA_DIR} ${enum_proto})
     normalize_source_comment(enum_out enum_pbs_normalized)
     normalize_source_comment(enum_proto_out enum_proto_normalized)
     if(NOT enum_proto_normalized STREQUAL enum_pbs_normalized)
@@ -182,7 +183,7 @@ if(FULL_BUILD)
             "Enum map .proto and .pbs generated outputs differ")
     endif()
 
-    run_ok(message_proto_out message_proto_err ${CODEGEN} ${message_proto})
+    run_ok(message_proto_out message_proto_err ${CODEGEN} -I ${DATA_DIR} ${message_proto})
     normalize_source_comment(message_out message_pbs_normalized)
     normalize_source_comment(message_proto_out message_proto_normalized)
     if(NOT message_proto_normalized STREQUAL message_pbs_normalized)

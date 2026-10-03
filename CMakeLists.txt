@@ -98,7 +98,12 @@ target_include_directories(manual_example PRIVATE include)
 add_executable(easypb_codegen codegen/main.cpp)
 set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
 target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl codegen)
-target_link_libraries(easypb_codegen PRIVATE easypb_codegen_core easypb_descriptor_loader)
+target_link_libraries(easypb_codegen PRIVATE easypb_codegen_core easypb_descriptor_loader easypb_header_output)
+if(WIN32)
+    # CommandLineToArgvW splits the wide command line before its one UTF-8
+    # conversion (plan 5 C4).
+    target_link_libraries(easypb_codegen PRIVATE shell32)
+endif()
 
 add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp codegen/logical_paths.cpp codegen/schema_linker.cpp codegen/descriptor_adapter.cpp)
 target_include_directories(easypb_schema
@@ -111,6 +116,7 @@ add_library(easypb_codegen_core STATIC
     codegen/codegen.cpp
     codegen/cpp_names.cpp
     codegen/generation_options.cpp
+    codegen/header_paths.cpp
     codegen/utils.cpp)
 target_include_directories(easypb_codegen_core
     PUBLIC include codegen)
@@ -127,6 +133,14 @@ add_library(easypb_descriptor_loader STATIC codegen/descriptor_loader.cpp)
 target_include_directories(easypb_descriptor_loader PUBLIC include codegen)
 target_link_libraries(easypb_descriptor_loader PUBLIC easypb_file_io easypb_schema)
 
+# Plan 5's standalone publisher: containment, native collision checks,
+# directory creation and per-file replacement. It is NOT part of the
+# generation core (P11) - a plugin or in-memory caller must not be able to
+# reach the output tree through the library it links for generation.
+add_library(easypb_header_output STATIC codegen/header_output.cpp)
+target_include_directories(easypb_header_output PUBLIC include codegen)
+target_link_libraries(easypb_header_output PUBLIC easypb_file_io easypb_schema)
+
 if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
     add_library(easypb_proto_parser STATIC codegen/parser/proto_parser.cpp)
     target_include_directories(easypb_proto_parser
@@ -141,7 +155,9 @@ if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
     target_sources(easypb_codegen PRIVATE
         codegen/parser/pretty_printer.cpp
         codegen/parser/parser_benchmark.cpp)
-    target_link_libraries(easypb_codegen PRIVATE easypb_proto_parser)
+    # Source input goes through the plan-3 loader now, so the standalone CLI
+    # links it beside the parser (the loader itself stays full-only).
+    target_link_libraries(easypb_codegen PRIVATE easypb_proto_parser easypb_proto_loader)
 
     target_compile_definitions(easypb_codegen PRIVATE
         EASYPB_CODEGEN_WITH_PROTO_PARSER=1)

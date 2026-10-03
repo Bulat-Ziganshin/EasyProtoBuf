@@ -1,0 +1,17 @@
+// Test-only search-root copy of `google/protobuf/descriptor.proto` (plan 5,
+// Task 3): source loading follows imports, so the option closure
+// `custom_types.proto -> easypb/options.proto -> google/protobuf/
+// descriptor.proto` must be complete. Only the one message the EasyProtoBuf
+// option extension extends is modeled here; the full schema ships with protoc
+// and is not this lane's subject. `extensions 1000 to max` gives
+// `FieldOptions` the extension range `easypb/options.proto` declares its
+// extension in, exactly like the reference file does.
+syntax = "proto2";
+
+package google.protobuf;
+
+// All the extensions of the range must be declared.
+message FieldOptions
+{
+    extensions 1000 to max;
+}

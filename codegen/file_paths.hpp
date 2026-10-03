@@ -124,6 +124,78 @@ bool utf8_from_wide(const wchar_t* text, std::string& utf8);
 bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 #endif
 
+// ---------------------------------------------------------------------------
+// Output-side additions (plan 5, step 4: the standalone publisher).
+//
+// The loader never needed to ask whether two spellings name one physical
+// entry, and it must not: identity, case folding and replacement belong to
+// the only component that writes an output tree. These helpers therefore sit
+// beside the input ones instead of inside the common library, which performs
+// no filesystem call at all.
+// ---------------------------------------------------------------------------
+
+// Native identity of one existing entry: the pair that two spellings of one
+// physical entry agree on (Windows: volume serial number + file index, the
+// pair a hardlink shares; POSIX: device + inode). Returns false with an empty
+// `error` when nothing usable is at the path, and false with `error` filled
+// when the entry exists but its identity cannot be read.
+struct FileIdentity
+{
+    unsigned long volume;
+    unsigned long long index;
+
+    FileIdentity() : volume(0), index(0) {}
+};
+bool get_file_identity(const std::string& path, FileIdentity& identity,
+                       std::string& error);
+
+// True when both existing spellings name one physical entry (a hardlink or a
+// letter-case alias on a folding filesystem). A missing entry on either side
+// is not a collision and returns false with an empty `error`; a failed
+// identity query is a failure, not equality, and fills `error`.
+bool equivalent_disk_spelling(const std::string& first,
+                              const std::string& second,
+                              bool& equivalent, std::string& error);
+
+// Filesystem case rule of one existing directory, measured instead of
+// guessed: a temporary file whose name differs from its flipped spelling only
+// in one ASCII letter's case is created there, and the flipped spelling is
+// looked up. It resolving to the same entry means the directory folds case.
+// A directory whose rule cannot be measured, or whose probe cannot be
+// created or removed, fills `error` and returns false; callers must not
+// digest a failed query as either answer.
+bool query_directory_case_sensitivity(const std::string& directory,
+                                      bool& case_sensitive,
+                                      std::string& error);
+
+// Containment of `file_absolute` below `root_absolute`: the lexical prefix
+// test of strip_search_root_prefix (byte-wise, component-boundary exact, so a
+// sibling with a shared prefix is outside) PLUS a native walk of the existing
+// components strictly below the root. A symlink or Windows reparse point on
+// that walk is refused: it could redirect the write outside the root, and
+// this module has no portable way to prove where it points. The root itself
+// may be a link - the caller chose it. Returns false with an empty `error`
+// when the path is simply outside the root, and false with `error` filled
+// when the walk could not be completed (a denied query is never silently
+// read as "outside").
+bool confirm_fold_containment(const std::string& file_absolute,
+                              const std::string& root_absolute,
+                              std::string& error);
+
+// Create every missing directory on the way to `directory`; existing
+// directories are accepted. Returns false with a reason on failure.
+bool make_directories(const std::string& directory, std::string& error);
+
+// Replace `target` with `contents`, through a temporary file created in the
+// same directory and renamed over the target once its bytes are on disk. The
+// target therefore keeps either its previous content or the complete new
+// content, never a prefix of the new one, and a failure removes the
+// temporary. Per-file replacement is the guarantee; there is deliberately no
+// transaction across several files.
+bool write_disk_file_atomic(const std::string& target,
+                            const std::string& contents,
+                            std::string& error);
+
 } // namespace easypb_file
 
 #endif

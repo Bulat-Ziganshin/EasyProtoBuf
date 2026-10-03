@@ -126,6 +126,8 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-maps)
     set(codegen_maps_generated_header
         ${codegen_maps_generated_dir}/maps.generated.hpp)
+    # The plan-5 helper publishes one header per target; the umbrella header
+    # is the rule's OUTPUT and the three per-target headers are BYPRODUCTS.
     add_custom_command(
         OUTPUT ${codegen_maps_generated_header}
         COMMAND ${CMAKE_COMMAND}
@@ -135,6 +137,10 @@ if(BUILD_TESTING)
             -DMESSAGE_INPUT=${codegen_maps_data_dir}/message_map.pbs
             -DOUTPUT=${codegen_maps_generated_header}
             -P ${codegen_maps_dir}/generate_runtime_header.cmake
+        BYPRODUCTS
+            ${codegen_maps_generated_dir}/scalar_maps.pb.hpp
+            ${codegen_maps_generated_dir}/enum_map.pb.hpp
+            ${codegen_maps_generated_dir}/message_map.pb.hpp
         DEPENDS
             easypb_codegen
             ${codegen_maps_data_dir}/scalar_maps.pbs
@@ -162,6 +168,7 @@ if(BUILD_TESTING)
             -DDATA_DIR=${codegen_custom_types_data_dir}
             -DOPTIONS_PROTO=${PROJECT_SOURCE_DIR}/codegen/easypb/options.proto
             -DDESCRIPTOR_HPP=${PROJECT_SOURCE_DIR}/codegen/descriptor.pb.hpp
+            -DDESCRIPTOR_ROOT=${codegen_custom_types_data_dir}/option-roots
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_custom_types_dir}/test_codegen_custom_types.cmake)
 
@@ -494,6 +501,30 @@ if(BUILD_TESTING)
     add_test(NAME codegen.imports.descriptor
         COMMAND codegen_imports_descriptor_test ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(codegen.imports.descriptor PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+    # Plan 5's CLI lane: the mode table, stdout cardinality, publication
+    # snapshots (P1/P8/P9) and option validation, driven against the built
+    # executable. Parser-dependent rows are guarded by FULL_BUILD inside the
+    # script, so the lane runs in the lite profile too.
+    add_test(NAME codegen.imports.cli
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/codegen/parser/data
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-cli
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/cli/test_codegen_cli.cmake)
+
+    # Plan 5's output half, parser-free like the descriptor suite: the pure
+    # logical mapping and the standalone publisher (P4-P10). P2's injected
+    # failure is staged here, where a denied directory (POSIX) or a read-only
+    # replacement target (Windows) is available. Scratch lives below the
+    # pinned working directory, named after the process.
+    add_executable(codegen_imports_output_test codegen/imports/test_output.cpp)
+    target_link_libraries(codegen_imports_output_test
+        PRIVATE easypb_header_output easypb_codegen_core)
+    add_test(NAME codegen.imports.output COMMAND codegen_imports_output_test)
+    set_tests_properties(codegen.imports.output PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
     # Step 11's two-way oracle parity lane, the descriptor half. Both halves

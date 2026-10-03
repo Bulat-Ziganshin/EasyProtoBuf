@@ -184,17 +184,19 @@ void check_cpp_type(const easypb_schema::SchemaFile& file,
     CHECK(text(field->options.cpp.type) == expected);
 }
 
-// Generate one file with default options, as the CLI would after option
-// finalization. The batch-2 lifetime tests compare this output against
-// generation from a live decode.
-std::string generate_one(const FileDescriptorProto& file,
-                         const std::string& provenance)
+// Generate one linked target with default options, the way the standalone
+// publisher does after option finalization. Batch 3 replaced the single-file
+// entry point with the linked generator, so the lifetime proofs now compare a
+// poisoned-buffer ingestion against a fresh one through that same entry
+// point: a string the adapter failed to intern would surface as a byte
+// difference, not as a crash.
+std::string generate_linked_one(const easypb_schema::SchemaFile& target,
+                                const easypb_schema::LinkedSchema& linked)
 {
     easypb_codegen::GenerationOptions options;
     std::string option_error;
     CHECK(easypb_codegen::finalize_generation_options(options, option_error));
-    return easypb_codegen::generate_descriptor_header(file, provenance,
-                                                      options);
+    return easypb_codegen::generate_header(target, linked, options);
 }
 
 // --- the common adapter ----------------------------------------------------
@@ -293,9 +295,9 @@ void test_adapter_rejects_duplicate_names_within_and_across_calls()
 // D1/D2/D4/D5/D6: decode a real container, ingest it through the common
 // adapter, then poison and destroy the only buffer every borrowed view
 // pointed into. Everything below -- indexing and generation -- must work from
-// the owned copy alone, and generation must equal generation from a live
-// decode byte for byte, so a single missed interning cannot hide behind
-// freed-but-intact memory.
+// the owned copy alone, and generation must equal generation from a fresh
+// ingestion of the same bytes, so a single missed interning cannot hide
+// behind freed-but-intact memory.
 void test_adapter_owns_a_decoded_buffer_and_generates_after_destruction(
     const std::string& fixture_dir)
 {
@@ -371,21 +373,24 @@ void test_adapter_owns_a_decoded_buffer_and_generates_after_destruction(
     CHECK(linked.files == &set);
     CHECK(linked.complete);
 
-    // D1, generation half. The linked generator does not exist yet in this
-    // batch, so the available entry point is the extracted single-file one;
-    // equality with a live decode is the proof that the owned copy carries
-    // every input the generator reads.
-    const std::string provenance = "integration-proto2.proto";
-    const std::string from_owned = generate_one(first.file, provenance);
+    // D1, generation half: the poisoned-buffer ingestion generates the same
+    // bytes as a fresh ingestion of the same container through the same
+    // linked entry point, so every string the generator reads survived the
+    // buffer's death.
+    const std::string from_owned = generate_linked_one(first, linked);
     CHECK(!from_owned.empty());
     {
-        std::string live_bytes;
-        CHECK(read_binary_file(path, live_bytes));
-        const FileDescriptorSet live =
-            easypb::decode<FileDescriptorSet>(live_bytes);
-        CHECK(live.file.size() == 2);
-        if (live.file.size() == 2) {
-            CHECK(from_owned == generate_one(live.file[0], provenance));
+        easypb_schema::SchemaSet live_set;
+        std::vector<std::string> live_inputs(1, path);
+        CHECK(easypb_schema::load_descriptor_sets(live_inputs, live_set, error));
+        easypb_schema::LinkedSchema live_linked;
+        CHECK(easypb_schema::link_schema(live_set, easypb_schema::LINK_COMPLETE,
+                                         live_linked, error));
+        easypb_schema::SchemaFile* live_target =
+            live_set.find_file("integration-proto2.proto");
+        CHECK(live_target != 0);
+        if (live_target != 0) {
+            CHECK(from_owned == generate_linked_one(*live_target, live_linked));
         }
     }
 }
@@ -559,7 +564,8 @@ void test_loader_rejects_duplicate_names_across_containers(
 
 // D2, the custom half: `(easypb.cpp).type` strings are interned like every
 // other string, so generation from the loaded copy equals generation from a
-// live decode. The fixture also carries a dependency (an import name), a
+// fresh ingestion of the same bytes. The fixture also carries a dependency
+// (an import name), a
 // proto3 syntax string, nested message and enum names, and type_name
 // references -- every string class the adapter's walk must cover.
 void test_loader_custom_type_strings_survive_the_container(
@@ -616,18 +622,24 @@ void test_loader_custom_type_strings_survive_the_container(
     CHECK(file.warnings.empty());
 
     // Generation, live vs owned: the custom template is read from the option,
-    // so a missed interning would surface as a byte difference here.
-    const std::string provenance = "custom_types.proto";
-    const std::string from_owned = generate_one(file.file, provenance);
+    // so a missed interning would surface as a byte difference here. The
+    // linked entry point derives its provenance from the logical name, so no
+    // provenance argument is passed any more.
+    const std::string from_owned = generate_linked_one(file, linked);
     CHECK(from_owned.find("std::deque") != std::string::npos);
     {
-        std::string live_bytes;
-        CHECK(read_binary_file(path, live_bytes));
-        const FileDescriptorSet live =
-            easypb::decode<FileDescriptorSet>(live_bytes);
-        CHECK(live.file.size() == 1);
-        if (live.file.size() == 1) {
-            CHECK(from_owned == generate_one(live.file[0], provenance));
+        easypb_schema::SchemaSet live_set;
+        std::vector<std::string> live_inputs(1, path);
+        CHECK(easypb_schema::load_descriptor_sets(live_inputs, live_set, error));
+        easypb_schema::LinkedSchema live_linked;
+        CHECK(easypb_schema::link_schema(
+            live_set, easypb_schema::LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY,
+            live_linked, error));
+        easypb_schema::SchemaFile* live_target =
+            live_set.find_file("custom_types.proto");
+        CHECK(live_target != 0);
+        if (live_target != 0) {
+            CHECK(from_owned == generate_linked_one(*live_target, live_linked));
         }
     }
 }
