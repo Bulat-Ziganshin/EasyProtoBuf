@@ -98,9 +98,9 @@ target_include_directories(manual_example PRIVATE include)
 add_executable(easypb_codegen codegen/main.cpp)
 set_target_properties(easypb_codegen PROPERTIES OUTPUT_NAME codegen)
 target_include_directories(easypb_codegen PRIVATE include 3rd-party/popl codegen)
-target_link_libraries(easypb_codegen PRIVATE easypb_codegen_core)
+target_link_libraries(easypb_codegen PRIVATE easypb_codegen_core easypb_descriptor_loader)
 
-add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp codegen/logical_paths.cpp codegen/schema_linker.cpp)
+add_library(easypb_schema STATIC codegen/schema.cpp codegen/schema_semantics.cpp codegen/logical_paths.cpp codegen/schema_linker.cpp codegen/descriptor_adapter.cpp)
 target_include_directories(easypb_schema
     PUBLIC include codegen)
 
@@ -116,16 +116,27 @@ target_include_directories(easypb_codegen_core
     PUBLIC include codegen)
 target_link_libraries(easypb_codegen_core PUBLIC easypb_schema)
 
+# Standalone I/O shared by the full and the lite product: plan 3's physical
+# path rules and the `.pbs` file wrapper. Neither belongs in easypb_schema,
+# which never touches the disk; the source loader above the descriptor loader
+# stays full-only and links easypb_file_io rather than compiling it twice.
+add_library(easypb_file_io STATIC codegen/file_paths.cpp)
+target_include_directories(easypb_file_io PUBLIC include codegen)
+
+add_library(easypb_descriptor_loader STATIC codegen/descriptor_loader.cpp)
+target_include_directories(easypb_descriptor_loader PUBLIC include codegen)
+target_link_libraries(easypb_descriptor_loader PUBLIC easypb_file_io easypb_schema)
+
 if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
     add_library(easypb_proto_parser STATIC codegen/parser/proto_parser.cpp)
     target_include_directories(easypb_proto_parser
         PUBLIC include codegen codegen/parser)
     target_link_libraries(easypb_proto_parser PUBLIC easypb_schema)
 
-    add_library(easypb_proto_loader STATIC codegen/proto_loader.cpp codegen/file_paths.cpp)
+    add_library(easypb_proto_loader STATIC codegen/proto_loader.cpp)
     target_include_directories(easypb_proto_loader
         PUBLIC include codegen codegen/parser)
-    target_link_libraries(easypb_proto_loader PUBLIC easypb_proto_parser easypb_schema)
+    target_link_libraries(easypb_proto_loader PUBLIC easypb_file_io easypb_proto_parser easypb_schema)
 
     target_sources(easypb_codegen PRIVATE
         codegen/parser/pretty_printer.cpp

@@ -31,7 +31,9 @@ target("tutorial")
 target("easypb_schema")
     set_kind("static")
     add_includedirs("codegen", {public = true})
-    add_files("codegen/schema.cpp", "codegen/schema_semantics.cpp", "codegen/logical_paths.cpp", "codegen/schema_linker.cpp")
+    add_files("codegen/schema.cpp", "codegen/schema_semantics.cpp",
+              "codegen/logical_paths.cpp", "codegen/schema_linker.cpp",
+              "codegen/descriptor_adapter.cpp")
 target_end()
 
 target("easypb_codegen_core")
@@ -40,6 +42,24 @@ target("easypb_codegen_core")
     add_files("codegen/codegen.cpp", "codegen/cpp_names.cpp",
               "codegen/generation_options.cpp", "codegen/utils.cpp")
     add_deps("easypb_schema")
+target_end()
+
+-- Standalone I/O shared by the full and the lite product: plan 3's physical
+-- path rules and the `.pbs` file wrapper. Neither belongs in easypb_schema,
+-- which never touches the disk; the source loader above the descriptor loader
+-- stays full-only and links easypb_file_io rather than compiling it twice.
+-- See CMakeLists.txt for the same split.
+target("easypb_file_io")
+    set_kind("static")
+    add_includedirs("codegen", {public = true})
+    add_files("codegen/file_paths.cpp")
+target_end()
+
+target("easypb_descriptor_loader")
+    set_kind("static")
+    add_includedirs("codegen", {public = true})
+    add_files("codegen/descriptor_loader.cpp")
+    add_deps("easypb_file_io", "easypb_schema")
 target_end()
 
 if has_config("codegen_parser") then
@@ -53,8 +73,8 @@ if has_config("codegen_parser") then
     target("easypb_proto_loader")
         set_kind("static")
         add_includedirs("codegen", "codegen/parser", {public = true})
-        add_files("codegen/proto_loader.cpp", "codegen/file_paths.cpp")
-        add_deps("easypb_proto_parser", "easypb_schema")
+        add_files("codegen/proto_loader.cpp")
+        add_deps("easypb_file_io", "easypb_proto_parser", "easypb_schema")
     target_end()
 end
 
@@ -62,7 +82,7 @@ target("codegen")
     set_kind("binary")
     add_includedirs("3rd-party/popl", "codegen")
     add_files("codegen/main.cpp")
-    add_deps("easypb_codegen_core")
+    add_deps("easypb_codegen_core", "easypb_descriptor_loader")
     if has_config("codegen_parser") then
         add_defines("EASYPB_CODEGEN_WITH_PROTO_PARSER=1")
         add_files("codegen/parser/pretty_printer.cpp",

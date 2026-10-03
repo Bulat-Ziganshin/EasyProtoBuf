@@ -480,6 +480,22 @@ if(BUILD_TESTING)
     add_test(NAME codegen.imports.linker
         COMMAND codegen_imports_linker_test ${CMAKE_CURRENT_SOURCE_DIR})
 
+    # Plan 5's descriptor-ingestion suite: the common adapter (owned copies,
+    # interned strings) and the standalone `.pbs` wrapper, with the
+    # buffer-destruction lifetime rows (D1/D2). Parser-free like the linker
+    # suite above, so it runs in every profile. The tests source directory is
+    # a positional argument (the tracked `.pbs` fixtures); the scratch
+    # containers the suite writes for the shapes the corpus does not carry
+    # live below the pinned working directory, never in the source tree.
+    add_executable(codegen_imports_descriptor_test
+        codegen/imports/test_descriptor_sets.cpp)
+    target_link_libraries(codegen_imports_descriptor_test
+        PRIVATE easypb_descriptor_loader easypb_codegen_core)
+    add_test(NAME codegen.imports.descriptor
+        COMMAND codegen_imports_descriptor_test ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(codegen.imports.descriptor PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
     # Step 11's two-way oracle parity lane, the descriptor half. Both halves
     # read codegen/imports/data/parity/parity-cases.tsv from this one source
     # file and assert every row's verdict; they are two registrations rather
