@@ -400,14 +400,16 @@ void run_differential_case(const std::string& corpus,
 // `edition = "2023";` (it models `syntax: "editions"`), while plan 4 refuses
 // it by decision, so the relation is an inverse and not a comparison.
 //
-// What is asserted is the refusal itself. MEASURED, and recorded in the
-// inventory README rather than assumed: the SOURCE frontend refuses the file as
-// a parse error carrying DIAGNOSTIC_GENERIC (`expected a top-level .proto
-// statement` at the `edition` line), while A25's own code path
-// (DIAGNOSTIC_UNSUPPORTED_SYNTAX) is the DESCRIPTOR-origin rule - the
-// divergence Step 11's section 11.6 already records for `edition = "2023";`.
-// The parser has no `edition` keyword to name, so the pack's 8.1 phrase "with a
-// message naming editions" does not hold on this origin.
+// What is asserted is the refusal itself. MEASURED at the 2026-09-28
+// registration, and re-measured 2026-10-04 after plan 5's parser branch
+// (ledger D-44): the SOURCE frontend refuses the statement by name -
+// `editions syntax is not supported: only "proto2" and "proto3" are accepted`
+// at the `edition` line - so the pack's 8.1 phrase "with a message naming
+// editions" holds on this origin. Before that branch the answer was the generic
+// `expected a top-level .proto statement`, because the parser had no `edition`
+// statement while A25's own code path (DIAGNOSTIC_UNSUPPORTED_SYNTAX) is the
+// DESCRIPTOR-origin rule. The refusal stays a load-stage one, so its code is
+// still DIAGNOSTIC_GENERIC; the message is what names editions.
 void test_editions_fixture_is_refused(const std::string& corpus)
 {
     easypb_proto::SourceLoaderOptions options;

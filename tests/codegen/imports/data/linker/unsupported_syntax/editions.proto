@@ -1,15 +1,21 @@
 // unsupported_syntax - R12c's source half: `edition = "2023";`. Step 8.1 asks
-// that "the parser must refuse with a message naming editions (A25)"; MEASURED,
-// and this is what the fixture witnesses: the SOURCE frontend refuses it as a
-// parse error - `expected a top-level .proto statement` at the `edition` line,
-// DIAGNOSTIC_GENERIC - because plan 4's parser has no `edition` statement
-// branch, while A25's naming code (DIAGNOSTIC_UNSUPPORTED_SYNTAX) has exactly
-// one producer, the descriptor-origin classifier, which a file the parser
-// refused never reaches (ledger `D-44`; the inventory README carries it too).
+// that "the parser must refuse with a message naming editions (A25)".
+//
+// MEASURED at the 2026-09-28 registration and re-measured 2026-10-04 after
+// plan 5's parser branch landed (ledger D-44, which assigned the source-side
+// statement to plan 5): the SOURCE frontend now refuses the statement by name -
+// `editions syntax is not supported: only "proto2" and "proto3" are accepted`
+// at the `edition` line - so the clause holds on this origin. Before that
+// branch the answer was a generic parse error (`expected a top-level .proto
+// statement`, DIAGNOSTIC_GENERIC), because the parser had no `edition`
+// statement branch while A25's DIAGNOSTIC_UNSUPPORTED_SYNTAX classified only at
+// the descriptor origin. The refusal remains a load-stage one: the file is
+// never classified, so its code stays DIAGNOSTIC_GENERIC and the message, not
+// the code, is what names editions.
 edition = "2023";
 package editions_test;
 message M { int32 x = 1; }
 // Deliberately OUTSIDE the differential table: protoc 30.1 ACCEPTS this file
-// (it models `syntax: "editions"`), while plan 4 refuses it by decision, so the
-// relation is an inverse and not a comparison. The descriptor half of A25 is
-// hand-built in Steps 5.2/7.3; nothing in this directory needs `protoc`.
+// (it models `syntax: "editions"`), while this project refuses it by decision,
+// so the relation is an inverse and not a comparison. The descriptor half of
+// A25 is hand-built in Steps 5.2/7.3; nothing in this directory needs `protoc`.

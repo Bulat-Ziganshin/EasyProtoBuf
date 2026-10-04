@@ -165,6 +165,9 @@ SOURCE_CASES = [
     # any link runs (a parse error, not A25's capability statement), so the
     # code's rows live at the descriptor origin. These three shapes are kept as
     # evidence for ledger D-30 and carry no row - a row may not name GENERIC.
+    # Since 2026-10-04 the editions probe's message names editions (plan 5's
+    # parser branch); its CODE is still the load-stage GENERIC, so the shape
+    # stays rowless for the same reason.
     probe_case("probe-source-proto3",
                'syntax = "proto3";\npackage s;\n'
                'message Root { int32 a = 1; }\n'),

@@ -170,6 +170,23 @@ run_fail(file_root_out file_root_err
 require_empty(file_root_out "P8 stdout")
 require_contains(file_root_err "not a directory" "P8 diagnostic")
 
+# --- C4: exactly one argument conversion, non-ASCII output root -------------
+
+# Windows delivers the command line through GetCommandLineW with exactly one
+# UTF-8 conversion (and POSIX passes the bytes through unchanged), so a
+# non-ASCII --out-dir must publish under the spelling the caller used.
+set(non_ascii_dir "${WORK_DIR}/выход-каталог")
+file(MAKE_DIRECTORY "${non_ascii_dir}")
+run_ok(non_ascii_out non_ascii_err
+    ${CODEGEN} --descriptor-set ${multi}
+            --target integration-proto2.proto
+            --out-dir "${non_ascii_dir}")
+require_empty(non_ascii_out "C4 stdout")
+if(NOT EXISTS "${non_ascii_dir}/integration-proto2.pb.hpp")
+    message(FATAL_ERROR
+        "C4: the non-ASCII output root did not receive the published header")
+endif()
+
 # --- option validation ------------------------------------------------------
 
 run_fail(repeated_out_dir_out repeated_out_dir_err
@@ -193,6 +210,38 @@ run_fail(empty_container_out empty_container_err
 require_contains(empty_container_err "contains no FileDescriptorProto"
     "Empty container rejection")
 require_empty(empty_container_out "Empty container stdout")
+
+# --- A25: the editions capability limit, end to end -------------------------
+
+# The parity corpus's editions shape: protoc accepts it, this project refuses
+# it by decision. The refusal is a semantic failure - nonzero exit, empty
+# stdout, no files written - in both link modes, while raw inspection stays
+# permissive.
+# DATA_DIR is tests/codegen/parser/data, so the parity corpus is two levels
+# up and across: tests/codegen/imports/data/parity/set.
+set(editions
+    "${DATA_DIR}/../../imports/data/parity/set/d-unsupported-syntax-editions-only-reject.pbs")
+set(a25_dir "${WORK_DIR}/a25")
+file(MAKE_DIRECTORY "${a25_dir}")
+run_fail(a25_out a25_err
+    ${CODEGEN} --descriptor-set "${editions}" --out-dir "${a25_dir}")
+require_empty(a25_out "A25 stdout")
+require_contains(a25_err "not supported" "A25 syntax refusal")
+file(GLOB a25_files "${a25_dir}/*")
+if(a25_files)
+    message(FATAL_ERROR
+        "A25: output files were written despite the refusal: ${a25_files}")
+endif()
+run_fail(a25_target_out a25_target_err
+    ${CODEGEN} --descriptor-set "${editions}" --target root.proto)
+require_empty(a25_target_out "A25 complete-mode stdout")
+# Raw inspection needs the parser, so this row is full-build-only.
+if(FULL_BUILD)
+    run_ok(a25_print_out a25_print_err
+        ${CODEGEN} --descriptor-set --print-descriptor "${editions}")
+    require_contains(a25_print_out "root.proto"
+        "A25 raw inspection stays permissive")
+endif()
 
 if(FULL_BUILD)
     run_fail(source_target_out source_target_err

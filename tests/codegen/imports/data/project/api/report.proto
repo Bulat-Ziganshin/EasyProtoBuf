@@ -1,0 +1,14 @@
+// Plan 5's runtime root, from the plan's own example: two direct normal
+// dependencies, a packed repeated enum, a message-valued map and an imported
+// nested type. The generated header must include both `common/*.pb.hpp` files
+// and initialize `state` to `::shared::State::READY`.
+syntax = "proto2";
+package api;
+import "common/state.proto";
+import "common/node.proto";
+message Report {
+  optional shared.State state = 1;
+  repeated shared.State history = 2 [packed = true];
+  map<string, common.Node> nodes = 3;
+  optional common.Node.Data detail = 4;
+}

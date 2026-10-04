@@ -527,6 +527,78 @@ if(BUILD_TESTING)
     set_tests_properties(codegen.imports.output PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
+    # Plan 5's in-memory lane: the owned adapter and the linked generator
+    # through easypb_codegen_core alone (T4: no descriptor-file wrapper, no
+    # native helper, no publisher). The driver prepares the strict `.pbs`
+    # reference with the CLI, then runs the core-only binary from an empty
+    # working directory and requires byte equality of names and content.
+    add_executable(codegen_imports_in_memory_test
+        codegen/imports/test_in_memory.cpp)
+    target_link_libraries(codegen_imports_in_memory_test
+        PRIVATE easypb_codegen_core)
+    add_test(NAME codegen.imports.in_memory
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DIN_MEMORY=$<TARGET_FILE:codegen_imports_in_memory_test>
+            -DTESTS_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-in-memory
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/test_in_memory.cmake)
+
+    # Plan 5's include-planner lane (I2/I3/I4): the support-import exception,
+    # its real-reference and public-re-export counterexamples, and the
+    # completeness refusal, driven through the CLI on committed complete
+    # `.pbs` closures. Descriptor-only, so every profile runs it.
+    add_test(NAME codegen.imports.includes
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/include_rules
+            -DCUSTOM_TYPES_PBS=${CMAKE_CURRENT_SOURCE_DIR}/codegen/custom_types/data/custom_types.pbs
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/test_includes.cmake)
+
+    # Plan 5's runtime integration: two translation units sharing the
+    # generated dependency header, both root and dependency headers in one
+    # TU, and the round trips (imported nonzero enum default, packed enum,
+    # nested message, message-valued map). Headers are generated independently
+    # per target; under FULL_BUILD the source frontend must reproduce each
+    # header byte for byte.
+    set(codegen_imports_runtime_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/runtime)
+    set(codegen_imports_project_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/project)
+    set(codegen_imports_runtime_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-imports-runtime)
+    add_custom_command(
+        OUTPUT
+            ${codegen_imports_runtime_generated_dir}/api/report.pb.hpp
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DPBS=${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/project.pbs
+            -DSOURCE_ROOT=${codegen_imports_project_dir}
+            -DOUTPUT_DIR=${codegen_imports_runtime_generated_dir}
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_imports_runtime_dir}/generate_runtime_headers.cmake
+        BYPRODUCTS
+            ${codegen_imports_runtime_generated_dir}/common/state.pb.hpp
+            ${codegen_imports_runtime_generated_dir}/common/node.pb.hpp
+        DEPENDS
+            easypb_codegen
+            ${CMAKE_CURRENT_SOURCE_DIR}/codegen/imports/data/project.pbs
+            ${codegen_imports_project_dir}/common/state.proto
+            ${codegen_imports_project_dir}/common/node.proto
+            ${codegen_imports_project_dir}/api/report.proto
+            ${codegen_imports_runtime_dir}/generate_runtime_headers.cmake
+        VERBATIM)
+    add_custom_target(codegen_imports_runtime_generated
+        DEPENDS ${codegen_imports_runtime_generated_dir}/api/report.pb.hpp)
+    add_executable(codegen_imports_runtime_test
+        ${codegen_imports_runtime_dir}/two_tu_main.cpp
+        ${codegen_imports_runtime_dir}/two_tu_shared.cpp)
+    add_dependencies(codegen_imports_runtime_test
+        codegen_imports_runtime_generated)
+    target_include_directories(codegen_imports_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_imports_runtime_generated_dir})
+    add_test(NAME codegen.imports.runtime COMMAND codegen_imports_runtime_test)
+
     # Step 11's two-way oracle parity lane, the descriptor half. Both halves
     # read codegen/imports/data/parity/parity-cases.tsv from this one source
     # file and assert every row's verdict; they are two registrations rather

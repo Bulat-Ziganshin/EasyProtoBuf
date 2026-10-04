@@ -22,7 +22,15 @@ generates `foo::bar::Request`, with the message declaration and its free `encode
 
 Generated references to user-defined message and enum types use absolute C++ names such as `::foo::bar::Outer::Inner`. This prevents a nearer C++ declaration from changing which Protobuf type a field names. Package components are emitted verbatim and must therefore be valid, non-reserved C++ namespace identifiers; Codegen rejects C++ keywords, reserved identifier forms, and a package whose first component is `std`.
 
-Descriptor-set generation still does not emit definitions for imported types. Their fully qualified Protobuf names map to absolute C++ names, so `.other.Type` becomes `::other::Type`. The corresponding C++ definition must be available before the generated field declaration is compiled. Generating an imported schema separately now naturally places its declarations in the namespace derived from its own package, but Codegen does not yet load imports or emit dependency includes automatically.
+Imported definitions are never emitted inside the target's header. Their fully qualified Protobuf names map to absolute C++ names, so `.other.Type` becomes `::other::Type`, and the imported type's own generated header provides the definition. Generate the dependencies as well, or otherwise provide matching declarations, before compiling the target.
+
+## Includes, provenance and dependency headers
+
+Every generated header starts with its provenance line — `// Source: <logical name>` — followed by `#pragma once`, the fixed runtime includes, and, for a complete link, one `#include "<dependency>.pb.hpp"` per direct dependency in declaration order (public and weak imports are ordinary direct dependencies here). The anonymous single-file `.pbs` compatibility path uses its container spelling as provenance.
+
+Two compiler-support imports are special-cased: `easypb/options.proto` and `google/protobuf/descriptor.proto` produce no dependency include while they are only option metadata. The exception ends — and the include appears — when a field names a declaration that file owns, or when the import is public, because a re-export must stay usable for the including translation unit. These files always stay in the linked set, so a missing one is still a link error.
+
+The thin single-file descriptor compatibility mode keeps the older contract instead: external declarations only, no automatic dependency includes.
 
 ## Nested messages and declaration ordering
 
@@ -121,7 +129,7 @@ protoc \
     example.proto
 ```
 
-Do not add `--include_imports`: Codegen currently requires each descriptor set to contain exactly one `FileDescriptorProto`. The embedded `.proto` parser recognizes the EasyProtoBuf option directly and does not need to load `easypb/options.proto`.
+Adding `--include_imports` is optional: Codegen ingests multi-file sets, and a loaded `easypb/options.proto` stays metadata-only, so it needs no options or descriptor include unless a field names their declarations or the import is public (see [Includes, provenance and dependency headers](#includes-provenance-and-dependency-headers)). The embedded `.proto` parser recognizes the EasyProtoBuf option directly as well.
 
 The C++ type of each field is generated from its Protobuf type using a type template. The template is selected according to the field category:
 

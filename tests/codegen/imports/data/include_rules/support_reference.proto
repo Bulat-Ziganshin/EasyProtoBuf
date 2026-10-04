@@ -1,0 +1,9 @@
+// Plan 5 I2's counterexample: a real field names a type the support file
+// owns, so the metadata-only exception must not apply and the generated
+// header must include the dependency header.
+syntax = "proto2";
+package include_rules;
+import "google/protobuf/descriptor.proto";
+message SupportReference {
+  optional google.protobuf.FieldOptions options = 1;
+}

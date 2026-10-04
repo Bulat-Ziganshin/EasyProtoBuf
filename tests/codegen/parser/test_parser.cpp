@@ -278,6 +278,38 @@ void test_lexer_diagnostics()
     CHECK(error.location.line == 1 && error.location.column == 1);
 }
 
+// A25's source half (plan 5, ledger D-44): `edition = "2023";` names an input
+// capability this project does not model, so the statement dispatcher refuses
+// it by name instead of falling through to the generic top-level message. The
+// unknown-`syntax` path keeps its own message, and neither refusal weakens the
+// other; proto2 and proto3 statements stay accepted.
+void test_edition_statement_is_refused_by_name()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto("editions.proto",
+        "edition = \"2023\";\npackage s;\nmessage M { int32 a = 1; }\n",
+        parsed, error));
+    CHECK(error.message.find("editions syntax is not supported") != std::string::npos);
+    CHECK(error.message.find("proto2") != std::string::npos &&
+          error.message.find("proto3") != std::string::npos);
+    CHECK(error.message.find("expected a top-level") == std::string::npos);
+    CHECK(error.location.line == 1 && error.location.column == 1);
+
+    // The unknown-syntax path is unchanged (A19): the literal is what fails,
+    // not the statement shape, and the message is its own.
+    CHECK(!easypb_proto::parse_proto("proto4.proto",
+        "syntax = \"proto4\";\npackage s;\n", parsed, error));
+    CHECK(error.message == "syntax must be \"proto2\" or \"proto3\"");
+
+    // Both supported statements still parse.
+    CHECK(easypb_proto::parse_proto("p2.proto",
+        "syntax = \"proto2\";\nmessage M { optional int32 a = 1; }\n",
+        parsed, error));
+    CHECK(easypb_proto::parse_proto("p3.proto",
+        "syntax = \"proto3\";\nmessage M { int32 a = 1; }\n", parsed, error));
+}
+
 void test_rejects_reserved_conflicts()
 {
     easypb_proto::ParsedProto parsed;
@@ -1179,6 +1211,7 @@ int main()
     test_64_bit_default_ranges();
     test_numeric_literal_forms();
     test_lexer_diagnostics();
+    test_edition_statement_is_refused_by_name();
     test_rejects_reserved_conflicts();
     test_rejects_extension_range_conflicts();
     test_rejects_reserved_enum_values();

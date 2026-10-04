@@ -665,6 +665,13 @@ public:
             }
             else if (accept_keyword("extend")) parse_extend();
             else if (accept_keyword("service")) parse_service();
+            // EditionsStatement: `edition = "2023";` names a syntax this
+            // project cannot model (A25), so it is refused by name instead of
+            // falling through to the generic top-level message, which read
+            // like a typo (plan 4's ledger D-44; plan 5 owns this branch).
+            // The refusal is a statement-level one and does not weaken the
+            // unknown-`syntax` path above, which keeps its own message.
+            else if (is_keyword("edition")) fail_editions_statement();
             else fail("expected a top-level .proto statement");
         }
 
@@ -763,21 +770,45 @@ private:
         return result;
     }
 
+    // EditionsStatement <- "edition" "=" StringSequence ";"
+    //
+    // protoc 30.1 models `edition = "2023";` as `syntax: "editions"`, which
+    // this project refuses wherever linking happens. The source origin names
+    // that limit here rather than leaving a generic parse error: A25's rule
+    // has one classifier (`classify_file_syntax`), and a source statement the
+    // parser cannot even build a descriptor from is a frontend statement, so
+    // the message is written at this origin instead of routing a
+    // half-built file into the linker.
+    void fail_editions_statement() const
+    {
+        throw ParseFailure(
+            current_.location,
+            "editions syntax is not supported: only \"proto2\" and "
+            "\"proto3\" are accepted");
+    }
+
     // SyntaxStatement <- "syntax" "=" StringSequence ";"
     void parse_syntax()
     {
         accept_keyword("syntax");
         expect_symbol('=');
         const std::string value = string_sequence();
-        if (value != "proto2" && value != "proto3") {
+        // The one classifier decides whether an explicit value names a syntax
+        // this project models; the literal comparison lives inside
+        // classify_file_syntax (E7), not here.
+        out_.file.syntax = out_.strings.save(value);
+        out_.file.has_syntax = true;
+        const easypb_schema::FileSyntax syntax =
+            easypb_schema::classify_file_syntax(out_.file);
+        if (syntax == easypb_schema::FILE_SYNTAX_UNSUPPORTED) {
             fail("syntax must be \"proto2\" or \"proto3\"");
         }
         expect_symbol(';');
         // protoc represents proto2 by leaving FileDescriptorProto.syntax
         // absent; only proto3 is materialized in field 12.
-        if (value == "proto3") {
-            out_.file.syntax = out_.strings.save(value);
-            out_.file.has_syntax = true;
+        if (syntax == easypb_schema::FILE_SYNTAX_PROTO2) {
+            out_.file.syntax = str_view();
+            out_.file.has_syntax = false;
         }
     }
 
@@ -1121,7 +1152,8 @@ private:
     // numeric/bool values, and an identifier for enum defaults.
     void apply_default(FieldDescriptorProto& field, const Constant& value)
     {
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) == "proto3")) {
+        if (easypb_schema::classify_file_syntax(out_.file) ==
+            easypb_schema::FILE_SYNTAX_PROTO3) {
             throw ParseFailure(value.location, "explicit default values are not allowed in proto3");
         }
         if (field.label == FieldDescriptorProto::LABEL_REPEATED || field.has_oneof_index) {
@@ -1227,10 +1259,14 @@ private:
         }
         field.has_label = true;
 
-        if ((!out_.file.has_syntax || view_text(out_.file.syntax) == "proto2") && !oneof_field && !label_seen) {
+        if (easypb_schema::classify_file_syntax(out_.file) ==
+                easypb_schema::FILE_SYNTAX_PROTO2 &&
+            !oneof_field && !label_seen) {
             fail("proto2 fields require optional, required, or repeated label");
         }
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) == "proto3") && field.label == FieldDescriptorProto::LABEL_REQUIRED) {
+        if (easypb_schema::classify_file_syntax(out_.file) ==
+                easypb_schema::FILE_SYNTAX_PROTO3 &&
+            field.label == FieldDescriptorProto::LABEL_REQUIRED) {
             fail("required fields are not allowed in proto3");
         }
 
@@ -1623,7 +1659,9 @@ private:
             }
         }
 
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) == "proto3") && !result.value.empty() && result.value[0].number != 0) {
+        if (easypb_schema::classify_file_syntax(out_.file) ==
+                easypb_schema::FILE_SYNTAX_PROTO3 &&
+            !result.value.empty() && result.value[0].number != 0) {
             throw ParseFailure(current_.location, "the first proto3 enum value must be zero");
         }
         if (!allow_alias) {
@@ -1698,7 +1736,8 @@ private:
     // for conflict checks because the trimmed descriptor has no range field.
     void parse_extensions(std::vector<NumberRange>& ranges)
     {
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) != "proto2")) fail("extensions ranges are allowed only in proto2");
+        if (easypb_schema::classify_file_syntax(out_.file) !=
+            easypb_schema::FILE_SYNTAX_PROTO2) fail("extensions ranges are allowed only in proto2");
         for (;;) {
             NumberRange range;
             range.location = current_.location;
@@ -1756,7 +1795,8 @@ private:
     void parse_extend()
     {
         const SourceLocation where = current_.location;
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) != "proto2")) fail("extend declarations are allowed only in proto2");
+        if (easypb_schema::classify_file_syntax(out_.file) !=
+            easypb_schema::FILE_SYNTAX_PROTO2) fail("extend declarations are allowed only in proto2");
         (void)full_identifier(true);
         expect_symbol('{');
         while (!accept_symbol('}')) {

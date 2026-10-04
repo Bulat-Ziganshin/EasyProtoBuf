@@ -180,17 +180,23 @@ nothing (the name would simply be absent).
 | --- | --- | --- | --- |
 | `unsupported_syntax/editions.proto` | **accept** | refuse (**load**) | `edition = "2023";`. This is the ONE corpus fixture deliberately outside the differential table: the relation is an inverse, not a comparison, so the suite asserts the refusal in `test_editions_fixture_is_refused`. |
 
-**Measured correction to the pack's 8.1 wording.** Step 8.1 says the editions
-fixture is one "which the parser must refuse with a message naming editions
-(A25)". What the tree does is refuse it as a parse error carrying
-`DIAGNOSTIC_GENERIC` - `expected a top-level .proto statement` at the `edition`
-line - because the parser has no `edition` keyword, while `A25`'s own code
-(`DIAGNOSTIC_UNSUPPORTED_SYNTAX`) is the DESCRIPTOR-origin rule. That is the same
-source-origin divergence Step 11's section 11.6 already records for
-`edition = "2023";`, and Step 8 filed it as ledger **`D-44`** - a pack-text row,
-because `A25`'s naming lives in plan 5's parser branch and this origin can never
-reach it. This file and the fixture's own header record the measured behaviour,
-so the fixture is not read as an A25 refusal on this origin.
+**Measured correction to the pack's 8.1 wording, resolved 2026-10-04.** Step 8.1
+says the editions fixture is one "which the parser must refuse with a message
+naming editions (A25)". At the 2026-09-28 registration the tree refused it as a
+parse error carrying `DIAGNOSTIC_GENERIC` - `expected a top-level .proto
+statement` at the `edition` line - because the parser had no `edition` keyword,
+while `A25`'s own code (`DIAGNOSTIC_UNSUPPORTED_SYNTAX`) is the
+DESCRIPTOR-origin rule. Step 8 filed that divergence as ledger **`D-44`**, a
+pack-text row, because `A25`'s naming belongs to plan 5's parser branch.
+
+Plan 5 implemented that branch, and the fixture's header now carries the
+re-measurement: the SOURCE frontend refuses the statement by name -
+`editions syntax is not supported: only "proto2" and "proto3" are accepted` -
+while the refusal stays a load-stage one (the file is never classified, so its
+code stays `DIAGNOSTIC_GENERIC` and the message is what names editions). The
+fixture is still deliberately outside the differential table: the relation
+remains an inverse, `protoc` 30.1 accepting what this project refuses by
+decision.
 
 The `relative/` subtree keeps its own inventory (`relative/README.md`), which the
 first table summarizes.
