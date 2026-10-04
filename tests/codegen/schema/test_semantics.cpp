@@ -1261,6 +1261,94 @@ void test_rule_type_proto3_field_cannot_use_proto2_enum()
     delete proto3_target;
 }
 
+void test_rule_nested_types_duplicates_and_recursion()
+{
+    // A nested type name is unique across BOTH the enum and the message list
+    // (one shared name set), so a message colliding with an earlier enum is
+    // refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        message.enum_type.push_back(enumeration);
+        DescriptorProto nested;
+        nested.name = file.strings.save("E");
+        nested.has_name = true;
+        message.nested_type.push_back(nested);
+        file.file.message_type.push_back(message);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+
+        easypb_schema::SymbolIndex symbols;
+        const std::set<const easypb_schema::SchemaFile*> visible;
+        easypb_schema::internal::UnresolvedPolicy policy;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_nested_types(
+            file, symbols, visible, policy, true, message, "M", message_path,
+            error));
+        CHECK(error.message.find("duplicate nested type name in M") !=
+              std::string::npos);
+    }
+    // Recursion: a nested message is handed to resolve_message, so an invalid
+    // field inside it is refused here, without a resolve_file walk.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto nested;
+        nested.name = file.strings.save("N");
+        nested.has_name = true;
+        nested.field.push_back(
+            make_scalar_field(file, "x", 0, FieldDescriptorProto::TYPE_INT32));
+        message.nested_type.push_back(nested);
+        file.file.message_type.push_back(message);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+
+        easypb_schema::SymbolIndex symbols;
+        const std::set<const easypb_schema::SchemaFile*> visible;
+        easypb_schema::internal::UnresolvedPolicy policy;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_nested_types(
+            file, symbols, visible, policy, true, message, "M", message_path,
+            error));
+        CHECK(error.message.find("outside the valid range") != std::string::npos);
+    }
+    // Control: distinct nested names and a valid nested message pass.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        message.enum_type.push_back(enumeration);
+        DescriptorProto nested;
+        nested.name = file.strings.save("N");
+        nested.has_name = true;
+        nested.field.push_back(
+            make_scalar_field(file, "x", 1, FieldDescriptorProto::TYPE_INT32));
+        message.nested_type.push_back(nested);
+        file.file.message_type.push_back(message);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+
+        easypb_schema::SymbolIndex symbols;
+        const std::set<const easypb_schema::SchemaFile*> visible;
+        easypb_schema::internal::UnresolvedPolicy policy;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_nested_types(
+            file, symbols, visible, policy, true, message, "M", message_path,
+            error));
+    }
+}
+
 } // namespace
 
 int main()
@@ -1288,6 +1376,7 @@ int main()
     test_rule_oneofs_d28_unclaimed_declaration_is_refused();
     test_rule_type_a7_declared_kind_mismatch_is_refused();
     test_rule_type_proto3_field_cannot_use_proto2_enum();
+    test_rule_nested_types_duplicates_and_recursion();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";
