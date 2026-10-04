@@ -1,4 +1,5 @@
 #include "schema_semantics.hpp"
+#include "schema_semantics_internal.hpp"
 
 #include <cassert>
 #include <cerrno>
@@ -1776,25 +1777,14 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
     }
 }
 
-// What a named type that resolves nowhere means to the pass that called
-// resolve_message. Exactly one of the three behaviours applies, and the two
-// pointers are the compatibility pass's caller-owned state (A4/A5):
-//
-// - complete linking: fatal, with the shared outcome code (complete);
-// - the parser's standalone pass: a per-field warning that keeps the raw
-//   metadata so a later complete link can resolve it (deferred);
-// - descriptor compatibility: an external reference is permitted only when
-//   the descriptor classifies it itself, and its warning is bounded one per
-//   type name by the caller-owned set (external_warned_types non-null).
-struct UnresolvedPolicy
-{
-    bool deferred;
-    std::set<std::string>* external_warned_types;
-    bool* missing_external;
+} // namespace
 
-    UnresolvedPolicy()
-        : deferred(false), external_warned_types(0), missing_external(0) {}
-};
+// The five rule helpers below, and the orchestrator that drives them, are the
+// unit suite's entry points (P1 split): they are declared in
+// schema_semantics_internal.hpp under `internal`, so a test can call one rule
+// directly. They stay in this translation unit, and everything else in the
+// file stays anonymous.
+namespace internal {
 
 // The orchestrator is declared first: validate_nested_types recurses into it.
 bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
@@ -2359,7 +2349,12 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                                  link_types, message, scope, message_path, error);
 }
 
-} // namespace
+} // namespace internal
+
+// The public passes below keep their unqualified spellings: the rule block
+// moved into `internal`, and these using-declarations are the one-line bridge.
+using internal::UnresolvedPolicy;
+using internal::resolve_message;
 
 bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error)
 {
