@@ -75,6 +75,17 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
                              bool unknown, bool external_reference,
                              Diagnostic& error);
 
+// The type-dependent validator behind rule 3's default dispatch (check 12):
+// exposed separately so one scalar or named default can be probed without a
+// field-encoding fixture. It is the only anonymous helper this seam reaches;
+// the other large validators - validate_symbol_names,
+// validate_enum_value_numbers and validate_map_entry_shapes - are already
+// public in schema_semantics.hpp and need no seam.
+bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
+                      const std::set<const SchemaFile*>& visible_files,
+                      const FieldDescriptorProto& field, bool unknown,
+                      const DescriptorPath& field_path, Diagnostic& error);
+
 // 4. oneof declarations claimed by no field (D-28) - after the field loop on
 // purpose
 bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,

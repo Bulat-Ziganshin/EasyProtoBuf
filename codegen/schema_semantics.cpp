@@ -1656,6 +1656,15 @@ bool valid_bytes_default_escape(const std::string& text)
     return true;
 }
 
+} // namespace
+
+// validate_default joins the `internal` seam (P1 unit tests). The other large
+// validators - validate_symbol_names, validate_enum_value_numbers and
+// validate_map_entry_shapes - are already public, so it is the only anonymous
+// helper the unit suite needs declared here; its definition stays in this
+// translation unit, beside the rules that call it.
+namespace internal {
+
 // Type-dependent semantic validation for the textual default_value stored
 // during parsing. Unknown kinds are the caller's responsibility: the caller
 // passes unknown == true when the named type could not be resolved, in which
@@ -1776,15 +1785,6 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                            where, field_path, error);
     }
 }
-
-} // namespace
-
-// The five rule helpers below, and the orchestrator that drives them, are the
-// unit suite's entry points (P1 split): they are declared in
-// schema_semantics_internal.hpp under `internal`, so a test can call one rule
-// directly. They stay in this translation unit, and everything else in the
-// file stays anonymous.
-namespace internal {
 
 // The orchestrator is declared first: validate_nested_types recurses into it.
 bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,

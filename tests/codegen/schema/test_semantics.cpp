@@ -1349,6 +1349,202 @@ void test_rule_nested_types_duplicates_and_recursion()
     }
 }
 
+void add_enum_value(EnumDescriptorProto& enumeration,
+                    easypb_schema::SchemaFile& file, const char* name,
+                    int number)
+{
+    EnumValueDescriptorProto value;
+    value.name = file.strings.save(name);
+    value.has_name = true;
+    value.number = number;
+    value.has_number = true;
+    enumeration.value.push_back(value);
+}
+
+void test_rule_default_validator_directly()
+{
+    // validate_default is the type-dependent validator behind rule 3, reached
+    // through the internal seam; each case probes one scalar category.
+    easypb_schema::SchemaFile file;
+    const easypb_schema::SymbolIndex symbols;
+    const std::set<const easypb_schema::SchemaFile*> visible;
+    const easypb_schema::DescriptorPath field_path =
+        easypb_schema::message_field_path(easypb_schema::file_message_path(0), 0);
+
+    // A legal 32-bit default passes.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        field.default_value = file.strings.save("7");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+    }
+    // One past INT32_MAX is refused.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        field.default_value = file.strings.save("2147483648");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+        CHECK(error.message.find("does not fit signed 32-bit field") !=
+              std::string::npos);
+    }
+    // A bool default must be exactly true or false.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_BOOL);
+        field.default_value = file.strings.save("yes");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+        CHECK(error.message.find("bool default must be true or false") !=
+              std::string::npos);
+    }
+    // A message field may not carry a default at all.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_MESSAGE);
+        field.default_value = file.strings.save("x");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+        CHECK(error.message.find("message fields cannot have defaults") !=
+              std::string::npos);
+    }
+    // D-58: a bytes default is C-escaped; an unknown escape is refused.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_BYTES);
+        field.default_value = file.strings.save("\\q");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+        CHECK(error.message.find("invalid escaping in bytes default value") !=
+              std::string::npos);
+    }
+    // An unknown named type defers with a warning instead of failing.
+    {
+        FieldDescriptorProto field = make_named_field(file, "a", 1, "State", false);
+        field.default_value = file.strings.save("ACTIVE");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        const std::size_t before = file.warnings.size();
+        CHECK(easypb_schema::internal::validate_default(
+            file, symbols, visible, field, true, field_path, error));
+        CHECK(file.warnings.size() == before + 1);
+    }
+    // A field with no default is a no-op, even for a message kind.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_MESSAGE);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+    }
+}
+
+void test_rule_enum_value_numbers_directly()
+{
+    // validate_enum_value_numbers is public; these cases call it directly.
+    // An enum with no values is refused.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_enum_value_numbers(file, error));
+        CHECK(error.message.find("contains no values") != std::string::npos);
+    }
+    // Two values may not share a number without allow_alias.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 1);
+        add_enum_value(enumeration, file, "B", 1);
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_enum_value_numbers(file, error));
+        CHECK(error.message.find("repeats number 1") != std::string::npos);
+    }
+    // ... unless the enum declares option allow_alias = true.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        enumeration.options.has_allow_alias = true;
+        enumeration.options.allow_alias = true;
+        add_enum_value(enumeration, file, "A", 1);
+        add_enum_value(enumeration, file, "B", 1);
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_enum_value_numbers(file, error));
+    }
+    // Distinct numbers pass without the option.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 0);
+        add_enum_value(enumeration, file, "B", 1);
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_enum_value_numbers(file, error));
+    }
+}
+
+void test_rule_symbol_names_directly()
+{
+    // validate_symbol_names is public; these cases call it directly.
+    // An illegal character in an enum name is refused.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("bad-name");
+        enumeration.has_name = true;
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_symbol_names(file, error));
+        CHECK(error.message.find("is not a valid identifier") != std::string::npos);
+    }
+    // An unnamed message is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_symbol_names(file, error));
+        CHECK(error.message.find("has no name") != std::string::npos);
+    }
+    // Well-formed declarations pass.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 0);
+        file.file.enum_type.push_back(enumeration);
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_symbol_names(file, error));
+    }
+}
+
 } // namespace
 
 int main()
@@ -1377,6 +1573,9 @@ int main()
     test_rule_type_a7_declared_kind_mismatch_is_refused();
     test_rule_type_proto3_field_cannot_use_proto2_enum();
     test_rule_nested_types_duplicates_and_recursion();
+    test_rule_default_validator_directly();
+    test_rule_enum_value_numbers_directly();
+    test_rule_symbol_names_directly();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";
