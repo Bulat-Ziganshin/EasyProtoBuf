@@ -2349,6 +2349,39 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                                  link_types, message, scope, message_path, error);
 }
 
+// One-line bridges onto the anonymous message-level validators declared in
+// schema_semantics_internal.hpp. The call is qualified with the enclosing
+// namespace because an unqualified name here would find the forwarder itself;
+// `easypb_schema::name` resolves to the anonymous function through the unnamed
+// namespace's implicit using-directive. The definitions stay anonymous.
+bool validate_message_symbol_names(const SchemaFile& file,
+                                   const DescriptorProto& message,
+                                   const DescriptorPath& message_path,
+                                   const std::string& parent, Diagnostic& error)
+{
+    return ::easypb_schema::validate_message_symbol_names(
+        file, message, message_path, parent, error);
+}
+
+bool validate_message_enum_value_numbers(const SchemaFile& file,
+                                         const DescriptorProto& message,
+                                         const std::string& qualified_name,
+                                         const DescriptorPath& message_path,
+                                         Diagnostic& error)
+{
+    return ::easypb_schema::validate_message_enum_value_numbers(
+        file, message, qualified_name, message_path, error);
+}
+
+bool validate_message_map_entries(const SchemaFile& file,
+                                  const DescriptorProto& message,
+                                  const std::string& qualified_name,
+                                  Diagnostic& error)
+{
+    return ::easypb_schema::validate_message_map_entries(file, message,
+                                                         qualified_name, error);
+}
+
 } // namespace internal
 
 // The public passes below keep their unqualified spellings: the rule block

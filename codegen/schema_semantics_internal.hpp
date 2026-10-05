@@ -86,6 +86,28 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                       const FieldDescriptorProto& field, bool unknown,
                       const DescriptorPath& field_path, Diagnostic& error);
 
+// The message-level validators behind the public sweeps (validate_symbol_names,
+// validate_enum_value_numbers, validate_map_entry_shapes). They stay anonymous
+// in schema_semantics.cpp - unlike validate_default, which sat alone and could
+// move, these are packed among the helpers that must stay anonymous - so they
+// are reached through one-line forwarders defined in schema_semantics.cpp
+// beside the rule block. A test can then drive one message subtree without a
+// whole-file walk.
+bool validate_message_symbol_names(const SchemaFile& file,
+                                   const DescriptorProto& message,
+                                   const DescriptorPath& message_path,
+                                   const std::string& parent,
+                                   Diagnostic& error);
+bool validate_message_enum_value_numbers(const SchemaFile& file,
+                                         const DescriptorProto& message,
+                                         const std::string& qualified_name,
+                                         const DescriptorPath& message_path,
+                                         Diagnostic& error);
+bool validate_message_map_entries(const SchemaFile& file,
+                                  const DescriptorProto& message,
+                                  const std::string& qualified_name,
+                                  Diagnostic& error);
+
 // 4. oneof declarations claimed by no field (D-28) - after the field loop on
 // purpose
 bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,

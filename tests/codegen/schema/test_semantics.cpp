@@ -1545,6 +1545,150 @@ void test_rule_symbol_names_directly()
     }
 }
 
+void test_rule_message_map_entries_directly()
+{
+    // A map-entry message with no key/value fields is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto entry;
+        entry.name = file.strings.save("MEntry");
+        entry.has_name = true;
+        entry.options.has_map_entry = true;
+        entry.options.map_entry = true;
+        entry.has_options = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_map_entries(
+            file, entry, "MEntry", error));
+        CHECK(error.message.find("fields 1 and 2 are required") !=
+              std::string::npos);
+    }
+    // Recursion: a nested malformed entry is reached from the outer message.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto outer;
+        outer.name = file.strings.save("M");
+        outer.has_name = true;
+        DescriptorProto entry;
+        entry.name = file.strings.save("MEntry");
+        entry.has_name = true;
+        entry.options.has_map_entry = true;
+        entry.options.map_entry = true;
+        entry.has_options = true;
+        outer.nested_type.push_back(entry);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_map_entries(
+            file, outer, "M", error));
+        CHECK(error.message.find("Malformed map entry") != std::string::npos);
+    }
+    // Control: a well-formed entry passes.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto entry;
+        entry.name = file.strings.save("MEntry");
+        entry.has_name = true;
+        entry.options.has_map_entry = true;
+        entry.options.map_entry = true;
+        entry.has_options = true;
+        entry.field.push_back(
+            make_scalar_field(file, "key", 1, FieldDescriptorProto::TYPE_INT32));
+        entry.field.push_back(make_scalar_field(
+            file, "value", 2, FieldDescriptorProto::TYPE_MESSAGE));
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_message_map_entries(
+            file, entry, "MEntry", error));
+    }
+}
+
+void test_rule_message_symbol_names_directly()
+{
+    // A field with an illegal name is refused in the message's own scope.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.field.push_back(make_scalar_field(
+            file, "bad-name", 1, FieldDescriptorProto::TYPE_INT32));
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_symbol_names(
+            file, message, message_path, "", error));
+        CHECK(error.message.find("is not a valid identifier") !=
+              std::string::npos);
+    }
+    // Recursion: an unnamed nested message is reached.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto nested;
+        message.nested_type.push_back(nested);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_symbol_names(
+            file, message, message_path, "", error));
+        CHECK(error.message.find("has no name") != std::string::npos);
+    }
+    // Control: valid names pass.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.field.push_back(make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32));
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_message_symbol_names(
+            file, message, message_path, "", error));
+    }
+}
+
+void test_rule_message_enum_value_numbers_directly()
+{
+    // A nested enum with a repeated number is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 1);
+        add_enum_value(enumeration, file, "B", 1);
+        message.enum_type.push_back(enumeration);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_enum_value_numbers(
+            file, message, "M", message_path, error));
+        CHECK(error.message.find("repeats number 1") != std::string::npos);
+    }
+    // Control: distinct numbers pass.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 0);
+        add_enum_value(enumeration, file, "B", 1);
+        message.enum_type.push_back(enumeration);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_message_enum_value_numbers(
+            file, message, "M", message_path, error));
+    }
+}
+
 } // namespace
 
 int main()
@@ -1576,6 +1720,9 @@ int main()
     test_rule_default_validator_directly();
     test_rule_enum_value_numbers_directly();
     test_rule_symbol_names_directly();
+    test_rule_message_map_entries_directly();
+    test_rule_message_symbol_names_directly();
+    test_rule_message_enum_value_numbers_directly();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";
