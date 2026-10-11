@@ -118,10 +118,10 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
 
     // Validate every name before anything is appended, so a failed call
     // never leaves a partial batch behind.
-    std::set<std::string> names;
+    std::set<str_view> names;
     for (std::size_t i = 0; i < files.size(); ++i) {
-        const std::string logical = own_text(files[i].name);
-        if (logical.empty()) {
+        const str_view& raw_name = files[i].name;
+        if (raw_name.empty()) {
             return fail(diagnostic_label,
                         "descriptor file #" +
                             easypb::detail::number_to_string(
@@ -132,14 +132,14 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                             "descriptor",
                         DIAGNOSTIC_GENERIC, result, error);
         }
-        if (names.count(logical) != 0 || result.find_file(logical) != 0) {
+        const std::string logical = own_text(raw_name);
+        if (!names.insert(raw_name).second || result.find_file(logical) != 0) {
             return fail(diagnostic_label,
                         "duplicate logical file name \"" + logical +
                             "\" in descriptor source \"" + diagnostic_label +
                             "\" (a file with this name was already appended)",
                         DIAGNOSTIC_DUPLICATE_SYMBOL, result, error);
         }
-        names.insert(logical);
     }
 
     for (std::size_t i = 0; i < files.size(); ++i) {

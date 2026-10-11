@@ -212,7 +212,7 @@ str_view pbtype_name(const FieldDescriptorProto& field)
 // independent of the package namespace and of any nearer C++ name.
 std::string cpp_qualified_type_str(str_view message_type)
 {
-    return easypb_codegen::cpp_absolute_name(std::string(message_type));
+    return easypb_codegen::cpp_absolute_name(message_type);
 }
 
 
@@ -512,7 +512,8 @@ const MapType* find_map_type(const FieldDescriptorProto& field,
                              const MapTypeByName& maptype_by_name,
                              str_view message_cpp_name)
 {
-    if (! is_repeated(field) || field.type != FieldDescriptorProto::TYPE_MESSAGE) {
+    if (maptype_by_name.empty() || ! is_repeated(field) ||
+        field.type != FieldDescriptorProto::TYPE_MESSAGE) {
         return nullptr;
     }
 
@@ -551,9 +552,9 @@ struct MessageInfo
     const DescriptorProto* descriptor = nullptr;
     std::string simple_name;          // Inner
     std::string proto_name;           // .pkg.Outer.Inner
-    std::string cpp_local_name;       // Outer::Inner
     std::string cpp_absolute_name;    // ::pkg::Outer::Inner
     std::string macro_stem;           // EASYPB_Outer_Inner (legacy spelling)
+    MapTypeByName map_types;
     std::vector<MessageInfo> children;
     std::vector<MessageInfo*> dependencies;
 };
@@ -579,7 +580,6 @@ MessageInfo make_message_info(const DescriptorProto& descriptor,
     info.proto_name = parent_proto_name.empty()
         ? context.package_name_prefix + info.simple_name
         : parent_proto_name + PB_TYPE_DELIMITER + info.simple_name;
-    info.cpp_local_name = easypb_codegen::cpp_local_name(info.proto_name, context.package);
     info.cpp_absolute_name = easypb_codegen::cpp_absolute_name(info.proto_name);
     info.macro_stem = easypb_codegen::insertion_macro_stem(
         info.proto_name, context.package);
@@ -709,10 +709,10 @@ void resolve_message_dependencies(MessageInfo& info,
                                   const MessageByProtoName& index,
                                   const GenerationContext& context)
 {
-    auto map_types = collect_map_types(*info.descriptor, info.proto_name);
+    info.map_types = collect_map_types(*info.descriptor, info.proto_name);
 
     for (const auto& field: info.descriptor->field) {
-        const MapType* map_type = find_map_type(field, map_types, info.cpp_absolute_name);
+        const MapType* map_type = find_map_type(field, info.map_types, info.cpp_absolute_name);
         const FieldDescriptorProto& dependency_field =
             map_type ? *map_type->value_field : field;
         MessageInfo* target = find_type_owner(dependency_field, index);
@@ -838,13 +838,14 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
 
     std::map<MessageInfo*, GraphColor> color;
     std::vector<MessageInfo*> result;
+    result.reserve(units.size());
     std::vector<MessageInfo*> stack;
     for (auto* unit: units) color[unit] = GraphColor::Unvisited;
 
     struct Visitor {
         static void visit(MessageInfo* unit,
                           const std::vector<MessageInfo*>& units,
-                          std::map<MessageInfo*, std::set<MessageInfo*> >& dependencies,
+                          const std::map<MessageInfo*, std::set<MessageInfo*> >& dependencies,
                           std::map<MessageInfo*, GraphColor>& color,
                           std::vector<MessageInfo*>& stack,
                           std::vector<MessageInfo*>& result)
@@ -853,24 +854,29 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
             stack.push_back(unit);
 
             // Walk dependencies in source order to keep unrelated output stable.
-            for (auto* candidate: units) {
-                if (dependencies[unit].count(candidate) == 0) continue;
-                if (color[candidate] == GraphColor::Unvisited) {
-                    visit(candidate, units, dependencies, color, stack, result);
-                } else if (color[candidate] == GraphColor::OnStack) {
-                    // This is a cycle between lexical units (for example, two
-                    // root structs whose nested messages depend on each other).
-                    std::string path;
-                    std::size_t start = 0;
-                    while (start < stack.size() && stack[start] != candidate) ++start;
-                    for (std::size_t i = start; i < stack.size(); ++i) {
+            const std::map<MessageInfo*, std::set<MessageInfo*> >::const_iterator dep_it =
+                dependencies.find(unit);
+            if (dep_it != dependencies.end()) {
+                const std::set<MessageInfo*>& unit_deps = dep_it->second;
+                for (auto* candidate: units) {
+                    if (unit_deps.count(candidate) == 0) continue;
+                    if (color[candidate] == GraphColor::Unvisited) {
+                        visit(candidate, units, dependencies, color, stack, result);
+                    } else if (color[candidate] == GraphColor::OnStack) {
+                        // This is a cycle between lexical units (for example, two
+                        // root structs whose nested messages depend on each other).
+                        std::string path;
+                        std::size_t start = 0;
+                        while (start < stack.size() && stack[start] != candidate) ++start;
+                        for (std::size_t i = start; i < stack.size(); ++i) {
+                            if (! path.empty()) path += " -> ";
+                            path += stack[i]->cpp_absolute_name;
+                        }
                         if (! path.empty()) path += " -> ";
-                        path += stack[i]->cpp_absolute_name;
+                        path += candidate->cpp_absolute_name;
+                        throw std::runtime_error(
+                            "recursive message value dependency: " + path);
                     }
-                    if (! path.empty()) path += " -> ";
-                    path += candidate->cpp_absolute_name;
-                    throw std::runtime_error(
-                        "recursive message value dependency: " + path);
                 }
             }
 
@@ -894,7 +900,9 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
 std::vector<MessageInfo*> dependency_safe_order(std::vector<MessageInfo>& messages)
 {
     std::vector<MessageInfo*> units;
+    units.reserve(messages.size());
     for (auto& message: messages) units.push_back(&message);
+    if (units.size() <= 1) return units;
     return stable_topological_order(units);
 }
 
@@ -911,21 +919,23 @@ std::string generate_message(MessageInfo& info,
                              const GenerationContext& context)
 {
     std::string nested_defs;
-    // Enum declarations precede nested messages and fields that may use them.
-    for (const auto& enum_type: info.descriptor->enum_type) {
-        nested_defs += generate_enum(enum_type, indent + CPP_INDENT);
-    }
-    for (auto* child: dependency_safe_order(info.children)) {
-        nested_defs += generate_message(
-            *child, indent + CPP_INDENT, enum_index, encoders, decoders, context);
+    if (! info.descriptor->enum_type.empty() || ! info.children.empty()) {
+        const std::string child_indent = indent + CPP_INDENT;
+        // Enum declarations precede nested messages and fields that may use them.
+        for (const auto& enum_type: info.descriptor->enum_type) {
+            nested_defs += generate_enum(enum_type, child_indent);
+        }
+        for (auto* child: dependency_safe_order(info.children)) {
+            nested_defs += generate_message(
+                *child, child_indent, enum_index, encoders, decoders, context);
+        }
     }
 
     std::string field_defs, has_field_defs, encoder, decoder, check_required_fields;
-    auto map_types = collect_map_types(*info.descriptor, info.proto_name);
 
     for (const auto& field: info.descriptor->field)
     {
-        auto map_type = find_map_type(field, map_types, info.cpp_absolute_name);
+        auto map_type = find_map_type(field, info.map_types, info.cpp_absolute_name);
 
         auto cpptype_str = cpp_type_as_str(field, map_type, context);
         field_defs += myformat("{0}    {1} {2}{3};\n",
@@ -1121,10 +1131,13 @@ void index_message_enums_of(const DescriptorProto& message,
             &message.enum_type[i]));
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        const DescriptorProto& nested = message.nested_type[i];
+        if (nested.enum_type.empty() && nested.nested_type.empty()) {
+            continue;
+        }
         index_message_enums_of(
-            message.nested_type[i],
-            proto_name + "." +
-                owned_descriptor_text(message.nested_type[i].name),
+            nested,
+            proto_name + "." + owned_descriptor_text(nested.name),
             index);
     }
 }
@@ -1146,9 +1159,13 @@ void index_file_enums(const FileDescriptorProto& file, EnumByProtoName& index)
             &file.enum_type[i]));
     }
     for (std::size_t i = 0; i < file.message_type.size(); ++i) {
+        const DescriptorProto& message = file.message_type[i];
+        if (message.enum_type.empty() && message.nested_type.empty()) {
+            continue;
+        }
         index_message_enums_of(
-            file.message_type[i],
-            prefix + owned_descriptor_text(file.message_type[i].name), index);
+            message,
+            prefix + owned_descriptor_text(message.name), index);
     }
 }
 
@@ -1316,7 +1333,7 @@ bool easypb_codegen::generate_files(
             error.message = problem.what();
             return false;
         }
-        generated.push_back(entry);
+        generated.push_back(std::move(entry));
     }
     result.swap(generated);
     return true;

@@ -220,28 +220,37 @@ SourceLocation declaration_location(const SchemaFile& file,
 // to read a message text to tell a redeclaration from a generic failure. The
 // message names both declarations by kind and name within the scope; the
 // cross-file producer (add_symbol) additionally names both logical files.
-bool add_scope_name(const SchemaFile& file,
-                    std::map<std::string, std::string>& names,
-                    const std::string& name,
-                    const std::string& kind,
-                    const std::string& scope,
-                    const DescriptorPath& path,
-                    Diagnostic& error)
+bool report_scope_collision(const SchemaFile& file,
+                            const str_view& name,
+                            const char* kind,
+                            const char* existing_kind,
+                            const std::string& scope,
+                            const DescriptorPath& path,
+                            Diagnostic& error)
 {
-    const std::pair<std::map<std::string, std::string>::iterator, bool> inserted =
-        names.insert(std::make_pair(name, kind));
+    std::string message = "name collision in " +
+        (scope.empty() ? std::string("global scope") : scope) +
+        ": " + std::string(kind) + " " + view_text(name) + " conflicts with " +
+        existing_kind;
+    SourceLocation location = declaration_location(file, path);
+    if (location.line == 0) message += " at " + format_path(path);
+    error.file = view_text(file.file.name);
+    error.location = location;
+    error.message = message;
+    error.warning = false;
+    error.code = DIAGNOSTIC_DUPLICATE_SYMBOL;
+    return false;
+}
+
+bool try_add_scope_name(std::map<str_view, const char*>& names,
+                        const str_view& name,
+                        const char* kind,
+                        const char** existing_kind)
+{
+    const std::pair<std::map<str_view, const char*>::iterator, bool> inserted =
+        names.insert(std::map<str_view, const char*>::value_type(name, kind));
     if (!inserted.second) {
-        std::string message = "name collision in " +
-            (scope.empty() ? std::string("global scope") : scope) +
-            ": " + kind + " " + name + " conflicts with " +
-            inserted.first->second;
-        SourceLocation location = declaration_location(file, path);
-        if (location.line == 0) message += " at " + format_path(path);
-        error.file = view_text(file.file.name);
-        error.location = location;
-        error.message = message;
-        error.warning = false;
-        error.code = DIAGNOSTIC_DUPLICATE_SYMBOL;
+        *existing_kind = inserted.first->second;
         return false;
     }
     return true;
@@ -250,37 +259,42 @@ bool add_scope_name(const SchemaFile& file,
 bool validate_file_scope_names(const SchemaFile& file, const std::string& scope,
                                Diagnostic& error)
 {
-    std::map<std::string, std::string> names;
+    std::map<str_view, const char*> names;
+    const char* existing_kind = 0;
     for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(file.file.enum_type[i].name),
-                            "enum type", scope, file_enum_path(static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, file.file.enum_type[i].name,
+                                "enum type", &existing_kind)) {
+            return report_scope_collision(
+                file, file.file.enum_type[i].name, "enum type", existing_kind,
+                scope, file_enum_path(static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(file.file.message_type[i].name),
-                            "message", scope, file_message_path(static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, file.file.message_type[i].name,
+                                "message", &existing_kind)) {
+            return report_scope_collision(
+                file, file.file.message_type[i].name, "message", existing_kind,
+                scope, file_message_path(static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < file.file.service.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(file.file.service[i].name),
-                            "service", scope, file_service_path(static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, file.file.service[i].name,
+                                "service", &existing_kind)) {
+            return report_scope_collision(
+                file, file.file.service[i].name, "service", existing_kind,
+                scope, file_service_path(static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
-        const DescriptorPath enum_path = file_enum_path(static_cast<int>(i));
         for (std::size_t j = 0; j < file.file.enum_type[i].value.size(); ++j) {
-            if (!add_scope_name(file, names,
-                                view_text(file.file.enum_type[i].value[j].name),
-                                "enum value", scope,
-                                enum_value_path(enum_path, static_cast<int>(j)),
-                                error)) {
-                return false;
+            if (!try_add_scope_name(names, file.file.enum_type[i].value[j].name,
+                                    "enum value", &existing_kind)) {
+                return report_scope_collision(
+                    file, file.file.enum_type[i].value[j].name, "enum value",
+                    existing_kind, scope,
+                    enum_value_path(file_enum_path(static_cast<int>(i)),
+                                    static_cast<int>(j)),
+                    error);
             }
         }
     }
@@ -294,49 +308,53 @@ bool validate_message_scope_names(const SchemaFile& file,
                                   Diagnostic& error)
 {
     const std::string scope = joined_name(parent, message.name);
-    std::map<std::string, std::string> names;
+    std::map<str_view, const char*> names;
+    const char* existing_kind = 0;
     for (std::size_t i = 0; i < message.field.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(message.field[i].name),
-                            "field", scope,
-                            message_field_path(message_path, static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, message.field[i].name,
+                                "field", &existing_kind)) {
+            return report_scope_collision(
+                file, message.field[i].name, "field", existing_kind, scope,
+                message_field_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(message.nested_type[i].name),
-                            "nested message", scope,
-                            message_nested_path(message_path, static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, message.nested_type[i].name,
+                                "nested message", &existing_kind)) {
+            return report_scope_collision(
+                file, message.nested_type[i].name, "nested message",
+                existing_kind, scope,
+                message_nested_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(message.enum_type[i].name),
-                            "nested enum type", scope,
-                            message_enum_path(message_path, static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, message.enum_type[i].name,
+                                "nested enum type", &existing_kind)) {
+            return report_scope_collision(
+                file, message.enum_type[i].name, "nested enum type",
+                existing_kind, scope,
+                message_enum_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(message.oneof_decl[i].name),
-                            "oneof", scope,
-                            message_oneof_path(message_path, static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, message.oneof_decl[i].name,
+                                "oneof", &existing_kind)) {
+            return report_scope_collision(
+                file, message.oneof_decl[i].name, "oneof", existing_kind, scope,
+                message_oneof_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-        const DescriptorPath enum_path =
-            message_enum_path(message_path, static_cast<int>(i));
         for (std::size_t j = 0; j < message.enum_type[i].value.size(); ++j) {
-            if (!add_scope_name(file, names,
-                                view_text(message.enum_type[i].value[j].name),
-                                "enum value", scope,
-                                enum_value_path(enum_path, static_cast<int>(j)),
-                                error)) {
-                return false;
+            if (!try_add_scope_name(names, message.enum_type[i].value[j].name,
+                                    "enum value", &existing_kind)) {
+                return report_scope_collision(
+                    file, message.enum_type[i].value[j].name, "enum value",
+                    existing_kind, scope,
+                    enum_value_path(
+                        message_enum_path(message_path, static_cast<int>(i)),
+                        static_cast<int>(j)),
+                    error);
             }
         }
     }
@@ -660,13 +678,15 @@ bool enclosing_scope(const std::string& scope, std::string& outer)
 bool package_is_visible(const std::set<const SchemaFile*>& visible_files,
                         const std::string& package_head)
 {
+    if (package_head.empty() || package_head[0] != '.') return false;
+    const str_view head_pkg = str_view(package_head).substr(1);
     for (std::set<const SchemaFile*>::const_iterator it = visible_files.begin();
          it != visible_files.end(); ++it) {
-        const std::string declared = package_prefix(**it);
-        if (declared == package_head) return true;
-        if (declared.size() > package_head.size() &&
-            declared.compare(0, package_head.size(), package_head) == 0 &&
-            declared[package_head.size()] == '.') {
+        const str_view& declared = (*it)->file.package;
+        if (declared == head_pkg) return true;
+        if (declared.size() > head_pkg.size() &&
+            declared.substr(0, head_pkg.size()) == head_pkg &&
+            declared[head_pkg.size()] == '.') {
             return true;
         }
     }
@@ -714,21 +734,17 @@ bool nested_in_field_message(const ResolveContext& context,
 // only kind test that survives deferred resolution: a source map field carries
 // no assigned kind until linking, so requiring TYPE_MESSAGE here would reject
 // every legal source map field the loader deferred.
-bool owns_map_entry(const ResolveContext& context, const SymbolEntry& entry)
+bool owns_map_entry(const ResolveContext& context, const SymbolEntry& entry,
+                    const DescriptorProto& entry_message)
 {
     if (context.field == 0 || context.owner == 0 || context.field_path == 0) {
         return false;
     }
     if (entry.owner != context.owner) return false;
     if (context.field->label != FieldDescriptorProto::LABEL_REPEATED) return false;
-    const DescriptorProto* entry_message = find_message(*entry.owner, entry.path);
-    if (entry_message == 0) return false;
-    if (!entry_message->options.has_map_entry || !entry_message->options.map_entry) {
-        return false;
-    }
     if (!nested_in_field_message(context, entry.path)) return false;
     return map_entry_name(view_text(context.field->name)) ==
-           view_text(entry_message->name);
+           entry_message.name;
 }
 
 // True when the resolved symbol is a synthetic map entry owned by some other
@@ -741,7 +757,7 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
     if (!entry_message->options.has_map_entry || !entry_message->options.map_entry) {
         return false;
     }
-    return !owns_map_entry(context, entry);
+    return !owns_map_entry(context, entry, *entry_message);
 }
 
 // Implements protoc's lexical name lookup over the compilation-wide index.
@@ -1100,22 +1116,29 @@ bool is_valid_symbol_name(const str_view& name)
 // and the name is only read here.  Taking a std::string forced the one caller
 // that had the view in hand to materialize a copy of it first.  On the legacy
 // lane `str_view` IS `std::string`, so this parameter is what it always was.
-bool check_symbol_name(const SchemaFile& file, const str_view& name,
-                       const std::string& kind, const std::string& scope,
-                       const DescriptorPath& path, Diagnostic& error)
+bool fail_symbol_name(const SchemaFile& file, const str_view& name,
+                      const char* kind, const std::string& scope,
+                      const DescriptorPath& path, Diagnostic& error)
 {
-    if (is_valid_symbol_name(name)) return true;
     const std::string where =
         scope.empty() ? std::string("the global scope") : scope;
     std::string message;
     if (name.empty()) {
-        message = kind + " in " + where + " has no name";
+        message = std::string(kind) + " in " + where + " has no name";
     } else {
-        message = kind + " name \"" + std::string(name) +
+        message = std::string(kind) + " name \"" + std::string(name) +
                   "\" in " + where + " is not a valid identifier";
     }
     return fail_at_code(file, message, declaration_location(file, path), path,
                         DIAGNOSTIC_INVALID_SYMBOL_NAME, error);
+}
+
+bool check_symbol_name(const SchemaFile& file, const str_view& name,
+                       const char* kind, const std::string& scope,
+                       const DescriptorPath& path, Diagnostic& error)
+{
+    if (is_valid_symbol_name(name)) return true;
+    return fail_symbol_name(file, name, kind, scope, path, error);
 }
 
 // The recursive half of validate_symbol_names: the message's own name, then its
@@ -1129,15 +1152,15 @@ bool validate_message_symbol_names(const SchemaFile& file,
                                    Diagnostic& error)
 {
     const std::string scope = joined_name(parent, message.name);
-    if (!check_symbol_name(file, view_text(message.name), "message", parent,
+    if (!check_symbol_name(file, message.name, "message", parent,
                            message_path, error)) {
         return false;
     }
     for (std::size_t i = 0; i < message.field.size(); ++i) {
-        if (!check_symbol_name(
-                file, view_text(message.field[i].name), "field", scope,
-                message_field_path(message_path, static_cast<int>(i)), error)) {
-            return false;
+        if (!is_valid_symbol_name(message.field[i].name)) {
+            return fail_symbol_name(
+                file, message.field[i].name, "field", scope,
+                message_field_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
@@ -1149,26 +1172,28 @@ bool validate_message_symbol_names(const SchemaFile& file,
         }
     }
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-        const DescriptorPath enum_path =
-            message_enum_path(message_path, static_cast<int>(i));
-        if (!check_symbol_name(file, view_text(message.enum_type[i].name),
-                               "nested enum type", scope, enum_path, error)) {
-            return false;
+        if (!is_valid_symbol_name(message.enum_type[i].name)) {
+            return fail_symbol_name(
+                file, message.enum_type[i].name, "nested enum type", scope,
+                message_enum_path(message_path, static_cast<int>(i)), error);
         }
         for (std::size_t j = 0; j < message.enum_type[i].value.size(); ++j) {
-            if (!check_symbol_name(
-                    file, view_text(message.enum_type[i].value[j].name),
-                    "enum value", scope,
-                    enum_value_path(enum_path, static_cast<int>(j)), error)) {
-                return false;
+            if (!is_valid_symbol_name(message.enum_type[i].value[j].name)) {
+                return fail_symbol_name(
+                    file, message.enum_type[i].value[j].name, "enum value",
+                    scope,
+                    enum_value_path(
+                        message_enum_path(message_path, static_cast<int>(i)),
+                        static_cast<int>(j)),
+                    error);
             }
         }
     }
     for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
-        if (!check_symbol_name(
-                file, view_text(message.oneof_decl[i].name), "oneof", scope,
-                message_oneof_path(message_path, static_cast<int>(i)), error)) {
-            return false;
+        if (!is_valid_symbol_name(message.oneof_decl[i].name)) {
+            return fail_symbol_name(
+                file, message.oneof_decl[i].name, "oneof", scope,
+                message_oneof_path(message_path, static_cast<int>(i)), error);
         }
     }
     return true;
@@ -1357,7 +1382,7 @@ bool validate_message_map_entries(const SchemaFile& file,
         // descriptor actually declared can disagree here.
         if ((key->has_label &&
              key->label != FieldDescriptorProto::LABEL_OPTIONAL) ||
-            view_text(key->name) != "key" ||
+            key->name != "key" ||
             !valid_map_key_type(key->type)) {
             return fail_map_entry_shape(
                 file, qualified_name,
@@ -1367,7 +1392,7 @@ bool validate_message_map_entries(const SchemaFile& file,
         }
         if ((value->has_label &&
              value->label != FieldDescriptorProto::LABEL_OPTIONAL) ||
-            view_text(value->name) != "value") {
+            value->name != "value") {
             return fail_map_entry_shape(
                 file, qualified_name,
                 "a value field named \"value\" numbered 2, LABEL_OPTIONAL",
@@ -1439,26 +1464,26 @@ bool validate_enum_value_numbers_in_enum(const SchemaFile& file,
         enumeration.options.allow_alias) {
         return true;
     }
-    std::map<std::int32_t, std::string> first_by_number;
+    std::map<std::int32_t, str_view> first_by_number;
     for (std::size_t i = 0; i < enumeration.value.size(); ++i) {
         const std::int32_t number = enumeration.value[i].number;
-        const std::string value_name = view_text(enumeration.value[i].name);
-        const std::map<std::int32_t, std::string>::const_iterator seen =
-            first_by_number.find(number);
-        if (seen != first_by_number.end()) {
+        const str_view& value_name = enumeration.value[i].name;
+        const std::pair<std::map<std::int32_t, str_view>::iterator, bool> inserted =
+            first_by_number.insert(
+                std::map<std::int32_t, str_view>::value_type(number, value_name));
+        if (!inserted.second) {
             const DescriptorPath value_path =
                 enum_value_path(enum_path, static_cast<int>(i));
             return fail_at_code(
                 file,
-                "enum value \"" + value_name + "\" of \"" + enum_name +
+                "enum value \"" + view_text(value_name) + "\" of \"" + enum_name +
                     "\" repeats number " + number_text(number) +
-                    ", which \"" + seen->second +
+                    ", which \"" + view_text(inserted.first->second) +
                     "\" already uses; set option allow_alias = true to allow "
                     "aliases",
                 declaration_location(file, value_path), value_path,
                 DIAGNOSTIC_DUPLICATE_ENUM_NUMBER, error);
         }
-        first_by_number.insert(std::make_pair(number, value_name));
     }
     return true;
 }
@@ -1676,10 +1701,6 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                       const DescriptorPath& field_path, Diagnostic& error)
 {
     if (!field.has_default_value) return true;
-    const std::string value = view_text(field.default_value);
-    std::int32_t signed32 = 0;
-    std::int64_t signed64 = 0;
-    const SourceLocation where = field_default_location(file, field_path);
     // An unresolvable named type may be an imported enum (whose default is
     // then legal) or an imported message (whose default complete linking
     // will reject). Either way validation is deferred with a warning instead
@@ -1688,12 +1709,17 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
     if (unknown) {
         warn_once(file,
                   kDeferredDefaultPrefix + view_text(field.type_name),
-                  DIAGNOSTIC_GENERIC, where, field_path);
+                  DIAGNOSTIC_GENERIC,
+                  field_default_location(file, field_path), field_path);
         return true;
     }
+    if (field.type == FieldDescriptorProto::TYPE_STRING) {
+        return true;
+    }
+    const std::string value = view_text(field.default_value);
+    std::int32_t signed32 = 0;
+    std::int64_t signed64 = 0;
     switch (field.type) {
-        case FieldDescriptorProto::TYPE_STRING:
-            return true;
         // D-58 (fix round r25): a bytes default is a C-escaped string, and
         // protoc validates its escape grammar while it builds the field. An
         // unchecked value reaches the generator verbatim, which is how
@@ -1704,26 +1730,30 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_BYTES:
             if (!valid_bytes_default_escape(value)) {
                 return fail_at(file, "invalid escaping in bytes default value",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_BOOL:
             if (value != "true" && value != "false") {
                 return fail_at(file, "bool default must be true or false",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_FLOAT:
         case FieldDescriptorProto::TYPE_DOUBLE:
             if (!is_float_text(value)) {
                 return fail_at(file, "invalid floating-point default",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_ENUM:
             if (value.empty()) {
                 return fail_at(file, "enum default must name an enum value",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             {
                 const std::string enum_name = view_text(field.type_name);
@@ -1738,31 +1768,36 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                 if (enumeration == 0) {
                     return fail_at(file,
                                    "cannot validate default for unknown enum type " + enum_name,
-                                   where, field_path, error);
+                                   field_default_location(file, field_path),
+                                   field_path, error);
                 }
                 for (std::size_t i = 0; i < enumeration->value.size(); ++i) {
-                    if (view_text(enumeration->value[i].name) == value) return true;
+                    if (enumeration->value[i].name == field.default_value) return true;
                 }
                 return fail_at(file,
                                "enum type " + enum_name + " has no value named " + value,
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
         case FieldDescriptorProto::TYPE_MESSAGE:
             return fail_at(file, "message fields cannot have defaults",
-                           where, field_path, error);
+                           field_default_location(file, field_path),
+                           field_path, error);
         case FieldDescriptorProto::TYPE_INT32:
         case FieldDescriptorProto::TYPE_SINT32:
         case FieldDescriptorProto::TYPE_SFIXED32:
             if (!parse_signed_32(value, signed32)) {
                 return fail_at(file, "default does not fit signed 32-bit field",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_UINT32:
         case FieldDescriptorProto::TYPE_FIXED32:
             if (!parse_unsigned_with_optional_plus(value, 4294967295ull)) {
                 return fail_at(file, "default does not fit unsigned 32-bit field",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_INT64:
@@ -1770,19 +1805,22 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_SFIXED64:
             if (!parse_signed_64(value, signed64)) {
                 return fail_at(file, "default does not fit signed 64-bit field",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_UINT64:
         case FieldDescriptorProto::TYPE_FIXED64:
             if (!parse_unsigned_with_optional_plus(value, 18446744073709551615ull)) {
                 return fail_at(file, "default does not fit unsigned 64-bit field",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         default:
             return fail_at(file, "unsupported field type in default validation",
-                           where, field_path, error);
+                           field_default_location(file, field_path),
+                           field_path, error);
     }
 }
 
@@ -2031,7 +2069,9 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                     ? FieldDescriptorProto::TYPE_GROUP
                     : resolved->kind;
                 field.has_type = true;
-                field.type_name = file.strings.save(resolved_name);
+                if (field.type_name != resolved_name) {
+                    field.type_name = file.strings.save(resolved_name);
+                }
             } else {
                 *unknown = true;
                 // A reference that exists but cannot be a field type is an
@@ -2092,8 +2132,8 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                         field.has_type && field.has_type_name &&
                         (field.type == FieldDescriptorProto::TYPE_MESSAGE ||
                          field.type == FieldDescriptorProto::TYPE_ENUM) &&
-                        !view_text(field.type_name).empty() &&
-                        view_text(field.type_name)[0] == '.';
+                        !field.type_name.empty() &&
+                        field.type_name[0] == '.';
                     if (!classified) {
                         return fail_at_code(
                             file,
@@ -2262,11 +2302,11 @@ bool validate_nested_types(SchemaFile& file, const SymbolIndex& symbols,
                            DescriptorProto& message, const std::string& scope,
                            const DescriptorPath& message_path, Diagnostic& error)
 {
-    std::set<std::string> nested_names;
+    std::set<str_view> nested_names;
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-        const DescriptorPath enum_path =
-            message_enum_path(message_path, static_cast<int>(i));
-        if (!nested_names.insert(view_text(message.enum_type[i].name)).second) {
+        if (!nested_names.insert(message.enum_type[i].name).second) {
+            const DescriptorPath enum_path =
+                message_enum_path(message_path, static_cast<int>(i));
             return fail_at(file, "duplicate nested type name in " + scope,
                            declaration_location(file, enum_path),
                            enum_path, error);
@@ -2275,7 +2315,7 @@ bool validate_nested_types(SchemaFile& file, const SymbolIndex& symbols,
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
         const DescriptorPath nested_path =
             message_nested_path(message_path, static_cast<int>(i));
-        if (!nested_names.insert(view_text(message.nested_type[i].name)).second) {
+        if (!nested_names.insert(message.nested_type[i].name).second) {
             return fail_at(file, "duplicate nested type name in " + scope,
                            declaration_location(file, nested_path),
                            nested_path, error);
@@ -2309,13 +2349,13 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
 {
     const std::string scope = joined_name(parent, message.name);
     const bool is_proto3 = classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3;
-    std::set<std::string> names;
+    std::set<str_view> names;
     std::set<std::int32_t> numbers;
     for (std::size_t i = 0; i < message.field.size(); ++i) {
         FieldDescriptorProto& field = message.field[i];
         const DescriptorPath field_path =
             message_field_path(message_path, static_cast<int>(i));
-        if (!names.insert(view_text(field.name)).second) {
+        if (!names.insert(field.name).second) {
             return fail_at(file, "duplicate field name " + view_text(field.name),
                            declaration_location(file, field_path), field_path, error);
         }
@@ -2453,7 +2493,7 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
     // ledger `D-39`, contract clause 13). The file's own `name` is a logical
     // path, not a symbol, and is NOT checked here.
     const std::string prefix = package_prefix(file);
-    const std::string package = view_text(file.file.package);
+    const str_view& package = file.file.package;
     if (file.file.has_package && !package.empty()) {
         // D-59 (fix round r25): a package component belongs to the package, so
         // its scope is the package's own name, and its location is the
@@ -2469,30 +2509,32 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
         std::size_t start = 0;
         for (;;) {
             const std::size_t dot = package.find('.', start);
-            const std::string component =
-                package.substr(start, (dot == std::string::npos
+            const str_view component =
+                package.substr(start, (dot == str_view::npos
                                            ? package.size()
                                            : dot) - start);
             if (!check_symbol_name(file, component, "package component",
                                    prefix, package_path, error)) {
                 return false;
             }
-            if (dot == std::string::npos) break;
+            if (dot == str_view::npos) break;
             start = dot + 1;
         }
     }
     for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
-        const DescriptorPath enum_path = file_enum_path(static_cast<int>(i));
-        if (!check_symbol_name(file, view_text(file.file.enum_type[i].name),
-                               "enum type", prefix, enum_path, error)) {
-            return false;
+        if (!is_valid_symbol_name(file.file.enum_type[i].name)) {
+            return fail_symbol_name(
+                file, file.file.enum_type[i].name, "enum type", prefix,
+                file_enum_path(static_cast<int>(i)), error);
         }
         for (std::size_t j = 0; j < file.file.enum_type[i].value.size(); ++j) {
-            if (!check_symbol_name(
-                    file, view_text(file.file.enum_type[i].value[j].name),
-                    "enum value", prefix,
-                    enum_value_path(enum_path, static_cast<int>(j)), error)) {
-                return false;
+            if (!is_valid_symbol_name(file.file.enum_type[i].value[j].name)) {
+                return fail_symbol_name(
+                    file, file.file.enum_type[i].value[j].name, "enum value",
+                    prefix,
+                    enum_value_path(file_enum_path(static_cast<int>(i)),
+                                    static_cast<int>(j)),
+                    error);
             }
         }
     }
@@ -2506,7 +2548,7 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
     for (std::size_t i = 0; i < file.file.service.size(); ++i) {
         const ServiceDescriptorProto& service = file.file.service[i];
         const DescriptorPath service_path = file_service_path(static_cast<int>(i));
-        if (!check_symbol_name(file, view_text(service.name), "service", prefix,
+        if (!check_symbol_name(file, service.name, "service", prefix,
                                service_path, error)) {
             return false;
         }
@@ -2525,13 +2567,15 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
         std::set<str_view> method_names;
         for (std::size_t j = 0; j < service.method.size(); ++j) {
             const str_view method_name = service.method[j].name;
-            const DescriptorPath method_path =
-                service_method_path(service_path, static_cast<int>(j));
-            if (!check_symbol_name(file, method_name, "method", service_scope,
-                                   method_path, error)) {
-                return false;
+            if (!is_valid_symbol_name(method_name)) {
+                return fail_symbol_name(
+                    file, method_name, "method", service_scope,
+                    service_method_path(service_path, static_cast<int>(j)),
+                    error);
             }
             if (!method_names.insert(method_name).second) {
+                const DescriptorPath method_path =
+                    service_method_path(service_path, static_cast<int>(j));
                 return fail_at_code(
                     file,
                     "duplicate method name \"" + std::string(method_name) +

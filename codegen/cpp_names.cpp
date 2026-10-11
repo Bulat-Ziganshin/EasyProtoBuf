@@ -93,16 +93,29 @@ bool has_reserved_identifier_form(const std::string& component,
 
 } // namespace
 
-std::string cpp_absolute_name(const std::string& absolute_proto_name)
+std::string cpp_absolute_name(const str_view& absolute_proto_name)
 {
     if (absolute_proto_name.size() < 2 || absolute_proto_name[0] != '.') {
         throw std::runtime_error(
             "absolute Protobuf type name must begin with '.'");
     }
 
-    const std::vector<std::string> components =
-        split_components(absolute_proto_name.substr(1), '.', "Protobuf type name");
-    return "::" + join_cpp(components);
+    std::string result;
+    result.reserve(absolute_proto_name.size() + 8);
+    for (std::size_t i = 0; i < absolute_proto_name.size(); ++i) {
+        const char c = absolute_proto_name[i];
+        if (c == '.') {
+            if (i + 1 == absolute_proto_name.size() ||
+                absolute_proto_name[i + 1] == '.') {
+                throw std::runtime_error(
+                    "invalid Protobuf type name: empty name component");
+            }
+            result += "::";
+        } else {
+            result += c;
+        }
+    }
+    return result;
 }
 
 std::string cpp_local_name(const std::string& absolute_proto_name,
@@ -135,24 +148,38 @@ std::string insertion_macro_stem(const std::string& absolute_proto_name,
             "absolute Protobuf type name must begin with '.'");
     }
 
-    std::string local_proto_name;
-    if (package.empty()) {
-        local_proto_name = absolute_proto_name.substr(1);
-    } else {
-        const std::string prefix = "." + package + ".";
-        if (absolute_proto_name.compare(0, prefix.size(), prefix) != 0) {
+    std::size_t start = 1;
+    if (!package.empty()) {
+        if (absolute_proto_name.size() < package.size() + 2 ||
+            absolute_proto_name.compare(1, package.size(), package) != 0 ||
+            absolute_proto_name[package.size() + 1] != '.') {
             throw std::runtime_error(
                 "insertion macro message name does not belong to the current package");
         }
-        local_proto_name = absolute_proto_name.substr(prefix.size());
+        start = package.size() + 2;
     }
 
-    const std::vector<std::string> components =
-        split_components(local_proto_name, '.', "Protobuf message name");
-    std::string result = "EASYPB_";
-    for (std::size_t i = 0; i < components.size(); ++i) {
-        if (i != 0) result += "_";
-        result += components[i];
+    if (start == absolute_proto_name.size() ||
+        absolute_proto_name[start] == '.') {
+        throw std::runtime_error(
+            "invalid Protobuf message name: empty name component");
+    }
+
+    std::string result;
+    result.reserve(7 + (absolute_proto_name.size() - start));
+    result += "EASYPB_";
+    for (std::size_t i = start; i < absolute_proto_name.size(); ++i) {
+        const char c = absolute_proto_name[i];
+        if (c == '.') {
+            if (i + 1 == absolute_proto_name.size() ||
+                absolute_proto_name[i + 1] == '.') {
+                throw std::runtime_error(
+                    "invalid Protobuf message name: empty name component");
+            }
+            result += '_';
+        } else {
+            result += c;
+        }
     }
     return result;
 }

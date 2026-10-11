@@ -33,6 +33,7 @@ std::string join_quoted(const std::vector<std::string>& items,
 
 struct LoaderState {
     std::vector<std::string> search_roots;
+    std::vector<std::string> search_roots_absolute;
     easypb_schema::SchemaSet* result;
     // Discovery path from the selected root to the file being loaded,
     // used only to spell diagnostics.
@@ -150,8 +151,7 @@ MapOutcome map_disk_to_logical(const std::string& argument,
     std::string invalid_root;
     std::string invalid_reason;
     for (std::size_t i = 0; i < state.search_roots.size(); ++i) {
-        const std::string root_absolute =
-            easypb_file::lexical_absolute(state.search_roots[i]);
+        const std::string& root_absolute = state.search_roots_absolute[i];
         std::string candidate;
         if (!easypb_file::strip_search_root_prefix(file_absolute,
                                                    root_absolute,
@@ -439,7 +439,7 @@ bool lies_under_search_root(const std::string& path,
         std::string remainder;
         if (easypb_file::strip_search_root_prefix(
                 absolute,
-                easypb_file::lexical_absolute(state.search_roots[i]),
+                state.search_roots_absolute[i],
                 remainder)) {
             if (containing_root != 0) {
                 *containing_root = state.search_roots[i];
@@ -561,8 +561,11 @@ bool load_source_files(const SourceLoaderOptions& options,
     // An empty entry means the working directory, exactly like ".":
     // join_disk_path already treats "" as cwd, and this keeps
     // lexical_absolute consistent with it.
+    state.search_roots_absolute.reserve(state.search_roots.size());
     for (std::size_t i = 0; i < state.search_roots.size(); ++i) {
         if (state.search_roots[i].empty()) state.search_roots[i] = ".";
+        state.search_roots_absolute.push_back(
+            easypb_file::lexical_absolute(state.search_roots[i]));
     }
 
     for (std::size_t i = 0; i < roots.size(); ++i) {

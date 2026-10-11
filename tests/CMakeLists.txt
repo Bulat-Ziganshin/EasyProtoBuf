@@ -260,6 +260,7 @@ if(BUILD_TESTING)
         ${codegen_packages_dir}/cpp_names_test.cpp
         ${PROJECT_SOURCE_DIR}/codegen/cpp_names.cpp)
     target_include_directories(codegen_cpp_names_test PRIVATE
+        ${easypb_test_include_dir}
         ${PROJECT_SOURCE_DIR}/codegen)
     add_test(NAME codegen.packages.naming COMMAND codegen_cpp_names_test)
 
