@@ -70,7 +70,7 @@ Without `--descriptor-set`, Codegen infers the common input mode from file exten
 - `--out-dir DIR` — write one generated header per selected target below `DIR` instead of stdout. Relative subdirectories of a logical name are recreated below `DIR`. `DIR` may be given only once. Required whenever more than one header would be written.
 - Without `--out-dir`, exactly one selected header is written to stdout; several selected headers without `--out-dir` fail with a guidance error.
 
-Publication replaces each existing target through a temporary file in the same directory, so an interrupted replacement never truncates a target. Per-file replacement is the guarantee; it is not a transaction across files, so a run that fails after replacing one header leaves earlier headers in their new state and the failing target unchanged.
+Publication writes each generated header in place below `DIR`: the output directory and every parent directory of an output are created first, then each file is created or truncated and written. It refuses two targets that map to one output file, and it reports the first failure without claiming partial success. It is not a transaction across files: a run that fails after writing one header leaves the earlier headers written, and a process interrupted mid-write may leave that one header truncated — the same guarantee the reference compiler gives.
 
 ## Structural options
 

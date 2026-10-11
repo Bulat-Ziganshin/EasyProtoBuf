@@ -628,8 +628,19 @@ std::string normalize_separators(const std::string& path)
 // because the common schema library must keep performing no filesystem call
 // at all. Nothing here is used by the loader; the publisher is their only
 // caller besides the tests.
+// ---------------------------------------------------------------------------
+// Output-side helpers (plan 5 batch 3: the standalone publisher).
+//
+// Trimmed to the reference compiler's model on 2026-10-07. What is left is the
+// directory tree and the write itself, which is what protoc's WriteAllToDisk
+// does (command_line_interface.cc:541-610): verify the output directory exists,
+// create the missing parents, then open/write/close. The containment, case
+// folding, native identity, hardlink and atomic temp+rename guards that used to
+// live here are gone, with their measured effect recorded in file_paths.hpp.
+// ---------------------------------------------------------------------------
 
 namespace {
+
 
 std::string number_text(unsigned long long code)
 {
@@ -637,7 +648,6 @@ std::string number_text(unsigned long long code)
     message << code;
     return message.str();
 }
-
 std::string write_error_text(const std::string& path, unsigned long long code)
 {
 #ifdef _WIN32
@@ -648,7 +658,6 @@ std::string write_error_text(const std::string& path, unsigned long long code)
     return path + ": cannot write file";
 #endif
 }
-
 std::string create_directory_error_text(const std::string& path,
                                         unsigned long long code)
 {
@@ -661,169 +670,27 @@ std::string create_directory_error_text(const std::string& path,
 #endif
 }
 
-std::string identity_error_text(const std::string& path,
-                                unsigned long long code)
-{
-#ifdef _WIN32
-    return path + ": cannot read file identity (Win32 error " +
-           number_text(code) + ")";
-#else
-    (void)code;
-    return path + ": cannot read file identity";
-#endif
-}
+} // namespace
 
-// A link on the walk below the output root is refused before anything is
-// written, because this module has no portable way to prove where a link
-// points; the publisher's promise is containment, and an unprovable
-// containment is a failure rather than a guess.
-bool disk_path_is_link(const std::string& path, bool& is_link,
-                       std::string& error)
+std::string parent_directory_of(const std::string& path)
 {
-    is_link = false;
+    std::string trimmed = path;
+    while (trimmed.size() > 1 && trimmed[trimmed.size() - 1] == '/') {
+        trimmed.resize(trimmed.size() - 1);
+    }
+    const std::size_t slash = trimmed.rfind('/');
+    if (slash == std::string::npos) return std::string();
+    if (slash == 0) return "/";
+    std::string parent = trimmed.substr(0, slash);
 #ifdef _WIN32
-    std::vector<wchar_t> wide;
-    if (!wide_win32_path(path, wide) || wide.empty()) {
-        error = path + ": cannot query path attributes";
-        return false;
+    // A bare drive component must stay qualified: "C:" is the root, and
+    // "C" would address the drive-relative spelling instead.
+    if (parent.size() == 2 && is_alpha(parent[0]) && parent[1] == ':') {
+        parent += "/";
     }
-    nul_terminate(wide);
-    const DWORD attributes = GetFileAttributesW(&wide[0]);
-    if (attributes == INVALID_FILE_ATTRIBUTES) {
-        error = path + ": cannot query path attributes (Win32 error " +
-                number_text(GetLastError()) + ")";
-        return false;
-    }
-    is_link = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-    return true;
-#else
-    struct stat status;
-    if (::lstat(path.c_str(), &status) != 0) {
-        error = path + ": cannot query path attributes";
-        return false;
-    }
-    is_link = S_ISLNK(status.st_mode) != 0;
-    return true;
 #endif
+    return parent;
 }
-
-// Creates `path` only when nothing is there yet, writing `contents` in one
-// call sequence. CREATE_NEW / O_EXCL is what makes the temp-file contract
-// safe: a preexisting temp name is never truncated.
-bool write_new_file_exclusive(const std::string& path,
-                              const std::string& contents,
-                              std::string& error)
-{
-    error.clear();
-#ifdef _WIN32
-    std::vector<wchar_t> wide;
-    if (!wide_win32_path(path, wide) || wide.empty()) {
-        error = path + ": cannot write file";
-        return false;
-    }
-    nul_terminate(wide);
-    HANDLE handle = CreateFileW(&wide[0], GENERIC_WRITE, 0, 0, CREATE_NEW,
-                                FILE_ATTRIBUTE_NORMAL, 0);
-    if (handle == INVALID_HANDLE_VALUE) {
-        error = write_error_text(path, GetLastError());
-        return false;
-    }
-    std::size_t done = 0;
-    while (done < contents.size()) {
-        const std::size_t chunk =
-            std::min<std::size_t>(contents.size() - done, 1u << 20);
-        DWORD written = 0;
-        if (!WriteFile(handle, contents.data() + done,
-                       static_cast<DWORD>(chunk), &written, 0) ||
-            written != chunk) {
-            const DWORD code = GetLastError();
-            CloseHandle(handle);
-            DeleteFileW(&wide[0]);
-            error = write_error_text(path, code);
-            return false;
-        }
-        done += chunk;
-    }
-    if (!CloseHandle(handle)) {
-        const DWORD code = GetLastError();
-        DeleteFileW(&wide[0]);
-        error = write_error_text(path, code);
-        return false;
-    }
-    return true;
-#else
-    const int descriptor =
-        ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
-    if (descriptor < 0) {
-        const int code = errno;
-        error = path + ": cannot write file (" + std::strerror(code) + ")";
-        return false;
-    }
-    std::size_t done = 0;
-    while (done < contents.size()) {
-        const ssize_t written =
-            ::write(descriptor, contents.data() + done, contents.size() - done);
-        if (written < 0) {
-            const int code = errno;
-            ::close(descriptor);
-            ::remove(path.c_str());
-            error = path + ": cannot write file (" + std::strerror(code) + ")";
-            return false;
-        }
-        done += static_cast<std::size_t>(written);
-    }
-    if (::close(descriptor) != 0) {
-        const int code = errno;
-        ::remove(path.c_str());
-        error = path + ": cannot write file (" + std::strerror(code) + ")";
-        return false;
-    }
-    return true;
-#endif
-}
-
-void remove_disk_file_quiet(const std::string& path)
-{
-#ifdef _WIN32
-    std::vector<wchar_t> wide;
-    if (wide_win32_path(path, wide) && !wide.empty()) {
-        nul_terminate(wide);
-        DeleteFileW(&wide[0]);
-    }
-#else
-    ::remove(path.c_str());
-#endif
-}
-
-bool replace_by_rename(const std::string& temporary, const std::string& target,
-                       std::string& error)
-{
-#ifdef _WIN32
-    std::vector<wchar_t> from;
-    std::vector<wchar_t> to;
-    if (!wide_win32_path(temporary, from) || from.empty() ||
-        !wide_win32_path(target, to) || to.empty()) {
-        error = target + ": cannot replace file";
-        return false;
-    }
-    nul_terminate(from);
-    nul_terminate(to);
-    if (!MoveFileExW(&from[0], &to[0],
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        error = write_error_text(target, GetLastError());
-        return false;
-    }
-    return true;
-#else
-    if (::rename(temporary.c_str(), target.c_str()) != 0) {
-        const int code = errno;
-        error = target + ": cannot replace file (" + std::strerror(code) + ")";
-        return false;
-    }
-    return true;
-#endif
-}
-
 bool create_directory_plain(const std::string& path, std::string& error)
 {
 #ifdef _WIN32
@@ -863,27 +730,6 @@ bool create_directory_plain(const std::string& path, std::string& error)
     return false;
 #endif
 }
-
-std::string parent_directory_of(const std::string& path)
-{
-    std::string trimmed = path;
-    while (trimmed.size() > 1 && trimmed[trimmed.size() - 1] == '/') {
-        trimmed.resize(trimmed.size() - 1);
-    }
-    const std::size_t slash = trimmed.rfind('/');
-    if (slash == std::string::npos) return std::string();
-    if (slash == 0) return "/";
-    std::string parent = trimmed.substr(0, slash);
-#ifdef _WIN32
-    // A bare drive component must stay qualified: "C:" is the root, and
-    // "C" would address the drive-relative spelling instead.
-    if (parent.size() == 2 && is_alpha(parent[0]) && parent[1] == ':') {
-        parent += "/";
-    }
-#endif
-    return parent;
-}
-
 bool make_directories_recursive(const std::string& absolute, std::string& error)
 {
     if (absolute.empty() || absolute == "/") return true;
@@ -907,235 +753,6 @@ bool make_directories_recursive(const std::string& absolute, std::string& error)
     }
     return create_directory_plain(absolute, error);
 }
-
-} // namespace
-
-bool get_file_identity(const std::string& path, FileIdentity& identity,
-                       std::string& error)
-{
-    error.clear();
-    identity = FileIdentity();
-    if (path.empty()) return false;
-    if (has_embedded_nul(path)) {
-        error = path + ": path contains NUL character";
-        return false;
-    }
-#ifdef _WIN32
-    std::vector<wchar_t> wide;
-    if (!wide_win32_path(path, wide) || wide.empty()) {
-        // A spelling that cannot be converted cannot name an existing entry,
-        // and an absent entry is not an identity failure (plan 5 P7 draws
-        // the line between "missing" and "unreadable" here).
-        return false;
-    }
-    nul_terminate(wide);
-    HANDLE handle = CreateFileW(&wide[0], 0,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE |
-                                    FILE_SHARE_DELETE,
-                                0, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
-    if (handle == INVALID_HANDLE_VALUE) {
-        const DWORD code = GetLastError();
-        if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND ||
-            code == ERROR_INVALID_NAME) {
-            return false;
-        }
-        error = identity_error_text(path, code);
-        return false;
-    }
-    BY_HANDLE_FILE_INFORMATION info;
-    if (!GetFileInformationByHandle(handle, &info)) {
-        const DWORD code = GetLastError();
-        CloseHandle(handle);
-        error = identity_error_text(path, code);
-        return false;
-    }
-    CloseHandle(handle);
-    identity.volume = info.dwVolumeSerialNumber;
-    identity.index =
-        (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) |
-        static_cast<unsigned long long>(info.nFileIndexLow);
-    return true;
-#else
-    struct stat status;
-    if (::stat(path.c_str(), &status) != 0) {
-        if (errno == ENOENT || errno == ENOTDIR) return false;
-        error = identity_error_text(path, static_cast<unsigned long long>(errno));
-        return false;
-    }
-    identity.volume = static_cast<unsigned long>(status.st_dev);
-    identity.index = static_cast<unsigned long long>(status.st_ino);
-    return true;
-#endif
-}
-
-bool equivalent_disk_spelling(const std::string& first,
-                              const std::string& second,
-                              bool& equivalent, std::string& error)
-{
-    equivalent = false;
-    error.clear();
-    FileIdentity first_identity;
-    std::string first_error;
-    const bool first_found = get_file_identity(first, first_identity, first_error);
-    if (!first_found) {
-        // Missing on either side is not a collision; a read failure is.
-        if (!first_error.empty()) error = first_error;
-        return first_error.empty();
-    }
-    FileIdentity second_identity;
-    std::string second_error;
-    const bool second_found = get_file_identity(second, second_identity, second_error);
-    if (!second_found) {
-        if (!second_error.empty()) error = second_error;
-        return second_error.empty();
-    }
-    equivalent = first_identity.volume == second_identity.volume &&
-                 first_identity.index == second_identity.index;
-    return true;
-}
-
-bool query_directory_case_sensitivity(const std::string& directory,
-                                      bool& case_sensitive,
-                                      std::string& error)
-{
-    error.clear();
-    case_sensitive = true;
-    // A probe whose flipped spelling differs in exactly one ASCII letter;
-    // the counter suffix only avoids an unlucky preexisting entry.
-    for (unsigned attempt = 0; attempt < 16; ++attempt) {
-        std::string name = ".easypb-case-probe-A";
-        std::string flipped = ".easypb-case-probe-a";
-        if (attempt != 0) {
-            name += "-" + number_text(attempt);
-            flipped += "-" + number_text(attempt);
-        }
-        const std::string probe_path = join_disk_path(directory, name);
-        const std::string flipped_path = join_disk_path(directory, flipped);
-        std::string status_error;
-        const FileStatus probe_status = disk_file_status(probe_path, status_error);
-        if (probe_status == FILE_STATUS_ERROR) {
-            error = status_error;
-            return false;
-        }
-        if (probe_status == FILE_STATUS_DIRECTORY) continue;
-        if (probe_status == FILE_STATUS_FILE) continue;
-
-        std::string write_error;
-        if (!write_new_file_exclusive(probe_path, std::string(), write_error)) {
-            // A concurrent creator or a denied directory: try the next
-            // spelling, and report the last reason when none works.
-            if (attempt == 15) {
-                error = write_error;
-                return false;
-            }
-            continue;
-        }
-
-        std::string lookup_error;
-        const FileStatus flipped_status =
-            disk_file_status(flipped_path, lookup_error);
-        bool result = false;
-        if (flipped_status == FILE_STATUS_FILE) {
-            FileIdentity probe_identity;
-            FileIdentity flipped_identity;
-            std::string identity_error;
-            if (!get_file_identity(probe_path, probe_identity, identity_error) ||
-                !get_file_identity(flipped_path, flipped_identity, identity_error)) {
-                error = identity_error.empty()
-                            ? probe_path + ": cannot read case-probe identity"
-                            : identity_error;
-            } else if (probe_identity.volume == flipped_identity.volume &&
-                       probe_identity.index == flipped_identity.index) {
-                case_sensitive = false;
-                result = true;
-            } else {
-                // The flipped spelling named some other preexisting entry;
-                // this directory is case-sensitive for practical purposes.
-                result = true;
-            }
-        } else if (flipped_status == FILE_STATUS_ABSENT) {
-            case_sensitive = true;
-            result = true;
-        } else if (flipped_status == FILE_STATUS_ERROR) {
-            error = lookup_error;
-        } else {
-            error = flipped_path + ": case probe resolved to a directory";
-        }
-
-        remove_disk_file_quiet(probe_path);
-        if (!result) return false;
-        // The probe must be gone before the measurement is trusted: a
-        // leftover would make the next run read the same spelling.
-        std::string leftover_error;
-        if (disk_file_status(probe_path, leftover_error) != FILE_STATUS_ABSENT) {
-            error = probe_path + ": case probe could not be removed";
-            return false;
-        }
-        return true;
-    }
-    error = directory + ": no free case-probe name";
-    return false;
-}
-
-bool confirm_fold_containment(const std::string& file_absolute,
-                              const std::string& root_absolute,
-                              std::string& error)
-{
-    error.clear();
-    std::string relative;
-    if (!strip_search_root_prefix(file_absolute, root_absolute, relative)) {
-        // Outside the root: a plain answer, not a query failure.
-        return false;
-    }
-
-    std::string current = root_absolute;
-    while (!current.empty() && current[current.size() - 1] == '/') {
-        current.resize(current.size() - 1);
-    }
-
-    std::size_t start = 0;
-    while (start < relative.size()) {
-        const std::size_t end = relative.find('/', start);
-        const std::string component = relative.substr(
-            start, end == std::string::npos ? std::string::npos : end - start);
-        current += "/";
-        current += component;
-
-        std::string query_error;
-        const FileStatus status = disk_file_status(current, query_error);
-        if (status == FILE_STATUS_ERROR) {
-            error = query_error;
-            return false;
-        }
-        if (status == FILE_STATUS_ABSENT) {
-            // Nothing below an absent component exists yet either.
-            return true;
-        }
-
-        bool is_link = false;
-        std::string link_error;
-        if (!disk_path_is_link(current, is_link, link_error)) {
-            error = link_error;
-            return false;
-        }
-        if (is_link) {
-            error = current +
-                    ": output path lies below a link, so containment in the "
-                    "output root cannot be confirmed";
-            return false;
-        }
-
-        if (status == FILE_STATUS_FILE) {
-            if (end == std::string::npos) return true;
-            error = current + ": output path component is a file, not a directory";
-            return false;
-        }
-        if (end == std::string::npos) return true;
-        start = end + 1;
-    }
-    return true;
-}
-
 bool make_directories(const std::string& directory, std::string& error)
 {
     error.clear();
@@ -1151,57 +768,77 @@ bool make_directories(const std::string& directory, std::string& error)
     return make_directories_recursive(absolute, error);
 }
 
-bool write_disk_file_atomic(const std::string& target,
-                            const std::string& contents,
-                            std::string& error)
+// Write `contents` to `target`, creating or truncating it. The reference
+// compiler's write model (command_line_interface.cc:559-610): open with
+// O_CREAT | O_TRUNC, write the whole buffer, close. No temporary file, no
+// rename, and therefore no "never a prefix of the new content" promise - a
+// process killed mid-write can leave a truncated header, exactly as protoc
+// can.
+bool write_disk_file(const std::string& target, const std::string& contents,
+                     std::string& error)
 {
     error.clear();
-    if (target.empty()) {
-        error = "cannot write an empty file path";
+#ifdef _WIN32
+    std::vector<wchar_t> wide;
+    if (!wide_win32_path(target, wide) || wide.empty()) {
+        error = target + ": cannot write file";
         return false;
     }
-    if (has_embedded_nul(target)) {
-        error = target + ": path contains NUL character";
+    nul_terminate(wide);
+    HANDLE handle = CreateFileW(&wide[0], GENERIC_WRITE, 0, 0,
+                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    if (handle == INVALID_HANDLE_VALUE) {
+        error = write_error_text(target, GetLastError());
         return false;
     }
-
-    // A temporary sibling: the suffix keeps the file in the target's own
-    // directory, so the final rename is a same-directory rename, and the
-    // target path itself never sees a partial write.
-    std::string temporary;
-    bool created = false;
-    for (unsigned attempt = 0; attempt < 32 && !created; ++attempt) {
-        temporary = target + ".easypb-tmp";
-        if (attempt != 0) temporary += "-" + number_text(attempt);
-        std::string status_error;
-        const FileStatus status = disk_file_status(temporary, status_error);
-        if (status == FILE_STATUS_ERROR) {
-            error = status_error;
+    std::size_t done = 0;
+    while (done < contents.size()) {
+        const std::size_t chunk =
+            std::min<std::size_t>(contents.size() - done, 1u << 20);
+        DWORD written = 0;
+        if (!WriteFile(handle, contents.data() + done,
+                       static_cast<DWORD>(chunk), &written, 0) ||
+            written != chunk) {
+            const DWORD code = GetLastError();
+            CloseHandle(handle);
+            error = write_error_text(target, code);
             return false;
         }
-        if (status != FILE_STATUS_ABSENT) continue;
-        std::string write_error;
-        if (write_new_file_exclusive(temporary, contents, write_error)) {
-            created = true;
-            break;
-        }
-        if (attempt == 31) {
-            error = write_error;
-            return false;
-        }
+        done += chunk;
     }
-    if (!created) {
-        error = target + ": cannot create a temporary file";
-        return false;
-    }
-
-    std::string rename_error;
-    if (!replace_by_rename(temporary, target, rename_error)) {
-        remove_disk_file_quiet(temporary);
-        error = rename_error;
+    if (!CloseHandle(handle)) {
+        error = write_error_text(target, GetLastError());
         return false;
     }
     return true;
+#else
+    const int descriptor =
+        ::open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (descriptor < 0) {
+        const int code = errno;
+        error = target + ": cannot write file (" + std::strerror(code) + ")";
+        return false;
+    }
+    std::size_t done = 0;
+    while (done < contents.size()) {
+        const ssize_t written =
+            ::write(descriptor, contents.data() + done, contents.size() - done);
+        if (written < 0) {
+            const int code = errno;
+            ::close(descriptor);
+            error = target + ": cannot write file (" + std::strerror(code) + ")";
+            return false;
+        }
+        done += static_cast<std::size_t>(written);
+    }
+    if (::close(descriptor) != 0) {
+        const int code = errno;
+        error = target + ": cannot write file (" + std::strerror(code) + ")";
+        return false;
+    }
+    return true;
+#endif
 }
+
 
 } // namespace easypb_file
