@@ -1,5 +1,6 @@
 #include "file_paths.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,8 +19,10 @@
 #include <windows.h>
 #else
 #include <errno.h>
+#include <fcntl.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 
@@ -616,5 +619,226 @@ std::string normalize_separators(const std::string& path)
 #endif
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Output-side helpers (plan 5 batch 3: the standalone publisher).
+//
+// They live in the same module as the input helpers because they are the
+// same kind of knowledge - what the filesystem does with a spelling - and
+// because the common schema library must keep performing no filesystem call
+// at all. Nothing here is used by the loader; the publisher is their only
+// caller besides the tests.
+// ---------------------------------------------------------------------------
+// Output-side helpers (plan 5 batch 3: the standalone publisher).
+//
+// Trimmed to the reference compiler's model on 2026-10-07. What is left is the
+// directory tree and the write itself, which is what protoc's WriteAllToDisk
+// does (command_line_interface.cc:541-610): verify the output directory exists,
+// create the missing parents, then open/write/close. The containment, case
+// folding, native identity, hardlink and atomic temp+rename guards that used to
+// live here are gone, with their measured effect recorded in file_paths.hpp.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+
+std::string number_text(unsigned long long code)
+{
+    std::ostringstream message;
+    message << code;
+    return message.str();
+}
+std::string write_error_text(const std::string& path, unsigned long long code)
+{
+#ifdef _WIN32
+    return path + ": cannot write file (Win32 error " +
+           number_text(code) + ")";
+#else
+    (void)code;
+    return path + ": cannot write file";
+#endif
+}
+std::string create_directory_error_text(const std::string& path,
+                                        unsigned long long code)
+{
+#ifdef _WIN32
+    return path + ": cannot create directory (Win32 error " +
+           number_text(code) + ")";
+#else
+    (void)code;
+    return path + ": cannot create directory";
+#endif
+}
+
+} // namespace
+
+std::string parent_directory_of(const std::string& path)
+{
+    std::string trimmed = path;
+    while (trimmed.size() > 1 && trimmed[trimmed.size() - 1] == '/') {
+        trimmed.resize(trimmed.size() - 1);
+    }
+    const std::size_t slash = trimmed.rfind('/');
+    if (slash == std::string::npos) return std::string();
+    if (slash == 0) return "/";
+    std::string parent = trimmed.substr(0, slash);
+#ifdef _WIN32
+    // A bare drive component must stay qualified: "C:" is the root, and
+    // "C" would address the drive-relative spelling instead.
+    if (parent.size() == 2 && is_alpha(parent[0]) && parent[1] == ':') {
+        parent += "/";
+    }
+#endif
+    return parent;
+}
+bool create_directory_plain(const std::string& path, std::string& error)
+{
+#ifdef _WIN32
+    std::vector<wchar_t> wide;
+    if (!wide_win32_path(path, wide) || wide.empty()) {
+        error = path + ": cannot create directory";
+        return false;
+    }
+    nul_terminate(wide);
+    if (CreateDirectoryW(&wide[0], 0)) return true;
+    const DWORD code = GetLastError();
+    if (code == ERROR_ALREADY_EXISTS || code == ERROR_FILE_EXISTS) {
+        // "Already there" is only success when what is there is a directory;
+        // an existing FILE at this spelling is the classic denied output root
+        // (plan 5 P8), not a no-op.
+        std::string status_error;
+        if (disk_file_status(path, status_error) == FILE_STATUS_DIRECTORY) {
+            return true;
+        }
+        error = path + ": output path is an existing file, not a directory";
+        return false;
+    }
+    error = create_directory_error_text(path, code);
+    return false;
+#else
+    if (::mkdir(path.c_str(), 0777) == 0) return true;
+    if (errno == EEXIST) {
+        std::string status_error;
+        if (disk_file_status(path, status_error) == FILE_STATUS_DIRECTORY) {
+            return true;
+        }
+        error = path + ": output path is an existing file, not a directory";
+        return false;
+    }
+    const int code = errno;
+    error = path + ": cannot create directory (" + std::strerror(code) + ")";
+    return false;
+#endif
+}
+bool make_directories_recursive(const std::string& absolute, std::string& error)
+{
+    if (absolute.empty() || absolute == "/") return true;
+#ifdef _WIN32
+    if (absolute.size() == 3 && is_alpha(absolute[0]) &&
+        absolute[1] == ':' && absolute[2] == '/') {
+        return true;
+    }
+#endif
+    if (absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/') {
+        // A UNC share root is created by its server; only what lies below it
+        // is this function's business.
+        const std::size_t server_end = absolute.find('/', 2);
+        if (server_end == std::string::npos) return true;
+        const std::size_t share_end = absolute.find('/', server_end + 1);
+        if (share_end == std::string::npos) return true;
+    }
+    const std::string parent = parent_directory_of(absolute);
+    if (!parent.empty() && !make_directories_recursive(parent, error)) {
+        return false;
+    }
+    return create_directory_plain(absolute, error);
+}
+bool make_directories(const std::string& directory, std::string& error)
+{
+    error.clear();
+    if (directory.empty()) {
+        error = "cannot create an empty directory path";
+        return false;
+    }
+    const std::string absolute = lexical_absolute(directory);
+    if (absolute.empty()) {
+        error = directory + ": cannot resolve directory";
+        return false;
+    }
+    return make_directories_recursive(absolute, error);
+}
+
+// Write `contents` to `target`, creating or truncating it. The reference
+// compiler's write model (command_line_interface.cc:559-610): open with
+// O_CREAT | O_TRUNC, write the whole buffer, close. No temporary file, no
+// rename, and therefore no "never a prefix of the new content" promise - a
+// process killed mid-write can leave a truncated header, exactly as protoc
+// can.
+bool write_disk_file(const std::string& target, const std::string& contents,
+                     std::string& error)
+{
+    error.clear();
+#ifdef _WIN32
+    std::vector<wchar_t> wide;
+    if (!wide_win32_path(target, wide) || wide.empty()) {
+        error = target + ": cannot write file";
+        return false;
+    }
+    nul_terminate(wide);
+    HANDLE handle = CreateFileW(&wide[0], GENERIC_WRITE, 0, 0,
+                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    if (handle == INVALID_HANDLE_VALUE) {
+        error = write_error_text(target, GetLastError());
+        return false;
+    }
+    std::size_t done = 0;
+    while (done < contents.size()) {
+        const std::size_t chunk =
+            std::min<std::size_t>(contents.size() - done, 1u << 20);
+        DWORD written = 0;
+        if (!WriteFile(handle, contents.data() + done,
+                       static_cast<DWORD>(chunk), &written, 0) ||
+            written != chunk) {
+            const DWORD code = GetLastError();
+            CloseHandle(handle);
+            error = write_error_text(target, code);
+            return false;
+        }
+        done += chunk;
+    }
+    if (!CloseHandle(handle)) {
+        error = write_error_text(target, GetLastError());
+        return false;
+    }
+    return true;
+#else
+    const int descriptor =
+        ::open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (descriptor < 0) {
+        const int code = errno;
+        error = target + ": cannot write file (" + std::strerror(code) + ")";
+        return false;
+    }
+    std::size_t done = 0;
+    while (done < contents.size()) {
+        const ssize_t written =
+            ::write(descriptor, contents.data() + done, contents.size() - done);
+        if (written < 0) {
+            const int code = errno;
+            ::close(descriptor);
+            error = target + ": cannot write file (" + std::strerror(code) + ")";
+            return false;
+        }
+        done += static_cast<std::size_t>(written);
+    }
+    if (::close(descriptor) != 0) {
+        const int code = errno;
+        error = target + ": cannot write file (" + std::strerror(code) + ")";
+        return false;
+    }
+    return true;
+#endif
+}
+
 
 } // namespace easypb_file

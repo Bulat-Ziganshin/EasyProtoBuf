@@ -6,7 +6,7 @@ Run `codegen --help` for the executable's generated option list.
 
 EasyProtoBuf Codegen accepts either `.proto` source files or binary `FileDescriptorSet` files, conventionally named `.pbs`. All input files in one invocation are processed in the same mode.
 
-Generation writes C++ header text to stdout. Redirect it to a file conventionally named `<schema>.pb.hpp`; generated output contains `#pragma once` and `inline` codec functions, so the header may be included from multiple translation units.
+Generation writes one C++ header per selected target. With a single target and no `--out-dir`, the header text goes to stdout; redirect it to a file conventionally named `<schema>.pb.hpp`. With `--out-dir`, each target becomes `<logical name>.pb.hpp` below the output directory, subdirectories included. Generated output contains `#pragma once` and `inline` codec functions, so a header may be included from multiple translation units. Any command, input, link or generation error leaves stdout empty and reports a nonzero exit and a diagnostic on stderr; publication is per file, never a transaction across files (see [Target selection and output](#target-selection-and-output)).
 
 ### Direct `.proto` input
 
@@ -16,7 +16,19 @@ The embedded parser can generate directly from a source schema:
 codegen tutorial.proto >tutorial.pb.hpp
 ```
 
-The parser recognizes and records imports but does not load them yet. Code generation stops when a source schema contains an unresolved imported type rather than guessing whether that type is a message or enum.
+Search roots come from `-I/--proto_path`, ordered and repeatable; an empty root list means the current directory:
+
+```sh
+codegen -I schemas -I schemas/vendor api/report.proto >report.pb.hpp
+```
+
+The loader follows every import through those roots and the linker resolves each named type against the loaded set; a source schema whose import cannot be found fails with the loader's missing-import diagnostic rather than guessing whether the type is a message or enum. `-I` is valid only with `.proto` input. Every positional input file is selected for generation, in the order given, and several inputs require `--out-dir`:
+
+```sh
+codegen -I schemas --out-dir build/generated common/state.proto common/node.proto api/report.proto
+```
+
+`--target` is not used with source input: the input list itself is the selection.
 
 Top-level `service` and `rpc` declarations are validated and skipped while message codecs from the same file are generated. Codegen does not generate RPC client or server APIs.
 
@@ -35,11 +47,30 @@ codegen tutorial.pbs >tutorial.pb.hpp
 codegen --descriptor-set tutorial.pbs >tutorial.pb.hpp
 ```
 
-Descriptor-set input is useful when descriptor files are already available or when `protoc` is needed to resolve imported field types that the embedded parser cannot link. Definitions of imported C++ types are not emitted; they must be available to the generated header separately. Fully qualified Protobuf names map to absolute C++ names in their package namespaces. See [Packages and C++ namespaces](GENERATED_CODE.md#packages-and-c-namespaces) for the generated names.
+A descriptor set may carry any number of files. With several files, name the files to generate with `--target` (repeatable; the requested order is preserved and duplicates are dropped):
 
-Each descriptor set must currently contain exactly one `FileDescriptorProto`. Avoid `protoc --include_imports` until target-file selection is implemented.
+```sh
+protoc -I schemas --include_imports \
+    --descriptor_set_out=project.pbs \
+    common/state.proto common/node.proto api/report.proto
+codegen --descriptor-set project.pbs \
+    --target common/state.proto --target common/node.proto --target api/report.proto \
+    --out-dir build/generated
+```
+
+A single-file set without `--target` keeps the thin compatibility path: external type declarations only, automatic dependency includes omitted, and a reference into a missing dependency tolerated with a warning, as before plan 5. Naming an explicit `--target` links the loaded set strictly instead, so a missing dependency is an error. `protoc --include_imports` produces the complete closure intended for that mode; dependency headers it declares must exist for the generated C++ to compile. `--target` is valid only with `--descriptor-set`.
+
+Descriptor-set input is useful when descriptor files are already available or when another tool produces them. Definitions of imported C++ types are never emitted inside the target's own header; a complete link includes the dependency header instead, so generate the dependencies as well. Fully qualified Protobuf names map to absolute C++ names in their package namespaces. See [Packages and C++ namespaces](GENERATED_CODE.md#packages-and-c-namespaces) for the generated names.
 
 Without `--descriptor-set`, Codegen infers the common input mode from file extensions: an invocation containing both `.pbs` and non-`.pbs` names is rejected. `--descriptor-set` forces every positional input to be decoded as a binary descriptor set; it does not enable mixing descriptor sets with `.proto` source files.
+
+## Target selection and output
+
+- `--target NAME` — a logical `.proto` name to generate from a descriptor set. Repeatable; order preserved, duplicates dropped. Valid only with `--descriptor-set`. Without it, a single-file set uses the compatibility path and a multi-file set fails with target-selection guidance.
+- `--out-dir DIR` — write one generated header per selected target below `DIR` instead of stdout. Relative subdirectories of a logical name are recreated below `DIR`. `DIR` may be given only once. Required whenever more than one header would be written.
+- Without `--out-dir`, exactly one selected header is written to stdout; several selected headers without `--out-dir` fail with a guidance error.
+
+Publication writes each generated header in place below `DIR`: the output directory and every parent directory of an output are created first, then each file is created or truncated and written. It refuses two targets that map to one output file, and it reports the first failure without claiming partial success. It is not a transaction across files: a run that fails after writing one header leaves the earlier headers written, and a process interrupted mid-write may leave that one header truncated — the same guarantee the reference compiler gives.
 
 ## Structural options
 
@@ -87,7 +118,7 @@ codegen --benchmark-parser [--benchmark-ms 500] a.proto b.proto
 
 For a reproducible real-world workload, pass schemas from the [`tests/codegen/parser/differential/corpus/`](../tests/codegen/parser/differential/corpus/) directory. Tests on a 4 GHz Zen3 CPU showed 100–200 MB/s parsing throughput.
 
-Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation from `.proto` source stops on such schemas instead of guessing whether an unresolved external type is a message or enum.
+Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation links the loaded set first, so imported types resolve; the run stops only when an import cannot be found or a reference stays unresolved, instead of guessing whether the type is a message or enum.
 
 `--print-descriptor` and `--benchmark-parser` cannot be used together. `--benchmark-parser` accepts `.proto` source files, not descriptor-set input. Structural, packed-field, and C++ type generation options cannot be combined with either utility mode.
 

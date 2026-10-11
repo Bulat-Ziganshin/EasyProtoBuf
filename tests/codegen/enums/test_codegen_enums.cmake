@@ -188,7 +188,7 @@ require_contains(no_class_out
     "Enum message codecs in --no-class output")
 
 if(FULL_BUILD)
-    run_ok(proto_out proto_err ${CODEGEN} ${enum_proto})
+    run_ok(proto_out proto_err ${CODEGEN} -I ${DATA_DIR} ${enum_proto})
     normalize_source_comment(enum_out pbs_normalized)
     normalize_source_comment(proto_out proto_normalized)
     if(NOT proto_normalized STREQUAL pbs_normalized)
@@ -196,7 +196,7 @@ if(FULL_BUILD)
             "Enum .proto and .pbs generated outputs differ")
     endif()
 
-    run_ok(open_proto_out open_proto_err ${CODEGEN} ${open_enum_proto})
+    run_ok(open_proto_out open_proto_err ${CODEGEN} -I ${DATA_DIR} ${open_enum_proto})
     normalize_source_comment(open_enum_out open_pbs_normalized)
     normalize_source_comment(open_proto_out open_proto_normalized)
     if(NOT open_proto_normalized STREQUAL open_pbs_normalized)

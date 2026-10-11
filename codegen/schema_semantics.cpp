@@ -1,4 +1,5 @@
 #include "schema_semantics.hpp"
+#include "schema_semantics_internal.hpp"
 
 #include <cassert>
 #include <cerrno>
@@ -219,28 +220,37 @@ SourceLocation declaration_location(const SchemaFile& file,
 // to read a message text to tell a redeclaration from a generic failure. The
 // message names both declarations by kind and name within the scope; the
 // cross-file producer (add_symbol) additionally names both logical files.
-bool add_scope_name(const SchemaFile& file,
-                    std::map<std::string, std::string>& names,
-                    const std::string& name,
-                    const std::string& kind,
-                    const std::string& scope,
-                    const DescriptorPath& path,
-                    Diagnostic& error)
+bool report_scope_collision(const SchemaFile& file,
+                            const str_view& name,
+                            const char* kind,
+                            const char* existing_kind,
+                            const std::string& scope,
+                            const DescriptorPath& path,
+                            Diagnostic& error)
 {
-    const std::pair<std::map<std::string, std::string>::iterator, bool> inserted =
-        names.insert(std::make_pair(name, kind));
+    std::string message = "name collision in " +
+        (scope.empty() ? std::string("global scope") : scope) +
+        ": " + std::string(kind) + " " + view_text(name) + " conflicts with " +
+        existing_kind;
+    SourceLocation location = declaration_location(file, path);
+    if (location.line == 0) message += " at " + format_path(path);
+    error.file = view_text(file.file.name);
+    error.location = location;
+    error.message = message;
+    error.warning = false;
+    error.code = DIAGNOSTIC_DUPLICATE_SYMBOL;
+    return false;
+}
+
+bool try_add_scope_name(std::map<str_view, const char*>& names,
+                        const str_view& name,
+                        const char* kind,
+                        const char** existing_kind)
+{
+    const std::pair<std::map<str_view, const char*>::iterator, bool> inserted =
+        names.insert(std::map<str_view, const char*>::value_type(name, kind));
     if (!inserted.second) {
-        std::string message = "name collision in " +
-            (scope.empty() ? std::string("global scope") : scope) +
-            ": " + kind + " " + name + " conflicts with " +
-            inserted.first->second;
-        SourceLocation location = declaration_location(file, path);
-        if (location.line == 0) message += " at " + format_path(path);
-        error.file = view_text(file.file.name);
-        error.location = location;
-        error.message = message;
-        error.warning = false;
-        error.code = DIAGNOSTIC_DUPLICATE_SYMBOL;
+        *existing_kind = inserted.first->second;
         return false;
     }
     return true;
@@ -249,37 +259,42 @@ bool add_scope_name(const SchemaFile& file,
 bool validate_file_scope_names(const SchemaFile& file, const std::string& scope,
                                Diagnostic& error)
 {
-    std::map<std::string, std::string> names;
+    std::map<str_view, const char*> names;
+    const char* existing_kind = 0;
     for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(file.file.enum_type[i].name),
-                            "enum type", scope, file_enum_path(static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, file.file.enum_type[i].name,
+                                "enum type", &existing_kind)) {
+            return report_scope_collision(
+                file, file.file.enum_type[i].name, "enum type", existing_kind,
+                scope, file_enum_path(static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(file.file.message_type[i].name),
-                            "message", scope, file_message_path(static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, file.file.message_type[i].name,
+                                "message", &existing_kind)) {
+            return report_scope_collision(
+                file, file.file.message_type[i].name, "message", existing_kind,
+                scope, file_message_path(static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < file.file.service.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(file.file.service[i].name),
-                            "service", scope, file_service_path(static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, file.file.service[i].name,
+                                "service", &existing_kind)) {
+            return report_scope_collision(
+                file, file.file.service[i].name, "service", existing_kind,
+                scope, file_service_path(static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
-        const DescriptorPath enum_path = file_enum_path(static_cast<int>(i));
         for (std::size_t j = 0; j < file.file.enum_type[i].value.size(); ++j) {
-            if (!add_scope_name(file, names,
-                                view_text(file.file.enum_type[i].value[j].name),
-                                "enum value", scope,
-                                enum_value_path(enum_path, static_cast<int>(j)),
-                                error)) {
-                return false;
+            if (!try_add_scope_name(names, file.file.enum_type[i].value[j].name,
+                                    "enum value", &existing_kind)) {
+                return report_scope_collision(
+                    file, file.file.enum_type[i].value[j].name, "enum value",
+                    existing_kind, scope,
+                    enum_value_path(file_enum_path(static_cast<int>(i)),
+                                    static_cast<int>(j)),
+                    error);
             }
         }
     }
@@ -293,49 +308,53 @@ bool validate_message_scope_names(const SchemaFile& file,
                                   Diagnostic& error)
 {
     const std::string scope = joined_name(parent, message.name);
-    std::map<std::string, std::string> names;
+    std::map<str_view, const char*> names;
+    const char* existing_kind = 0;
     for (std::size_t i = 0; i < message.field.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(message.field[i].name),
-                            "field", scope,
-                            message_field_path(message_path, static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, message.field[i].name,
+                                "field", &existing_kind)) {
+            return report_scope_collision(
+                file, message.field[i].name, "field", existing_kind, scope,
+                message_field_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(message.nested_type[i].name),
-                            "nested message", scope,
-                            message_nested_path(message_path, static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, message.nested_type[i].name,
+                                "nested message", &existing_kind)) {
+            return report_scope_collision(
+                file, message.nested_type[i].name, "nested message",
+                existing_kind, scope,
+                message_nested_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(message.enum_type[i].name),
-                            "nested enum type", scope,
-                            message_enum_path(message_path, static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, message.enum_type[i].name,
+                                "nested enum type", &existing_kind)) {
+            return report_scope_collision(
+                file, message.enum_type[i].name, "nested enum type",
+                existing_kind, scope,
+                message_enum_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
-        if (!add_scope_name(file, names, view_text(message.oneof_decl[i].name),
-                            "oneof", scope,
-                            message_oneof_path(message_path, static_cast<int>(i)),
-                            error)) {
-            return false;
+        if (!try_add_scope_name(names, message.oneof_decl[i].name,
+                                "oneof", &existing_kind)) {
+            return report_scope_collision(
+                file, message.oneof_decl[i].name, "oneof", existing_kind, scope,
+                message_oneof_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-        const DescriptorPath enum_path =
-            message_enum_path(message_path, static_cast<int>(i));
         for (std::size_t j = 0; j < message.enum_type[i].value.size(); ++j) {
-            if (!add_scope_name(file, names,
-                                view_text(message.enum_type[i].value[j].name),
-                                "enum value", scope,
-                                enum_value_path(enum_path, static_cast<int>(j)),
-                                error)) {
-                return false;
+            if (!try_add_scope_name(names, message.enum_type[i].value[j].name,
+                                    "enum value", &existing_kind)) {
+                return report_scope_collision(
+                    file, message.enum_type[i].value[j].name, "enum value",
+                    existing_kind, scope,
+                    enum_value_path(
+                        message_enum_path(message_path, static_cast<int>(i)),
+                        static_cast<int>(j)),
+                    error);
             }
         }
     }
@@ -659,13 +678,15 @@ bool enclosing_scope(const std::string& scope, std::string& outer)
 bool package_is_visible(const std::set<const SchemaFile*>& visible_files,
                         const std::string& package_head)
 {
+    if (package_head.empty() || package_head[0] != '.') return false;
+    const str_view head_pkg = str_view(package_head).substr(1);
     for (std::set<const SchemaFile*>::const_iterator it = visible_files.begin();
          it != visible_files.end(); ++it) {
-        const std::string declared = package_prefix(**it);
-        if (declared == package_head) return true;
-        if (declared.size() > package_head.size() &&
-            declared.compare(0, package_head.size(), package_head) == 0 &&
-            declared[package_head.size()] == '.') {
+        const str_view& declared = (*it)->file.package;
+        if (declared == head_pkg) return true;
+        if (declared.size() > head_pkg.size() &&
+            declared.substr(0, head_pkg.size()) == head_pkg &&
+            declared[head_pkg.size()] == '.') {
             return true;
         }
     }
@@ -713,21 +734,17 @@ bool nested_in_field_message(const ResolveContext& context,
 // only kind test that survives deferred resolution: a source map field carries
 // no assigned kind until linking, so requiring TYPE_MESSAGE here would reject
 // every legal source map field the loader deferred.
-bool owns_map_entry(const ResolveContext& context, const SymbolEntry& entry)
+bool owns_map_entry(const ResolveContext& context, const SymbolEntry& entry,
+                    const DescriptorProto& entry_message)
 {
     if (context.field == 0 || context.owner == 0 || context.field_path == 0) {
         return false;
     }
     if (entry.owner != context.owner) return false;
     if (context.field->label != FieldDescriptorProto::LABEL_REPEATED) return false;
-    const DescriptorProto* entry_message = find_message(*entry.owner, entry.path);
-    if (entry_message == 0) return false;
-    if (!entry_message->options.has_map_entry || !entry_message->options.map_entry) {
-        return false;
-    }
     if (!nested_in_field_message(context, entry.path)) return false;
     return map_entry_name(view_text(context.field->name)) ==
-           view_text(entry_message->name);
+           entry_message.name;
 }
 
 // True when the resolved symbol is a synthetic map entry owned by some other
@@ -740,7 +757,7 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
     if (!entry_message->options.has_map_entry || !entry_message->options.map_entry) {
         return false;
     }
-    return !owns_map_entry(context, entry);
+    return !owns_map_entry(context, entry, *entry_message);
 }
 
 // Implements protoc's lexical name lookup over the compilation-wide index.
@@ -1099,22 +1116,29 @@ bool is_valid_symbol_name(const str_view& name)
 // and the name is only read here.  Taking a std::string forced the one caller
 // that had the view in hand to materialize a copy of it first.  On the legacy
 // lane `str_view` IS `std::string`, so this parameter is what it always was.
-bool check_symbol_name(const SchemaFile& file, const str_view& name,
-                       const std::string& kind, const std::string& scope,
-                       const DescriptorPath& path, Diagnostic& error)
+bool fail_symbol_name(const SchemaFile& file, const str_view& name,
+                      const char* kind, const std::string& scope,
+                      const DescriptorPath& path, Diagnostic& error)
 {
-    if (is_valid_symbol_name(name)) return true;
     const std::string where =
         scope.empty() ? std::string("the global scope") : scope;
     std::string message;
     if (name.empty()) {
-        message = kind + " in " + where + " has no name";
+        message = std::string(kind) + " in " + where + " has no name";
     } else {
-        message = kind + " name \"" + std::string(name) +
+        message = std::string(kind) + " name \"" + std::string(name) +
                   "\" in " + where + " is not a valid identifier";
     }
     return fail_at_code(file, message, declaration_location(file, path), path,
                         DIAGNOSTIC_INVALID_SYMBOL_NAME, error);
+}
+
+bool check_symbol_name(const SchemaFile& file, const str_view& name,
+                       const char* kind, const std::string& scope,
+                       const DescriptorPath& path, Diagnostic& error)
+{
+    if (is_valid_symbol_name(name)) return true;
+    return fail_symbol_name(file, name, kind, scope, path, error);
 }
 
 // The recursive half of validate_symbol_names: the message's own name, then its
@@ -1128,15 +1152,15 @@ bool validate_message_symbol_names(const SchemaFile& file,
                                    Diagnostic& error)
 {
     const std::string scope = joined_name(parent, message.name);
-    if (!check_symbol_name(file, view_text(message.name), "message", parent,
+    if (!check_symbol_name(file, message.name, "message", parent,
                            message_path, error)) {
         return false;
     }
     for (std::size_t i = 0; i < message.field.size(); ++i) {
-        if (!check_symbol_name(
-                file, view_text(message.field[i].name), "field", scope,
-                message_field_path(message_path, static_cast<int>(i)), error)) {
-            return false;
+        if (!is_valid_symbol_name(message.field[i].name)) {
+            return fail_symbol_name(
+                file, message.field[i].name, "field", scope,
+                message_field_path(message_path, static_cast<int>(i)), error);
         }
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
@@ -1148,26 +1172,28 @@ bool validate_message_symbol_names(const SchemaFile& file,
         }
     }
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-        const DescriptorPath enum_path =
-            message_enum_path(message_path, static_cast<int>(i));
-        if (!check_symbol_name(file, view_text(message.enum_type[i].name),
-                               "nested enum type", scope, enum_path, error)) {
-            return false;
+        if (!is_valid_symbol_name(message.enum_type[i].name)) {
+            return fail_symbol_name(
+                file, message.enum_type[i].name, "nested enum type", scope,
+                message_enum_path(message_path, static_cast<int>(i)), error);
         }
         for (std::size_t j = 0; j < message.enum_type[i].value.size(); ++j) {
-            if (!check_symbol_name(
-                    file, view_text(message.enum_type[i].value[j].name),
-                    "enum value", scope,
-                    enum_value_path(enum_path, static_cast<int>(j)), error)) {
-                return false;
+            if (!is_valid_symbol_name(message.enum_type[i].value[j].name)) {
+                return fail_symbol_name(
+                    file, message.enum_type[i].value[j].name, "enum value",
+                    scope,
+                    enum_value_path(
+                        message_enum_path(message_path, static_cast<int>(i)),
+                        static_cast<int>(j)),
+                    error);
             }
         }
     }
     for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
-        if (!check_symbol_name(
-                file, view_text(message.oneof_decl[i].name), "oneof", scope,
-                message_oneof_path(message_path, static_cast<int>(i)), error)) {
-            return false;
+        if (!is_valid_symbol_name(message.oneof_decl[i].name)) {
+            return fail_symbol_name(
+                file, message.oneof_decl[i].name, "oneof", scope,
+                message_oneof_path(message_path, static_cast<int>(i)), error);
         }
     }
     return true;
@@ -1356,7 +1382,7 @@ bool validate_message_map_entries(const SchemaFile& file,
         // descriptor actually declared can disagree here.
         if ((key->has_label &&
              key->label != FieldDescriptorProto::LABEL_OPTIONAL) ||
-            view_text(key->name) != "key" ||
+            key->name != "key" ||
             !valid_map_key_type(key->type)) {
             return fail_map_entry_shape(
                 file, qualified_name,
@@ -1366,7 +1392,7 @@ bool validate_message_map_entries(const SchemaFile& file,
         }
         if ((value->has_label &&
              value->label != FieldDescriptorProto::LABEL_OPTIONAL) ||
-            view_text(value->name) != "value") {
+            value->name != "value") {
             return fail_map_entry_shape(
                 file, qualified_name,
                 "a value field named \"value\" numbered 2, LABEL_OPTIONAL",
@@ -1438,26 +1464,26 @@ bool validate_enum_value_numbers_in_enum(const SchemaFile& file,
         enumeration.options.allow_alias) {
         return true;
     }
-    std::map<std::int32_t, std::string> first_by_number;
+    std::map<std::int32_t, str_view> first_by_number;
     for (std::size_t i = 0; i < enumeration.value.size(); ++i) {
         const std::int32_t number = enumeration.value[i].number;
-        const std::string value_name = view_text(enumeration.value[i].name);
-        const std::map<std::int32_t, std::string>::const_iterator seen =
-            first_by_number.find(number);
-        if (seen != first_by_number.end()) {
+        const str_view& value_name = enumeration.value[i].name;
+        const std::pair<std::map<std::int32_t, str_view>::iterator, bool> inserted =
+            first_by_number.insert(
+                std::map<std::int32_t, str_view>::value_type(number, value_name));
+        if (!inserted.second) {
             const DescriptorPath value_path =
                 enum_value_path(enum_path, static_cast<int>(i));
             return fail_at_code(
                 file,
-                "enum value \"" + value_name + "\" of \"" + enum_name +
+                "enum value \"" + view_text(value_name) + "\" of \"" + enum_name +
                     "\" repeats number " + number_text(number) +
-                    ", which \"" + seen->second +
+                    ", which \"" + view_text(inserted.first->second) +
                     "\" already uses; set option allow_alias = true to allow "
                     "aliases",
                 declaration_location(file, value_path), value_path,
                 DIAGNOSTIC_DUPLICATE_ENUM_NUMBER, error);
         }
-        first_by_number.insert(std::make_pair(number, value_name));
     }
     return true;
 }
@@ -1655,6 +1681,15 @@ bool valid_bytes_default_escape(const std::string& text)
     return true;
 }
 
+} // namespace
+
+// validate_default joins the `internal` seam (P1 unit tests). The other large
+// validators - validate_symbol_names, validate_enum_value_numbers and
+// validate_map_entry_shapes - are already public, so it is the only anonymous
+// helper the unit suite needs declared here; its definition stays in this
+// translation unit, beside the rules that call it.
+namespace internal {
+
 // Type-dependent semantic validation for the textual default_value stored
 // during parsing. Unknown kinds are the caller's responsibility: the caller
 // passes unknown == true when the named type could not be resolved, in which
@@ -1666,10 +1701,6 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                       const DescriptorPath& field_path, Diagnostic& error)
 {
     if (!field.has_default_value) return true;
-    const std::string value = view_text(field.default_value);
-    std::int32_t signed32 = 0;
-    std::int64_t signed64 = 0;
-    const SourceLocation where = field_default_location(file, field_path);
     // An unresolvable named type may be an imported enum (whose default is
     // then legal) or an imported message (whose default complete linking
     // will reject). Either way validation is deferred with a warning instead
@@ -1678,12 +1709,17 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
     if (unknown) {
         warn_once(file,
                   kDeferredDefaultPrefix + view_text(field.type_name),
-                  DIAGNOSTIC_GENERIC, where, field_path);
+                  DIAGNOSTIC_GENERIC,
+                  field_default_location(file, field_path), field_path);
         return true;
     }
+    if (field.type == FieldDescriptorProto::TYPE_STRING) {
+        return true;
+    }
+    const std::string value = view_text(field.default_value);
+    std::int32_t signed32 = 0;
+    std::int64_t signed64 = 0;
     switch (field.type) {
-        case FieldDescriptorProto::TYPE_STRING:
-            return true;
         // D-58 (fix round r25): a bytes default is a C-escaped string, and
         // protoc validates its escape grammar while it builds the field. An
         // unchecked value reaches the generator verbatim, which is how
@@ -1694,26 +1730,30 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_BYTES:
             if (!valid_bytes_default_escape(value)) {
                 return fail_at(file, "invalid escaping in bytes default value",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_BOOL:
             if (value != "true" && value != "false") {
                 return fail_at(file, "bool default must be true or false",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_FLOAT:
         case FieldDescriptorProto::TYPE_DOUBLE:
             if (!is_float_text(value)) {
                 return fail_at(file, "invalid floating-point default",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_ENUM:
             if (value.empty()) {
                 return fail_at(file, "enum default must name an enum value",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             {
                 const std::string enum_name = view_text(field.type_name);
@@ -1728,31 +1768,36 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                 if (enumeration == 0) {
                     return fail_at(file,
                                    "cannot validate default for unknown enum type " + enum_name,
-                                   where, field_path, error);
+                                   field_default_location(file, field_path),
+                                   field_path, error);
                 }
                 for (std::size_t i = 0; i < enumeration->value.size(); ++i) {
-                    if (view_text(enumeration->value[i].name) == value) return true;
+                    if (enumeration->value[i].name == field.default_value) return true;
                 }
                 return fail_at(file,
                                "enum type " + enum_name + " has no value named " + value,
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
         case FieldDescriptorProto::TYPE_MESSAGE:
             return fail_at(file, "message fields cannot have defaults",
-                           where, field_path, error);
+                           field_default_location(file, field_path),
+                           field_path, error);
         case FieldDescriptorProto::TYPE_INT32:
         case FieldDescriptorProto::TYPE_SINT32:
         case FieldDescriptorProto::TYPE_SFIXED32:
             if (!parse_signed_32(value, signed32)) {
                 return fail_at(file, "default does not fit signed 32-bit field",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_UINT32:
         case FieldDescriptorProto::TYPE_FIXED32:
             if (!parse_unsigned_with_optional_plus(value, 4294967295ull)) {
                 return fail_at(file, "default does not fit unsigned 32-bit field",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_INT64:
@@ -1760,470 +1805,463 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_SFIXED64:
             if (!parse_signed_64(value, signed64)) {
                 return fail_at(file, "default does not fit signed 64-bit field",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_UINT64:
         case FieldDescriptorProto::TYPE_FIXED64:
             if (!parse_unsigned_with_optional_plus(value, 18446744073709551615ull)) {
                 return fail_at(file, "default does not fit unsigned 64-bit field",
-                               where, field_path, error);
+                               field_default_location(file, field_path),
+                               field_path, error);
             }
             return true;
         default:
             return fail_at(file, "unsupported field type in default validation",
-                           where, field_path, error);
+                           field_default_location(file, field_path),
+                           field_path, error);
     }
 }
 
-// What a named type that resolves nowhere means to the pass that called
-// resolve_message. Exactly one of the three behaviours applies, and the two
-// pointers are the compatibility pass's caller-owned state (A4/A5):
-//
-// - complete linking: fatal, with the shared outcome code (complete);
-// - the parser's standalone pass: a per-field warning that keeps the raw
-//   metadata so a later complete link can resolve it (deferred);
-// - descriptor compatibility: an external reference is permitted only when
-//   the descriptor classifies it itself, and its warning is bounded one per
-//   type name by the caller-owned set (external_warned_types non-null).
-struct UnresolvedPolicy
-{
-    bool deferred;
-    std::set<std::string>* external_warned_types;
-    bool* missing_external;
-
-    UnresolvedPolicy()
-        : deferred(false), external_warned_types(0), missing_external(0) {}
-};
-
-// Checks every field in one message subtree. With link_types == true this
-// resolves custom field TypeNames and applies the semantic rules that
-// require the resolved kind (packed legality for named types, named default
-// validation). With link_types == false only checks that need no type
-// resolution run: a locally resolvable kind must not decide the outcome,
-// because shadowing imports may change it after linking. Unknown-kind
-// packed/default rules are then left for complete linking.
-//
-// `unresolved_policy` says what a type_name that resolves nowhere means to
-// the pass that called this (see UnresolvedPolicy above).
+// The orchestrator is declared first: validate_nested_types recurses into it.
 bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                      const std::set<const SchemaFile*>& visible_files,
                      const UnresolvedPolicy& unresolved_policy,
                      bool link_types,
                      DescriptorProto& message,
                      const std::string& parent, const DescriptorPath& message_path,
-                     Diagnostic& error)
+                     Diagnostic& error);
+
+// 1. the shape a field declares - always asked, in both modes
+bool validate_field_declared_shape(SchemaFile& file, FieldDescriptorProto& field,
+                                   const DescriptorPath& field_path,
+                                   bool is_proto3, Diagnostic& error)
 {
-    const std::string scope = joined_name(parent, message.name);
-    std::set<std::string> names;
-    std::set<std::int32_t> numbers;
-    for (std::size_t i = 0; i < message.field.size(); ++i) {
-        FieldDescriptorProto& field = message.field[i];
-        const DescriptorPath field_path =
-            message_field_path(message_path, static_cast<int>(i));
-        if (!names.insert(view_text(field.name)).second) {
-            return fail_at(file, "duplicate field name " + view_text(field.name),
-                           declaration_location(file, field_path), field_path, error);
-        }
-        if (!numbers.insert(field.number).second) {
-            return fail_at(file, "duplicate field number in message " + scope,
-                           declaration_location(file, field_path), field_path, error);
-        }
-
-        // D-23 (contract clause 12): field structure is validated over every
-        // available field, in both modes, before any resolution, because the
-        // shapes are provable from the descriptor alone and a
-        // reference-driven check would never reach a field nothing names -
-        // A26's entry-shape precedent. The number rule mirrors the parser's
-        // source-path refusals; the named-kind rule has no source twin, since
-        // a source field always carries the type its declaration gave it.
-        // Both are asked in EVERY mode, which is what the compatibility mode
-        // needs - and it is why fix round r12's compatibility-only block for
-        // the named-kind shape was provably DEAD (fix round r17, the 0927-mimo
-        // review's F1): a field whose declared kind is named and which carries
-        // no type_name can never be classified as an external reference,
-        // because the mode's single "maybe external" door is an ABSOLUTE type
-        // name and this shape has no name at all. The rationale r12 recorded
-        // lives here now, beside the check that actually answers it.
-        if (field.number <= 0 || field.number > kMaxFieldNumber) {
+    // D-23 (contract clause 12): field structure is validated over every
+    // available field, in both modes, before any resolution, because the
+    // shapes are provable from the descriptor alone and a
+    // reference-driven check would never reach a field nothing names -
+    // A26's entry-shape precedent. The number rule mirrors the parser's
+    // source-path refusals; the named-kind rule has no source twin, since
+    // a source field always carries the type its declaration gave it.
+    // Both are asked in EVERY mode, which is what the compatibility mode
+    // needs - and it is why fix round r12's compatibility-only block for
+    // the named-kind shape was provably DEAD (fix round r17, the 0927-mimo
+    // review's F1): a field whose declared kind is named and which carries
+    // no type_name can never be classified as an external reference,
+    // because the mode's single "maybe external" door is an ABSOLUTE type
+    // name and this shape has no name at all. The rationale r12 recorded
+    // lives here now, beside the check that actually answers it.
+    if (field.number <= 0 || field.number > kMaxFieldNumber) {
+        return fail_at_code(
+            file,
+            "field \"" + view_text(field.name) + "\" number " +
+                number_text(field.number) +
+                " is outside the valid range 1..536870911",
+            declaration_location(file, field_path), field_path,
+            DIAGNOSTIC_INVALID_FIELD_NUMBER, error);
+    }
+    if (field.number >= kReservedFieldNumberFirst &&
+        field.number <= kReservedFieldNumberLast) {
+        return fail_at_code(
+            file,
+            "field \"" + view_text(field.name) + "\" number " +
+                number_text(field.number) +
+                " is inside the reserved range 19000..19999",
+            declaration_location(file, field_path), field_path,
+            DIAGNOSTIC_INVALID_FIELD_NUMBER, error);
+    }
+    if (field.has_type && is_named_kind(field.type) &&
+        !field.has_type_name) {
+        return fail_at_code(
+            file,
+            "field \"" + view_text(field.name) + "\" declares " +
+                descriptor_kind_name(field.type) +
+                " type but carries no type_name",
+            declaration_location(file, field_path), field_path,
+            DIAGNOSTIC_MISSING_TYPE_NAME, error);
+    }
+    // D-55 (fix round r25): a repeated field may not carry a default, which
+    // protoc refuses while it builds a descriptor ("Repeated fields can't
+    // have default values.", descriptor.cc:6652-6655) and our parser
+    // refuses as source text ("default value is not allowed on repeated or
+    // oneof fields", proto_parser.cpp:1128). Reference-free and asked in
+    // BOTH modes: no resolution can turn a repeated field into a singular
+    // one. It is asked BEFORE the proto3 block below, because protoc
+    // reports this shape first - the repeated-default check lives in the
+    // field build, the proto3 field rules in the later options validation.
+    // Only a label the descriptor actually declared can be repeated here,
+    // because protoc's own default for an absent label is OPTIONAL.
+    if (field.has_default_value && field.has_label &&
+        field.label == FieldDescriptorProto::LABEL_REPEATED) {
+        return fail_at(file,
+                       "repeated fields cannot have default values",
+                       field_default_location(file, field_path), field_path,
+                       error);
+    }
+    // Clause 12 (fix round r17, the 0927-mimo review's F2): a
+    // descriptor-origin file that declares `syntax = "proto3"` must obey
+    // the proto3 FIELD rules, asked at the same site and for the same
+    // reason as the checks above - the shape is provable from the
+    // descriptor alone, so both modes and every available field, before
+    // anything is resolved. protoc asks both questions of every field of a
+    // proto3 message when it builds the file from the same bytes
+    // (`ValidateProto3Field`, descriptor.cc:7912-7930, reached from
+    // `ValidateProto3Message`), and our parser refuses both as source text
+    // ("required fields are not allowed in proto3",
+    // codegen/parser/proto_parser.cpp:1233, and "explicit default values
+    // are not allowed in proto3", :1124), so this is the descriptor-origin
+    // half of that frontend parity rule. The gate is the field's OWN file:
+    // proto2 gives both shapes a meaning, so reading the wrong file here
+    // would refuse legal input (the proto2 controls in
+    // test_descriptor_origin_proto3_field_rules_are_refused).
+    //
+    // The open-enum first-value rule is the same family and NOT here: the
+    // contract sweep's row B6 assigns open-enum semantics to plan 2/5, and
+    // ledger `D-33` records that scope decision (rejected), re-raised by
+    // the same review rather than reversed by this round.
+    if (is_proto3) {
+        if (field.label == FieldDescriptorProto::LABEL_REQUIRED) {
             return fail_at_code(
                 file,
-                "field \"" + view_text(field.name) + "\" number " +
-                    number_text(field.number) +
-                    " is outside the valid range 1..536870911",
+                "field \"" + view_text(field.name) +
+                    "\" is required, and a proto3 field may not be",
                 declaration_location(file, field_path), field_path,
-                DIAGNOSTIC_INVALID_FIELD_NUMBER, error);
+                DIAGNOSTIC_PROTO3_REQUIRED_FIELD, error);
         }
-        if (field.number >= kReservedFieldNumberFirst &&
-            field.number <= kReservedFieldNumberLast) {
+        if (field.has_default_value) {
             return fail_at_code(
                 file,
-                "field \"" + view_text(field.name) + "\" number " +
-                    number_text(field.number) +
-                    " is inside the reserved range 19000..19999",
-                declaration_location(file, field_path), field_path,
-                DIAGNOSTIC_INVALID_FIELD_NUMBER, error);
+                "field \"" + view_text(field.name) +
+                    "\" carries an explicit default value, which proto3 "
+                    "does not allow",
+                field_default_location(file, field_path), field_path,
+                DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT, error);
         }
-        if (field.has_type && is_named_kind(field.type) &&
-            !field.has_type_name) {
-            return fail_at_code(
-                file,
-                "field \"" + view_text(field.name) + "\" declares " +
-                    descriptor_kind_name(field.type) +
-                    " type but carries no type_name",
-                declaration_location(file, field_path), field_path,
-                DIAGNOSTIC_MISSING_TYPE_NAME, error);
-        }
-        // D-55 (fix round r25): a repeated field may not carry a default, which
-        // protoc refuses while it builds a descriptor ("Repeated fields can't
-        // have default values.", descriptor.cc:6652-6655) and our parser
-        // refuses as source text ("default value is not allowed on repeated or
-        // oneof fields", proto_parser.cpp:1128). Reference-free and asked in
-        // BOTH modes: no resolution can turn a repeated field into a singular
-        // one. It is asked BEFORE the proto3 block below, because protoc
-        // reports this shape first - the repeated-default check lives in the
-        // field build, the proto3 field rules in the later options validation.
-        // Only a label the descriptor actually declared can be repeated here,
-        // because protoc's own default for an absent label is OPTIONAL.
-        if (field.has_default_value && field.has_label &&
-            field.label == FieldDescriptorProto::LABEL_REPEATED) {
+        // D-54 (fix round r25): proto3 has no groups, which protoc refuses
+        // from the same bytes ("Groups are not supported in proto3
+        // syntax.", ValidateProto3Field, descriptor.cc:7936-7938). Our
+        // source parser refuses the keyword in ANY syntax
+        // (proto_parser.cpp:1240), so the shape arrives only as crafted
+        // descriptor input, and the gate is the field's OWN file exactly as
+        // its two siblings above. No dedicated code exists among the frozen
+        // plan-4 values and adding one is a contract amendment, so the
+        // failure carries DIAGNOSTIC_GENERIC like the other
+        // kind-independent verdicts.
+        if (field.type == FieldDescriptorProto::TYPE_GROUP) {
             return fail_at(file,
-                           "repeated fields cannot have default values",
-                           field_default_location(file, field_path), field_path,
-                           error);
-        }
-        // Clause 12 (fix round r17, the 0927-mimo review's F2): a
-        // descriptor-origin file that declares `syntax = "proto3"` must obey
-        // the proto3 FIELD rules, asked at the same site and for the same
-        // reason as the checks above - the shape is provable from the
-        // descriptor alone, so both modes and every available field, before
-        // anything is resolved. protoc asks both questions of every field of a
-        // proto3 message when it builds the file from the same bytes
-        // (`ValidateProto3Field`, descriptor.cc:7912-7930, reached from
-        // `ValidateProto3Message`), and our parser refuses both as source text
-        // ("required fields are not allowed in proto3",
-        // codegen/parser/proto_parser.cpp:1233, and "explicit default values
-        // are not allowed in proto3", :1124), so this is the descriptor-origin
-        // half of that frontend parity rule. The gate is the field's OWN file:
-        // proto2 gives both shapes a meaning, so reading the wrong file here
-        // would refuse legal input (the proto2 controls in
-        // test_descriptor_origin_proto3_field_rules_are_refused).
-        //
-        // The open-enum first-value rule is the same family and NOT here: the
-        // contract sweep's row B6 assigns open-enum semantics to plan 2/5, and
-        // ledger `D-33` records that scope decision (rejected), re-raised by
-        // the same review rather than reversed by this round.
-        if (classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3) {
-            if (field.label == FieldDescriptorProto::LABEL_REQUIRED) {
-                return fail_at_code(
-                    file,
-                    "field \"" + view_text(field.name) +
-                        "\" is required, and a proto3 field may not be",
-                    declaration_location(file, field_path), field_path,
-                    DIAGNOSTIC_PROTO3_REQUIRED_FIELD, error);
-            }
-            if (field.has_default_value) {
-                return fail_at_code(
-                    file,
-                    "field \"" + view_text(field.name) +
-                        "\" carries an explicit default value, which proto3 "
-                        "does not allow",
-                    field_default_location(file, field_path), field_path,
-                    DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT, error);
-            }
-            // D-54 (fix round r25): proto3 has no groups, which protoc refuses
-            // from the same bytes ("Groups are not supported in proto3
-            // syntax.", ValidateProto3Field, descriptor.cc:7936-7938). Our
-            // source parser refuses the keyword in ANY syntax
-            // (proto_parser.cpp:1240), so the shape arrives only as crafted
-            // descriptor input, and the gate is the field's OWN file exactly as
-            // its two siblings above. No dedicated code exists among the frozen
-            // plan-4 values and adding one is a contract amendment, so the
-            // failure carries DIAGNOSTIC_GENERIC like the other
-            // kind-independent verdicts.
-            if (field.type == FieldDescriptorProto::TYPE_GROUP) {
-                return fail_at(file,
-                               "field \"" + view_text(field.name) +
-                                   "\" is a group, and proto3 has no groups",
-                               declaration_location(file, field_path), field_path,
-                               error);
-            }
-        }
-
-        bool unknown = false;
-        // Set when the compatibility policy permitted an external reference:
-        // the declared metadata is kept verbatim and the field's default is
-        // not validated, because the external definition cannot answer and the
-        // A5 warning already states that defaults were not validated.
-        bool external_reference = false;
-        if (field.has_type_name) {
-            if (!link_types) {
-                // Deferred: never resolve locally. The resolved kind is
-                // unknown until import linking, even when a local
-                // declaration could match today.
-                unknown = true;
-            } else {
-                const std::string raw = raw_type_name(file, field, field_path);
-                ResolveContext context;
-                context.owner = &file;
-                context.field_path = &field_path;
-                context.field = &field;
-                ResolveOutcome outcome = RESOLVE_MISSING;
-                std::string resolved_name;
-                const SymbolEntry* resolved = resolve_name(
-                    raw, scope, symbols, visible_files, context, &outcome,
-                    &resolved_name);
-                if (resolved != 0) {
-                    // A7: a descriptor-origin field's declared kind is
-                    // authoritative metadata, so it is COMPARED with the kind
-                    // of the definition its name resolved to, never silently
-                    // rewritten. The comparison belongs before the assignment
-                    // below, which destroys the declared kind - after
-                    // resolution no post-pass can recover it. Source-origin
-                    // fields carry no declared kind (deferred parsing leaves
-                    // has_type unset), so they are overwritten as before.
-                    //
-                    // A group field declares TYPE_GROUP and names the group
-                    // message, and a group IS a message: protoc's own model
-                    // carries TYPE_GROUP only on the field. The index records
-                    // every message as TYPE_MESSAGE, so comparing the two
-                    // kinds literally used to refuse every legal proto2 group -
-                    // a divergence from the oracle, which accepts such a
-                    // descriptor (fix round r4, ledger D-12). The two kinds
-                    // therefore agree here, and the declared one is kept.
-                    const bool declared_group =
-                        field.type == FieldDescriptorProto::TYPE_GROUP &&
-                        resolved->kind == FieldDescriptorProto::TYPE_MESSAGE;
-                    if (file.from_descriptor_set && field.has_type &&
-                        !declared_group && field.type != resolved->kind) {
-                        return fail_at_code(
-                            file,
-                            kind_mismatch_message(field, resolved_name,
-                                                  resolved->kind),
-                            field_type_location(file, field_path), field_path,
-                            DIAGNOSTIC_KIND_MISMATCH, error);
-                    }
-                    // Step 6.1 (R11): the cross-syntax enum restriction. A
-                    // proto3 field must not directly use a proto2 enum, and
-                    // the rule keys on the file that DECLARES the enum, never
-                    // on the requesting file alone or on a transitive notion
-                    // of openness: a proto3 field may name a proto2 message
-                    // even when that message carries proto2 enum fields of its
-                    // own (oracle C3 accepts that shape), while a proto2 field
-                    // may use an enum of either syntax (S1, S2). The check
-                    // sits after the A7 comparison because the declared-kind
-                    // contradiction is the more specific verdict when a
-                    // descriptor carries both, and before the rewrite below
-                    // so a refused reference keeps its metadata.
-                    //
-                    // It is silent wherever the kind is unknown: the deferred
-                    // pass (link_types == false) resolves nothing, so `unknown`
-                    // still covers every named type, and the parser's own
-                    // allow_unresolved pass resolves only inside its own file,
-                    // whose syntax is the field's file's syntax by definition.
-                    // FILE_SYNTAX_UNSUPPORTED never matches on either side, so
-                    // a direct caller keeps A25's own verdict for an editions
-                    // file: link_schema refuses such a file before resolution,
-                    // and nothing here reads "not proto3" as proto2.
-                    //
-                    // No dedicated code exists for this verdict among the
-                    // seven plan-4 values (A3/A25/A26), each of which has a
-                    // frozen meaning that this rule would dilute - an eighth
-                    // value is a contract amendment, not a step - so the
-                    // failure carries DIAGNOSTIC_GENERIC like the other
-                    // kind-independent validation verdicts (packed legality,
-                    // default validation, duplicate field names).
-                    if (resolved->kind == FieldDescriptorProto::TYPE_ENUM &&
-                        classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3 &&
-                        classify_file_syntax(resolved->owner->file) ==
-                            FILE_SYNTAX_PROTO2) {
-                        return fail_at(file,
-                                       cross_syntax_enum_message(
-                                           file, *resolved->owner,
-                                           resolved_name),
-                                       field_type_location(file, field_path),
-                                       field_path, error);
-                    }
-                    // Authoritative metadata is not rewritten: a group keeps
-                    // its declared TYPE_GROUP, because overwriting it with
-                    // TYPE_MESSAGE would silently change the wire encoding the
-                    // generator emits for it.
-                    field.type = declared_group
-                        ? FieldDescriptorProto::TYPE_GROUP
-                        : resolved->kind;
-                    field.has_type = true;
-                    field.type_name = file.strings.save(resolved_name);
-                } else {
-                    unknown = true;
-                    // A reference that exists but cannot be a field type is an
-                    // error even where a missing type is only deferred
-                    // (allow_unresolved): no import can turn a field, an enum
-                    // value, a service, or a foreign map entry into a legal
-                    // field type, and protoc rejects each of them today.
-                    // "Invisible" stays deferrable, because a later linking
-                    // pass is exactly what makes such a file visible.
-                    if (outcome == RESOLVE_NOT_A_TYPE ||
-                        outcome == RESOLVE_MAP_ENTRY) {
-                        return fail_at_code(
-                            file,
-                            reference_failure_message(file, symbols, raw, outcome,
-                                                      resolved_name),
-                            field_type_location(file, field_path), field_path,
-                            outcome_code(outcome), error);
-                    }
-                    // A name the index HOLDS but the requesting file cannot
-                    // see is not "missing external information" either: the
-                    // descriptor says the type is declared, and protoc's own
-                    // verdict for the shape is an ERROR - the undeclared-
-                    // dependency branch of AddNotDefinedError (descriptor.cc
-                    // 4898-4929, libprotoc 30.1), the same "seems to be
-                    // defined in ..., which is not imported by ..., add the
-                    // necessary import" wording the INVISIBLE branch of
-                    // reference_failure_message mirrors. Tolerating it in
-                    // compatibility mode would record a warning whose
-                    // sentence is false (the type IS declared in the set) and
-                    // give one reference two verdicts depending on which
-                    // entry point is called (the review's CR-3, ledger
-                    // D-25), so the tolerance below is reserved for a
-                    // reference the index does not know at all
-                    // (RESOLVE_MISSING).
-                    const bool invisible_reference =
-                        outcome == RESOLVE_INVISIBLE;
-                    const std::string reason =
-                        invisible_reference
-                            ? reference_failure_message(file, symbols, raw, outcome,
-                                                        resolved_name)
-                            : missing_reference_message(raw, scope, resolved_name);
-                    if (unresolved_policy.external_warned_types != 0 &&
-                        !invisible_reference) {
-                        // Step 7.2: compatibility mode tolerates a MISSING
-                        // target only when the descriptor classifies the
-                        // reference itself - an explicit supported message or
-                        // enum kind and an absolute type name. Everything else
-                        // (a relative source-style name, a missing has_type,
-                        // and since fix round r12 an invisible declared type)
-                        // is refused even here, or the mode becomes the
-                        // general unresolved-type escape hatch the contract
-                        // forbids. The code stays the lookup outcome's own
-                        // (DIAGNOSTIC_UNRESOLVED_TYPE for a missing target,
-                        // DIAGNOSTIC_INVISIBLE_TYPE for an invisible one):
-                        // the reference is unresolved, the policy merely
-                        // refuses to tolerate it.
-                        const bool classified =
-                            field.has_type && field.has_type_name &&
-                            (field.type == FieldDescriptorProto::TYPE_MESSAGE ||
-                             field.type == FieldDescriptorProto::TYPE_ENUM) &&
-                            !view_text(field.type_name).empty() &&
-                            view_text(field.type_name)[0] == '.';
-                        if (!classified) {
-                            return fail_at_code(
-                                file,
-                                reason +
-                                "; compatibility mode accepts an unresolved "
-                                "type only when the descriptor supplies an "
-                                "absolute type name and an explicit message or "
-                                "enum kind",
-                                field_type_location(file, field_path),
-                                field_path, outcome_code(outcome), error);
-                        }
-                        // A5: the bound is one warning per type NAME, not per
-                        // field, and it is the caller-owned set that carries
-                        // it - warn_once only keeps a repeated pass idempotent.
-                        // The warning goes to the stable unknown location
-                        // because a thin descriptor has no positions, and the
-                        // reference is never rewritten: no fabricated kind, no
-                        // absolute name invented, no first enumerator or
-                        // integer zero for its default.
-                        external_reference = true;
-                        if (unresolved_policy.missing_external != 0) {
-                            *unresolved_policy.missing_external = true;
-                        }
-                        const std::string type_name = view_text(field.type_name);
-                        if (unresolved_policy.external_warned_types
-                                ->insert(type_name).second) {
-                            warn_once(file, external_reference_message(type_name),
-                                      DIAGNOSTIC_GENERIC, unknown_location(),
-                                      field_path);
-                        }
-                    } else if (unresolved_policy.deferred) {
-                        warn_once(file,
-                                  reason +
-                                  "; it is kept as TYPE_MESSAGE until imports are linked",
-                                  outcome_code(outcome),
-                                  field_type_location(file, field_path), field_path);
-                    } else {
-                        return fail_at_code(file, reason,
-                                            field_type_location(file, field_path),
-                                            field_path, outcome_code(outcome),
-                                            error);
-                    }
-                }
-            }
-        }
-
-        // Repeatedness is known without resolution: no import can turn an
-        // optional field into a repeated one, so reject packed on
-        // non-repeated fields immediately. Whether the type itself admits
-        // packed encoding is checked only for known kinds.
-        //
-        // D-51 (fix round r25): the gate is protoc's `field->options().packed()`
-        // - presence AND value - not `has_packed` alone. protoc refuses exactly
-        // one shape, `[packed = true]` on a non-packable field
-        // (descriptor.cc:7977), and writes `has_packed = true, packed = false`
-        // for `[packed = false]`, so a presence-only gate refused the sets
-        // protoc itself emits for an optional field, a repeated string and a
-        // repeated message.
-        if (field.options.has_packed && field.options.packed) {
-            if (field.label != FieldDescriptorProto::LABEL_REPEATED) {
-                return fail_at(file,
-                               "packed option is valid only on repeated primitive or enum fields",
-                               field_packed_location(file, field_path),
-                               field_path, error);
-            }
-            if (!unknown && !packable_type(field.type)) {
-                return fail_at(file,
-                               "packed option is valid only on repeated primitive or enum fields",
-                               field_packed_location(file, field_path),
-                               field_path, error);
-            }
-        }
-        if (field.has_oneof_index &&
-            (field.oneof_index < 0 ||
-             static_cast<std::size_t>(field.oneof_index) >= message.oneof_decl.size())) {
-            return fail_at(file, "invalid oneof_index in message " + scope,
-                           declaration_location(file, field_path), field_path, error);
-        }
-        // D-56 (fix round r25): a field claimed by a oneof must itself be
-        // OPTIONAL, which protoc reports as "Fields of oneofs must themselves
-        // have label LABEL_OPTIONAL." (descriptor.cc:7471-7475) - a shape only a
-        // manually built descriptor can carry, because the .proto parser cannot
-        // write it. The range check above keeps its own message by running
-        // first; an ABSENT label is read as OPTIONAL, exactly as protoc's
-        // `proto.label()` default is, so only a declared label can disagree.
-        if (field.has_oneof_index && field.has_label &&
-            field.label != FieldDescriptorProto::LABEL_OPTIONAL) {
-            return fail_at(file,
-                           "a field of a oneof must have label "
-                           "LABEL_OPTIONAL",
+                           "field \"" + view_text(field.name) +
+                               "\" is a group, and proto3 has no groups",
                            declaration_location(file, field_path), field_path,
                            error);
         }
-        // Scalar kinds are known without linking; named kinds are validated
-        // only when linking (link_types) so a shadowed local match cannot
-        // decide packed/default validity ahead of import linking.
-        if (!field.has_type_name) {
-            if (!validate_default(file, symbols, visible_files, field, false,
-                                  field_path, error)) {
-                return false;
-            }
-        } else if (link_types && !external_reference) {
-            if (!validate_default(file, symbols, visible_files, field, unknown,
-                                  field_path, error)) {
-                return false;
+    }
+    return true;
+}
+
+// 2. type resolution - only when link_types; reports the two outcome flags
+bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
+                        const std::set<const SchemaFile*>& visible_files,
+                        const UnresolvedPolicy& unresolved_policy,
+                        const std::string& scope, bool link_types,
+                        FieldDescriptorProto& field, const DescriptorPath& field_path,
+                        bool* unknown, bool* external_reference,
+                        Diagnostic& error)
+{
+    // Set when the compatibility policy permitted an external reference:
+    // the declared metadata is kept verbatim and the field's default is
+    // not validated, because the external definition cannot answer and the
+    // A5 warning already states that defaults were not validated.
+    if (field.has_type_name) {
+        if (!link_types) {
+            // Deferred: never resolve locally. The resolved kind is
+            // unknown until import linking, even when a local
+            // declaration could match today.
+            *unknown = true;
+        } else {
+            const std::string raw = raw_type_name(file, field, field_path);
+            ResolveContext context;
+            context.owner = &file;
+            context.field_path = &field_path;
+            context.field = &field;
+            ResolveOutcome outcome = RESOLVE_MISSING;
+            std::string resolved_name;
+            const SymbolEntry* resolved = resolve_name(
+                raw, scope, symbols, visible_files, context, &outcome,
+                &resolved_name);
+            if (resolved != 0) {
+                // A7: a descriptor-origin field's declared kind is
+                // authoritative metadata, so it is COMPARED with the kind
+                // of the definition its name resolved to, never silently
+                // rewritten. The comparison belongs before the assignment
+                // below, which destroys the declared kind - after
+                // resolution no post-pass can recover it. Source-origin
+                // fields carry no declared kind (deferred parsing leaves
+                // has_type unset), so they are overwritten as before.
+                //
+                // A group field declares TYPE_GROUP and names the group
+                // message, and a group IS a message: protoc's own model
+                // carries TYPE_GROUP only on the field. The index records
+                // every message as TYPE_MESSAGE, so comparing the two
+                // kinds literally used to refuse every legal proto2 group -
+                // a divergence from the oracle, which accepts such a
+                // descriptor (fix round r4, ledger D-12). The two kinds
+                // therefore agree here, and the declared one is kept.
+                const bool declared_group =
+                    field.type == FieldDescriptorProto::TYPE_GROUP &&
+                    resolved->kind == FieldDescriptorProto::TYPE_MESSAGE;
+                if (file.from_descriptor_set && field.has_type &&
+                    !declared_group && field.type != resolved->kind) {
+                    return fail_at_code(
+                        file,
+                        kind_mismatch_message(field, resolved_name,
+                                              resolved->kind),
+                        field_type_location(file, field_path), field_path,
+                        DIAGNOSTIC_KIND_MISMATCH, error);
+                }
+                // Step 6.1 (R11): the cross-syntax enum restriction. A
+                // proto3 field must not directly use a proto2 enum, and
+                // the rule keys on the file that DECLARES the enum, never
+                // on the requesting file alone or on a transitive notion
+                // of openness: a proto3 field may name a proto2 message
+                // even when that message carries proto2 enum fields of its
+                // own (oracle C3 accepts that shape), while a proto2 field
+                // may use an enum of either syntax (S1, S2). The check
+                // sits after the A7 comparison because the declared-kind
+                // contradiction is the more specific verdict when a
+                // descriptor carries both, and before the rewrite below
+                // so a refused reference keeps its metadata.
+                //
+                // It is silent wherever the kind is unknown: the deferred
+                // pass (link_types == false) resolves nothing, so `unknown`
+                // still covers every named type, and the parser's own
+                // allow_unresolved pass resolves only inside its own file,
+                // whose syntax is the field's file's syntax by definition.
+                // FILE_SYNTAX_UNSUPPORTED never matches on either side, so
+                // a direct caller keeps A25's own verdict for an editions
+                // file: link_schema refuses such a file before resolution,
+                // and nothing here reads "not proto3" as proto2.
+                //
+                // No dedicated code exists for this verdict among the
+                // seven plan-4 values (A3/A25/A26), each of which has a
+                // frozen meaning that this rule would dilute - an eighth
+                // value is a contract amendment, not a step - so the
+                // failure carries DIAGNOSTIC_GENERIC like the other
+                // kind-independent validation verdicts (packed legality,
+                // default validation, duplicate field names).
+                if (resolved->kind == FieldDescriptorProto::TYPE_ENUM &&
+                    classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3 &&
+                    classify_file_syntax(resolved->owner->file) ==
+                        FILE_SYNTAX_PROTO2) {
+                    return fail_at(file,
+                                   cross_syntax_enum_message(
+                                       file, *resolved->owner,
+                                       resolved_name),
+                                   field_type_location(file, field_path),
+                                   field_path, error);
+                }
+                // Authoritative metadata is not rewritten: a group keeps
+                // its declared TYPE_GROUP, because overwriting it with
+                // TYPE_MESSAGE would silently change the wire encoding the
+                // generator emits for it.
+                field.type = declared_group
+                    ? FieldDescriptorProto::TYPE_GROUP
+                    : resolved->kind;
+                field.has_type = true;
+                if (field.type_name != resolved_name) {
+                    field.type_name = file.strings.save(resolved_name);
+                }
+            } else {
+                *unknown = true;
+                // A reference that exists but cannot be a field type is an
+                // error even where a missing type is only deferred
+                // (allow_unresolved): no import can turn a field, an enum
+                // value, a service, or a foreign map entry into a legal
+                // field type, and protoc rejects each of them today.
+                // "Invisible" stays deferrable, because a later linking
+                // pass is exactly what makes such a file visible.
+                if (outcome == RESOLVE_NOT_A_TYPE ||
+                    outcome == RESOLVE_MAP_ENTRY) {
+                    return fail_at_code(
+                        file,
+                        reference_failure_message(file, symbols, raw, outcome,
+                                                  resolved_name),
+                        field_type_location(file, field_path), field_path,
+                        outcome_code(outcome), error);
+                }
+                // A name the index HOLDS but the requesting file cannot
+                // see is not "missing external information" either: the
+                // descriptor says the type is declared, and protoc's own
+                // verdict for the shape is an ERROR - the undeclared-
+                // dependency branch of AddNotDefinedError (descriptor.cc
+                // 4898-4929, libprotoc 30.1), the same "seems to be
+                // defined in ..., which is not imported by ..., add the
+                // necessary import" wording the INVISIBLE branch of
+                // reference_failure_message mirrors. Tolerating it in
+                // compatibility mode would record a warning whose
+                // sentence is false (the type IS declared in the set) and
+                // give one reference two verdicts depending on which
+                // entry point is called (the review's CR-3, ledger
+                // D-25), so the tolerance below is reserved for a
+                // reference the index does not know at all
+                // (RESOLVE_MISSING).
+                const bool invisible_reference =
+                    outcome == RESOLVE_INVISIBLE;
+                const std::string reason =
+                    invisible_reference
+                        ? reference_failure_message(file, symbols, raw, outcome,
+                                                    resolved_name)
+                        : missing_reference_message(raw, scope, resolved_name);
+                if (unresolved_policy.external_warned_types != 0 &&
+                    !invisible_reference) {
+                    // Step 7.2: compatibility mode tolerates a MISSING
+                    // target only when the descriptor classifies the
+                    // reference itself - an explicit supported message or
+                    // enum kind and an absolute type name. Everything else
+                    // (a relative source-style name, a missing has_type,
+                    // and since fix round r12 an invisible declared type)
+                    // is refused even here, or the mode becomes the
+                    // general unresolved-type escape hatch the contract
+                    // forbids. The code stays the lookup outcome's own
+                    // (DIAGNOSTIC_UNRESOLVED_TYPE for a missing target,
+                    // DIAGNOSTIC_INVISIBLE_TYPE for an invisible one):
+                    // the reference is unresolved, the policy merely
+                    // refuses to tolerate it.
+                    const bool classified =
+                        field.has_type && field.has_type_name &&
+                        (field.type == FieldDescriptorProto::TYPE_MESSAGE ||
+                         field.type == FieldDescriptorProto::TYPE_ENUM) &&
+                        !field.type_name.empty() &&
+                        field.type_name[0] == '.';
+                    if (!classified) {
+                        return fail_at_code(
+                            file,
+                            reason +
+                            "; compatibility mode accepts an unresolved "
+                            "type only when the descriptor supplies an "
+                            "absolute type name and an explicit message or "
+                            "enum kind",
+                            field_type_location(file, field_path),
+                            field_path, outcome_code(outcome), error);
+                    }
+                    // A5: the bound is one warning per type NAME, not per
+                    // field, and it is the caller-owned set that carries
+                    // it - warn_once only keeps a repeated pass idempotent.
+                    // The warning goes to the stable unknown location
+                    // because a thin descriptor has no positions, and the
+                    // reference is never rewritten: no fabricated kind, no
+                    // absolute name invented, no first enumerator or
+                    // integer zero for its default.
+                    *external_reference = true;
+                    if (unresolved_policy.missing_external != 0) {
+                        *unresolved_policy.missing_external = true;
+                    }
+                    const std::string type_name = view_text(field.type_name);
+                    if (unresolved_policy.external_warned_types
+                            ->insert(type_name).second) {
+                        warn_once(file, external_reference_message(type_name),
+                                  DIAGNOSTIC_GENERIC, unknown_location(),
+                                  field_path);
+                    }
+                } else if (unresolved_policy.deferred) {
+                    warn_once(file,
+                              reason +
+                              "; it is kept as TYPE_MESSAGE until imports are linked",
+                              outcome_code(outcome),
+                              field_type_location(file, field_path), field_path);
+                } else {
+                    return fail_at_code(file, reason,
+                                        field_type_location(file, field_path),
+                                        field_path, outcome_code(outcome),
+                                        error);
+                }
             }
         }
     }
+    return true;
+}
 
+// 3. the field rules that run after resolution - packed legality, the oneof
+// index and label checks, and default validation
+bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
+                             const std::set<const SchemaFile*>& visible_files,
+                             const std::string& scope,
+                             const DescriptorProto& message, bool link_types,
+                             FieldDescriptorProto& field, const DescriptorPath& field_path,
+                             bool unknown, bool external_reference,
+                             Diagnostic& error)
+{
+    // Repeatedness is known without resolution: no import can turn an
+    // optional field into a repeated one, so reject packed on
+    // non-repeated fields immediately. Whether the type itself admits
+    // packed encoding is checked only for known kinds.
+    //
+    // D-51 (fix round r25): the gate is protoc's `field->options().packed()`
+    // - presence AND value - not `has_packed` alone. protoc refuses exactly
+    // one shape, `[packed = true]` on a non-packable field
+    // (descriptor.cc:7977), and writes `has_packed = true, packed = false`
+    // for `[packed = false]`, so a presence-only gate refused the sets
+    // protoc itself emits for an optional field, a repeated string and a
+    // repeated message.
+    if (field.options.has_packed && field.options.packed) {
+        if (field.label != FieldDescriptorProto::LABEL_REPEATED) {
+            return fail_at(file,
+                           "packed option is valid only on repeated primitive or enum fields",
+                           field_packed_location(file, field_path),
+                           field_path, error);
+        }
+        if (!unknown && !packable_type(field.type)) {
+            return fail_at(file,
+                           "packed option is valid only on repeated primitive or enum fields",
+                           field_packed_location(file, field_path),
+                           field_path, error);
+        }
+    }
+    if (field.has_oneof_index &&
+        (field.oneof_index < 0 ||
+         static_cast<std::size_t>(field.oneof_index) >= message.oneof_decl.size())) {
+        return fail_at(file, "invalid oneof_index in message " + scope,
+                       declaration_location(file, field_path), field_path, error);
+    }
+    // D-56 (fix round r25): a field claimed by a oneof must itself be
+    // OPTIONAL, which protoc reports as "Fields of oneofs must themselves
+    // have label LABEL_OPTIONAL." (descriptor.cc:7471-7475) - a shape only a
+    // manually built descriptor can carry, because the .proto parser cannot
+    // write it. The range check above keeps its own message by running
+    // first; an ABSENT label is read as OPTIONAL, exactly as protoc's
+    // `proto.label()` default is, so only a declared label can disagree.
+    if (field.has_oneof_index && field.has_label &&
+        field.label != FieldDescriptorProto::LABEL_OPTIONAL) {
+        return fail_at(file,
+                       "a field of a oneof must have label "
+                       "LABEL_OPTIONAL",
+                       declaration_location(file, field_path), field_path,
+                       error);
+    }
+    // Scalar kinds are known without linking; named kinds are validated
+    // only when linking (link_types) so a shadowed local match cannot
+    // decide packed/default validity ahead of import linking.
+    if (!field.has_type_name) {
+        if (!validate_default(file, symbols, visible_files, field, false,
+                              field_path, error)) {
+            return false;
+        }
+    } else if (link_types && !external_reference) {
+        if (!validate_default(file, symbols, visible_files, field, unknown,
+                              field_path, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// 4. oneof declarations claimed by no field (D-28) - after the field loop on
+// purpose
+bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
+                             const std::string& scope,
+                             const DescriptorPath& message_path, Diagnostic& error)
+{
     // D-28 (fix round r13, contract clause 12): every oneof declaration must be
     // claimed by at least one field. The index-RANGE check inside the loop
     // above only refuses a field pointing outside the list, so a declaration
@@ -2254,12 +2292,21 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                 DIAGNOSTIC_EMPTY_ONEOF, error);
         }
     }
+    return true;
+}
 
-    std::set<std::string> nested_names;
+// 5. nested type names, then recursion
+bool validate_nested_types(SchemaFile& file, const SymbolIndex& symbols,
+                           const std::set<const SchemaFile*>& visible_files,
+                           const UnresolvedPolicy& unresolved_policy, bool link_types,
+                           DescriptorProto& message, const std::string& scope,
+                           const DescriptorPath& message_path, Diagnostic& error)
+{
+    std::set<str_view> nested_names;
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
-        const DescriptorPath enum_path =
-            message_enum_path(message_path, static_cast<int>(i));
-        if (!nested_names.insert(view_text(message.enum_type[i].name)).second) {
+        if (!nested_names.insert(message.enum_type[i].name).second) {
+            const DescriptorPath enum_path =
+                message_enum_path(message_path, static_cast<int>(i));
             return fail_at(file, "duplicate nested type name in " + scope,
                            declaration_location(file, enum_path),
                            enum_path, error);
@@ -2268,7 +2315,7 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
         const DescriptorPath nested_path =
             message_nested_path(message_path, static_cast<int>(i));
-        if (!nested_names.insert(view_text(message.nested_type[i].name)).second) {
+        if (!nested_names.insert(message.nested_type[i].name).second) {
             return fail_at(file, "duplicate nested type name in " + scope,
                            declaration_location(file, nested_path),
                            nested_path, error);
@@ -2282,7 +2329,105 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
     return true;
 }
 
-} // namespace
+// Checks every field in one message subtree. With link_types == true this
+// resolves custom field TypeNames and applies the semantic rules that
+// require the resolved kind (packed legality for named types, named default
+// validation). With link_types == false only checks that need no type
+// resolution run: a locally resolvable kind must not decide the outcome,
+// because shadowing imports may change it after linking. Unknown-kind
+// packed/default rules are then left for complete linking.
+//
+// `unresolved_policy` says what a type_name that resolves nowhere means to
+// the pass that called this (see UnresolvedPolicy above).
+bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
+                     const std::set<const SchemaFile*>& visible_files,
+                     const UnresolvedPolicy& unresolved_policy,
+                     bool link_types,
+                     DescriptorProto& message,
+                     const std::string& parent, const DescriptorPath& message_path,
+                     Diagnostic& error)
+{
+    const std::string scope = joined_name(parent, message.name);
+    const bool is_proto3 = classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3;
+    std::set<str_view> names;
+    std::set<std::int32_t> numbers;
+    for (std::size_t i = 0; i < message.field.size(); ++i) {
+        FieldDescriptorProto& field = message.field[i];
+        const DescriptorPath field_path =
+            message_field_path(message_path, static_cast<int>(i));
+        if (!names.insert(field.name).second) {
+            return fail_at(file, "duplicate field name " + view_text(field.name),
+                           declaration_location(file, field_path), field_path, error);
+        }
+        if (!numbers.insert(field.number).second) {
+            return fail_at(file, "duplicate field number in message " + scope,
+                           declaration_location(file, field_path), field_path, error);
+        }
+
+        bool unknown = false;
+        bool external_reference = false;
+        if (!validate_field_declared_shape(file, field, field_path, is_proto3,
+                                           error)) {
+            return false;
+        }
+        if (!resolve_field_type(file, symbols, visible_files, unresolved_policy,
+                                scope, link_types, field, field_path, &unknown,
+                                &external_reference, error)) {
+            return false;
+        }
+        if (!validate_field_encoding(file, symbols, visible_files, scope, message,
+                                     link_types, field, field_path, unknown,
+                                     external_reference, error)) {
+            return false;
+        }
+    }
+
+    if (!validate_message_oneofs(file, message, scope, message_path, error)) {
+        return false;
+    }
+    return validate_nested_types(file, symbols, visible_files, unresolved_policy,
+                                 link_types, message, scope, message_path, error);
+}
+
+// One-line bridges onto the anonymous message-level validators declared in
+// schema_semantics_internal.hpp. The call is qualified with the enclosing
+// namespace because an unqualified name here would find the forwarder itself;
+// `easypb_schema::name` resolves to the anonymous function through the unnamed
+// namespace's implicit using-directive. The definitions stay anonymous.
+bool validate_message_symbol_names(const SchemaFile& file,
+                                   const DescriptorProto& message,
+                                   const DescriptorPath& message_path,
+                                   const std::string& parent, Diagnostic& error)
+{
+    return ::easypb_schema::validate_message_symbol_names(
+        file, message, message_path, parent, error);
+}
+
+bool validate_message_enum_value_numbers(const SchemaFile& file,
+                                         const DescriptorProto& message,
+                                         const std::string& qualified_name,
+                                         const DescriptorPath& message_path,
+                                         Diagnostic& error)
+{
+    return ::easypb_schema::validate_message_enum_value_numbers(
+        file, message, qualified_name, message_path, error);
+}
+
+bool validate_message_map_entries(const SchemaFile& file,
+                                  const DescriptorProto& message,
+                                  const std::string& qualified_name,
+                                  Diagnostic& error)
+{
+    return ::easypb_schema::validate_message_map_entries(file, message,
+                                                         qualified_name, error);
+}
+
+} // namespace internal
+
+// The public passes below keep their unqualified spellings: the rule block
+// moved into `internal`, and these using-declarations are the one-line bridge.
+using internal::UnresolvedPolicy;
+using internal::resolve_message;
 
 bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error)
 {
@@ -2348,7 +2493,7 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
     // ledger `D-39`, contract clause 13). The file's own `name` is a logical
     // path, not a symbol, and is NOT checked here.
     const std::string prefix = package_prefix(file);
-    const std::string package = view_text(file.file.package);
+    const str_view& package = file.file.package;
     if (file.file.has_package && !package.empty()) {
         // D-59 (fix round r25): a package component belongs to the package, so
         // its scope is the package's own name, and its location is the
@@ -2364,30 +2509,32 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
         std::size_t start = 0;
         for (;;) {
             const std::size_t dot = package.find('.', start);
-            const std::string component =
-                package.substr(start, (dot == std::string::npos
+            const str_view component =
+                package.substr(start, (dot == str_view::npos
                                            ? package.size()
                                            : dot) - start);
             if (!check_symbol_name(file, component, "package component",
                                    prefix, package_path, error)) {
                 return false;
             }
-            if (dot == std::string::npos) break;
+            if (dot == str_view::npos) break;
             start = dot + 1;
         }
     }
     for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
-        const DescriptorPath enum_path = file_enum_path(static_cast<int>(i));
-        if (!check_symbol_name(file, view_text(file.file.enum_type[i].name),
-                               "enum type", prefix, enum_path, error)) {
-            return false;
+        if (!is_valid_symbol_name(file.file.enum_type[i].name)) {
+            return fail_symbol_name(
+                file, file.file.enum_type[i].name, "enum type", prefix,
+                file_enum_path(static_cast<int>(i)), error);
         }
         for (std::size_t j = 0; j < file.file.enum_type[i].value.size(); ++j) {
-            if (!check_symbol_name(
-                    file, view_text(file.file.enum_type[i].value[j].name),
-                    "enum value", prefix,
-                    enum_value_path(enum_path, static_cast<int>(j)), error)) {
-                return false;
+            if (!is_valid_symbol_name(file.file.enum_type[i].value[j].name)) {
+                return fail_symbol_name(
+                    file, file.file.enum_type[i].value[j].name, "enum value",
+                    prefix,
+                    enum_value_path(file_enum_path(static_cast<int>(i)),
+                                    static_cast<int>(j)),
+                    error);
             }
         }
     }
@@ -2401,7 +2548,7 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
     for (std::size_t i = 0; i < file.file.service.size(); ++i) {
         const ServiceDescriptorProto& service = file.file.service[i];
         const DescriptorPath service_path = file_service_path(static_cast<int>(i));
-        if (!check_symbol_name(file, view_text(service.name), "service", prefix,
+        if (!check_symbol_name(file, service.name, "service", prefix,
                                service_path, error)) {
             return false;
         }
@@ -2420,13 +2567,15 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
         std::set<str_view> method_names;
         for (std::size_t j = 0; j < service.method.size(); ++j) {
             const str_view method_name = service.method[j].name;
-            const DescriptorPath method_path =
-                service_method_path(service_path, static_cast<int>(j));
-            if (!check_symbol_name(file, method_name, "method", service_scope,
-                                   method_path, error)) {
-                return false;
+            if (!is_valid_symbol_name(method_name)) {
+                return fail_symbol_name(
+                    file, method_name, "method", service_scope,
+                    service_method_path(service_path, static_cast<int>(j)),
+                    error);
             }
             if (!method_names.insert(method_name).second) {
+                const DescriptorPath method_path =
+                    service_method_path(service_path, static_cast<int>(j));
                 return fail_at_code(
                     file,
                     "duplicate method name \"" + std::string(method_name) +

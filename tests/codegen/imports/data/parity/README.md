@@ -246,19 +246,21 @@ Nothing is asserted about message text.
   ledger row.
 * **Three fixtures carry no row: `source/probe-source-{proto3,proto4,
   editions}.proto`.** Measured: the source frontend refuses `syntax = "proto4"`
-  (`syntax must be "proto2" or "proto3"`) and `edition = "2023"` (`expected a
-  top-level .proto statement`) itself, as a **parse error carrying
-  `DIAGNOSTIC_GENERIC`**, so `DIAGNOSTIC_UNSUPPORTED_SYNTAX` is unreachable from
-  `.proto` text and the code's rows live at the descriptor origin, where
-  `schema_linker.cpp` owns it. A row may not name `GENERIC` (the bucket is not a
-  verdict), so the shapes are kept as evidence rather than as rows — but they
-  are **not the same relation**, measured 2026-09-28: `syntax = "proto4"` is
-  parity (`protoc` refuses it as source text too, and both answers are the
-  bucket because a file the parser refused is never classified), while
-  `edition = "2023";` is an **inverse** on this origin as well as on the
-  descriptor one — `libprotoc 30.1` ACCEPTS it and models the file as
-  `syntax: "editions"`, our parser refuses it, and that refusal is A25's
-  recorded capability boundary (owned by plan 5), not a parity verdict.
+  (`syntax must be "proto2" or "proto3"`) and `edition = "2023"`
+  (`editions syntax is not supported: only "proto2" and "proto3" are
+  accepted`, since plan 5's parser branch landed 2026-10-04; before it the
+  answer was `expected a top-level .proto statement`) itself, as a **parse
+  error carrying `DIAGNOSTIC_GENERIC`**, so `DIAGNOSTIC_UNSUPPORTED_SYNTAX` is
+  unreachable from `.proto` text and the code's rows live at the descriptor
+  origin, where `schema_linker.cpp` owns it. A row may not name `GENERIC` (the
+  bucket is not a verdict), so the shapes are kept as evidence rather than as
+  rows — but they are **not the same relation**, measured 2026-09-28:
+  `syntax = "proto4"` is parity (`protoc` refuses it as source text too, and
+  both answers are the bucket because a file the parser refused is never
+  classified), while `edition = "2023";` is an **inverse** on this origin as
+  well as on the descriptor one — `libprotoc 30.1` ACCEPTS it and models the
+  file as `syntax: "editions"`, our parser refuses it by name, and that refusal
+  is A25's recorded capability boundary, not a parity verdict.
 
 ## Provenance of every cell
 

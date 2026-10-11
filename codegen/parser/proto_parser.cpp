@@ -207,7 +207,6 @@ public:
         if (std::strchr(punctuation, c) != 0) {
             token.kind = TOKEN_SYMBOL;
             token.symbol = c;
-            token.text.assign(1, c);
             advance();
             return token;
         }
@@ -611,7 +610,8 @@ public:
            ParsedProto& result, const ParseOptions& options)
         : file_name_(file_name), lexer_(source, source_size), out_(result),
           seen_syntax_(false), seen_package_(false), seen_statement_(false),
-          defer_type_resolution_(options.defer_type_resolution)
+          defer_type_resolution_(options.defer_type_resolution),
+          syntax_(easypb_schema::FILE_SYNTAX_PROTO2)
     {
         current_ = lexer_.next();
         next_ = lexer_.next();
@@ -665,6 +665,13 @@ public:
             }
             else if (accept_keyword("extend")) parse_extend();
             else if (accept_keyword("service")) parse_service();
+            // EditionsStatement: `edition = "2023";` names a syntax this
+            // project cannot model (A25), so it is refused by name instead of
+            // falling through to the generic top-level message, which read
+            // like a typo (plan 4's ledger D-44; plan 5 owns this branch).
+            // The refusal is a statement-level one and does not weaken the
+            // unknown-`syntax` path above, which keeps its own message.
+            else if (is_keyword("edition")) fail_editions_statement();
             else fail("expected a top-level .proto statement");
         }
 
@@ -681,10 +688,11 @@ private:
     bool seen_package_;
     bool seen_statement_;
     bool defer_type_resolution_;
+    easypb_schema::FileSyntax syntax_;
 
     void advance()
     {
-        current_ = next_;
+        current_ = std::move(next_);
         next_ = lexer_.next();
     }
 
@@ -731,7 +739,7 @@ private:
     std::string identifier()
     {
         if (current_.kind != TOKEN_IDENTIFIER) fail("expected identifier");
-        const std::string result = current_.text;
+        std::string result = std::move(current_.text);
         advance();
         return result;
     }
@@ -763,21 +771,46 @@ private:
         return result;
     }
 
+    // EditionsStatement <- "edition" "=" StringSequence ";"
+    //
+    // protoc 30.1 models `edition = "2023";` as `syntax: "editions"`, which
+    // this project refuses wherever linking happens. The source origin names
+    // that limit here rather than leaving a generic parse error: A25's rule
+    // has one classifier (`classify_file_syntax`), and a source statement the
+    // parser cannot even build a descriptor from is a frontend statement, so
+    // the message is written at this origin instead of routing a
+    // half-built file into the linker.
+    void fail_editions_statement() const
+    {
+        throw ParseFailure(
+            current_.location,
+            "editions syntax is not supported: only \"proto2\" and "
+            "\"proto3\" are accepted");
+    }
+
     // SyntaxStatement <- "syntax" "=" StringSequence ";"
     void parse_syntax()
     {
         accept_keyword("syntax");
         expect_symbol('=');
         const std::string value = string_sequence();
-        if (value != "proto2" && value != "proto3") {
+        // The one classifier decides whether an explicit value names a syntax
+        // this project models; the literal comparison lives inside
+        // classify_file_syntax (E7), not here.
+        out_.file.syntax = out_.strings.save(value);
+        out_.file.has_syntax = true;
+        const easypb_schema::FileSyntax syntax =
+            easypb_schema::classify_file_syntax(out_.file);
+        if (syntax == easypb_schema::FILE_SYNTAX_UNSUPPORTED) {
             fail("syntax must be \"proto2\" or \"proto3\"");
         }
         expect_symbol(';');
+        syntax_ = syntax;
         // protoc represents proto2 by leaving FileDescriptorProto.syntax
         // absent; only proto3 is materialized in field 12.
-        if (value == "proto3") {
-            out_.file.syntax = out_.strings.save(value);
-            out_.file.has_syntax = true;
+        if (syntax == easypb_schema::FILE_SYNTAX_PROTO2) {
+            out_.file.syntax = str_view();
+            out_.file.has_syntax = false;
         }
     }
 
@@ -811,7 +844,6 @@ private:
         else if (accept_keyword("weak")) info.modifier = ImportInfo::WEAK_IMPORT;
         info.path = string_sequence();
         expect_symbol(';');
-        out_.imports.push_back(info);
         out_.file.dependency.push_back(out_.strings.save(info.path));
         const int index = static_cast<int>(out_.file.dependency.size() - 1);
         if (info.modifier == ImportInfo::PUBLIC_IMPORT) {
@@ -819,6 +851,7 @@ private:
         } else if (info.modifier == ImportInfo::WEAK_IMPORT) {
             out_.file.weak_dependency.push_back(index);
         }
+        out_.imports.push_back(std::move(info));
     }
 
     // OptionNamePart <- Identifier / "(" "."? FullIdentifier ")"
@@ -974,7 +1007,7 @@ private:
         service.has_name = true;
         const DescriptorPath path = easypb_schema::file_service_path(
             static_cast<int>(out_.file.service.size()));
-        out_.file.service.push_back(service);
+        out_.file.service.push_back(std::move(service));
         out_.declaration_locations[path] = name_location;
         expect_symbol('{');
         while (!accept_symbol('}')) {
@@ -1004,11 +1037,11 @@ private:
             const SourceLocation option_location = current_.location;
             const std::string name = option_name();
             expect_symbol('=');
-            const Constant value = constant();
+            Constant value = constant();
             if (name == "default") {
                 if (state.has_default) throw ParseFailure(option_location, "duplicate default field option");
                 state.has_default = true;
-                state.default_value = value;
+                state.default_value = std::move(value);
             } else if (name == "packed") {
                 if (state.has_packed) throw ParseFailure(option_location, "duplicate packed field option");
                 if (value.kind != Constant::BOOL_VALUE) {
@@ -1031,7 +1064,7 @@ private:
                         "EasyProtoBuf C++ type must not be empty");
                 }
                 state.has_cpp_type = true;
-                state.cpp_type = value.text;
+                state.cpp_type = std::move(value.text);
             } else if (name == "(easypb.cpp)") {
                 throw ParseFailure(option_location,
                     "use (easypb.cpp).type = \"...\" instead of assigning "
@@ -1121,7 +1154,7 @@ private:
     // numeric/bool values, and an identifier for enum defaults.
     void apply_default(FieldDescriptorProto& field, const Constant& value)
     {
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) == "proto3")) {
+        if (syntax_ == easypb_schema::FILE_SYNTAX_PROTO3) {
             throw ParseFailure(value.location, "explicit default values are not allowed in proto3");
         }
         if (field.label == FieldDescriptorProto::LABEL_REPEATED || field.has_oneof_index) {
@@ -1185,8 +1218,8 @@ private:
         else source.default_location = easypb_schema::unknown_location();
         if (provenance.has_packed) source.packed_location = provenance.packed_location;
         else source.packed_location = easypb_schema::unknown_location();
-        out_.field_sources.push_back(source);
         out_.declaration_locations[source.path] = provenance.name_location;
+        out_.field_sources.push_back(std::move(source));
     }
 
     // Parses one field production, appends it to message.field, and records
@@ -1227,10 +1260,12 @@ private:
         }
         field.has_label = true;
 
-        if ((!out_.file.has_syntax || view_text(out_.file.syntax) == "proto2") && !oneof_field && !label_seen) {
+        if (syntax_ == easypb_schema::FILE_SYNTAX_PROTO2 &&
+            !oneof_field && !label_seen) {
             fail("proto2 fields require optional, required, or repeated label");
         }
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) == "proto3") && field.label == FieldDescriptorProto::LABEL_REQUIRED) {
+        if (syntax_ == easypb_schema::FILE_SYNTAX_PROTO3 &&
+            field.label == FieldDescriptorProto::LABEL_REQUIRED) {
             fail("required fields are not allowed in proto3");
         }
 
@@ -1341,7 +1376,7 @@ private:
         key.label = FieldDescriptorProto::LABEL_OPTIONAL;
         key.has_label = true;
         set_type(key, key_type_name);
-        entry.field.push_back(key);
+        entry.field.push_back(std::move(key));
 
         // Entry field 2: optional TypeName value.
         FieldDescriptorProto value;
@@ -1352,7 +1387,7 @@ private:
         value.label = FieldDescriptorProto::LABEL_OPTIONAL;
         value.has_label = true;
         set_type(value, value_type_name);
-        entry.field.push_back(value);
+        entry.field.push_back(std::move(value));
 
         // Source map field: repeated synthetic-entry message.
         FieldDescriptorProto field;
@@ -1381,7 +1416,7 @@ private:
             field.has_options = true;
         }
 
-        message.nested_type.push_back(entry);
+        message.nested_type.push_back(std::move(entry));
         out_.declaration_locations[entry_path] = map_location;
         // The synthetic entry holds exactly two fields pushed above: key at
         // index 0, value at index 1. A plain assert is avoided on purpose:
@@ -1399,7 +1434,7 @@ private:
             key_source.type_location = key_location;
             key_source.default_location = easypb_schema::unknown_location();
             key_source.packed_location = easypb_schema::unknown_location();
-            out_.field_sources.push_back(key_source);
+            out_.field_sources.push_back(std::move(key_source));
         }
         {
             FieldSource value_source;
@@ -1408,9 +1443,9 @@ private:
             value_source.type_location = value_location;
             value_source.default_location = easypb_schema::unknown_location();
             value_source.packed_location = easypb_schema::unknown_location();
-            out_.field_sources.push_back(value_source);
+            out_.field_sources.push_back(std::move(value_source));
         }
-        message.field.push_back(field);
+        message.field.push_back(std::move(field));
         {
             FieldSource field_source;
             field_source.path = easypb_schema::message_field_path(
@@ -1419,8 +1454,8 @@ private:
             field_source.type_location = map_location;
             field_source.default_location = easypb_schema::unknown_location();
             field_source.packed_location = easypb_schema::unknown_location();
-            out_.field_sources.push_back(field_source);
             out_.declaration_locations[field_source.path] = field_name_location;
+            out_.field_sources.push_back(std::move(field_source));
         }
     }
 
@@ -1492,7 +1527,7 @@ private:
         const SourceLocation name_location = current_.location;
         const std::string oneof_name = identifier();
         for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
-            if (view_text(message.oneof_decl[i].name) == oneof_name) {
+            if (message.oneof_decl[i].name == oneof_name) {
                 throw ParseFailure(name_location, "duplicate oneof name " + oneof_name);
             }
         }
@@ -1500,7 +1535,7 @@ private:
         declaration.name = out_.strings.save(oneof_name);
         declaration.has_name = true;
         const std::int32_t index = static_cast<std::int32_t>(message.oneof_decl.size());
-        message.oneof_decl.push_back(declaration);
+        message.oneof_decl.push_back(std::move(declaration));
         out_.declaration_locations[easypb_schema::message_oneof_path(
             message_path, index)] = name_location;
         expect_symbol('{');
@@ -1603,7 +1638,7 @@ private:
             expect_symbol(';');
             out_.declaration_locations[easypb_schema::enum_value_path(
                 enum_path, static_cast<int>(result.value.size()))] = value_location;
-            result.value.push_back(value);
+            result.value.push_back(std::move(value));
         }
 
         if (result.value.empty()) {
@@ -1611,19 +1646,24 @@ private:
                                "enum must contain at least one value");
         }
 
-        for (std::size_t i = 0; i < result.value.size(); ++i) {
-            const std::string value_name = view_text(result.value[i].name);
-            if (reserved_names.find(value_name) != reserved_names.end()) {
-                fail("enum value name is reserved: " + value_name);
-            }
-            for (std::size_t r = 0; r < reserved_ranges.size(); ++r) {
-                if (range_contains(reserved_ranges[r], result.value[i].number)) {
-                    fail("enum value number is reserved");
+        if (!reserved_names.empty() || !reserved_ranges.empty()) {
+            for (std::size_t i = 0; i < result.value.size(); ++i) {
+                if (!reserved_names.empty()) {
+                    const std::string value_name = view_text(result.value[i].name);
+                    if (reserved_names.find(value_name) != reserved_names.end()) {
+                        fail("enum value name is reserved: " + value_name);
+                    }
+                }
+                for (std::size_t r = 0; r < reserved_ranges.size(); ++r) {
+                    if (range_contains(reserved_ranges[r], result.value[i].number)) {
+                        fail("enum value number is reserved");
+                    }
                 }
             }
         }
 
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) == "proto3") && !result.value.empty() && result.value[0].number != 0) {
+        if (syntax_ == easypb_schema::FILE_SYNTAX_PROTO3 &&
+            !result.value.empty() && result.value[0].number != 0) {
             throw ParseFailure(current_.location, "the first proto3 enum value must be zero");
         }
         if (!allow_alias) {
@@ -1698,7 +1738,7 @@ private:
     // for conflict checks because the trimmed descriptor has no range field.
     void parse_extensions(std::vector<NumberRange>& ranges)
     {
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) != "proto2")) fail("extensions ranges are allowed only in proto2");
+        if (syntax_ != easypb_schema::FILE_SYNTAX_PROTO2) fail("extensions ranges are allowed only in proto2");
         for (;;) {
             NumberRange range;
             range.location = current_.location;
@@ -1722,6 +1762,11 @@ private:
                                       const std::set<std::string>& reserved_names,
                                       const std::vector<NumberRange>& extension_ranges)
     {
+        if (reserved_names.empty() && reserved_ranges.empty() &&
+            extension_ranges.empty()) {
+            return;
+        }
+
         for (std::size_t i = 0; i < reserved_ranges.size(); ++i) {
             for (std::size_t j = 0; j < extension_ranges.size(); ++j) {
                 if (ranges_overlap(reserved_ranges[i], extension_ranges[j])) {
@@ -1733,9 +1778,11 @@ private:
 
         for (std::size_t i = 0; i < message.field.size(); ++i) {
             const FieldDescriptorProto& field = message.field[i];
-            const std::string name = view_text(field.name);
-            if (reserved_names.find(name) != reserved_names.end()) {
-                fail("field name is reserved: " + name);
+            if (!reserved_names.empty()) {
+                const std::string name = view_text(field.name);
+                if (reserved_names.find(name) != reserved_names.end()) {
+                    fail("field name is reserved: " + name);
+                }
             }
             for (std::size_t j = 0; j < reserved_ranges.size(); ++j) {
                 if (range_contains(reserved_ranges[j], field.number)) {
@@ -1756,7 +1803,7 @@ private:
     void parse_extend()
     {
         const SourceLocation where = current_.location;
-        if ((out_.file.has_syntax && view_text(out_.file.syntax) != "proto2")) fail("extend declarations are allowed only in proto2");
+        if (syntax_ != easypb_schema::FILE_SYNTAX_PROTO2) fail("extend declarations are allowed only in proto2");
         (void)full_identifier(true);
         expect_symbol('{');
         while (!accept_symbol('}')) {
@@ -1769,7 +1816,7 @@ private:
         warning.location = where;
         warning.warning = true;
         warning.message = "extend declaration parsed but not stored by the trimmed FileDescriptorProto model";
-        out_.warnings.push_back(warning);
+        out_.warnings.push_back(std::move(warning));
     }
 
     // Semantic driver after ProtoFile has been consumed. Both modes index

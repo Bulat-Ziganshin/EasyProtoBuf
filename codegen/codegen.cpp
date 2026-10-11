@@ -9,25 +9,11 @@
 #include <easypb.hpp>
 #include "descriptor.pb.hpp"
 #include "cpp_names.hpp"
-#include "utils.cpp"
-
-
-// Command-line options affecting the generated code
-struct
-{
-    bool no_class = false;
-    bool no_decoder = false;
-    bool no_encoder = false;
-    bool no_has_fields = false;
-    bool no_required = false;
-    bool no_default_values = false;
-    bool packed = false;
-    bool no_packed = false;
-    bool allow_self_recursive_containers = false;
-    std::string cpp_string_type;
-    std::string cpp_repeated_type;
-    std::string cpp_map_type;
-} option;
+#include "generation.hpp"
+#include "generation_options.hpp"
+#include "header_paths.hpp"
+#include "schema.hpp"
+#include "utils.hpp"
 
 
 // Protobuf and C++ naming/formatting constants used by the generator
@@ -44,10 +30,29 @@ enum class GraphColor
 };
 
 
-// A few global vars instead of passing data between functions
-std::string package_name_prefix;  // package-describing prefix of message types, e.g. ".mypackage."
-std::string current_package;      // package name without leading/trailing dots
-bool current_file_is_proto3 = false;
+// Per-invocation generation state. These values used to be file-scope mutable
+// globals (`option`, `package_name_prefix`, `current_package`,
+// `current_file_is_proto3`); one context per generated file is what keeps two
+// requests in one process from observing each other's state.
+struct GenerationContext
+{
+    GenerationContext(const easypb_codegen::GenerationOptions& options,
+                      const FileDescriptorProto& file)
+        : options(options),
+          package(file.package > "" ? std::string(file.package) : std::string()),
+          package_name_prefix(
+              ! package.empty()
+                  ? PB_TYPE_DELIMITER + package + PB_TYPE_DELIMITER
+                  : PB_TYPE_DELIMITER),
+          syntax(easypb_schema::classify_file_syntax(file))
+    {
+    }
+
+    const easypb_codegen::GenerationOptions& options;
+    std::string package;              // package name without leading/trailing dots
+    std::string package_name_prefix;  // package-describing prefix, e.g. ".mypackage."
+    easypb_schema::FileSyntax syntax; // the ONE per-file syntax classification
+};
 
 
 // The descriptor supplies the first declared value used by implicit protobuf
@@ -136,9 +141,10 @@ bool is_repeated(const FieldDescriptorProto& field)
 
 
 // Does this field have corresponding has_* flag?
-bool hasfield_enabled(const FieldDescriptorProto& field)
+bool hasfield_enabled(const FieldDescriptorProto& field,
+                      const GenerationContext& context)
 {
-    return (! is_repeated(field)  &&  ! option.no_has_fields);
+    return (! is_repeated(field)  &&  ! context.options.no_has_fields);
 }
 
 
@@ -153,14 +159,22 @@ bool is_numeric_field(const FieldDescriptorProto& field)
 
 
 // Serialize this field in the more compact "packed" Protobuf wire format?
-bool write_as_packed(const FieldDescriptorProto& field)
+bool write_as_packed(const FieldDescriptorProto& field,
+                     const GenerationContext& context)
 {
+    // The proto3 packed default comes from the classification made once per
+    // invocation; no part of the generator compares `file.syntax` itself
+    // (plan 5 A25), and an unsupported file never receives proto3 semantics.
+    // The linker refuses FILE_SYNTAX_UNSUPPORTED before generation once the
+    // standalone CLI runs it; until that adapter/CLI batch lands, this
+    // expression keeps the bytes the pre-extraction generator produced for
+    // every input of the existing corpus (S7).
     return is_repeated(field) &&
            is_numeric_field(field) &&
-           (option.packed ?    true :
-            option.no_packed ? false :
+           (context.options.packed ?    true :
+            context.options.no_packed ? false :
             field.options.has_packed ? field.options.packed :
-                                       current_file_is_proto3);
+            context.syntax == easypb_schema::FILE_SYNTAX_PROTO3);
 }
 
 
@@ -198,12 +212,13 @@ str_view pbtype_name(const FieldDescriptorProto& field)
 // independent of the package namespace and of any nearer C++ name.
 std::string cpp_qualified_type_str(str_view message_type)
 {
-    return easypb_codegen::cpp_absolute_name(std::string(message_type));
+    return easypb_codegen::cpp_absolute_name(message_type);
 }
 
 
 // Return C++ type corresponding to the base type (without "repeated") of the Protobuf field
-std::string base_cpp_type_as_str(const FieldDescriptorProto& field)
+std::string base_cpp_type_as_str(const FieldDescriptorProto& field,
+                                 const GenerationContext& context)
 {
     // According to https://github.com/protocolbuffers/protobuf/blob/c05b320d9c18173bfce36c4bef22f9953d340ff9/src/google/protobuf/descriptor.h#L780
     switch(field.type)
@@ -229,7 +244,7 @@ std::string base_cpp_type_as_str(const FieldDescriptorProto& field)
         case FieldDescriptorProto::TYPE_BOOL:     return "bool";
 
         case FieldDescriptorProto::TYPE_STRING:
-        case FieldDescriptorProto::TYPE_BYTES:    return option.cpp_string_type;
+        case FieldDescriptorProto::TYPE_BYTES:    return context.options.cpp_string_type;
 
         case FieldDescriptorProto::TYPE_ENUM:
         case FieldDescriptorProto::TYPE_MESSAGE:  return cpp_qualified_type_str(field.type_name);
@@ -282,7 +297,8 @@ std::string cpp_type_legacy_safe(std::string type)
 
 
 // Return C++ type for the Protobuf field
-std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* map_type)
+std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* map_type,
+                            const GenerationContext& context)
 {
     const bool has_cpp_type =
         field.has_options && field.options.has_cpp && field.options.cpp.has_type;
@@ -295,16 +311,16 @@ std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* ma
 
     if (map_type) {
         return cpp_type_legacy_safe(
-            myformat(has_cpp_type ? field.options.cpp.type : option.cpp_map_type,
-                     base_cpp_type_as_str(*map_type->key_field),
-                     base_cpp_type_as_str(*map_type->value_field)));
+            myformat(has_cpp_type ? field.options.cpp.type : context.options.cpp_map_type,
+                     base_cpp_type_as_str(*map_type->key_field, context),
+                     base_cpp_type_as_str(*map_type->value_field, context)));
     }
 
-    const std::string basetype_str = base_cpp_type_as_str(field);
+    const std::string basetype_str = base_cpp_type_as_str(field, context);
 
     if (is_repeated(field)) {
         return cpp_type_legacy_safe(
-            myformat(has_cpp_type ? field.options.cpp.type : option.cpp_repeated_type,
+            myformat(has_cpp_type ? field.options.cpp.type : context.options.cpp_repeated_type,
                      basetype_str));
     }
 
@@ -334,14 +350,15 @@ std::string generate_enum(const EnumDescriptorProto& enum_type,
 
 
 // Encoder code for a single field
-std::string generate_field_encoder(const FieldDescriptorProto& field, const MapType* map_type)
+std::string generate_field_encoder(const FieldDescriptorProto& field, const MapType* map_type,
+                                   const GenerationContext& context)
 {
     // "x." belongs to the literal: as an argument it cost a temporary
     // std::string of the name plus a second one for the concatenation, once
     // per field, and both were discarded immediately.
     return myformat("    pb.put_{0}{1}({2}, x.{3});\n",
     /* 0 */ ! map_type && is_repeated(field)
-                ? (write_as_packed(field)? "packed_" : "repeated_")
+                ? (write_as_packed(field, context)? "packed_" : "repeated_")
                 : "",
     /* 1 */ protobuf_type_as_str(field, map_type),
     /* 2 */ number_to_string(field.number),
@@ -350,7 +367,8 @@ std::string generate_field_encoder(const FieldDescriptorProto& field, const MapT
 
 
 // Decoder code for a single field
-std::string generate_field_decoder(const FieldDescriptorProto& field, const MapType* map_type)
+std::string generate_field_decoder(const FieldDescriptorProto& field, const MapType* map_type,
+                                   const GenerationContext& context)
 {
     // Same as the encoder: the receiver spelling comes from the literal
     // instead of two temporaries per field.
@@ -359,7 +377,7 @@ std::string generate_field_decoder(const FieldDescriptorProto& field, const MapT
     /* 1 */ ! map_type && is_repeated(field)? "repeated_" : "",
     /* 2 */ protobuf_type_as_str(field, map_type),
     /* 3 */ field.name,
-    /* 4 */ hasfield_enabled(field)
+    /* 4 */ hasfield_enabled(field, context)
                 ? myformat(", &x.has_{0}", field.name)
                 : "");
 }
@@ -369,7 +387,8 @@ std::string generate_field_decoder(const FieldDescriptorProto& field, const MapT
 // declared first value as the implicit protobuf default; integer zero cannot
 // initialize an enum in standard C++ and may not name a declared value.
 std::string default_value_str(const FieldDescriptorProto& field,
-                              const EnumByProtoName& enums)
+                              const EnumByProtoName& enums,
+                              const GenerationContext& context)
 {
     if (is_repeated(field)) {
         return "";
@@ -383,7 +402,7 @@ std::string default_value_str(const FieldDescriptorProto& field,
         // the selected file.  Preserve the historical explicit-default output,
         // but an implicit value cannot be inferred without that descriptor.
         if (found == enums.end()) {
-            return field.has_default_value && ! option.no_default_values
+            return field.has_default_value && ! context.options.no_default_values
                 ? myformat(" = {0}{1}{2}",
                            cpp_qualified_type_str(field.type_name),
                            CPP_TYPE_DELIMITER, field.default_value)
@@ -396,7 +415,7 @@ std::string default_value_str(const FieldDescriptorProto& field,
                 myformat("Enum type '{0}' must contain at least one value", proto_name));
         }
 
-        const str_view value = field.has_default_value && ! option.no_default_values
+        const str_view value = field.has_default_value && ! context.options.no_default_values
             ? field.default_value
             : enum_type.value.front().name;
         // C++11 permits qualifying an unscoped enumerator through its enum
@@ -407,7 +426,7 @@ std::string default_value_str(const FieldDescriptorProto& field,
                         CPP_TYPE_DELIMITER, value);
     }
 
-    if (field.has_default_value  &&  ! option.no_default_values) {
+    if (field.has_default_value  &&  ! context.options.no_default_values) {
         // Use default field value specified in .proto file
         bool is_bytearray_field = (field.type==FieldDescriptorProto::TYPE_STRING || field.type==FieldDescriptorProto::TYPE_BYTES);
         const char* quote_str = (is_bytearray_field? "\"" : "");
@@ -493,7 +512,8 @@ const MapType* find_map_type(const FieldDescriptorProto& field,
                              const MapTypeByName& maptype_by_name,
                              str_view message_cpp_name)
 {
-    if (! is_repeated(field) || field.type != FieldDescriptorProto::TYPE_MESSAGE) {
+    if (maptype_by_name.empty() || ! is_repeated(field) ||
+        field.type != FieldDescriptorProto::TYPE_MESSAGE) {
         return nullptr;
     }
 
@@ -532,9 +552,9 @@ struct MessageInfo
     const DescriptorProto* descriptor = nullptr;
     std::string simple_name;          // Inner
     std::string proto_name;           // .pkg.Outer.Inner
-    std::string cpp_local_name;       // Outer::Inner
     std::string cpp_absolute_name;    // ::pkg::Outer::Inner
     std::string macro_stem;           // EASYPB_Outer_Inner (legacy spelling)
+    MapTypeByName map_types;
     std::vector<MessageInfo> children;
     std::vector<MessageInfo*> dependencies;
 };
@@ -551,23 +571,23 @@ using MessageByProtoName = std::map<str_view, MessageInfo*>;
 // Synthetic map entries stay in DescriptorProto::nested_type for map metadata,
 // but are not added to the user-visible message tree.
 MessageInfo make_message_info(const DescriptorProto& descriptor,
-                              const std::string& parent_proto_name)
+                              const std::string& parent_proto_name,
+                              const GenerationContext& context)
 {
     MessageInfo info;
     info.descriptor = &descriptor;
     info.simple_name = descriptor.name;
     info.proto_name = parent_proto_name.empty()
-        ? package_name_prefix + info.simple_name
+        ? context.package_name_prefix + info.simple_name
         : parent_proto_name + PB_TYPE_DELIMITER + info.simple_name;
-    info.cpp_local_name = easypb_codegen::cpp_local_name(info.proto_name, current_package);
     info.cpp_absolute_name = easypb_codegen::cpp_absolute_name(info.proto_name);
     info.macro_stem = easypb_codegen::insertion_macro_stem(
-        info.proto_name, current_package);
+        info.proto_name, context.package);
 
     for (const auto& nested: descriptor.nested_type) {
         if (! nested.options.map_entry) {
             info.children.push_back(
-                make_message_info(nested, info.proto_name));
+                make_message_info(nested, info.proto_name, context));
         }
     }
 
@@ -581,19 +601,6 @@ void index_message_info(MessageInfo& info, MessageByProtoName& index)
     index[info.proto_name] = &info;
     for (auto& child: info.children) {
         index_message_info(child, index);
-    }
-}
-
-
-// Add enums from one real-message subtree to the absolute-name index used by
-// default-value generation.
-void index_message_enums(const MessageInfo& info, EnumByProtoName& index)
-{
-    for (const auto& enum_type: info.descriptor->enum_type) {
-        index[info.proto_name + PB_TYPE_DELIMITER + std::string(enum_type.name)] = &enum_type;
-    }
-    for (const auto& child: info.children) {
-        index_message_enums(child, index);
     }
 }
 
@@ -652,9 +659,10 @@ bool requires_definition_dependency(const MessageInfo& owner,
                                     const FieldDescriptorProto& field,
                                     const FieldDescriptorProto& dependency_field,
                                     const MapType* map_type,
-                                    const MessageInfo* target)
+                                    const MessageInfo* target,
+                                    const GenerationContext& context)
 {
-    if (option.allow_self_recursive_containers &&
+    if (context.options.allow_self_recursive_containers &&
         target == &owner &&
         dependency_field.type == FieldDescriptorProto::TYPE_MESSAGE &&
         (map_type || field.label == FieldDescriptorProto::LABEL_REPEATED))
@@ -698,19 +706,20 @@ MessageInfo* find_type_owner(const FieldDescriptorProto& field,
 // has already rejected unresolved imports, while descriptor-set mode preserves
 // the existing behavior for types Codegen does not itself define.
 void resolve_message_dependencies(MessageInfo& info,
-                                  const MessageByProtoName& index)
+                                  const MessageByProtoName& index,
+                                  const GenerationContext& context)
 {
-    auto map_types = collect_map_types(*info.descriptor, info.proto_name);
+    info.map_types = collect_map_types(*info.descriptor, info.proto_name);
 
     for (const auto& field: info.descriptor->field) {
-        const MapType* map_type = find_map_type(field, map_types, info.cpp_absolute_name);
+        const MapType* map_type = find_map_type(field, info.map_types, info.cpp_absolute_name);
         const FieldDescriptorProto& dependency_field =
             map_type ? *map_type->value_field : field;
         MessageInfo* target = find_type_owner(dependency_field, index);
         if (! target) continue;
 
         const bool needs_definition = requires_definition_dependency(
-            info, field, dependency_field, map_type, target);
+            info, field, dependency_field, map_type, target, context);
 
         if (dependency_field.type == FieldDescriptorProto::TYPE_MESSAGE &&
             needs_definition &&
@@ -734,7 +743,7 @@ void resolve_message_dependencies(MessageInfo& info,
     }
 
     for (auto& child: info.children) {
-        resolve_message_dependencies(child, index);
+        resolve_message_dependencies(child, index, context);
     }
 }
 
@@ -829,13 +838,14 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
 
     std::map<MessageInfo*, GraphColor> color;
     std::vector<MessageInfo*> result;
+    result.reserve(units.size());
     std::vector<MessageInfo*> stack;
     for (auto* unit: units) color[unit] = GraphColor::Unvisited;
 
     struct Visitor {
         static void visit(MessageInfo* unit,
                           const std::vector<MessageInfo*>& units,
-                          std::map<MessageInfo*, std::set<MessageInfo*> >& dependencies,
+                          const std::map<MessageInfo*, std::set<MessageInfo*> >& dependencies,
                           std::map<MessageInfo*, GraphColor>& color,
                           std::vector<MessageInfo*>& stack,
                           std::vector<MessageInfo*>& result)
@@ -844,24 +854,29 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
             stack.push_back(unit);
 
             // Walk dependencies in source order to keep unrelated output stable.
-            for (auto* candidate: units) {
-                if (dependencies[unit].count(candidate) == 0) continue;
-                if (color[candidate] == GraphColor::Unvisited) {
-                    visit(candidate, units, dependencies, color, stack, result);
-                } else if (color[candidate] == GraphColor::OnStack) {
-                    // This is a cycle between lexical units (for example, two
-                    // root structs whose nested messages depend on each other).
-                    std::string path;
-                    std::size_t start = 0;
-                    while (start < stack.size() && stack[start] != candidate) ++start;
-                    for (std::size_t i = start; i < stack.size(); ++i) {
+            const std::map<MessageInfo*, std::set<MessageInfo*> >::const_iterator dep_it =
+                dependencies.find(unit);
+            if (dep_it != dependencies.end()) {
+                const std::set<MessageInfo*>& unit_deps = dep_it->second;
+                for (auto* candidate: units) {
+                    if (unit_deps.count(candidate) == 0) continue;
+                    if (color[candidate] == GraphColor::Unvisited) {
+                        visit(candidate, units, dependencies, color, stack, result);
+                    } else if (color[candidate] == GraphColor::OnStack) {
+                        // This is a cycle between lexical units (for example, two
+                        // root structs whose nested messages depend on each other).
+                        std::string path;
+                        std::size_t start = 0;
+                        while (start < stack.size() && stack[start] != candidate) ++start;
+                        for (std::size_t i = start; i < stack.size(); ++i) {
+                            if (! path.empty()) path += " -> ";
+                            path += stack[i]->cpp_absolute_name;
+                        }
                         if (! path.empty()) path += " -> ";
-                        path += stack[i]->cpp_absolute_name;
+                        path += candidate->cpp_absolute_name;
+                        throw std::runtime_error(
+                            "recursive message value dependency: " + path);
                     }
-                    if (! path.empty()) path += " -> ";
-                    path += candidate->cpp_absolute_name;
-                    throw std::runtime_error(
-                        "recursive message value dependency: " + path);
                 }
             }
 
@@ -885,7 +900,9 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
 std::vector<MessageInfo*> dependency_safe_order(std::vector<MessageInfo>& messages)
 {
     std::vector<MessageInfo*> units;
+    units.reserve(messages.size());
     for (auto& message: messages) units.push_back(&message);
+    if (units.size() <= 1) return units;
     return stable_topological_order(units);
 }
 
@@ -898,41 +915,44 @@ std::string generate_message(MessageInfo& info,
                              const std::string& indent,
                              const EnumByProtoName& enum_index,
                              std::string& encoders,
-                             std::string& decoders)
+                             std::string& decoders,
+                             const GenerationContext& context)
 {
     std::string nested_defs;
-    // Enum declarations precede nested messages and fields that may use them.
-    for (const auto& enum_type: info.descriptor->enum_type) {
-        nested_defs += generate_enum(enum_type, indent + CPP_INDENT);
-    }
-    for (auto* child: dependency_safe_order(info.children)) {
-        nested_defs += generate_message(
-            *child, indent + CPP_INDENT, enum_index, encoders, decoders);
+    if (! info.descriptor->enum_type.empty() || ! info.children.empty()) {
+        const std::string child_indent = indent + CPP_INDENT;
+        // Enum declarations precede nested messages and fields that may use them.
+        for (const auto& enum_type: info.descriptor->enum_type) {
+            nested_defs += generate_enum(enum_type, child_indent);
+        }
+        for (auto* child: dependency_safe_order(info.children)) {
+            nested_defs += generate_message(
+                *child, child_indent, enum_index, encoders, decoders, context);
+        }
     }
 
     std::string field_defs, has_field_defs, encoder, decoder, check_required_fields;
-    auto map_types = collect_map_types(*info.descriptor, info.proto_name);
 
     for (const auto& field: info.descriptor->field)
     {
-        auto map_type = find_map_type(field, map_types, info.cpp_absolute_name);
+        auto map_type = find_map_type(field, info.map_types, info.cpp_absolute_name);
 
-        auto cpptype_str = cpp_type_as_str(field, map_type);
+        auto cpptype_str = cpp_type_as_str(field, map_type, context);
         field_defs += myformat("{0}    {1} {2}{3};\n",
                                indent, cpptype_str, field.name,
-                               default_value_str(field, enum_index));
+                               default_value_str(field, enum_index, context));
 
-        if (hasfield_enabled(field)) {
+        if (hasfield_enabled(field, context)) {
             has_field_defs += myformat("{0}    bool has_{1} = false;\n",
                                        indent, field.name);
         }
 
         // Field codecs still use the same helpers as top-level messages; only
         // the enclosing type name and output section have changed.
-        encoder += generate_field_encoder(field, map_type);
-        decoder += generate_field_decoder(field, map_type);
+        encoder += generate_field_encoder(field, map_type, context);
+        decoder += generate_field_decoder(field, map_type, context);
 
-        if ((field.label == FieldDescriptorProto::LABEL_REQUIRED) && ! option.no_required) {
+        if ((field.label == FieldDescriptorProto::LABEL_REQUIRED) && ! context.options.no_required) {
             check_required_fields += myformat(
                 CHECK_REQUIRED_FIELD_TEMPLATE, info.cpp_absolute_name, field.name);
         }
@@ -940,15 +960,15 @@ std::string generate_message(MessageInfo& info,
 
     // Codec functions are emitted for every real message, including nested
     // ones. Their signatures use qualified C++ names such as Outer::Inner.
-    if (! option.no_encoder) {
+    if (! context.options.no_encoder) {
         encoders += myformat(ENCODER_TEMPLATE, info.cpp_absolute_name, info.macro_stem, encoder);
     }
-    if (! option.no_decoder) {
+    if (! context.options.no_decoder) {
         decoders += myformat(DECODER_TEMPLATE, info.cpp_absolute_name, info.macro_stem,
                              decoder, check_required_fields);
     }
 
-    if (option.no_class) return "";
+    if (context.options.no_class) return "";
     return myformat(CLASS_TEMPLATE, indent, info.simple_name, nested_defs,
                     field_defs, has_field_defs, info.macro_stem);
 }
@@ -996,55 +1016,214 @@ std::string close_package_namespaces(const std::string& package)
 }
 
 
-// Generate the body of one output header.  The dependency graph is built and
-// validated before any text reaches main(), so recursive schemas fail without
-// leaving a partial generated file.  Generation itself is one recursive pass:
-// structs are returned in `class_defs`, while codecs are appended to their own
-// sections and concatenated only after all message definitions are complete.
-std::string generator(const FileDescriptorProto& file)
+// --- plan 5, batch 3: the linked generation entry points -------------------
+
+std::string owned_descriptor_text(const str_view& value)
 {
-    // Set global vars and validate the package before emitting it verbatim as C++.
-    current_file_is_proto3 = file.has_syntax && (file.syntax == "proto3");
-    current_package = file.package > "" ? std::string(file.package) : std::string();
-    easypb_codegen::validate_cpp_package(current_package);
-    package_name_prefix =
-        ! current_package.empty()
-            ? PB_TYPE_DELIMITER + current_package + PB_TYPE_DELIMITER
-            : PB_TYPE_DELIMITER;
+    return std::string(value.data(), value.size());
+}
+
+
+// The two imports the generator itself knows are usually option metadata only
+// (`(easypb.cpp).type` templates and descriptor options). The include planner
+// reconsiders these two names and nothing else (plan 5 I2's closed list).
+bool is_compiler_support_import(const std::string& logical_name)
+{
+    return logical_name == "easypb/options.proto" ||
+           logical_name == "google/protobuf/descriptor.proto";
+}
+
+
+// Does any field of `message`, map entries and nested messages included, name
+// a declaration the dependency file owns? The linker rewrote every resolved
+// type_name to its absolute spelling, so the symbol index answers with the
+// owning file - and a codec needs exactly the declarations its field names.
+bool message_names_owner(const DescriptorProto& message,
+                         const easypb_schema::SchemaFile& dependency,
+                         const easypb_schema::LinkedSchema& schema)
+{
+    for (std::size_t i = 0; i < message.field.size(); ++i) {
+        const FieldDescriptorProto& field = message.field[i];
+        if (field.type != FieldDescriptorProto::TYPE_MESSAGE &&
+            field.type != FieldDescriptorProto::TYPE_ENUM &&
+            field.type != FieldDescriptorProto::TYPE_GROUP) {
+            continue;
+        }
+        if (field.type_name.empty()) continue;
+        const std::map<std::string,
+                       easypb_schema::SymbolEntry>::const_iterator found =
+            schema.symbols.symbols.find(owned_descriptor_text(field.type_name));
+        if (found != schema.symbols.symbols.end() &&
+            found->second.owner == &dependency) {
+            return true;
+        }
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (message_names_owner(message.nested_type[i], dependency, schema)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+bool file_names_owner(const FileDescriptorProto& file,
+                      const easypb_schema::SchemaFile& dependency,
+                      const easypb_schema::LinkedSchema& schema)
+{
+    for (std::size_t i = 0; i < file.message_type.size(); ++i) {
+        if (message_names_owner(file.message_type[i], dependency, schema)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+// One include per direct dependency, in source declaration order, public and
+// weak dependencies included (I1). An ordinary import keeps its include even
+// when nothing references it: this header may be included by a translation
+// unit that needs the name, and only the two known support files have a
+// documented metadata-only reading (I2). A public re-export always restores
+// the include (I3).
+std::string dependency_includes(const easypb_schema::SchemaFile& target,
+                                const easypb_schema::LinkedSchema& schema)
+{
+    const FileDescriptorProto& file = target.file;
+    std::string includes;
+    for (std::size_t i = 0; i < file.dependency.size(); ++i) {
+        const std::string logical = owned_descriptor_text(file.dependency[i]);
+        bool needed = true;
+        if (is_compiler_support_import(logical)) {
+            needed = false;
+            for (std::size_t j = 0; j < file.public_dependency.size(); ++j) {
+                if (file.public_dependency[j] == static_cast<int32_t>(i)) {
+                    needed = true;
+                    break;
+                }
+            }
+            if (!needed) {
+                const easypb_schema::SchemaFile* dependency =
+                    schema.files == 0 ? 0 : schema.files->find_file(logical);
+                // A dependency the set does not carry cannot be proven to be
+                // metadata-only, so its include stays.
+                needed = dependency == 0 ||
+                         file_names_owner(file, *dependency, schema);
+            }
+        }
+        if (needed) {
+            includes += "#include \"";
+            includes += easypb_codegen::generated_header_path(logical);
+            includes += "\"\n";
+        }
+    }
+    return includes;
+}
+
+
+void index_message_enums_of(const DescriptorProto& message,
+                            const std::string& proto_name,
+                            EnumByProtoName& index)
+{
+    for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
+        index.insert(std::make_pair(
+            proto_name + "." + owned_descriptor_text(message.enum_type[i].name),
+            &message.enum_type[i]));
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        const DescriptorProto& nested = message.nested_type[i];
+        if (nested.enum_type.empty() && nested.nested_type.empty()) {
+            continue;
+        }
+        index_message_enums_of(
+            nested,
+            proto_name + "." + owned_descriptor_text(nested.name),
+            index);
+    }
+}
+
+
+// Index every enum of one file (top-level and nested) by its absolute
+// Protobuf name, so `default_value_str` finds imported owners exactly the way
+// it finds local ones. Imported definitions are complete by construction, and
+// nothing here infers a value from zero or from an enum's name.
+void index_file_enums(const FileDescriptorProto& file, EnumByProtoName& index)
+{
+    const std::string prefix =
+        file.package.empty()
+            ? std::string(".")
+            : "." + owned_descriptor_text(file.package) + ".";
+    for (std::size_t i = 0; i < file.enum_type.size(); ++i) {
+        index.insert(std::make_pair(
+            prefix + owned_descriptor_text(file.enum_type[i].name),
+            &file.enum_type[i]));
+    }
+    for (std::size_t i = 0; i < file.message_type.size(); ++i) {
+        const DescriptorProto& message = file.message_type[i];
+        if (message.enum_type.empty() && message.nested_type.empty()) {
+            continue;
+        }
+        index_message_enums_of(
+            message,
+            prefix + owned_descriptor_text(message.name), index);
+    }
+}
+
+
+// Generate one complete header for a linked target (plan 5 Task 2).
+std::string easypb_codegen::generate_header(
+    const easypb_schema::SchemaFile& target,
+    const easypb_schema::LinkedSchema& schema,
+    const easypb_codegen::GenerationOptions& options)
+{
+    const FileDescriptorProto& file = target.file;
+    // Per-invocation state: nothing here survives the call, and the
+    // classification is made exactly once (plan 5 A25).
+    const GenerationContext context(options, file);
+    easypb_codegen::validate_cpp_package(context.package);
 
     // Build the lexical tree first. reserve() is important because the name
     // index will later store pointers into these root objects.
     std::vector<MessageInfo> roots;
     roots.reserve(file.message_type.size());
     for (const auto& message_type: file.message_type) {
-        roots.push_back(make_message_info(message_type, ""));
+        roots.push_back(make_message_info(message_type, "", context));
     }
 
     // Resolve field type names to MessageInfo pointers only after the tree is
     // complete, then reject every dependency pattern impossible by C++ value.
     MessageByProtoName index;
     for (auto& root: roots) index_message_info(root, index);
-    for (auto& root: roots) resolve_message_dependencies(root, index);
+    for (auto& root: roots) resolve_message_dependencies(root, index, context);
     detect_dependency_cycles(roots);
 
-    // Index every local enum once so implicit defaults and type-qualified
-    // initializers do not depend on declaration order.
+    // Index the target's enums plus every visible file's, so an imported
+    // enum's first declared value initializes a field the same way a local
+    // one does. Duplicate absolute names cannot reach here: conflicting
+    // declarations were refused by the linker before publish.
     EnumByProtoName enum_index;
-    for (const auto& enum_type: file.enum_type) {
-        enum_index[package_name_prefix + std::string(enum_type.name)] = &enum_type;
+    index_file_enums(file, enum_index);
+    const std::map<const easypb_schema::SchemaFile*,
+                   std::set<const easypb_schema::SchemaFile*> >::const_iterator
+        visible = schema.visible_files.find(&target);
+    if (visible != schema.visible_files.end()) {
+        for (std::set<const easypb_schema::SchemaFile*>::const_iterator it =
+                 visible->second.begin();
+             it != visible->second.end(); ++it) {
+            if (*it != &target) index_file_enums((*it)->file, enum_index);
+        }
     }
-    for (const auto& root: roots) index_message_enums(root, enum_index);
 
     std::string enum_defs, class_defs, encoders, decoders;
     // Top-level enums must be complete before any message field uses them.
-    if (! option.no_class) {
+    if (! context.options.no_class) {
         for (const auto& enum_type: file.enum_type) {
             enum_defs += generate_enum(enum_type, "");
         }
     }
     // Top-level messages are ordered by the same dependency rule as nested siblings.
     for (auto* root: dependency_safe_order(roots)) {
-        class_defs += generate_message(*root, "", enum_index, encoders, decoders);
+        class_defs += generate_message(*root, "", enum_index, encoders, decoders, context);
     }
 
     // One buffer instead of the chain of temporaries the '+' operators built:
@@ -1057,14 +1236,105 @@ std::string generator(const FileDescriptorProto& file)
     body += class_defs;
     body += encoders;
     body += decoders;
-    if (current_package.empty() || body.empty()) return body;
-    const std::string open_namespaces = open_package_namespaces(current_package);
-    const std::string close_namespaces = close_package_namespaces(current_package);
-    std::string result;
-    result.reserve(open_namespaces.size() + body.size() +
-                   close_namespaces.size());
-    result += open_namespaces;
-    result += body;
-    result += close_namespaces;
-    return result;
+    if (! context.package.empty() && ! body.empty()) {
+        const std::string open_namespaces = open_package_namespaces(context.package);
+        const std::string close_namespaces = close_package_namespaces(context.package);
+        std::string wrapped;
+        wrapped.reserve(open_namespaces.size() + body.size() +
+                        close_namespaces.size());
+        wrapped += open_namespaces;
+        wrapped += body;
+        wrapped += close_namespaces;
+        body.swap(wrapped);
+    }
+
+    // The banner is applied here, not by the CLI, so every frontend that
+    // reaches the core emits the same header shape. The logical name is the
+    // normal provenance; only the anonymous single-file `.pbs` compatibility
+    // path, which has no logical name, falls back to its container spelling.
+    const std::string provenance = file.name.empty()
+        ? target.physical_name
+        : owned_descriptor_text(file.name);
+    std::string header = myformat(FILE_TEMPLATE, provenance);
+    // Dependency includes belong outside package namespaces, exactly like the
+    // fixed runtime includes above them; thin compatibility omits them all.
+    if (schema.complete) {
+        const std::string includes = dependency_includes(target, schema);
+        if (!includes.empty()) {
+            header += includes;
+            header += "\n";
+        }
+    }
+    header += body;
+    return header;
+}
+
+
+bool easypb_codegen::generate_files(
+    const easypb_schema::LinkedSchema& schema,
+    const easypb_codegen::GenerationOptions& options,
+    std::vector<GeneratedFile>& result,
+    easypb_schema::Diagnostic& error)
+{
+    result.clear();
+    error = easypb_schema::Diagnostic();
+    if (schema.files == 0) {
+        error.location = easypb_schema::unknown_location();
+        error.message =
+            "generate_files needs a linked schema; this one is the invalid "
+            "empty state";
+        return false;
+    }
+    const std::vector<easypb_schema::SchemaFile*>& targets =
+        schema.files->targets();
+    if (targets.empty()) {
+        error.location = easypb_schema::unknown_location();
+        error.message = "no generation targets were selected";
+        return false;
+    }
+
+    std::vector<GeneratedFile> generated;
+    generated.reserve(targets.size());
+    std::set<std::string> mapped_names;
+    for (std::size_t i = 0; i < targets.size(); ++i) {
+        const easypb_schema::SchemaFile& target = *targets[i];
+        const std::string logical = owned_descriptor_text(target.file.name);
+        if (logical.empty()) {
+            error.file = target.physical_name;
+            error.location = easypb_schema::unknown_location();
+            error.message =
+                target.physical_name +
+                ": this target has no logical name, so it has no output name; "
+                "only the single-target stdout compatibility path may "
+                "generate an anonymous descriptor";
+            return false;
+        }
+        GeneratedFile entry;
+        try {
+            entry.name = generated_header_path(logical);
+        } catch (const std::exception& problem) {
+            error.file = logical;
+            error.location = easypb_schema::unknown_location();
+            error.message = problem.what();
+            return false;
+        }
+        if (!mapped_names.insert(entry.name).second) {
+            error.file = logical;
+            error.location = easypb_schema::unknown_location();
+            error.message = "two targets map to one output file \"" +
+                            entry.name + "\"";
+            return false;
+        }
+        try {
+            entry.content = generate_header(target, schema, options);
+        } catch (const std::exception& problem) {
+            error.file = logical;
+            error.location = easypb_schema::unknown_location();
+            error.message = problem.what();
+            return false;
+        }
+        generated.push_back(std::move(entry));
+    }
+    result.swap(generated);
+    return true;
 }

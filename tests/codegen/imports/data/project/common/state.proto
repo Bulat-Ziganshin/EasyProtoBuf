@@ -1,0 +1,6 @@
+// Plan 5's runtime fixture, placed at `common/state.proto` with the plan-4
+// contents verbatim: a proto2 enum whose first value is deliberately nonzero,
+// so an imported implicit default is observable before any assignment.
+syntax = "proto2";
+package shared;
+enum State { READY = 7; STOPPED = 9; }

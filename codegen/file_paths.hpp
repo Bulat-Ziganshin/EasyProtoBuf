@@ -124,6 +124,44 @@ bool utf8_from_wide(const wchar_t* text, std::string& utf8);
 bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 #endif
 
+// ---------------------------------------------------------------------------
+// Output-side additions (plan 5, step 4: the standalone publisher).
+//
+// Trimmed to the reference compiler's model on 2026-10-07: the publisher writes
+// files at paths the generator already mapped and validated, creating the
+// directory tree and writing each file, exactly as protoc's
+// WriteAllToDisk does (VerifyDirectoryExists, TryCreateParentDirectory, then
+// open/write/close - command_line_interface.cc:541-610).
+//
+// The guards this module used to carry - containment below the output root,
+// case-folding collision probing, native file identity, hardlink detection and
+// the atomic temp+rename replacement - measured 373 lines and had no
+// counterpart in the reference. Their observable effect was measured against
+// protoc 30.1 and both divergences are recorded: a descriptor set whose file
+// name is "../escape.proto" is refused here through
+// easypb_codegen::generated_header_path (the pure logical mapping,
+// codegen/header_paths.cpp) and written one directory ABOVE the output
+// directory by protoc; and two output names that are one entry on a
+// case-folding filesystem silently overwrite here, as they do in protoc.
+//
+// The loader never needed these and must not have them: identity, case folding
+// and replacement belong to the only component that writes an output tree, so
+// they sit beside the input ones instead of inside the common library, which
+// performs no filesystem call at all.
+// ---------------------------------------------------------------------------
+
+// Create every missing directory on the way to `directory`; existing
+// directories are accepted. Returns false with a reason on failure.
+bool make_directories(const std::string& directory, std::string& error);
+
+// Write `contents` to `target`, creating or truncating it. The target keeps
+// either its previous content or the complete new content unless the process
+// dies mid-write; a failure removes nothing and reports the reason. This is
+// the reference compiler's write model - no temporary file, no rename.
+bool write_disk_file(const std::string& target,
+                     const std::string& contents,
+                     std::string& error);
+
 } // namespace easypb_file
 
 #endif

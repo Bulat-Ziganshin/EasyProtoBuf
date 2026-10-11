@@ -13,6 +13,8 @@ cmake --build build --config Release
 
 The CMake target is named `easypb_codegen` internally and produces the `codegen` executable.
 
+The build separates the pieces so each consumer links only what it needs: `easypb_codegen_core` (the linked generator, options and pure header-path mapping), `easypb_schema` (schema storage, semantics, linking and the descriptor adapter), `easypb_file_io` (native path rules and reads/writes), `easypb_descriptor_loader` (the standalone `.pbs` container reader) and `easypb_header_output` (the output publisher). The core links the schema library only; a caller that generates in memory never links the CLI, the publisher or any filesystem helper.
+
 With xmake:
 
 ```sh
@@ -47,7 +49,9 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) test checks explicit and implicit descriptor-set input, `.proto` versus `.pbs` generated-code equivalence, proto2/proto3 packed behavior, descriptor printing, parser benchmarking, unresolved-type handling, and invalid empty/multi-file descriptor sets.
+The [`codegen.modes`](../tests/codegen/parser/test_codegen_modes.cmake) test checks explicit and implicit descriptor-set input, `.proto` versus `.pbs` generated-code equivalence, proto2/proto3 packed behavior, descriptor printing, parser benchmarking, missing-import handling, and invalid empty descriptor sets.
+
+The plan-5 integration suites cover the new surface. [`codegen.imports.cli`](../tests/codegen/cli/test_codegen_cli.cmake) drives the mode table, option validation, stdout cardinality, non-ASCII output roots and publication snapshots through the built executable; [`codegen.imports.output`](../tests/codegen/imports/test_output.cpp) stages the publisher's path/identity matrix and an injected later-file failure; [`codegen.imports.includes`](../tests/codegen/imports/test_includes.cmake) pins the support-import include rule with its real-reference and public-re-export counterexamples; [`codegen.imports.in_memory`](../tests/codegen/imports/test_in_memory.cpp) links the generation core alone, runs from an empty directory and must byte-match the CLI's `.pbs` output; [`codegen.imports.runtime`](../tests/codegen/imports/runtime/two_tu_main.cpp) compiles independently generated headers in two translation units and round-trips an imported enum default, a packed enum, a nested message and a message-valued map.
 
 The [`codegen.maps`](../tests/codegen/maps/test_codegen_maps.cmake) test covers scalar, enum and message-valued map generation, custom map containers, malformed map descriptors, and `.proto`/`.pbs` equivalence. `codegen.maps.runtime` compiles the generated ADL codecs and verifies scalar, enum and message-valued map round trips in both full and descriptor-set-only builds.
 

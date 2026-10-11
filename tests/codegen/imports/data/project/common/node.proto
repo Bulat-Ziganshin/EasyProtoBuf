@@ -1,0 +1,8 @@
+// Plan 5's runtime fixture, from the plan's own example: a nested message
+// reached both as a message-typed field and as an imported nested type.
+syntax = "proto2";
+package common;
+message Node {
+  message Data { optional int32 value = 1; }
+  optional Data data = 1;
+}

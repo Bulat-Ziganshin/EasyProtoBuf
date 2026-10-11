@@ -3,11 +3,13 @@
 
 #include <string>
 
+#include "descriptor.pb.hpp"
+
 namespace easypb_codegen {
 
 // Convert an absolute Protobuf name such as .foo.bar.Outer.Inner to the
 // corresponding absolute C++ name ::foo::bar::Outer::Inner.
-std::string cpp_absolute_name(const std::string& absolute_proto_name);
+std::string cpp_absolute_name(const str_view& absolute_proto_name);
 
 // Convert an absolute Protobuf name to the spelling used inside the current
 // package namespace. Only an exact package-component prefix is stripped;

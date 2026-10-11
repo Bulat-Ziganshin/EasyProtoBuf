@@ -1,0 +1,23 @@
+
+=
+common/state.protoshared*
+State	
+READY
+STOPPED	
+h
+common/node.protocommon"K
+Node%
+data (2.common.Node.DataRdata
+Data
+value (Rvalue
+¼
+api/report.protoapicommon/state.protocommon/node.proto"û
+Report#
+state (2.shared.StateRstate+
+history (2.shared.StateBRhistory,
+nodes (2.api.Report.NodesEntryRnodes)
+detail (2.common.Node.DataRdetailF
+
+NodesEntry
+key (	Rkey"
+value (2.common.NodeRvalue:8

@@ -192,9 +192,10 @@ namespace {
 
 const DescriptorProto* step_into_message(const DescriptorProto& message,
                                          std::size_t& position,
-                                         const DescriptorPath& path)
+                                         const DescriptorPath& path,
+                                         std::size_t length)
 {
-    if (position + 1 >= path.size()) return 0;
+    if (position + 1 >= length) return 0;
     const int field_number = path[position];
     const int index = path[position + 1];
     if (index < 0) return 0;
@@ -207,22 +208,29 @@ const DescriptorProto* step_into_message(const DescriptorProto& message,
     return 0;
 }
 
-} // namespace
-
-const DescriptorProto* find_message(const SchemaFile& file,
-                                    const DescriptorPath& path)
+const DescriptorProto* find_message_prefix(const SchemaFile& file,
+                                           const DescriptorPath& path,
+                                           std::size_t length)
 {
-    if (path.size() < 2 || path.size() % 2 != 0) return 0;
+    if (length < 2 || length % 2 != 0 || length > path.size()) return 0;
     if (path[0] != 4 || path[1] < 0) return 0;
     const std::size_t top = static_cast<std::size_t>(path[1]);
     if (top >= file.file.message_type.size()) return 0;
     const DescriptorProto* message = &file.file.message_type[top];
     std::size_t position = 2;
-    while (position < path.size()) {
-        message = step_into_message(*message, position, path);
+    while (position < length) {
+        message = step_into_message(*message, position, path, length);
         if (message == 0) return 0;
     }
     return message;
+}
+
+} // namespace
+
+const DescriptorProto* find_message(const SchemaFile& file,
+                                    const DescriptorPath& path)
+{
+    return find_message_prefix(file, path, path.size());
 }
 
 const EnumDescriptorProto* find_enum(const SchemaFile& file,
@@ -238,8 +246,8 @@ const EnumDescriptorProto* find_enum(const SchemaFile& file,
         if (element >= file.file.enum_type.size()) return 0;
         return &file.file.enum_type[element];
     }
-    DescriptorPath parent_path(path.begin(), path.end() - 2);
-    const DescriptorProto* parent = find_message(file, parent_path);
+    const DescriptorProto* parent =
+        find_message_prefix(file, path, path.size() - 2);
     if (parent == 0 || path[path.size() - 2] != 4) return 0;
     if (element >= parent->enum_type.size()) return 0;
     return &parent->enum_type[element];
@@ -253,8 +261,8 @@ const FieldDescriptorProto* find_field(const SchemaFile& file,
     const int index = path[path.size() - 1];
     if (index < 0) return 0;
     const std::size_t element = static_cast<std::size_t>(index);
-    DescriptorPath parent_path(path.begin(), path.end() - 2);
-    const DescriptorProto* parent = find_message(file, parent_path);
+    const DescriptorProto* parent =
+        find_message_prefix(file, path, path.size() - 2);
     if (parent == 0) return 0;
     if (element >= parent->field.size()) return 0;
     return &parent->field[element];
@@ -340,10 +348,11 @@ bool bind_import_edges(SchemaSet& files, bool allow_missing,
         // Repeated dependency names are rejected before index checks so
         // the duplicate spelling is reported instead of an aliasing edge.
         {
-            std::set<std::string> seen;
+            std::set<str_view> seen;
             for (std::size_t i = 0; i < dependency_count; ++i) {
-                const std::string name = view_text(importer.file.dependency[i]);
-                if (!seen.insert(name).second) {
+                if (!seen.insert(importer.file.dependency[i]).second) {
+                    const std::string name =
+                        view_text(importer.file.dependency[i]);
                     std::ostringstream message;
                     message << "file \"" << importer_name
                             << "\": duplicate import \"" << name << "\"";

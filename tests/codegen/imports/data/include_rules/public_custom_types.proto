@@ -1,0 +1,10 @@
+// Plan 5 I3's counterexample: the custom-option fixture's public-import
+// variant. Nothing references the option metadata here, but the public
+// re-export means this header's includers can reach the option declarations,
+// so the dependency include stays.
+syntax = "proto3";
+package include_rules.reexport;
+import public "easypb/options.proto";
+message PublicOptions {
+  int32 value = 1 [(easypb.cpp).type = "WrappedInt"];
+}

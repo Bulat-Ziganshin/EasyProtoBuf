@@ -377,3 +377,10 @@ searched roots and import chains, plus a stricter logical-name validator shared 
 it leaves out is every mechanism the reference compiler does not have — case folding, native identity,
 an isolated-root convenience, statistics and test seams — so that each behavior can be justified by
 `protoc` or by a diagnostic this project deliberately improves on.
+
+The output publisher was brought to the same position on 2026-10-07. It had grown the analogous
+mechanisms — output-root containment, measured case-fold collision detection, native file identity and
+hardlink detection, and atomic per-file replacement through a temporary sibling — at 703 code lines
+against the reference compiler's roughly 80 for the same job. They were withdrawn by owner decision;
+see `header_output.hpp` for the measurements that justified each one, and for the one check that survives
+upstream of the publisher (`generated_header_path`, which still refuses an escaping logical name).

@@ -10,6 +10,7 @@
 #include <string>
 
 #include "schema_semantics.hpp"
+#include "schema_semantics_internal.hpp"
 
 namespace {
 
@@ -939,6 +940,755 @@ void test_integer_parsing_boundaries_follow_protoc()
     }
 }
 
+// --- P1 rule split: direct calls -------------------------------------------
+//
+// resolve_message was split (P1) into five rule helpers, declared in
+// schema_semantics_internal.hpp under easypb_schema::internal so each rule can
+// be called on its own. These tests exercise one rule per case; a failure names
+// the rule, and a shape the .proto parser cannot produce (a repeated field with
+// a default, a oneof member with a label) can be probed directly.
+
+// A target file declaring `enum E { A = 0; }`. An absent syntax is proto2, so
+// passing "proto3" gives the cross-syntax counterpart.
+easypb_schema::SchemaFile* make_enum_only_file(const char* syntax)
+{
+    easypb_schema::SchemaFile* file = new easypb_schema::SchemaFile();
+    if (syntax != 0) {
+        file->file.syntax = file->strings.save(syntax);
+        file->file.has_syntax = true;
+    }
+    EnumDescriptorProto enumeration;
+    enumeration.name = file->strings.save("E");
+    enumeration.has_name = true;
+    EnumValueDescriptorProto value;
+    value.name = file->strings.save("A");
+    value.has_name = true;
+    value.number = 0;
+    value.has_number = true;
+    enumeration.value.push_back(value);
+    file->file.enum_type.push_back(enumeration);
+    declare(*file, easypb_schema::file_enum_path(0), 2);
+    declare(*file,
+            easypb_schema::enum_value_path(easypb_schema::file_enum_path(0), 0),
+            3);
+    return file;
+}
+
+void test_rule_shape_d55_repeated_default_is_refused()
+{
+    easypb_schema::SchemaFile file;
+    DescriptorProto message;
+    message.name = file.strings.save("M");
+    message.has_name = true;
+    FieldDescriptorProto repeated =
+        make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+    repeated.label = FieldDescriptorProto::LABEL_REPEATED;
+    repeated.default_value = file.strings.save("7");
+    repeated.has_default_value = true;
+    message.field.push_back(repeated);
+    FieldDescriptorProto singular =
+        make_scalar_field(file, "b", 2, FieldDescriptorProto::TYPE_INT32);
+    singular.default_value = file.strings.save("7");
+    singular.has_default_value = true;
+    message.field.push_back(singular);
+    file.file.message_type.push_back(message);
+
+    const easypb_schema::DescriptorPath repeated_path =
+        easypb_schema::message_field_path(easypb_schema::file_message_path(0), 0);
+    const easypb_schema::DescriptorPath singular_path =
+        easypb_schema::message_field_path(easypb_schema::file_message_path(0), 1);
+    record_source(file, repeated_path, 0, 0, true, 4, false, 0);
+
+    // D-55: a repeated field may not carry a default.
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_schema::internal::validate_field_declared_shape(
+        file, message.field[0], repeated_path, false, error));
+    CHECK(error.message.find("repeated fields cannot have default values") !=
+          std::string::npos);
+
+    // Control: the same default on a singular proto2 field is legal, so the
+    // refusal above is the label rule and not the presence of a default.
+    CHECK(easypb_schema::internal::validate_field_declared_shape(
+        file, message.field[1], singular_path, false, error));
+
+    // F2/D-54: proto3 refuses an explicit default on any field, through the
+    // same shape rule.
+    easypb_schema::Diagnostic proto3_error;
+    CHECK(!easypb_schema::internal::validate_field_declared_shape(
+        file, message.field[1], singular_path, true, proto3_error));
+    CHECK(proto3_error.message.find("proto3") != std::string::npos);
+}
+
+void test_rule_encoding_d51_packed_is_presence_and_value()
+{
+    easypb_schema::SchemaFile file;
+    DescriptorProto message;
+    message.name = file.strings.save("M");
+    message.has_name = true;
+    const easypb_schema::SymbolIndex symbols;
+    const std::set<const easypb_schema::SchemaFile*> visible;
+
+    // Repeated int32 with [packed = true] is legal.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        field.label = FieldDescriptorProto::LABEL_REPEATED;
+        field.options.packed = true;
+        field.options.has_packed = true;
+        field.has_options = true;
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(
+                easypb_schema::file_message_path(0), 0);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_field_encoding(
+            file, symbols, visible, "M", message, true, field, field_path, false,
+            false, error));
+    }
+    // Packed on a singular field is refused without reading the kind.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "b", 2, FieldDescriptorProto::TYPE_INT32);
+        field.options.packed = true;
+        field.options.has_packed = true;
+        field.has_options = true;
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(
+                easypb_schema::file_message_path(0), 1);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_field_encoding(
+            file, symbols, visible, "M", message, true, field, field_path, false,
+            false, error));
+        CHECK(error.message.find("packed option is valid only") !=
+              std::string::npos);
+    }
+    // Packed on a repeated non-packable type is refused for a known kind.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "s", 3, FieldDescriptorProto::TYPE_STRING);
+        field.label = FieldDescriptorProto::LABEL_REPEATED;
+        field.options.packed = true;
+        field.options.has_packed = true;
+        field.has_options = true;
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(
+                easypb_schema::file_message_path(0), 2);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_field_encoding(
+            file, symbols, visible, "M", message, true, field, field_path, false,
+            false, error));
+        CHECK(error.message.find("packed option is valid only") !=
+              std::string::npos);
+    }
+    // D-51: [packed = false] writes has_packed = true with packed = false and
+    // is legal - the VALUE, not the presence, is the gate.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "c", 4, FieldDescriptorProto::TYPE_INT32);
+        field.label = FieldDescriptorProto::LABEL_REPEATED;
+        field.options.packed = false;
+        field.options.has_packed = true;
+        field.has_options = true;
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(
+                easypb_schema::file_message_path(0), 3);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_field_encoding(
+            file, symbols, visible, "M", message, true, field, field_path, false,
+            false, error));
+    }
+}
+
+void test_rule_encoding_d56_oneof_member_must_be_optional()
+{
+    easypb_schema::SchemaFile file;
+    DescriptorProto message;
+    message.name = file.strings.save("M");
+    message.has_name = true;
+    OneofDescriptorProto oneof;
+    oneof.name = file.strings.save("choice");
+    oneof.has_name = true;
+    message.oneof_decl.push_back(oneof);
+    const easypb_schema::SymbolIndex symbols;
+    const std::set<const easypb_schema::SchemaFile*> visible;
+
+    // D-56: a oneof member declared REPEATED is refused.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        field.has_oneof_index = true;
+        field.oneof_index = 0;
+        field.label = FieldDescriptorProto::LABEL_REPEATED;
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(
+                easypb_schema::file_message_path(0), 0);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_field_encoding(
+            file, symbols, visible, "M", message, true, field, field_path, false,
+            false, error));
+        CHECK(error.message.find("must have label") != std::string::npos);
+    }
+    // An index past the declaration list names the message.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "b", 2, FieldDescriptorProto::TYPE_INT32);
+        field.has_oneof_index = true;
+        field.oneof_index = 5;
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(
+                easypb_schema::file_message_path(0), 1);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_field_encoding(
+            file, symbols, visible, "M", message, true, field, field_path, false,
+            false, error));
+        CHECK(error.message.find("invalid oneof_index in message M") !=
+              std::string::npos);
+    }
+    // Control: an OPTIONAL member of the declared oneof passes.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "c", 3, FieldDescriptorProto::TYPE_INT32);
+        field.has_oneof_index = true;
+        field.oneof_index = 0;
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(
+                easypb_schema::file_message_path(0), 2);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_field_encoding(
+            file, symbols, visible, "M", message, true, field, field_path, false,
+            false, error));
+    }
+}
+
+void test_rule_oneofs_d28_unclaimed_declaration_is_refused()
+{
+    easypb_schema::SchemaFile file;
+    DescriptorProto message;
+    message.name = file.strings.save("M");
+    message.has_name = true;
+    OneofDescriptorProto oneof;
+    oneof.name = file.strings.save("choice");
+    oneof.has_name = true;
+    message.oneof_decl.push_back(oneof);
+    const easypb_schema::DescriptorPath message_path =
+        easypb_schema::file_message_path(0);
+
+    // D-28: a declaration no field claims is refused.
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_schema::internal::validate_message_oneofs(
+        file, message, "M", message_path, error));
+    CHECK(error.message.find("has no fields") != std::string::npos);
+
+    // Control: once a field claims it, the same declaration passes.
+    FieldDescriptorProto field =
+        make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+    field.has_oneof_index = true;
+    field.oneof_index = 0;
+    message.field.push_back(field);
+    CHECK(easypb_schema::internal::validate_message_oneofs(
+        file, message, "M", message_path, error));
+}
+
+void test_rule_type_a7_declared_kind_mismatch_is_refused()
+{
+    easypb_schema::SchemaFile* target = make_enum_only_file(0);
+    easypb_schema::SymbolIndex symbols;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::index_file(*target, symbols, error));
+
+    easypb_schema::SchemaFile requester;
+    requester.from_descriptor_set = true;
+    FieldDescriptorProto field = make_named_field(requester, "e", 1, ".E", false);
+    // make_named_field declares TYPE_MESSAGE; the name resolves to an enum.
+    const easypb_schema::DescriptorPath field_path =
+        easypb_schema::message_field_path(easypb_schema::file_message_path(0), 0);
+    std::set<const easypb_schema::SchemaFile*> visible;
+    visible.insert(target);
+    easypb_schema::internal::UnresolvedPolicy policy;
+    bool unknown = false;
+    bool external_reference = false;
+    CHECK(!easypb_schema::internal::resolve_field_type(
+        requester, symbols, visible, policy, "M", true, field, field_path, &unknown,
+        &external_reference, error));
+    CHECK(error.message.find("descriptor metadata is authoritative") !=
+          std::string::npos);
+    delete target;
+}
+
+void test_rule_type_proto3_field_cannot_use_proto2_enum()
+{
+    easypb_schema::SchemaFile* proto2_target = make_enum_only_file(0);
+    easypb_schema::SymbolIndex symbols;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::index_file(*proto2_target, symbols, error));
+
+    easypb_schema::SchemaFile requester;
+    requester.file.syntax = requester.strings.save("proto3");
+    requester.file.has_syntax = true;
+    FieldDescriptorProto field =
+        make_scalar_field(requester, "e", 1, FieldDescriptorProto::TYPE_ENUM);
+    field.type_name = requester.strings.save(".E");
+    field.has_type_name = true;
+    const easypb_schema::DescriptorPath field_path =
+        easypb_schema::message_field_path(easypb_schema::file_message_path(0), 0);
+    std::set<const easypb_schema::SchemaFile*> visible;
+    visible.insert(proto2_target);
+    easypb_schema::internal::UnresolvedPolicy policy;
+    bool unknown = false;
+    bool external_reference = false;
+    CHECK(!easypb_schema::internal::resolve_field_type(
+        requester, symbols, visible, policy, "M", true, field, field_path, &unknown,
+        &external_reference, error));
+    CHECK(error.message.find("must not be used by a proto3 field") !=
+          std::string::npos);
+    delete proto2_target;
+
+    // Control: the same reference resolves when both sides are proto3.
+    easypb_schema::SchemaFile* proto3_target = make_enum_only_file("proto3");
+    easypb_schema::SymbolIndex proto3_symbols;
+    CHECK(easypb_schema::index_file(*proto3_target, proto3_symbols, error));
+    FieldDescriptorProto resolved =
+        make_scalar_field(requester, "e", 1, FieldDescriptorProto::TYPE_ENUM);
+    resolved.type_name = requester.strings.save(".E");
+    resolved.has_type_name = true;
+    std::set<const easypb_schema::SchemaFile*> proto3_visible;
+    proto3_visible.insert(proto3_target);
+    bool resolved_unknown = false;
+    bool resolved_external = false;
+    CHECK(easypb_schema::internal::resolve_field_type(
+        requester, proto3_symbols, proto3_visible, policy, "M", true, resolved,
+        field_path, &resolved_unknown, &resolved_external, error));
+    CHECK(resolved.type == FieldDescriptorProto::TYPE_ENUM);
+    delete proto3_target;
+}
+
+void test_rule_nested_types_duplicates_and_recursion()
+{
+    // A nested type name is unique across BOTH the enum and the message list
+    // (one shared name set), so a message colliding with an earlier enum is
+    // refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        message.enum_type.push_back(enumeration);
+        DescriptorProto nested;
+        nested.name = file.strings.save("E");
+        nested.has_name = true;
+        message.nested_type.push_back(nested);
+        file.file.message_type.push_back(message);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+
+        easypb_schema::SymbolIndex symbols;
+        const std::set<const easypb_schema::SchemaFile*> visible;
+        easypb_schema::internal::UnresolvedPolicy policy;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_nested_types(
+            file, symbols, visible, policy, true, message, "M", message_path,
+            error));
+        CHECK(error.message.find("duplicate nested type name in M") !=
+              std::string::npos);
+    }
+    // Recursion: a nested message is handed to resolve_message, so an invalid
+    // field inside it is refused here, without a resolve_file walk.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto nested;
+        nested.name = file.strings.save("N");
+        nested.has_name = true;
+        nested.field.push_back(
+            make_scalar_field(file, "x", 0, FieldDescriptorProto::TYPE_INT32));
+        message.nested_type.push_back(nested);
+        file.file.message_type.push_back(message);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+
+        easypb_schema::SymbolIndex symbols;
+        const std::set<const easypb_schema::SchemaFile*> visible;
+        easypb_schema::internal::UnresolvedPolicy policy;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_nested_types(
+            file, symbols, visible, policy, true, message, "M", message_path,
+            error));
+        CHECK(error.message.find("outside the valid range") != std::string::npos);
+    }
+    // Control: distinct nested names and a valid nested message pass.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        message.enum_type.push_back(enumeration);
+        DescriptorProto nested;
+        nested.name = file.strings.save("N");
+        nested.has_name = true;
+        nested.field.push_back(
+            make_scalar_field(file, "x", 1, FieldDescriptorProto::TYPE_INT32));
+        message.nested_type.push_back(nested);
+        file.file.message_type.push_back(message);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+
+        easypb_schema::SymbolIndex symbols;
+        const std::set<const easypb_schema::SchemaFile*> visible;
+        easypb_schema::internal::UnresolvedPolicy policy;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_nested_types(
+            file, symbols, visible, policy, true, message, "M", message_path,
+            error));
+    }
+}
+
+void add_enum_value(EnumDescriptorProto& enumeration,
+                    easypb_schema::SchemaFile& file, const char* name,
+                    int number)
+{
+    EnumValueDescriptorProto value;
+    value.name = file.strings.save(name);
+    value.has_name = true;
+    value.number = number;
+    value.has_number = true;
+    enumeration.value.push_back(value);
+}
+
+void test_rule_default_validator_directly()
+{
+    // validate_default is the type-dependent validator behind rule 3, reached
+    // through the internal seam; each case probes one scalar category.
+    easypb_schema::SchemaFile file;
+    const easypb_schema::SymbolIndex symbols;
+    const std::set<const easypb_schema::SchemaFile*> visible;
+    const easypb_schema::DescriptorPath field_path =
+        easypb_schema::message_field_path(easypb_schema::file_message_path(0), 0);
+
+    // A legal 32-bit default passes.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        field.default_value = file.strings.save("7");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+    }
+    // One past INT32_MAX is refused.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        field.default_value = file.strings.save("2147483648");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+        CHECK(error.message.find("does not fit signed 32-bit field") !=
+              std::string::npos);
+    }
+    // A bool default must be exactly true or false.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_BOOL);
+        field.default_value = file.strings.save("yes");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+        CHECK(error.message.find("bool default must be true or false") !=
+              std::string::npos);
+    }
+    // A message field may not carry a default at all.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_MESSAGE);
+        field.default_value = file.strings.save("x");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+        CHECK(error.message.find("message fields cannot have defaults") !=
+              std::string::npos);
+    }
+    // D-58: a bytes default is C-escaped; an unknown escape is refused.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_BYTES);
+        field.default_value = file.strings.save("\\q");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+        CHECK(error.message.find("invalid escaping in bytes default value") !=
+              std::string::npos);
+    }
+    // An unknown named type defers with a warning instead of failing.
+    {
+        FieldDescriptorProto field = make_named_field(file, "a", 1, "State", false);
+        field.default_value = file.strings.save("ACTIVE");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        const std::size_t before = file.warnings.size();
+        CHECK(easypb_schema::internal::validate_default(
+            file, symbols, visible, field, true, field_path, error));
+        CHECK(file.warnings.size() == before + 1);
+    }
+    // A field with no default is a no-op, even for a message kind.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_MESSAGE);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, field_path, error));
+    }
+}
+
+void test_rule_enum_value_numbers_directly()
+{
+    // validate_enum_value_numbers is public; these cases call it directly.
+    // An enum with no values is refused.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_enum_value_numbers(file, error));
+        CHECK(error.message.find("contains no values") != std::string::npos);
+    }
+    // Two values may not share a number without allow_alias.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 1);
+        add_enum_value(enumeration, file, "B", 1);
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_enum_value_numbers(file, error));
+        CHECK(error.message.find("repeats number 1") != std::string::npos);
+    }
+    // ... unless the enum declares option allow_alias = true.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        enumeration.options.has_allow_alias = true;
+        enumeration.options.allow_alias = true;
+        add_enum_value(enumeration, file, "A", 1);
+        add_enum_value(enumeration, file, "B", 1);
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_enum_value_numbers(file, error));
+    }
+    // Distinct numbers pass without the option.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 0);
+        add_enum_value(enumeration, file, "B", 1);
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_enum_value_numbers(file, error));
+    }
+}
+
+void test_rule_symbol_names_directly()
+{
+    // validate_symbol_names is public; these cases call it directly.
+    // An illegal character in an enum name is refused.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("bad-name");
+        enumeration.has_name = true;
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_symbol_names(file, error));
+        CHECK(error.message.find("is not a valid identifier") != std::string::npos);
+    }
+    // An unnamed message is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_symbol_names(file, error));
+        CHECK(error.message.find("has no name") != std::string::npos);
+    }
+    // Well-formed declarations pass.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 0);
+        file.file.enum_type.push_back(enumeration);
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_symbol_names(file, error));
+    }
+}
+
+void test_rule_message_map_entries_directly()
+{
+    // A map-entry message with no key/value fields is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto entry;
+        entry.name = file.strings.save("MEntry");
+        entry.has_name = true;
+        entry.options.has_map_entry = true;
+        entry.options.map_entry = true;
+        entry.has_options = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_map_entries(
+            file, entry, "MEntry", error));
+        CHECK(error.message.find("fields 1 and 2 are required") !=
+              std::string::npos);
+    }
+    // Recursion: a nested malformed entry is reached from the outer message.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto outer;
+        outer.name = file.strings.save("M");
+        outer.has_name = true;
+        DescriptorProto entry;
+        entry.name = file.strings.save("MEntry");
+        entry.has_name = true;
+        entry.options.has_map_entry = true;
+        entry.options.map_entry = true;
+        entry.has_options = true;
+        outer.nested_type.push_back(entry);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_map_entries(
+            file, outer, "M", error));
+        CHECK(error.message.find("Malformed map entry") != std::string::npos);
+    }
+    // Control: a well-formed entry passes.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto entry;
+        entry.name = file.strings.save("MEntry");
+        entry.has_name = true;
+        entry.options.has_map_entry = true;
+        entry.options.map_entry = true;
+        entry.has_options = true;
+        entry.field.push_back(
+            make_scalar_field(file, "key", 1, FieldDescriptorProto::TYPE_INT32));
+        entry.field.push_back(make_scalar_field(
+            file, "value", 2, FieldDescriptorProto::TYPE_MESSAGE));
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_message_map_entries(
+            file, entry, "MEntry", error));
+    }
+}
+
+void test_rule_message_symbol_names_directly()
+{
+    // A field with an illegal name is refused in the message's own scope.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.field.push_back(make_scalar_field(
+            file, "bad-name", 1, FieldDescriptorProto::TYPE_INT32));
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_symbol_names(
+            file, message, message_path, "", error));
+        CHECK(error.message.find("is not a valid identifier") !=
+              std::string::npos);
+    }
+    // Recursion: an unnamed nested message is reached.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto nested;
+        message.nested_type.push_back(nested);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_symbol_names(
+            file, message, message_path, "", error));
+        CHECK(error.message.find("has no name") != std::string::npos);
+    }
+    // Control: valid names pass.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.field.push_back(make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32));
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_message_symbol_names(
+            file, message, message_path, "", error));
+    }
+}
+
+void test_rule_message_enum_value_numbers_directly()
+{
+    // A nested enum with a repeated number is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 1);
+        add_enum_value(enumeration, file, "B", 1);
+        message.enum_type.push_back(enumeration);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_enum_value_numbers(
+            file, message, "M", message_path, error));
+        CHECK(error.message.find("repeats number 1") != std::string::npos);
+    }
+    // Control: distinct numbers pass.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 0);
+        add_enum_value(enumeration, file, "B", 1);
+        message.enum_type.push_back(enumeration);
+        const easypb_schema::DescriptorPath message_path =
+            easypb_schema::file_message_path(0);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_message_enum_value_numbers(
+            file, message, "M", message_path, error));
+    }
+}
+
 } // namespace
 
 int main()
@@ -960,6 +1710,19 @@ int main()
     test_message_defaults_are_rejected();
     test_map_entry_name_follows_protoc();
     test_integer_parsing_boundaries_follow_protoc();
+    test_rule_shape_d55_repeated_default_is_refused();
+    test_rule_encoding_d51_packed_is_presence_and_value();
+    test_rule_encoding_d56_oneof_member_must_be_optional();
+    test_rule_oneofs_d28_unclaimed_declaration_is_refused();
+    test_rule_type_a7_declared_kind_mismatch_is_refused();
+    test_rule_type_proto3_field_cannot_use_proto2_enum();
+    test_rule_nested_types_duplicates_and_recursion();
+    test_rule_default_validator_directly();
+    test_rule_enum_value_numbers_directly();
+    test_rule_symbol_names_directly();
+    test_rule_message_map_entries_directly();
+    test_rule_message_symbol_names_directly();
+    test_rule_message_enum_value_numbers_directly();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

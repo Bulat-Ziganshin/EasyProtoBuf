@@ -31,19 +31,25 @@ descriptor.pb.hpp decoder|
       generated C++ header
 ```
 
-`main.cpp` selects the input/action mode, reads files, invokes the parser or descriptor decoder, reports parser diagnostics, and writes the generated header to stdout.
+`main.cpp` selects the input/action mode and parses the command line (`-I/--proto_path` and `--target` are ordered and repeatable, `--out-dir` is single), loads all source roots or descriptor containers, selects targets, links the set, and generates through the core. One selected header goes to stdout, or every selected header is published through `header_output.cpp`. On Windows the command line reaches the program through `GetCommandLineW` with exactly one UTF-8 conversion before any loader runs.
 
 ## Source layout
 
-- [`main.cpp`](main.cpp) — command-line parser, input-mode selection, file I/O, descriptor decoding, parser diagnostics, and utility-mode dispatch.
-- [`codegen.cpp`](codegen.cpp) — translates `FileDescriptorProto` into C++ code.
+- [`main.cpp`](main.cpp) — command-line parser, input-mode selection and validation, source/descriptor loading orchestration, target selection, link invocation, output publication, and utility-mode dispatch.
+- [`codegen.cpp`](codegen.cpp) — the linked generator: message model and dependency analysis, the direct-dependency include planner (including the two compiler-support imports), imported enum-default indexing, and code generation for one target or a batch.
 - [`cpp_names.hpp`](cpp_names.hpp) / [`cpp_names.cpp`](cpp_names.cpp) — validate package namespace names and convert absolute Protobuf identities to C++ spellings.
 - [`descriptor.pb.hpp`](descriptor.pb.hpp) — internal trimmed C++ representation and EasyProtoBuf decoders for [`descriptor.proto`](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/descriptor.proto). Besides messages, enums, and fields it carries file dependency lists (`dependency`, `public_dependency`, `weak_dependency`) and minimal service names.
 - [`schema.hpp`](schema.hpp) / [`schema.cpp`](schema.cpp) — parser-independent schema storage: string pool, diagnostics, `SchemaFile`/`SchemaSet` ownership, descriptor paths, source metadata, and the common import-edge binder (`bind_import_edges`). Builds without the source parser.
 - [`schema_semantics.hpp`](schema_semantics.hpp) / [`schema_semantics.cpp`](schema_semantics.cpp) — shared symbol indexing (`SymbolIndex`, `index_file`) and local/strict field resolution (`resolve_file`) used by the parser, the import linker (`schema_linker.*`), and the compatibility pass. Builds without the source parser.
 - [`schema_linker.hpp`](schema_linker.hpp) / [`schema_linker.cpp`](schema_linker.cpp) — import linking (`link_schema`): the deterministic name-sorted walk over edge binding, the one shared index, visibility, resolution and warning hygiene, the publish-on-success rule, and the non-owning `LinkedSchema` view. Carries both modes (`LINK_COMPLETE` and the thin-descriptor compatibility pass). Builds without the source parser.
+- [`descriptor_adapter.hpp`](descriptor_adapter.hpp) / [`descriptor_adapter.cpp`](descriptor_adapter.cpp) — the common descriptor-ingestion adapter: owned deep copies of decoded `FileDescriptorProto`s into an owning `SchemaSet`, with every retained string interned into the file's own pool, logical-name validation and duplicate refusal. Builds without the source parser and never touches the disk.
+- [`descriptor_loader.hpp`](descriptor_loader.hpp) / [`descriptor_loader.cpp`](descriptor_loader.cpp) — the standalone `.pbs` container reader outside `easypb_schema`: decodes a `FileDescriptorSet`, keeps a single unnamed file as the anonymous compatibility identity, retains the container path in `physical_name` for diagnostics, and forwards every named set through the adapter.
+- [`generation.hpp`](generation.hpp) — the public generation entry points `generate_header` (one target) and `generate_files` (explicit targets in request order) plus the owning `GeneratedFile{name, content}` result.
+- [`generation_options.hpp`](generation_options.hpp) / [`generation_options.cpp`](generation_options.cpp) — `GenerationOptions` defaults and the shared validation/derived behavior every frontend applies.
+- [`header_paths.hpp`](header_paths.hpp) / [`header_paths.cpp`](header_paths.cpp) — the pure logical-name → generated-header mapping (`.proto` → `.pb.hpp`, otherwise append `.pb.hpp`). No filesystem call and no case logic.
+- [`header_output.hpp`](header_output.hpp) / [`header_output.cpp`](header_output.cpp) — the standalone output publisher, modelled on the reference compiler's `WriteAllToDisk`: duplicate output-name refusal, output-directory creation, per-output parent-directory creation, and an in-place write per file. Not part of the generation core. The containment, case-fold-collision, native-identity and atomic-replacement guards it used to carry were withdrawn on 2026-10-07 as protoc-absent; the header records the measurements and where each name check now lives.
 - [`logical_paths.hpp`](logical_paths.hpp) / [`logical_paths.cpp`](logical_paths.cpp) — pure logical import-name validation shared by every frontend. No filesystem calls or platform headers, so descriptor-set and future plugin input reuse the same spelling rules.
-- [`file_paths.hpp`](file_paths.hpp) / [`file_paths.cpp`](file_paths.cpp) — native physical-path operations for standalone source input: joining, byte-wise root-prefix mapping, lexical absolute normalization, file status and reads. Owns every filesystem call and Windows path rule; never linked into the common schema core.
+- [`file_paths.hpp`](file_paths.hpp) / [`file_paths.cpp`](file_paths.cpp) — native physical-path operations: joining, byte-wise root-prefix mapping, lexical absolute normalization, file status and reads for source input, plus the output-side directory creation and the plain in-place write. Owns every filesystem call and Windows path rule; never linked into the common schema core.
 - [`proto_loader.hpp`](proto_loader.hpp) / [`proto_loader.cpp`](proto_loader.cpp) — source-only discovery, caching, deferred parsing, and root selection in `easypb_proto`. Built as `easypb_proto_loader` in full builds only; descriptor-only and future plugin targets never link it.
 - [`easypb/options.proto`](easypb/options.proto) — EasyProtoBuf's Protobuf custom-option schema, currently including the per-field C++ type template.
 - [`parser/`](parser/) — `.proto` lexer/parser, descriptor pretty-printer, and parser benchmark helper (see [parser/README.md](parser/README.md) for the frontend API and behavior).
@@ -59,7 +65,7 @@ The reusable parser library consists of [`parser/proto_parser.cpp`](parser/proto
 
 The parser returns an owned `easypb_schema::SchemaFile` (aliased as `ParsedProto`): the same trimmed descriptor structures that descriptor-set input decodes into, plus source provenance (`field_sources`, `declaration_locations`, location-bearing `imports`). Generation after the frontend boundary does not depend on whether the original input was `.proto` or `.pbs`.
 
-Imports are parsed and recorded — in both the `imports` vector and the authoritative `FileDescriptorProto` dependency lists — but are not loaded yet. Unresolved imported types are therefore a frontend diagnostic; `main.cpp` refuses to pass such source schemas to the generator. The deferred `parse_proto` overload additionally leaves every named type unresolved without warnings so `link_schema` can resolve a whole loaded set. See [the parser documentation](parser/README.md) for the parser-level behavior and [Deferred and linked descriptor states](#deferred-and-linked-descriptor-states) for what the two states contain.
+Imports are parsed and recorded — in both the `imports` vector and the authoritative `FileDescriptorProto` dependency lists. Source input is then loaded through `load_source_files`, which follows every import through the search roots and binds the import edges; descriptor input is ingested through the adapter, which binds them too. `link_schema` resolves the whole loaded set, and generation reads only the linked view. A bare `parse_proto` remains available and leaves every named type unresolved without warnings so a caller can link a set itself. See [the parser documentation](parser/README.md) for the parser-level behavior and [Deferred and linked descriptor states](#deferred-and-linked-descriptor-states) for what the two states contain.
 
 ## Deferred and linked descriptor states
 
@@ -78,11 +84,16 @@ Two refusals in this layer are **deliberate divergences** from the reference
 compiler, recorded here so a later round does not file them as defects (the
 parity lane's `inverse` class, `tests/codegen/imports/data/parity/`):
 
-- **Editions.** `edition = "2023"` is refused with `DIAGNOSTIC_UNSUPPORTED_SYNTAX`
-  where libprotoc 30.1 accepts it, because this model carries no editions
-  semantics and the classification refuses what it cannot model (A25); the
-  parity lane pins it as `d-unsupported-syntax-editions-inverse`, and plan 5's
-  editions support is its owner.
+- **Editions.** `edition = "2023"` is refused where libprotoc 30.1 accepts it,
+  because this model carries no editions semantics and the classification
+  refuses what it cannot model (A25). The two origins refuse it differently and
+  both name editions: a descriptor set is refused by `link_schema` with
+  `DIAGNOSTIC_UNSUPPORTED_SYNTAX`, and a `.proto` source statement is refused by
+  the parser's `edition` branch with `editions syntax is not supported: only
+  "proto2" and "proto3" are accepted` at the `edition` line (plan 5's parser
+  branch, ledger D-44). The parity lane pins the descriptor origin as
+  `d-unsupported-syntax-editions-inverse`; the source probes stay rowless
+  because a load-stage refusal carries `DIAGNOSTIC_GENERIC`.
 - **The map-entry shape sweep is reference-free.** A26's check runs on the
   descriptor alone, so an entry **no field references** is checked as well.
   protoc validates a map entry only through the referencing field's `is_map()`,
@@ -143,9 +154,9 @@ After dependency validation, generation is a recursive pass over the ordered mes
 4. Build the corresponding encoder and decoder bodies.
 5. Emit free `inline encode(...)` / `decode(...)` overloads for every real message, including nested messages.
 
-The definition-dependency graph is fully built and validated before generated text reaches `main.cpp`, so unsupported recursive schemas fail without leaving a partial generated file.
+The definition-dependency graph is fully built and validated before any generated text is emitted, so unsupported recursive schemas fail without leaving a partial result.
 
-Generator-wide command-line settings are stored in the `option` structure in [`codegen.cpp`](codegen.cpp). The user-facing behavior of those settings is documented in [OPTIONS.md](OPTIONS.md).
+Generation settings live in `easypb_codegen::GenerationOptions` ([`generation_options.hpp`](generation_options.hpp)) with their defaults and the shared validation/derived behavior, so a core-only caller gets the same options the CLI does. Per-file generator state lives in an explicit context created per target, not in file-scope variables, so one process can generate several targets without leaking state; the user-facing behavior is documented in [OPTIONS.md](OPTIONS.md).
 
 ## Descriptor model
 
@@ -154,10 +165,10 @@ Generator-wide command-line settings are stored in the `option` structure in [`c
 Both frontends therefore produce data in the same model:
 
 - `.proto` input: parser constructs the descriptor tree directly;
-- `.pbs` input: EasyProtoBuf decodes the `FileDescriptorSet`, after which `main.cpp` requires exactly one `FileDescriptorProto`.
+- `.pbs` input: [`descriptor_loader.cpp`](descriptor_loader.cpp) decodes the container; a single-file set may omit the logical name as the anonymous stdout compatibility identity, every named file is ingested through the adapter with the container path retained for diagnostics, and targets are selected explicitly.
 
 Recognized EasyProtoBuf field options are preserved in this common descriptor model. For `.pbs` input, the descriptor decoder recognizes EasyProtoBuf's fixed extension number directly; Codegen does not implement a general Protobuf extension registry.
 
 ## Tests
 
-Codegen tests live under [`../tests/codegen/`](../tests/codegen/), grouped by generated-code feature (`maps`, `enums`, `packages`, `nested`), parser/input behavior (`parser`), shared schema storage/semantics (`schema`), and package/import support (`imports` with `test_graph.cpp` for the common binder, `test_loader.cpp` and `data/loader/` for filesystem discovery, `test_linker.cpp` for descriptor-origin linking, `test_source_linker.cpp` for the source-driven path with the `data/linker/` fixtures and the `protoc` differential, and `test_parity.cpp` with `data/parity/` for the two-way oracle lane). See [BUILDING.md](BUILDING.md#testing) for the user-facing test commands and test-suite overview.
+Codegen tests live under [`../tests/codegen/`](../tests/codegen/), grouped by generated-code feature (`maps`, `enums`, `packages`, `nested`), parser/input behavior (`parser`), shared schema storage/semantics (`schema`), and package/import support (`imports` with `test_graph.cpp` for the common binder, `test_loader.cpp` and `data/loader/` for filesystem discovery, `test_linker.cpp` for descriptor-origin linking, `test_source_linker.cpp` for the source-driven path with the `data/linker/` fixtures and the `protoc` differential, `test_parity.cpp` with `data/parity/` for the two-way oracle lane, `test_descriptor_sets.cpp` for descriptor ingestion and lifetime, `test_in_memory.cpp` for the core-only in-memory path, `test_output.cpp` for the publisher, and `runtime/` plus `test_includes.cmake` for the two-TU runtime and include-planner lanes). See [BUILDING.md](BUILDING.md#testing) for the user-facing test commands and test-suite overview.

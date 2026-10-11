@@ -7,6 +7,8 @@ The generated data types do not inherit from runtime classes and do not require 
 ## Capabilities
 
 - Generate C++ from either `.proto` source or a binary descriptor set produced by `protoc`.
+- Load imports from ordered search roots, link the whole set, and generate complete per-target headers with automatic dependency includes.
+- Select descriptor-set targets explicitly and publish one header per target below `--out-dir`.
 - Generate top-level and nested messages, enums, repeated fields, and maps with scalar, enum, or message values.
 - Map Protobuf packages directly to C++ namespaces.
 - Generate presence tracking, proto2 required-field checks, schema defaults, and packed repeated-field codecs.
@@ -33,6 +35,15 @@ Generate a C++ header:
 ```sh
 codegen person.proto >person.pb.hpp
 ```
+
+Schemas with imports name their search roots; several files are published together with `--out-dir`, and a complete descriptor set selects its targets explicitly:
+
+```sh
+codegen -I schemas --out-dir build/generated common/state.proto common/node.proto api/report.proto
+codegen --descriptor-set project.pbs --target common/state.proto --target common/node.proto --target api/report.proto --out-dir build/generated
+```
+
+Generate every dependency of a selected target as well: a complete link includes the dependency's header, so the set must be closed for the generated C++ to compile.
 
 Depending on the selected options, Codegen can generate C++ code like this:
 
