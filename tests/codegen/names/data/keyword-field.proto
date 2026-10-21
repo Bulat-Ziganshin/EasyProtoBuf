@@ -1,0 +1,20 @@
+// A field whose name is a C++ keyword.
+//
+// The reference compiler escapes the keyword (compiler/cpp/helpers.cc:509-514,
+// ResolveKeyword): the accessor is `class_()` and the presence member is
+// `has_class_`. Before the fix the member was spelled `class`, so the header
+// did not compile.
+//
+// The presence flag is the second half of the shape: it is named after the
+// field, so it has to be named after the ESCAPED field.
+
+syntax = "proto2";
+
+package kwfield;
+
+message M
+{
+    optional int32 class = 1;
+    optional int32 template = 2;
+    optional int32 namespace = 3;
+}

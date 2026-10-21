@@ -127,10 +127,11 @@ inline void decode(::easypb::Decoder pb, {0} &x)
 )---";
 
 
-// {0}=qualified message name, {1}=field.name
+// {0}=qualified C++ message name, {1}=the C++ name of the presence flag,
+// {2}=the Protobuf name of the field
 const char* CHECK_REQUIRED_FIELD_TEMPLATE = R"---(
-    if(! x.has_{1}) {
-        throw ::easypb::missing_required_field("Decoded protobuf has no required field {0}.{1}");
+    if(! x.{1}) {
+        throw ::easypb::missing_required_field("Decoded protobuf has no required field {0}.{2}");
     }
 )---";
 
@@ -147,6 +148,43 @@ bool hasfield_enabled(const FieldDescriptorProto& field,
                       const GenerationContext& context)
 {
     return (! is_repeated(field)  &&  ! context.options.no_has_fields);
+}
+
+
+// The text of a descriptor view, as an owned string.
+//
+// An empty view may carry a null pointer - a default-constructed
+// std::string_view does - and std::string(nullptr, 0) is formally undefined
+// (the ledger's W-35), so the empty case is spelled out.
+std::string descriptor_text(const str_view& value)
+{
+    if (value.empty()) return std::string();
+    return std::string(value.data(), value.size());
+}
+
+
+// The C++ member name of a field.
+//
+// A Protobuf field name is a valid C++ identifier in every case but one: a
+// name that is a C++ keyword cannot be spelled verbatim, and the reference
+// compiler escapes it - the accessor of a field named `class` is `class_`
+// (compiler/cpp/helpers.cc:642-654). The member carries the same escaped
+// name, so the field, its presence flag and the codec functions all speak
+// one name.
+std::string field_member_name(const FieldDescriptorProto& field)
+{
+    return easypb_codegen::cpp_identifier(descriptor_text(field.name));
+}
+
+
+// The C++ member name of a field's presence flag.
+//
+// The flag is named after the field, so it is named after the ESCAPED field:
+// a field named `class` owns the flag `has_class_`, which is how the
+// reference compiler spells its presence accessor.
+std::string field_flag_name(const FieldDescriptorProto& field)
+{
+    return "has_" + field_member_name(field);
 }
 
 
@@ -354,16 +392,26 @@ std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* ma
 
 // Generate an unscoped C++ enum with a fixed int32_t representation.  The
 // fixed underlying type lets an open proto3 enum retain any unknown int32 value.
+//
+// The enum's own name and the names of its values are escaped the way the
+// reference compiler escapes them: the enum of a schema that declares
+// `enum class` is `class_` (compiler/cpp/helpers.cc:461-469), and the
+// enumerator of a value named `class` is `class_` (helpers.cc:681-683).
 std::string generate_enum(const EnumDescriptorProto& enum_type,
                           const std::string& indent)
 {
+    const std::string enum_name =
+        easypb_codegen::cpp_identifier(descriptor_text(enum_type.name));
     std::string result = myformat("{0}enum {1} : {2}\n{0}{\n",
-                                  indent, enum_type.name, CPP_ENUM_BASE_TYPE);
+                                  indent, enum_name, CPP_ENUM_BASE_TYPE);
 
     for (std::size_t i = 0; i < enum_type.value.size(); ++i) {
         const auto& value = enum_type.value[i];
         result += myformat("{0}    {1} = {2}{3}\n",
-                           indent, value.name, number_to_string(value.number),
+                           indent,
+                           easypb_codegen::cpp_identifier(
+                               descriptor_text(value.name)),
+                           number_to_string(value.number),
                            i + 1 < enum_type.value.size() ? "," : "");
     }
 
@@ -385,7 +433,7 @@ std::string generate_field_encoder(const FieldDescriptorProto& field, const MapT
                 : "",
     /* 1 */ protobuf_type_as_str(field, map_type),
     /* 2 */ number_to_string(field.number),
-    /* 3 */ field.name);
+    /* 3 */ field_member_name(field));
 }
 
 
@@ -399,9 +447,9 @@ std::string generate_field_decoder(const FieldDescriptorProto& field, const MapT
     /* 0 */ number_to_string(field.number),
     /* 1 */ ! map_type && is_repeated(field)? "repeated_" : "",
     /* 2 */ protobuf_type_as_str(field, map_type),
-    /* 3 */ field.name,
+    /* 3 */ field_member_name(field),
     /* 4 */ hasfield_enabled(field, context)
-                ? myformat(", &x.has_{0}", field.name)
+                ? myformat(", &x.{0}", field_flag_name(field))
                 : "");
 }
 
@@ -623,7 +671,9 @@ std::string default_value_str(const FieldDescriptorProto& field,
             return field.has_default_value && ! context.options.no_default_values
                 ? myformat(" = {0}{1}{2}",
                            cpp_qualified_type_str(field.type_name),
-                           CPP_TYPE_DELIMITER, field.default_value)
+                           CPP_TYPE_DELIMITER,
+                           easypb_codegen::cpp_identifier(
+                               descriptor_text(field.default_value)))
                 : "";
         }
 
@@ -638,10 +688,12 @@ std::string default_value_str(const FieldDescriptorProto& field,
             : enum_type.value.front().name;
         // C++11 permits qualifying an unscoped enumerator through its enum
         // type. This prevents an enumerator in a nearer scope from shadowing
-        // the intended value.
+        // the intended value. The enumerator is spelled the way the emitter
+        // declares it, so a value named after a keyword is escaped here too.
         return myformat(" = {0}{1}{2}",
                         cpp_qualified_type_str(field.type_name),
-                        CPP_TYPE_DELIMITER, value);
+                        CPP_TYPE_DELIMITER,
+                        easypb_codegen::cpp_identifier(descriptor_text(value)));
     }
 
     if (field.has_default_value  &&  ! context.options.no_default_values) {
@@ -776,6 +828,7 @@ struct MessageInfo
 {
     const DescriptorProto* descriptor = nullptr;
     std::string simple_name;          // Inner
+    std::string cpp_name;             // Inner_ (the C++ struct name)
     std::string proto_name;           // .pkg.Outer.Inner
     std::string cpp_absolute_name;    // ::pkg::Outer::Inner
     std::string macro_stem;           // EASYPB_Outer_Inner (legacy spelling)
@@ -802,6 +855,12 @@ MessageInfo make_message_info(const DescriptorProto& descriptor,
     MessageInfo info;
     info.descriptor = &descriptor;
     info.simple_name = descriptor.name;
+    // The C++ name of the struct. A name that is a C++ keyword is escaped,
+    // exactly as the reference compiler escapes it (compiler/cpp/helpers.cc:
+    // 451-459 spells the class of a schema that declares `message class`
+    // `class_`). The Protobuf name keeps the raw spelling: it is the key of
+    // the symbol index and the name a type reference resolves against.
+    info.cpp_name = easypb_codegen::cpp_identifier(info.simple_name);
     info.proto_name = parent_proto_name.empty()
         ? context.package_name_prefix + info.simple_name
         : parent_proto_name + PB_TYPE_DELIMITER + info.simple_name;
@@ -1132,6 +1191,47 @@ std::vector<MessageInfo*> dependency_safe_order(std::vector<MessageInfo>& messag
 }
 
 
+// Refuse a message whose presence flags collide with its own members.
+//
+// The presence flag of a field is named after the field, so two fields of one
+// message can ask for the same member name: the field `foo` wants the flag
+// `has_foo`, and the field `has_foo` wants the member `has_foo`. A struct
+// cannot declare both, so the shape is refused with a diagnostic instead of a
+// header that does not compile.
+//
+// The reference compiler accepts the schema. In proto3 a scalar field has no
+// presence accessor, so nothing collides there; in proto2 it generates two
+// accessors that differ only in their return type, which C++ forbids. There
+// is no working protoc output to match, so a diagnostic is the better
+// answer.
+//
+// The check is gated on the generation options and not on the schema: the
+// flag exists only while the flags are enabled, so a run with
+// --no-has-fields accepts the shape.
+void check_presence_flag_collisions(const MessageInfo& info,
+                                    const GenerationContext& context)
+{
+    std::map<std::string, std::string> members;  // member name -> field name
+    for (const auto& field: info.descriptor->field) {
+        members[field_member_name(field)] = descriptor_text(field.name);
+    }
+
+    for (const auto& field: info.descriptor->field) {
+        if (! hasfield_enabled(field, context)) continue;
+        const std::string flag = field_flag_name(field);
+        const std::map<std::string, std::string>::const_iterator found =
+            members.find(flag);
+        if (found == members.end()) continue;
+        throw std::runtime_error(
+            myformat("Field '{0}' of message '{1}' collides with the presence "
+                     "flag of the field '{2}': both members would be named "
+                     "'{3}'",
+                     found->second, info.proto_name,
+                     descriptor_text(field.name), flag));
+    }
+}
+
+
 // Generate one message subtree in a single recursive walk.  The return value is
 // the C++ struct text that must be embedded in the parent.  Encoder and decoder
 // text is accumulated separately so all type definitions can be printed before
@@ -1158,18 +1258,20 @@ std::string generate_message(MessageInfo& info,
 
     std::string field_defs, has_field_defs, encoder, decoder, check_required_fields;
 
+    check_presence_flag_collisions(info, context);
+
     for (const auto& field: info.descriptor->field)
     {
         auto map_type = find_map_type(field, info.map_types, info.cpp_absolute_name);
 
         auto cpptype_str = cpp_type_as_str(field, map_type, context);
         field_defs += myformat("{0}    {1} {2}{3};\n",
-                               indent, cpptype_str, field.name,
+                               indent, cpptype_str, field_member_name(field),
                                default_value_str(field, enum_index, context));
 
         if (hasfield_enabled(field, context)) {
-            has_field_defs += myformat("{0}    bool has_{1} = false;\n",
-                                       indent, field.name);
+            has_field_defs += myformat("{0}    bool {1} = false;\n",
+                                       indent, field_flag_name(field));
         }
 
         // Field codecs still use the same helpers as top-level messages; only
@@ -1179,7 +1281,9 @@ std::string generate_message(MessageInfo& info,
 
         if ((field.label == FieldDescriptorProto::LABEL_REQUIRED) && ! context.options.no_required) {
             check_required_fields += myformat(
-                CHECK_REQUIRED_FIELD_TEMPLATE, info.cpp_absolute_name, field.name);
+                CHECK_REQUIRED_FIELD_TEMPLATE, info.cpp_absolute_name,
+                field_flag_name(field),
+                descriptor_text(field.name));
         }
     }
 
@@ -1194,7 +1298,7 @@ std::string generate_message(MessageInfo& info,
     }
 
     if (context.options.no_class) return "";
-    return myformat(CLASS_TEMPLATE, indent, info.simple_name, nested_defs,
+    return myformat(CLASS_TEMPLATE, indent, info.cpp_name, nested_defs,
                     field_defs, has_field_defs, info.macro_stem);
 }
 

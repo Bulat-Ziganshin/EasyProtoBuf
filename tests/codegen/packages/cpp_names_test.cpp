@@ -29,6 +29,7 @@ bool rejects_package(const std::string& package)
 int main()
 {
     using easypb_codegen::cpp_absolute_name;
+    using easypb_codegen::cpp_identifier;
     using easypb_codegen::cpp_local_name;
     using easypb_codegen::insertion_macro_stem;
     using easypb_codegen::validate_cpp_package;
@@ -42,6 +43,22 @@ int main()
     CHECK(cpp_local_name(".other.Thing", "foo.bar") ==
           "::other::Thing");
     CHECK(cpp_local_name(".Outer.Inner", "") == "Outer::Inner");
+
+    // A name that cannot be spelled verbatim in C++ is escaped; every other
+    // name is returned unchanged, so a header without a reserved name keeps
+    // its bytes.
+    CHECK(cpp_identifier("class") == "class_");
+    CHECK(cpp_identifier("template") == "template_");
+    CHECK(cpp_identifier("namespace") == "namespace_");
+    CHECK(cpp_identifier("NULL") == "NULL_");
+    CHECK(cpp_identifier("assert") == "assert_");
+    CHECK(cpp_identifier("value") == "value");
+    CHECK(cpp_identifier("") == "");
+    // The escaped name is the qualified name's component too.
+    CHECK(cpp_absolute_name(".foo.class.Inner") ==
+          "::foo::class_::Inner");
+    CHECK(cpp_absolute_name(".foo.bar.Outer.Inner") ==
+          "::foo::bar::Outer::Inner");
 
     CHECK(insertion_macro_stem(".foo.bar.Outer", "foo.bar") ==
           "EASYPB_Outer");
@@ -67,6 +84,10 @@ int main()
     CHECK(rejects_package("foo.__detail"));
     CHECK(rejects_package("_global.foo"));
     CHECK(rejects_package("foo.bad-name"));
+    // The two macro names the reference compiler escapes as well: a
+    // namespace named after one of them does not compile either.
+    CHECK(rejects_package("NULL"));
+    CHECK(rejects_package("foo.assert"));
 
     return EXIT_SUCCESS;
 }

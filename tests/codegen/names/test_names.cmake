@@ -1,0 +1,162 @@
+# The names lane: generate -> compile -> run -> refuse.
+#
+# One lane for the two rows of the plan-5 follow-up's session S2: W-08 (a
+# C++ keyword in a declaration name) and W-09 (a presence flag that collides
+# with a member of the same message). The three things every row needs:
+#
+#   1. BOTH input paths. The source path (.proto) and the descriptor path
+#      (.pbs) must produce the SAME header for the same schema. The two
+#      frontends carry the same names, so the emitter must spell them the
+#      same way.
+#   2. THE HEADER COMPILES. A generated header that does not compile is a
+#      failure; "the tool exited 0" is not a pass. The compile happens with
+#      the tree's own compiler and the tree's own standard.
+#   3. THE NAME CARRIES THE DATA. An escaped member must still hold the
+#      value the schema names, and the value must still travel under the
+#      field number the schema gives it. The runtime checker writes every
+#      escaped member and reads the bytes back.
+#
+# Required arguments:
+#   CODEGEN     the standalone codegen executable
+#   DATA_DIR    the fixture directory
+#   WORK_DIR    the scratch directory
+#   RUNTIME     the built runtime checker
+#   CXX         the C++ compiler
+#   CXX_FLAGS   the tree's compiler flags
+#   CXX_STD_FLAG the tree's standard flag (may be empty)
+#   INCLUDE_DIR the library's include directory
+#   FULL_BUILD  1 when the proto parser is available
+
+foreach(required_var CODEGEN DATA_DIR WORK_DIR RUNTIME CXX INCLUDE_DIR)
+    if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
+        message(FATAL_ERROR "${required_var} is required")
+    endif()
+endforeach()
+if(NOT DEFINED FULL_BUILD)
+    set(FULL_BUILD 1)
+endif()
+
+function(run_ok output_var error_var)
+    execute_process(
+        COMMAND ${ARGN}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR
+            "Command failed (${result}): ${ARGN}\nstdout:\n${output}\nstderr:\n${error}")
+    endif()
+    set(${output_var} "${output}" PARENT_SCOPE)
+    set(${error_var} "${error}" PARENT_SCOPE)
+endfunction()
+
+function(run_fail output_var error_var)
+    execute_process(
+        COMMAND ${ARGN}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error)
+    if(result EQUAL 0)
+        message(FATAL_ERROR
+            "Command unexpectedly succeeded: ${ARGN}\nstdout:\n${output}\nstderr:\n${error}")
+    endif()
+    set(${output_var} "${output}" PARENT_SCOPE)
+    set(${error_var} "${error}" PARENT_SCOPE)
+endfunction()
+
+function(require_contains variable_name expected description)
+    string(FIND "${${variable_name}}" "${expected}" position)
+    if(position EQUAL -1)
+        message(FATAL_ERROR "${description}: missing '${expected}' in ${variable_name}")
+    endif()
+endfunction()
+
+function(require_empty variable_name description)
+    if(NOT "${${variable_name}}" STREQUAL "")
+        message(FATAL_ERROR "${description}: expected empty output, got '${${variable_name}}'")
+    endif()
+endfunction()
+
+file(REMOVE_RECURSE "${WORK_DIR}")
+file(MAKE_DIRECTORY "${WORK_DIR}/descriptor")
+file(MAKE_DIRECTORY "${WORK_DIR}/source")
+
+# The paired fixtures: a .proto source and the .pbs descriptor of the same
+# schema. Every one of them names a declaration after a C++ keyword, in one
+# of the four kinds the emitter spells: a field, a message, an enum, an enum
+# value.
+set(paired_fixtures
+    keyword-field
+    keyword-message
+    keyword-enum
+    keyword-enum-value
+    keyword-nested)
+
+foreach(name ${paired_fixtures})
+    # The descriptor path.
+    run_ok(desc_out desc_err
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${name}.pbs")
+    file(WRITE "${WORK_DIR}/descriptor/${name}.pb.hpp" "${desc_out}")
+    require_empty(desc_err "Descriptor generation stderr for ${name}")
+
+    # The source path. The two frontends must agree byte for byte, so the
+    # header the descriptor path produced is the reference.
+    if(FULL_BUILD)
+        run_ok(src_out src_err
+            ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
+        file(WRITE "${WORK_DIR}/source/${name}.pb.hpp" "${src_out}")
+        require_empty(src_err "Source generation stderr for ${name}")
+
+        file(READ "${WORK_DIR}/descriptor/${name}.pb.hpp" descriptor_header)
+        file(READ "${WORK_DIR}/source/${name}.pb.hpp" source_header)
+        if(NOT source_header STREQUAL descriptor_header)
+            message(FATAL_ERROR
+                "The source path and the descriptor path disagree for ${name}")
+        endif()
+    endif()
+
+    # The header compiles, in the tree's own standard. It is compiled as an
+    # INCLUDED header, not as the main file: a header that is the main file
+    # draws a "#pragma once in main file" warning that says nothing about the
+    # header.
+    if(CXX_STD_FLAG)
+        set(std_flag "${CXX_STD_FLAG}")
+    else()
+        set(std_flag "")
+    endif()
+    file(WRITE "${WORK_DIR}/probe-${name}.cpp"
+        "#include \"${name}.pb.hpp\"\n")
+    run_ok(syntax_out syntax_err
+        ${CXX} ${CXX_FLAGS} ${std_flag} -fsyntax-only
+        -I "${INCLUDE_DIR}" -I "${WORK_DIR}/descriptor"
+        "${WORK_DIR}/probe-${name}.cpp")
+    require_empty(syntax_err "The generated header of ${name} must compile clean")
+endforeach()
+
+# The escaped names carry the schema's data.
+run_ok(runtime_out runtime_err ${RUNTIME})
+require_empty(runtime_err "The runtime checker's stderr")
+require_contains(runtime_out "every escaped name carries the data the schema names"
+    "The runtime checker's verdict")
+
+# --- the refusal ------------------------------------------------------------
+#
+# A field named `has_foo` next to a field named `foo`: the presence flag of
+# `foo` is named `has_foo`, so the struct would declare two members with that
+# name. The shape is refused with a diagnostic, in proto2 and in proto3.
+
+foreach(name has-collision has-collision-p3)
+    run_fail(collision_out collision_err
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${name}.pbs")
+    require_empty(collision_out "The collision refusal stdout for ${name}")
+    require_contains(collision_err "collides with the presence flag"
+        "The collision refusal for ${name}")
+
+    if(FULL_BUILD)
+        run_fail(source_out source_err
+            ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
+        require_empty(source_out "The collision refusal stdout for ${name}")
+        require_contains(source_err "collides with the presence flag"
+            "The collision refusal for ${name} on the source path")
+    endif()
+endforeach()

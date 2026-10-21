@@ -1,0 +1,20 @@
+// A field named `has_foo` next to a field named `foo`.
+//
+// The presence flag of `foo` is named `has_foo`, so the struct would declare
+// two members with that name: the flag of `foo` and the value of `has_foo`.
+// The reference compiler accepts the schema and generates working code for it
+// in proto3; in proto2 it generates code that does not compile (two accessors
+// that differ only in their return type).
+//
+// This generator refuses the shape with a diagnostic instead of writing a
+// header that cannot mean what the schema says.
+
+syntax = "proto2";
+
+package hascollision;
+
+message M
+{
+    optional int32 foo = 1;
+    optional int32 has_foo = 2;
+}

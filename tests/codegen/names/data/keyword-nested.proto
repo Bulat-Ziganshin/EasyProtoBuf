@@ -1,0 +1,29 @@
+// A NESTED message and a NESTED enum whose names are C++ keywords.
+//
+// The nested names reach the header as the nested type's own name and as the
+// qualified type of the fields that use them. Before the fix both said
+// `class` and `template`, so the header did not compile.
+//
+// The nested message's own field is named after a keyword too, so the three
+// name kinds meet in one header.
+
+syntax = "proto2";
+
+package kwnested;
+
+message Outer
+{
+    message class
+    {
+        optional int32 value = 1;
+    }
+
+    enum template
+    {
+        first = 0;
+        second = 1;
+    }
+
+    optional class payload = 1;
+    optional template kind = 2 [default = second];
+}

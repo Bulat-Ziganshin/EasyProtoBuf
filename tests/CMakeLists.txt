@@ -334,6 +334,82 @@ if(BUILD_TESTING)
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_validity_dir}/test_validity.cmake)
 
+    # Plan 5 follow-up S2 (W-08, W-09): the emitter's name layer. The lane
+    # generates every fixture through BOTH input paths, compiles the
+    # generated headers with the tree's own compiler and standard, checks
+    # that every escaped name still carries the data the schema names, and
+    # drives the presence-flag collision through the CLI. The descriptor
+    # path builds the headers the runtime checker reads, because it is the
+    # one every build profile has; the driver compares the source path's
+    # header with the descriptor path's byte for byte.
+    set(codegen_names_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/names)
+    set(codegen_names_data_dir ${codegen_names_dir}/data)
+    set(codegen_names_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-names)
+    set(codegen_names_descriptor_dir
+        ${codegen_names_generated_dir}/descriptor)
+    set(codegen_names_fixtures
+        keyword-field
+        keyword-message
+        keyword-enum
+        keyword-enum-value
+        keyword-nested)
+
+    foreach(name ${codegen_names_fixtures})
+        add_custom_command(
+            OUTPUT ${codegen_names_descriptor_dir}/${name}.pb.hpp
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_names_data_dir}/${name}.pbs
+                -DOUTPUT=${codegen_names_descriptor_dir}/${name}.pb.hpp
+                -P ${codegen_names_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_names_data_dir}/${name}.pbs
+                ${codegen_names_dir}/generate_header.cmake
+            VERBATIM)
+    endforeach()
+    add_custom_target(codegen_names_generated
+        DEPENDS
+            ${codegen_names_descriptor_dir}/keyword-field.pb.hpp
+            ${codegen_names_descriptor_dir}/keyword-message.pb.hpp
+            ${codegen_names_descriptor_dir}/keyword-enum.pb.hpp
+            ${codegen_names_descriptor_dir}/keyword-enum-value.pb.hpp
+            ${codegen_names_descriptor_dir}/keyword-nested.pb.hpp)
+
+    add_executable(codegen_names_runtime_test
+        ${codegen_names_dir}/names_runtime.cpp)
+    add_dependencies(codegen_names_runtime_test codegen_names_generated)
+    target_include_directories(codegen_names_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_names_descriptor_dir})
+
+    # The tree's own standard: the C++11 profile passes its standard through
+    # EASYPB_CXX_FLAGS, so CMAKE_CXX_STANDARD is empty there and the flags
+    # carry it. The flags are split into a list, because the profile's
+    # standard arrives as one string with a leading space, and a compiler
+    # does not read " -std=c++11" as the option it is.
+    if(CMAKE_CXX_STANDARD)
+        set(codegen_names_std_flag "-std=c++${CMAKE_CXX_STANDARD}")
+    else()
+        set(codegen_names_std_flag "")
+    endif()
+    separate_arguments(codegen_names_cxx_flags NATIVE_COMMAND
+        "${CMAKE_CXX_FLAGS}")
+
+    add_test(NAME codegen.names
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_names_data_dir}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-names
+            -DRUNTIME=$<TARGET_FILE:codegen_names_runtime_test>
+            -DCXX=${CMAKE_CXX_COMPILER}
+            "-DCXX_FLAGS=${codegen_names_cxx_flags}"
+            -DCXX_STD_FLAG=${codegen_names_std_flag}
+            -DINCLUDE_DIR=${easypb_test_include_dir}
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_names_dir}/test_names.cmake)
+
     set(codegen_packages_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/packages)
     set(codegen_packages_data_dir ${codegen_packages_dir}/data)

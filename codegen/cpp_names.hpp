@@ -8,8 +8,14 @@
 namespace easypb_codegen {
 
 // Convert an absolute Protobuf name such as .foo.bar.Outer.Inner to the
-// corresponding absolute C++ name ::foo::bar::Outer::Inner.
+// corresponding absolute C++ name ::foo::bar::Outer::Inner. Every component
+// that cannot be spelled verbatim in C++ is escaped (see cpp_identifier).
 std::string cpp_absolute_name(const str_view& absolute_proto_name);
+
+// The C++ name a Protobuf declaration name maps to. A name that is a C++
+// keyword - or one of the two macro names the reference compiler escapes as
+// well - gets an underscore appended; every other name is returned unchanged.
+std::string cpp_identifier(const std::string& name);
 
 // Convert an absolute Protobuf name to the spelling used inside the current
 // package namespace. Only an exact package-component prefix is stripped;
