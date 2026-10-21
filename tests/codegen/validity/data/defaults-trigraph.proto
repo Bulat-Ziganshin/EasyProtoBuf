@@ -1,0 +1,13 @@
+syntax = "proto2";
+
+// A default that holds a trigraph opener. The generated header is compiled
+// with -std=c++11, and GCC's ISO mode still has trigraphs: a trigraph is
+// replaced in translation phase 1, before the backslash escape is read, so
+// the literal has to break every "??X" pair - the second '?' of the pair is
+// the one that has to be escaped.
+message TrigraphDefaults
+{
+    optional string assignment = 1 [default = "a??=b"];
+    optional string slash = 2 [default = "a??/b"];
+    optional bytes less = 3 [default = "a??<b"];
+}

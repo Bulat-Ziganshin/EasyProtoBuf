@@ -322,6 +322,16 @@ A25_EDITION_NOTE = (
     "the model carries no editions semantics - a recorded capability boundary "
     "whose owner is plan 5")
 
+INVALID_FIELD_TYPE_NOTE = (
+    "protoc 30.1 accepts this shape and resolves it: an absent kind is the "
+    "proto default (TYPE_DOUBLE), an unknown kind the same way, a group a "
+    "generated group class. This project refuses all three by the owner's "
+    "decision of 2026-10-21 (plan 5 follow-up, session S1, W-10): the "
+    "generator has no group types at all, and the emitter used to write "
+    "\"???type\" or \"???group\" into the header at rc=0 - a deliberate "
+    "\"stricter than protoc\" divergence, like the package-depth and the "
+    "output-root rules")
+
 ENTRY_KEY_INT32 = ('      field { name: "key" number: 1 label: '
                    'LABEL_OPTIONAL type: TYPE_INT32 }\n')
 ENTRY_KEY_STRING = ('      field { name: "key" number: 1 label: '
@@ -572,15 +582,23 @@ EXTRA_CASES = [
         "accept"),
 
     # --- The group and oneof controls (r25, D-54/D-56) ---------------------
+    # A proto2 group is one of the three shapes the plan-5 follow-up's S1
+    # (W-10) refuses: the generator has no group types, and the emitter used
+    # to write "???group" for one. protoc accepts the shape and generates a
+    # group class for it, so the row is an INVERSE one - the disagreement is
+    # by decision, and the decision is recorded in the ledger's Decisions
+    # table. The accept column of the code it answers with is
+    # d-invalid-field-type-accept, below.
     descriptor_case(
-        "d-group-proto2-accept",
+        "d-invalid-field-type-group-reject",
         file_block("root.proto",
                    '  message_type {\n    name: "M"\n'
                    '    field { name: "g" number: 1 label: LABEL_OPTIONAL '
                    'type: TYPE_GROUP type_name: ".p.M.G" }\n'
                    '    nested_type { name: "G" }\n  }\n',
                    syntax="proto2"),
-        "accept"),
+        "DIAGNOSTIC_INVALID_FIELD_TYPE", kind="inverse",
+        note=INVALID_FIELD_TYPE_NOTE),
     descriptor_case(
         "d-oneof-member-optional-accept",
         file_block("root.proto",
@@ -919,15 +937,42 @@ DESCRIPTOR_CASES = [
                     "DIAGNOSTIC_INVALID_FIELD_NUMBER"),
 
     # --- MISSING_TYPE_NAME, and the P-19 control --------------------------
+    # The accept column is a field that names no type: a SCALAR needs no
+    # type_name, so the field is legal and the rule does not reach it. It
+    # used to carry no kind at all, which the S1 refusal (W-10) turned into
+    # a refusal of its own - the accept column of this code needs a shape the
+    # code still accepts.
     descriptor_case("d-missing-type-name-accept",
                     root_set('  message_type {\n    name: "M"\n'
                              '    field { name: "a" number: 1 label: '
-                             'LABEL_OPTIONAL }\n  }\n'), "accept"),
+                             'LABEL_OPTIONAL type: TYPE_INT32 }\n  }\n'),
+                    "accept"),
     descriptor_case("d-missing-type-name-reject",
                     root_set('  message_type {\n    name: "M"\n'
                              '    field { name: "a" number: 1 label: '
                              'LABEL_OPTIONAL type: TYPE_MESSAGE }\n  }\n'),
                     "DIAGNOSTIC_MISSING_TYPE_NAME"),
+
+    # --- INVALID_FIELD_TYPE (the plan-5 follow-up's S1, W-10) --------------
+    # The kinds the emitter cannot spell. protoc accepts all of them and
+    # emits working code; this project refuses them by decision, so the rows
+    # are inverse ones. The UNKNOWN kind (a type outside the TYPE_* set) is
+    # NOT a row: protoc's text format will not carry an enumeration value it
+    # does not know ("Unknown enumeration value of \"99\" for field \"type\""),
+    # and a row's fixture must be protoc's own encoding of a text this
+    # project tracks. That shape is measured by the validity lane instead
+    # (tests/codegen/validity/data/field-type-unknown.pbs).
+    descriptor_case("d-invalid-field-type-accept",
+                    root_set('  message_type {\n    name: "M"\n'
+                             '    field { name: "a" number: 1 label: '
+                             'LABEL_OPTIONAL type: TYPE_INT32 }\n  }\n'),
+                    "accept"),
+    descriptor_case("d-invalid-field-type-absent-reject",
+                    root_set('  message_type {\n    name: "M"\n'
+                             '    field { name: "a" number: 1 label: '
+                             'LABEL_OPTIONAL }\n  }\n'),
+                    "DIAGNOSTIC_INVALID_FIELD_TYPE", kind="inverse",
+                    note=INVALID_FIELD_TYPE_NOTE),
 
     # --- DUPLICATE_ENUM_NUMBER --------------------------------------------
     descriptor_case("d-duplicate-enum-number-accept",

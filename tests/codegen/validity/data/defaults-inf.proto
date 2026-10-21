@@ -1,0 +1,10 @@
+syntax = "proto2";
+
+// The special floating-point defaults. They are not numbers in the source
+// text, so the emitter has to spell them as numeric_limits calls instead of
+// pasting the bare identifier.
+message InfDefaults
+{
+    optional double positive_infinity = 1 [default = inf];
+    optional float negative_infinity = 2 [default = -inf];
+}

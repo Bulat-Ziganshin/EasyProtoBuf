@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+// A quote inside a string default. The source frontend stores the DECODED
+// text, so the descriptor carries three raw bytes: 'a', '"', 'b'.
+message QuoteDefaults
+{
+    optional string quoted = 1 [default = "a\"b"];
+}

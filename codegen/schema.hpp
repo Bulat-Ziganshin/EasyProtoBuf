@@ -137,7 +137,19 @@ enum DiagnosticCode
     // the generator's question, not the linker's (contract clause 11). The two
     // messages share one code because they are one category - the name is not a
     // symbol name - and one rule asked of two values (E1/A3).
-    DIAGNOSTIC_INVALID_SYMBOL_NAME
+    DIAGNOSTIC_INVALID_SYMBOL_NAME,
+    // Plan 5 follow-up S1 (W-10): a descriptor-origin field declares a kind
+    // the generator cannot emit - no kind at all, a group, or a value outside
+    // the TYPE_* set. protoc resolves all three (an absent kind as the proto
+    // default TYPE_DOUBLE, a group as a generated group class) and emits
+    // working code; this project REFUSES them, because the emitter has no
+    // spelling for them and used to write "???type" / "???group" into the
+    // header. A deliberate "stricter than protoc" divergence, like the
+    // package-depth and the output-root rules. The check is gated on the
+    // descriptor origin, because a source-origin field carries no declared
+    // kind: deferred parsing leaves has_type unset and the kind is written
+    // during resolution.
+    DIAGNOSTIC_INVALID_FIELD_TYPE
 };
 
 struct Diagnostic

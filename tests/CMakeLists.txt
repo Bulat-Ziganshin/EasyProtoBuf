@@ -252,6 +252,88 @@ if(BUILD_TESTING)
         ${easypb_test_include_dir} ${codegen_enums_generated_dir})
     add_test(NAME codegen.enums.runtime COMMAND codegen_enums_runtime_test)
 
+    # Plan 5 follow-up S1 (W-02, W-03, W-05, W-10, W-12): the emitter's value
+    # and field-type layer. The lane generates every fixture through BOTH
+    # input paths, compiles the generated headers with the tree's own
+    # compiler, runs the runtime check of the default values, and drives the
+    # refusals through the CLI. The descriptor path builds the headers the
+    # runtime checker reads, because it is the one every build profile has;
+    # the driver compares the source path's header with the descriptor path's
+    # byte for byte.
+    set(codegen_validity_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/validity)
+    set(codegen_validity_data_dir ${codegen_validity_dir}/data)
+    set(codegen_validity_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-validity)
+    set(codegen_validity_descriptor_dir
+        ${codegen_validity_generated_dir}/descriptor)
+    set(codegen_validity_fixtures
+        defaults-quote
+        defaults-backslash
+        defaults-newline
+        defaults-nul
+        defaults-quote-byte
+        defaults-trigraph
+        defaults-inf
+        defaults-nan)
+
+    foreach(name ${codegen_validity_fixtures})
+        add_custom_command(
+            OUTPUT ${codegen_validity_descriptor_dir}/${name}.pb.hpp
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_validity_data_dir}/${name}.pbs
+                -DOUTPUT=${codegen_validity_descriptor_dir}/${name}.pb.hpp
+                -P ${codegen_validity_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_validity_data_dir}/${name}.pbs
+                ${codegen_validity_dir}/generate_header.cmake
+            VERBATIM)
+    endforeach()
+    add_custom_target(codegen_validity_generated
+        DEPENDS
+            ${codegen_validity_descriptor_dir}/defaults-quote.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-backslash.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-newline.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-nul.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-quote-byte.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-trigraph.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-inf.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-nan.pb.hpp)
+
+    add_executable(codegen_validity_runtime_test
+        ${codegen_validity_dir}/validity_runtime.cpp)
+    add_dependencies(codegen_validity_runtime_test codegen_validity_generated)
+    target_include_directories(codegen_validity_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_validity_descriptor_dir})
+
+    # The tree's own standard: the C++11 profile passes its standard through
+    # EASYPB_CXX_FLAGS, so CMAKE_CXX_STANDARD is empty there and the flags
+    # carry it. The flags are split into a list, because the profile's
+    # standard arrives as one string with a leading space, and a compiler
+    # does not read " -std=c++11" as the option it is.
+    if(CMAKE_CXX_STANDARD)
+        set(codegen_validity_std_flag "-std=c++${CMAKE_CXX_STANDARD}")
+    else()
+        set(codegen_validity_std_flag "")
+    endif()
+    separate_arguments(codegen_validity_cxx_flags NATIVE_COMMAND
+        "${CMAKE_CXX_FLAGS}")
+
+    add_test(NAME codegen.validity
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_validity_data_dir}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-validity
+            -DRUNTIME=$<TARGET_FILE:codegen_validity_runtime_test>
+            -DCXX=${CMAKE_CXX_COMPILER}
+            "-DCXX_FLAGS=${codegen_validity_cxx_flags}"
+            -DCXX_STD_FLAG=${codegen_validity_std_flag}
+            -DINCLUDE_DIR=${easypb_test_include_dir}
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_validity_dir}/test_validity.cmake)
+
     set(codegen_packages_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/packages)
     set(codegen_packages_data_dir ${codegen_packages_dir}/data)

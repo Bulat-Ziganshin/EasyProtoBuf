@@ -3089,14 +3089,20 @@ void test_warning_hygiene_drops_only_stale_unresolved_warnings()
     CHECK(a.warnings[0].message == "a note another pass recorded");
 }
 
-// D-12 (fix round r4): a group field declares TYPE_GROUP and names the group
-// message, and a group IS a message - protoc's model carries TYPE_GROUP only on
-// the field. The index records every message as TYPE_MESSAGE, so the declared-
-// kind comparison must treat the two as agreeing or every legal proto2 group is
-// refused; protoc accepts the same descriptor (review r4's oracle, exit 0).
-// The declared kind must also SURVIVE the link: overwriting it with
-// TYPE_MESSAGE would silently change the wire encoding the generator emits.
-void test_group_field_links_and_keeps_its_declared_kind()
+// D-12 (fix round r4) said a group field must LINK and keep its declared
+// kind: a group IS a message, protoc's model carries TYPE_GROUP only on the
+// field, and protoc accepts the same descriptor (review r4's oracle, exit 0).
+// The plan-5 follow-up's session S1 (W-10) OVERRODE that: the generator has
+// no group types at all - the source parser refuses a group outright ("group
+// fields are not supported") - and the emitter used to answer one with
+// "???group" in the header at rc=0. The owner's decision of 2026-10-21 is a
+// deliberate "stricter than protoc" divergence, so a descriptor-origin group
+// is refused with DIAGNOSTIC_INVALID_FIELD_TYPE, in both link modes.
+//
+// The control from review r4 still holds: a genuine kind disagreement - a
+// field declaring an enum but naming a message - is still refused, and with
+// its own code.
+void test_group_field_is_refused()
 {
     // A descriptor-origin group: nested message G, field g of TYPE_GROUP.
     easypb_schema::SchemaSet set;
@@ -3111,13 +3117,12 @@ void test_group_field_links_and_keeps_its_declared_kind()
     file.file.message_type.push_back(m);
 
     easypb_schema::Diagnostic error;
-    CHECK(link_verdict(set, error));
-    CHECK(text(file.file.message_type[0].field[0].type_name) == ".pkg.M.G");
-    CHECK(file.file.message_type[0].field[0].type ==
-          FieldDescriptorProto::TYPE_GROUP);
+    CHECK(!link_verdict(set, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
+    CHECK(error.message.find("group") != std::string::npos);
 
-    // A group field that also has a body field still links, and the body's own
-    // scalar is untouched by the group handling.
+    // A group field that also has a body field is refused the same way: the
+    // group's own body is not what the rule asks about.
     easypb_schema::SchemaSet nested;
     easypb_schema::SchemaFile& host = make_simple_file(nested, "group2.proto", "pkg");
     host.from_descriptor_set = true;
@@ -3144,9 +3149,8 @@ void test_group_field_links_and_keeps_its_declared_kind()
     host.file.message_type.push_back(outer);
 
     easypb_schema::Diagnostic error2;
-    CHECK(link_verdict(nested, error2));
-    CHECK(host.file.message_type[0].field[0].type ==
-          FieldDescriptorProto::TYPE_GROUP);
+    CHECK(!link_verdict(nested, error2));
+    CHECK(error2.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
 
     // The control from review r4 still holds: a genuine kind disagreement - a
     // field declaring an enum but naming a message - is still refused. Without
@@ -4347,9 +4351,12 @@ void test_compat_rejects_unclassified_external_references()
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
         CHECK(!link_compat(set, linked, error));
-        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
-        CHECK(error.message.find("explicit message or enum kind") !=
-              std::string::npos);
+        // The descriptor names a type but declares no kind, so the declared
+        // shape is refused BEFORE the compatibility mode's own rule is asked:
+        // the mode tolerates an unresolved reference only when the descriptor
+        // supplies an explicit message or enum kind, and a field with no kind
+        // at all cannot supply one (the plan-5 follow-up's S1, W-10).
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
     }
 }
 
@@ -5059,7 +5066,7 @@ void test_underscore_map_fields_collide_on_the_shared_entry_name()
     }
 }
 
-// F-H1 (refuted): the muse review's HIGH finding read "a field with neither a
+// F-H1 (refuted, then overridden): the muse review's HIGH finding read "a field with neither a
 // declared kind nor a type_name slips past the A7/clause-12 guard, and protoc
 // rejects that shape too", and proposed refusing it with MISSING_TYPE_NAME.
 // Measured over a real descriptor set mutated by deleting the field's `type`
@@ -5068,11 +5075,19 @@ void test_underscore_map_fields_collide_on_the_shared_entry_name()
 // claimed to close. The rows below keep both accepted shapes and the
 // neighbour the same measurement settled, so a later session that wants the
 // refusal has to produce a new counter-example rather than re-read the report.
-void test_descriptor_origin_field_without_a_declared_kind_links()
+//
+// That later session is the plan-5 follow-up's S1 (W-10), and the owner's
+// decision of 2026-10-21 takes the refusal anyway: a field that declares no
+// kind has no spelling in a generated header, and the emitter used to answer
+// one with "???type" at rc=0. The shape is a deliberate "stricter than
+// protoc" divergence, and the measurement below is the new counter-example
+// the F-H1 note asked for - protoc accepts all three shapes, this project
+// refuses them.
+void test_descriptor_origin_field_without_a_declared_kind_is_refused()
 {
     // Neither `type` nor `type_name`: protoc reads the absent kind as its own
-    // proto2 default and accepts; the link accepts and leaves the metadata
-    // alone.
+    // proto2 default and accepts; this project refuses the shape, because the
+    // emitter has no kind to write.
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
@@ -5089,17 +5104,14 @@ void test_descriptor_origin_field_without_a_declared_kind_links()
         file.file.message_type.push_back(holder);
 
         easypb_schema::Diagnostic error;
-        CHECK(link_verdict(set, error));
-        // The absent kind stays absent - the model reads it as kind 0, NOT as
-        // protoc's default. Both readers accept the field at link time, so the
-        // difference is a generation question (plan 5), named here so it is
-        // not mistaken for a link verdict.
-        CHECK(!file.file.message_type[0].field[0].has_type);
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
     }
     // A type_name with no declared kind: protoc builds the NAMED type from the
-    // name (exit 0), and the link fills the kind from the definition - the one
-    // place a descriptor-origin kind is written without a comparison, because
-    // there is no declared kind to compare (A7's guard is `has_type && ...`).
+    // name (exit 0), and the link could fill the kind from the definition
+    // (A7's guard is `has_type && ...`). The refusal is the same: the
+    // descriptor does not say what the field is, and the rule asks the
+    // descriptor, not the resolution.
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
@@ -5116,16 +5128,13 @@ void test_descriptor_origin_field_without_a_declared_kind_links()
         file.file.message_type.push_back(holder);
 
         easypb_schema::Diagnostic error;
-        CHECK(link_verdict(set, error));
-        const FieldDescriptorProto& linked_field =
-            file.file.message_type[1].field[0];
-        CHECK(linked_field.has_type);
-        CHECK(linked_field.type == FieldDescriptorProto::TYPE_MESSAGE);
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
     }
     // Neighbour from the same measurement: a DECLARED scalar kind carrying a
     // type_name is refused by protoc (`Field with primitive type has
     // type_name.`) and here by the A7 comparison - so "no declared kind" is
-    // accepted while "a declared kind that contradicts the name" is not.
+    // refused too, with its own code.
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
@@ -5711,7 +5720,11 @@ void test_descriptor_origin_proto3_field_rules_are_refused()
         CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
         CHECK(error.message.find("group") != std::string::npos);
     }
-    // (h) The proto2 control of that shape still links, group kind and all.
+    // (h) The proto2 control of that shape is refused too, with the kind's
+    // own code: the generator has no group types at all, so a group is
+    // refused in either syntax (the plan-5 follow-up's S1, W-10, and the
+    // owner's decision of 2026-10-21 - a deliberate "stricter than protoc"
+    // divergence, where protoc generates a group class for the shape).
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
@@ -5727,7 +5740,9 @@ void test_descriptor_origin_proto3_field_rules_are_refused()
         message.field[0].type = FieldDescriptorProto::TYPE_GROUP;
 
         easypb_schema::Diagnostic error;
-        CHECK(accepted_in_both_modes(set, error));
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
+        CHECK(error.message.find("group") != std::string::npos);
     }
 }
 
@@ -7688,7 +7703,7 @@ int main(int argc, char** argv)
     test_input_order_and_targets_do_not_decide_the_verdict();
     test_already_resolved_input_is_resolved_again();
     test_warning_hygiene_drops_only_stale_unresolved_warnings();
-    test_group_field_links_and_keeps_its_declared_kind();
+    test_group_field_is_refused();
     test_warning_hygiene_drops_the_paired_default_warning();
     test_seeded_prefix_warning_survives_the_link();
     test_relative_package_head_reference_resolves();
@@ -7720,7 +7735,7 @@ int main(int argc, char** argv)
     test_corpus_compatibility_mode(fixture_dir);
     test_map_entry_sweep_reaches_every_depth();
     test_underscore_map_fields_collide_on_the_shared_entry_name();
-    test_descriptor_origin_field_without_a_declared_kind_links();
+    test_descriptor_origin_field_without_a_declared_kind_is_refused();
     test_descriptor_origin_duplicate_enum_number_is_refused();
     test_descriptor_origin_empty_enum_is_refused();
     test_descriptor_origin_proto3_field_rules_are_refused();

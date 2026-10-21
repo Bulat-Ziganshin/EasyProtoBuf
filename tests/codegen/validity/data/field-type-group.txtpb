@@ -1,0 +1,12 @@
+# A descriptor with a proto2 group field. protoc generates a group class for
+# it; this project generates no group types at all, so the shape is refused
+# rather than emitted as "???group".
+file {
+  name: "field-type-group.proto"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    field { name: "g" number: 1 label: LABEL_OPTIONAL type: TYPE_GROUP type_name: ".M.G" }
+    nested_type { name: "G" }
+  }
+}

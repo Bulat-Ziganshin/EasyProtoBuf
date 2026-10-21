@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+// The quiet NaN default, for both widths.
+message NanDefaults
+{
+    optional double quiet_nan = 1 [default = nan];
+    optional float quiet_nan_float = 2 [default = nan];
+}

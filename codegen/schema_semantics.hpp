@@ -20,6 +20,20 @@ bool parse_unsigned_integer(const std::string& text, std::uint64_t& result);
 bool parse_signed_32(const std::string& text, std::int32_t& result);
 bool is_float_text(const std::string& text);
 
+// Decode the C-escaped text a bytes default carries into the bytes it
+// denotes. The grammar is the one `valid_bytes_default_escape` accepts and
+// the one the reference compiler applies with `absl::CUnescape` while it
+// builds a bytes field (descriptor.cc:6728-6741): the simple escapes, an
+// octal escape of one to three digits, a hex escape of one or more digits
+// and `\u`/`\U` of exactly four/eight hex digits, the last two decoding to
+// the UTF-8 encoding of the code point. A string default is stored DECODED
+// and needs no decoding - only a bytes default does.
+//
+// Returns false and leaves `result` untouched when the text is not a valid
+// escape sequence. The generator core links this module, so the emitter can
+// decode a descriptor-origin bytes default without depending on the parser.
+bool decode_bytes_escape(const std::string& text, std::string& result);
+
 // One indexed declaration. Message and enum entries use the matching
 // FieldDescriptorProto TYPE_* kind; package scopes use SYMBOL_PACKAGE and
 // service names SYMBOL_SERVICE; every other declaration category (enum

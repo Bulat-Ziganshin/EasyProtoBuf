@@ -1,0 +1,10 @@
+syntax = "proto2";
+
+// An embedded NUL inside a string default and inside a bytes default. Both
+// decode to three bytes - 'a', NUL, 'b' - so the generated member must carry
+// the length: a C++ string literal truncates at the NUL.
+message NulDefaults
+{
+    optional string nul = 1 [default = "a\000b"];
+    optional bytes nulbytes = 2 [default = "a\000b"];
+}

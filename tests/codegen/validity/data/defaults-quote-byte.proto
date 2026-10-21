@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+// A quote inside a bytes default. A bytes default is stored C-ESCAPED, so
+// the descriptor carries the four characters a, backslash, quote, b - and the
+// emitter has to decode them before it can write a C++ literal.
+message QuoteByteDefaults
+{
+    optional bytes quoted = 1 [default = "a\"b"];
+}

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <set>
+#include <sstream>
 #include <string>
 
 namespace easypb_schema {
@@ -91,6 +92,32 @@ std::string own_text(str_view value)
     return std::string(value.data(), value.size());
 }
 
+// True when the byte is a C0 control character. A logical Protobuf file name
+// never carries one: the name is a path the user spelled, and the generator
+// writes it into the "// Source:" line of the header, so a newline in it
+// would inject arbitrary lines into the generated file.
+bool is_control_character(char c)
+{
+    const unsigned char byte = static_cast<unsigned char>(c);
+    return byte < 0x20u;
+}
+
+// The control character the name carries, spelled for a diagnostic.
+std::string control_character_name(char c)
+{
+    const unsigned char byte = static_cast<unsigned char>(c);
+    switch (byte) {
+        case 0x00: return "NUL";
+        case 0x09: return "TAB";
+        case 0x0A: return "LF";
+        case 0x0D: return "CR";
+        default: break;
+    }
+    std::ostringstream text;
+    text << "0x" << std::hex << static_cast<unsigned>(byte);
+    return text.str();
+}
+
 bool fail(const std::string& label, const std::string& message,
           DiagnosticCode code, SchemaSet& result, Diagnostic& error)
 {
@@ -139,6 +166,25 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                             "\" in descriptor source \"" + diagnostic_label +
                             "\" (a file with this name was already appended)",
                         DIAGNOSTIC_DUPLICATE_SYMBOL, result, error);
+        }
+        // The name is a logical Protobuf name, and it reaches the "// Source:"
+        // line of the generated header. A control character in it would
+        // inject arbitrary lines into that header, so the name is refused
+        // here - at the same place the empty and the duplicate names are
+        // refused, and before anything is appended, so a failed call never
+        // leaves a partial batch behind.
+        for (std::size_t position = 0; position < logical.size(); ++position) {
+            if (!is_control_character(logical[position])) continue;
+            return fail(diagnostic_label,
+                        "logical file name \"" + logical +
+                            "\" in descriptor source \"" + diagnostic_label +
+                            "\" carries a control character (" +
+                            control_character_name(logical[position]) +
+                            " at position " +
+                            easypb::detail::number_to_string(
+                                static_cast<uint64_t>(position)) +
+                            "); a logical name cannot contain one",
+                        DIAGNOSTIC_GENERIC, result, error);
         }
     }
 

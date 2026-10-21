@@ -1,0 +1,24 @@
+# A descriptor whose enum declares a value named "1A" and whose field uses it
+# as the default. The default text is a legal protobuf SYMBOL name (protoc's
+# ValidateSymbolName accepts [A-Za-z0-9_]), but it is not an IDENTIFIER, and
+# protoc refuses the shape: "Default value for an enum field must be an
+# identifier."
+file {
+  name: "enum-default-identifier.proto"
+  syntax: "proto2"
+  enum_type {
+    name: "E"
+    value { name: "1A" number: 0 }
+  }
+  message_type {
+    name: "M"
+    field {
+      name: "e"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_ENUM
+      type_name: ".E"
+      default_value: "1A"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+# A descriptor whose field declares a type outside the TYPE_* values. protoc
+# resolves an unknown kind as the proto default (TYPE_DOUBLE); this project
+# refuses it instead, because the emitter could only write "???type" for it.
+file {
+  name: "field-type-unknown.proto"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: 99 }
+  }
+}

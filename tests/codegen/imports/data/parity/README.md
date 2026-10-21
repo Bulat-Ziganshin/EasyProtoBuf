@@ -159,6 +159,29 @@ encoder.
 * **The `D-51` and neighbour controls (`r25`).** `[packed = false]` on
   optional, repeated-string and repeated-message fields; a proto2 group; a
   proto2 oneof member - all accepted by both.
+* **The field kind the emitter cannot spell (`S1`, `W-10`).** The plan-5
+  follow-up's session S1 added `DIAGNOSTIC_INVALID_FIELD_TYPE`: a
+  descriptor-origin field that declares no kind, an unknown kind or a group
+  is **refused**, where `protoc` resolves the first two as the proto default
+  (`TYPE_DOUBLE`) and generates a group class for the third. The refusal is
+  the owner's decision of 2026-10-21 and a deliberate "stricter than
+  protoc" divergence: the generator has no group types, and the emitter used
+  to write `???type` / `???group` into the header at `rc=0`. The table
+  carries the **absent** kind and the **group** as two `inverse` rows
+  (`d-invalid-field-type-absent-reject`,
+  `d-invalid-field-type-group-reject`) with the accept column
+  `d-invalid-field-type-accept`; the row that used to assert that a proto2
+  group is accepted (`d-group-proto2-accept`) became the group row.
+  The **unknown** kind (a `type` outside the `TYPE_*` set) is NOT a row:
+  `protoc`'s text format will not carry an enumeration value it does not
+  know ("Unknown enumeration value of \"99\" for field \"type\""), and a
+  row's fixture must be `protoc`'s own encoding of a text this project
+  tracks. That shape is measured by the validity lane instead
+  (`tests/codegen/validity/data/field-type-unknown.pbs`).
+  The accept column of `DIAGNOSTIC_MISSING_TYPE_NAME` changed with it: a
+  field that names no type used to carry no kind at all, which S1's refusal
+  turned into a refusal of its own, so the control is a scalar field now -
+  a scalar needs no `type_name`, and the rule does not reach it.
 * **The nested map-entry name collision (`r28`).** Two nested declarations
   named `ItemsEntry` in one message - both legal map entries, or one entry and
   one plain message - refused by **both** sides, plus the two accept controls

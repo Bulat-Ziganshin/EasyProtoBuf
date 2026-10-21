@@ -4,6 +4,6 @@ file {
   syntax: "proto3"
   message_type {
     name: "M"
-    field { name: "a" number: 1 label: LABEL_OPTIONAL }
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
   }
 }

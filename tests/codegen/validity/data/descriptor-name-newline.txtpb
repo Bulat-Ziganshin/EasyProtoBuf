@@ -1,0 +1,11 @@
+# A descriptor whose logical file name carries a newline. The name reaches
+# the "// Source:" line of the generated header, so an unvalidated name
+# injects arbitrary lines into it.
+file {
+  name: "name\nwith-newline.proto"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}

@@ -597,6 +597,17 @@ bool is_named_kind(int kind)
            kind == FieldDescriptorProto::TYPE_GROUP;
 }
 
+// The kinds the descriptor model defines. A field whose declared kind is
+// outside this set names a kind that does not exist: the reference compiler
+// resolves an unknown value as the proto default (TYPE_DOUBLE) and emits
+// working code, but this project's emitter has no spelling for it and used to
+// write "???type" into the header (plan 5 follow-up S1, W-10).
+bool is_known_field_kind(int kind)
+{
+    return kind >= FieldDescriptorProto::TYPE_DOUBLE &&
+           kind <= FieldDescriptorProto::TYPE_SINT64;
+}
+
 // The field-number bounds both frontends enforce. The parser refuses these
 // shapes as source text (proto_parser.cpp:1049-1060: 0, above the maximum,
 // and the reserved range) and resolve_message refuses them on
@@ -1104,7 +1115,36 @@ bool is_valid_symbol_name(const str_view& name)
     return true;
 }
 
-// The one site that turns a malformed declaration name into a diagnostic, so
+// True when `text` is an IDENTIFIER in the reference compiler's sense, which
+// is stricter than the symbol-name rule above: the first character must be a
+// letter or an underscore, the rest may also be digits
+// (`io::Tokenizer::IsIdentifier`, whose character classes are ASCII-only -
+// `Letter` is `[A-Za-z_]`, `Alphanumeric` is `[A-Za-z0-9_]`).
+//
+// The reference compiler uses this rule for the default value of an enum
+// field ("Default value for an enum field must be an identifier.",
+// descriptor.cc's enum branch of the descriptor builder), and it asks it
+// BEFORE it asks whether the default names a value of the enum: a default of
+// "1A" is a legal symbol name, so the membership check alone would let it
+// through and the emitter would write `::p::E::1A`, which is not C++.
+bool is_identifier(const std::string& text)
+{
+    if (text.empty()) return false;
+    const char first = text[0];
+    const bool first_is_letter =
+        (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') ||
+        first == '_';
+    if (!first_is_letter) return false;
+    for (std::size_t i = 1; i < text.size(); ++i) {
+        const char character = text[i];
+        const bool letter = (character >= 'a' && character <= 'z') ||
+                            (character >= 'A' && character <= 'Z');
+        const bool digit = character >= '0' && character <= '9';
+        if (!letter && !digit && character != '_') return false;
+    }
+    return true;
+}
+
 // every kind reports the same category with the same code (E1/A3). The message
 // mirrors protoc's two wordings - an empty name is "missing", an illegal
 // character is "not a valid identifier" - while the code stays DIAGNOSTIC_
@@ -1683,6 +1723,110 @@ bool valid_bytes_default_escape(const std::string& text)
 
 } // namespace
 
+// The decoder that belongs to the grammar above: it turns the C-escaped text
+// a bytes default carries into the bytes it denotes, with exactly the escapes
+// `valid_bytes_default_escape` accepts. The reference compiler does the same
+// with `absl::CUnescape` while it builds a bytes field
+// (descriptor.cc:6728-6741), and this project's own parser does it with the
+// tokenizer's own escape handling (proto_parser.cpp:380-435) - so the two
+// frontends and the emitter agree on what a bytes default means.
+//
+// The decode is byte-exact: a `\u`/`\U` escape becomes the UTF-8 encoding of
+// the code point (the bytes a protobuf string literal holds), and an octal or
+// hex escape becomes the byte it names.
+bool decode_bytes_escape(const std::string& text, std::string& result)
+{
+    std::string decoded;
+    decoded.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '\\') {
+            decoded.push_back(text[i]);
+            continue;
+        }
+        if (i + 1 == text.size()) return false;
+        const char escaped = text[++i];
+        switch (escaped) {
+            case 'a': decoded.push_back('\a'); break;
+            case 'b': decoded.push_back('\b'); break;
+            case 'f': decoded.push_back('\f'); break;
+            case 'n': decoded.push_back('\n'); break;
+            case 'r': decoded.push_back('\r'); break;
+            case 't': decoded.push_back('\t'); break;
+            case 'v': decoded.push_back('\v'); break;
+            case '\\': decoded.push_back('\\'); break;
+            case '\'': decoded.push_back('\''); break;
+            case '"': decoded.push_back('"'); break;
+            case '?': decoded.push_back('?'); break;
+            case 'x': {
+                std::uint32_t value = 0;
+                std::size_t digits = 0;
+                while (i + 1 < text.size() && is_hex_digit(text[i + 1])) {
+                    const char c = text[++i];
+                    value = value * 16u +
+                            (c <= '9' ? static_cast<std::uint32_t>(c - '0')
+                                      : static_cast<std::uint32_t>((c | 0x20) - 'a' + 10));
+                    ++digits;
+                    if (value > 255u) return false;
+                }
+                if (digits == 0) return false;
+                decoded.push_back(static_cast<char>(value));
+                break;
+            }
+            case 'u':
+            case 'U': {
+                const std::size_t digits = escaped == 'u' ? 4u : 8u;
+                std::uint32_t value = 0;
+                for (std::size_t d = 0; d < digits; ++d) {
+                    if (i + 1 >= text.size() || !is_hex_digit(text[i + 1])) {
+                        return false;
+                    }
+                    const char c = text[++i];
+                    value = value * 16u +
+                            (c <= '9' ? static_cast<std::uint32_t>(c - '0')
+                                      : static_cast<std::uint32_t>((c | 0x20) - 'a' + 10));
+                }
+                if (value > 0x10FFFFu || (value >= 0xD800u && value < 0xE000u)) {
+                    return false;
+                }
+                // The UTF-8 encoding of the code point, the same bytes the
+                // parser's own escape handling produces.
+                if (value <= 0x7Fu) {
+                    decoded.push_back(static_cast<char>(value));
+                } else if (value <= 0x7FFu) {
+                    decoded.push_back(static_cast<char>(0xC0u | (value >> 6)));
+                    decoded.push_back(static_cast<char>(0x80u | (value & 0x3Fu)));
+                } else if (value <= 0xFFFFu) {
+                    decoded.push_back(static_cast<char>(0xE0u | (value >> 12)));
+                    decoded.push_back(static_cast<char>(0x80u | ((value >> 6) & 0x3Fu)));
+                    decoded.push_back(static_cast<char>(0x80u | (value & 0x3Fu)));
+                } else {
+                    decoded.push_back(static_cast<char>(0xF0u | (value >> 18)));
+                    decoded.push_back(static_cast<char>(0x80u | ((value >> 12) & 0x3Fu)));
+                    decoded.push_back(static_cast<char>(0x80u | ((value >> 6) & 0x3Fu)));
+                    decoded.push_back(static_cast<char>(0x80u | (value & 0x3Fu)));
+                }
+                break;
+            }
+            default:
+                if (escaped < '0' || escaped > '7') return false;
+                {
+                    std::uint32_t value = static_cast<std::uint32_t>(escaped - '0');
+                    std::size_t digits = 1;
+                    while (digits < 3 && i + 1 < text.size() &&
+                           text[i + 1] >= '0' && text[i + 1] <= '7') {
+                        value = value * 8u + static_cast<std::uint32_t>(text[++i] - '0');
+                        ++digits;
+                    }
+                    if (value > 255u) return false;
+                    decoded.push_back(static_cast<char>(value));
+                }
+                break;
+        }
+    }
+    result.swap(decoded);
+    return true;
+}
+
 // validate_default joins the `internal` seam (P1 unit tests). The other large
 // validators - validate_symbol_names, validate_enum_value_numbers and
 // validate_map_entry_shapes - are already public, so it is the only anonymous
@@ -1752,6 +1896,17 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_ENUM:
             if (value.empty()) {
                 return fail_at(file, "enum default must name an enum value",
+                               field_default_location(file, field_path),
+                               field_path, error);
+            }
+            // The identifier rule comes FIRST, exactly as the reference
+            // compiler asks it (descriptor.cc's enum default branch): a
+            // default of "1A" is a legal symbol name, so the membership check
+            // alone would let it through and the emitter would write
+            // `::p::E::1A` - not a C++ name - into the header.
+            if (!is_identifier(value)) {
+                return fail_at(file,
+                               "Default value for an enum field must be an identifier.",
                                field_default_location(file, field_path),
                                field_path, error);
             }
@@ -1957,6 +2112,50 @@ bool validate_field_declared_shape(SchemaFile& file, FieldDescriptorProto& field
                            error);
         }
     }
+    // Plan 5 follow-up S1 (W-10): the kinds the EMITTER cannot spell. The
+    // reference compiler resolves all three - an absent kind as the proto
+    // default TYPE_DOUBLE, an unknown kind the same way, a group as a
+    // generated group class - and emits working code; this project refuses
+    // them, because the generator has no group types at all (the source
+    // parser refuses a group outright: "group fields are not supported") and
+    // because the emitter used to write "???type" / "???group" into the
+    // header at rc=0. A deliberate "stricter than protoc" divergence, like
+    // the package-depth and the output-root rules.
+    //
+    // The gate is the ORIGIN, not the shape: a source-origin field carries no
+    // declared kind at all (deferred parsing leaves has_type unset and the
+    // kind is written during resolution), so the same "no kind" test would
+    // refuse every source field. The descriptor path is the only one that can
+    // carry a kind the generator cannot use.
+    //
+    // The check sits AFTER the proto3 block above, so a proto3 group keeps
+    // the proto3 wording and only a proto2 group reaches the rule below.
+    if (file.from_descriptor_set) {
+        if (!field.has_type) {
+            return fail_at_code(
+                file,
+                "field \"" + view_text(field.name) +
+                    "\" declares no type, so there is nothing to generate for it",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_FIELD_TYPE, error);
+        }
+        if (field.type == FieldDescriptorProto::TYPE_GROUP) {
+            return fail_at_code(
+                file,
+                "field \"" + view_text(field.name) +
+                    "\" is a group, and this generator does not support group types",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_FIELD_TYPE, error);
+        }
+        if (!is_known_field_kind(field.type)) {
+            std::ostringstream text;
+            text << "field \"" << view_text(field.name)
+                 << "\" declares an unknown type (kind " << field.type << ")";
+            return fail_at_code(
+                file, text.str(), declaration_location(file, field_path),
+                field_path, DIAGNOSTIC_INVALID_FIELD_TYPE, error);
+        }
+    }
     return true;
 }
 
@@ -2008,11 +2207,17 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                 // a divergence from the oracle, which accepts such a
                 // descriptor (fix round r4, ledger D-12). The two kinds
                 // therefore agree here, and the declared one is kept.
-                const bool declared_group =
-                    field.type == FieldDescriptorProto::TYPE_GROUP &&
-                    resolved->kind == FieldDescriptorProto::TYPE_MESSAGE;
+                //
+                // The plan-5 follow-up's S1 (W-10) ended that exemption: a
+                // descriptor-origin group is refused by the declared-shape
+                // sweep before this point, because the generator has no
+                // group types (the owner's decision of 2026-10-21, a
+                // deliberate "stricter than protoc" divergence). The
+                // comparison below therefore never sees a group, and the
+                // exemption that made it agree with a message is gone with
+                // it.
                 if (file.from_descriptor_set && field.has_type &&
-                    !declared_group && field.type != resolved->kind) {
+                    field.type != resolved->kind) {
                     return fail_at_code(
                         file,
                         kind_mismatch_message(field, resolved_name,
@@ -2061,13 +2266,11 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                                    field_type_location(file, field_path),
                                    field_path, error);
                 }
-                // Authoritative metadata is not rewritten: a group keeps
-                // its declared TYPE_GROUP, because overwriting it with
-                // TYPE_MESSAGE would silently change the wire encoding the
-                // generator emits for it.
-                field.type = declared_group
-                    ? FieldDescriptorProto::TYPE_GROUP
-                    : resolved->kind;
+                // Authoritative metadata is not rewritten: the declared kind
+                // stays the kind the descriptor named. A group never reaches
+                // this line - the declared-shape sweep refuses it - so the
+                // kind here is always the resolved definition's.
+                field.type = resolved->kind;
                 field.has_type = true;
                 if (field.type_name != resolved_name) {
                     field.type_name = file.strings.save(resolved_name);
