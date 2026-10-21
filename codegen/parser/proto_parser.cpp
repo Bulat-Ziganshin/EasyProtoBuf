@@ -1467,6 +1467,26 @@ private:
     // and field records its descriptor path immediately.
     DescriptorProto parse_message(const DescriptorPath& message_path)
     {
+        // The nesting bound, before the function descends into the body. The
+        // reference compiler refuses the 32nd level of nested messages with
+        // "Reached maximum recursion limit for nested messages."
+        // (compiler/parser.cc:785-789; its limit is
+        // MaxMessageDeclarationNestingDepth() == 32, descriptor.h:3045), and
+        // the depth of a message is the number of levels of its descriptor
+        // path: the path holds a field number and an index per level
+        // (easypb_schema::file_message_path, message_nested_path), so a
+        // file-level message has two components and a message nested in it
+        // has four.
+        //
+        // The check stands here so that the parser never descends deeper than
+        // the limit it enforces - the recursion below is what overflowed the
+        // stack on a deep schema.
+        if (message_path.size() / 2 >=
+                static_cast<std::size_t>(
+                    easypb_schema::max_message_nesting_depth())) {
+            fail("Reached maximum recursion limit for nested messages.");
+        }
+
         const std::string name = identifier();
         DescriptorProto message;
         message.name = out_.strings.save(name);

@@ -410,6 +410,70 @@ if(BUILD_TESTING)
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_names_dir}/test_names.cmake)
 
+    # Plan 5 follow-up S3 (W-01, W-30, W-32): the boundaries of untrusted
+    # input. The lane drives the nesting limit through BOTH input paths (the
+    # 31 levels the reference compiler accepts, the 32 it refuses),
+    # compiles the accepted header with the tree's own compiler and standard,
+    # checks that the accepted nesting carries the schema's data, and drives
+    # the refusals through the CLI. The descriptor path builds the header the
+    # runtime checker reads, because it is the one every build profile has;
+    # the driver compares the source path's header with the descriptor path's
+    # byte for byte.
+    set(codegen_limits_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/limits)
+    set(codegen_limits_data_dir ${codegen_limits_dir}/data)
+    set(codegen_limits_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-limits)
+    set(codegen_limits_descriptor_dir
+        ${codegen_limits_generated_dir}/descriptor)
+
+    add_custom_command(
+        OUTPUT ${codegen_limits_descriptor_dir}/nesting-31.pb.hpp
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DINPUT=${codegen_limits_data_dir}/nesting-31.pbs
+            -DOUTPUT=${codegen_limits_descriptor_dir}/nesting-31.pb.hpp
+            -P ${codegen_limits_dir}/generate_header.cmake
+        DEPENDS
+            easypb_codegen
+            ${codegen_limits_data_dir}/nesting-31.pbs
+            ${codegen_limits_dir}/generate_header.cmake
+        VERBATIM)
+    add_custom_target(codegen_limits_generated
+        DEPENDS ${codegen_limits_descriptor_dir}/nesting-31.pb.hpp)
+
+    add_executable(codegen_limits_runtime_test
+        ${codegen_limits_dir}/limits_runtime.cpp)
+    add_dependencies(codegen_limits_runtime_test codegen_limits_generated)
+    target_include_directories(codegen_limits_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_limits_descriptor_dir})
+
+    # The tree's own standard: the C++11 profile passes its standard through
+    # EASYPB_CXX_FLAGS, so CMAKE_CXX_STANDARD is empty there and the flags
+    # carry it. The flags are split into a list, because the profile's
+    # standard arrives as one string with a leading space, and a compiler
+    # does not read " -std=c++11" as the option it is.
+    if(CMAKE_CXX_STANDARD)
+        set(codegen_limits_std_flag "-std=c++${CMAKE_CXX_STANDARD}")
+    else()
+        set(codegen_limits_std_flag "")
+    endif()
+    separate_arguments(codegen_limits_cxx_flags NATIVE_COMMAND
+        "${CMAKE_CXX_FLAGS}")
+
+    add_test(NAME codegen.limits
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_limits_data_dir}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-limits
+            -DRUNTIME=$<TARGET_FILE:codegen_limits_runtime_test>
+            -DCXX=${CMAKE_CXX_COMPILER}
+            "-DCXX_FLAGS=${codegen_limits_cxx_flags}"
+            -DCXX_STD_FLAG=${codegen_limits_std_flag}
+            -DINCLUDE_DIR=${easypb_test_include_dir}
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_limits_dir}/test_limits.cmake)
+
     set(codegen_packages_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/packages)
     set(codegen_packages_data_dir ${codegen_packages_dir}/data)

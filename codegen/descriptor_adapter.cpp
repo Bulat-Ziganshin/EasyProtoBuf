@@ -5,6 +5,8 @@
 #include <sstream>
 #include <string>
 
+#include "schema_semantics.hpp"
+
 namespace easypb_schema {
 namespace {
 
@@ -185,6 +187,18 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                                 static_cast<uint64_t>(position)) +
                             "); a logical name cannot contain one",
                         DIAGNOSTIC_GENERIC, result, error);
+        }
+        // The nesting of the messages the file declares is bounded here, before
+        // the file is copied: the copy interns every string of the tree and
+        // walks it recursively (intern_message below), so a descriptor that
+        // nests deeper than the limit would overflow the stack inside the
+        // copy - and the copy is what a library caller hands this project.
+        // The rule is the reference compiler's own (descriptor.h:3045) and the
+        // sentence is the one it uses.
+        if (!easypb_schema::validate_message_nesting_depth(files[i], logical,
+                                                            error)) {
+            result.clear();
+            return false;
         }
     }
 

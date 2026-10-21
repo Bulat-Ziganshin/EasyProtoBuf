@@ -1,9 +1,28 @@
 #ifndef EASYPB_LOGICAL_PATHS_HPP_INCLUDED
 #define EASYPB_LOGICAL_PATHS_HPP_INCLUDED
 
+#include <cstddef>
 #include <string>
 
 namespace easypb_schema {
+
+// The number of components a logical path may have.
+//
+// A logical path is not only a name: the publisher maps it to an output path
+// and creates one directory per component, and the directory creation is the
+// work a deep path costs. The reference compiler bounds a path-shaped thing
+// on the same scale - its kPackageLimit is 100 (descriptor.cc:96, used at
+// descriptor.cc:6024-6030: "Exceeds Maximum Package Depth") - and this
+// project refuses a deeper path with its own diagnostic, before anything is
+// created.
+//
+// The value is shared with the filesystem layer (easypb_file::make_directories
+// refuses a path with more components than this), so the two bounds cannot
+// disagree.
+inline std::size_t max_logical_path_components()
+{
+    return 100;
+}
 
 // Pure logical import-name validation shared by every frontend (source
 // loader, descriptor-set adapter, future plugin). A logical name is the

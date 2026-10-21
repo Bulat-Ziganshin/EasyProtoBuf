@@ -1,5 +1,7 @@
 #include "file_paths.hpp"
 
+#include "logical_paths.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -670,27 +672,35 @@ std::string create_directory_error_text(const std::string& path,
 #endif
 }
 
-} // namespace
-
-std::string parent_directory_of(const std::string& path)
+// The length of the part of an absolute path that the filesystem provides and
+// this module never creates: the drive root ("C:/"), the UNC share
+// ("//server/share/") or the filesystem root ("/"). Everything below it is the
+// chain of directories the caller asks for.
+//
+// A UNC share is created by its server, so only what lies below the share is
+// this function's business; a path that names the share and nothing else has
+// no components to create.
+std::size_t root_prefix_length(const std::string& absolute)
 {
-    std::string trimmed = path;
-    while (trimmed.size() > 1 && trimmed[trimmed.size() - 1] == '/') {
-        trimmed.resize(trimmed.size() - 1);
-    }
-    const std::size_t slash = trimmed.rfind('/');
-    if (slash == std::string::npos) return std::string();
-    if (slash == 0) return "/";
-    std::string parent = trimmed.substr(0, slash);
 #ifdef _WIN32
-    // A bare drive component must stay qualified: "C:" is the root, and
-    // "C" would address the drive-relative spelling instead.
-    if (parent.size() == 2 && is_alpha(parent[0]) && parent[1] == ':') {
-        parent += "/";
+    if (absolute.size() >= 3 && is_alpha(absolute[0]) &&
+        absolute[1] == ':' && absolute[2] == '/') {
+        return 3;
+    }
+    if (absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/') {
+        const std::size_t server_end = absolute.find('/', 2);
+        if (server_end == std::string::npos) return absolute.size();
+        const std::size_t share_end = absolute.find('/', server_end + 1);
+        if (share_end == std::string::npos) return absolute.size();
+        return share_end + 1;
     }
 #endif
-    return parent;
+    if (!absolute.empty() && absolute[0] == '/') return 1;
+    return 0;
 }
+
+} // namespace
+
 bool create_directory_plain(const std::string& path, std::string& error)
 {
 #ifdef _WIN32
@@ -730,28 +740,55 @@ bool create_directory_plain(const std::string& path, std::string& error)
     return false;
 #endif
 }
+
+// Create every missing directory on the way to `absolute`.
+//
+// The chain is created from the root down, one component at a time, so the
+// call stack does not grow with the depth of the path. The recursion this
+// replaces walked the same chain from the bottom up and copied the whole
+// remaining path in every frame, which made the work grow with the square of
+// the depth and ended the process with a stack overflow on a path deep
+// enough.
+//
+// The number of components is bounded (the same bound the logical path rule
+// applies, easypb_schema::max_logical_path_components), and the count is
+// taken before the first directory is created: a refused path leaves no tree
+// behind.
 bool make_directories_recursive(const std::string& absolute, std::string& error)
 {
     if (absolute.empty() || absolute == "/") return true;
-#ifdef _WIN32
-    if (absolute.size() == 3 && is_alpha(absolute[0]) &&
-        absolute[1] == ':' && absolute[2] == '/') {
-        return true;
+
+    const std::size_t root_length = root_prefix_length(absolute);
+
+    // The components below the root, as the offset of their end.
+    std::vector<std::size_t> ends;
+    std::size_t start = root_length;
+    while (start < absolute.size()) {
+        std::size_t end = absolute.find('/', start);
+        if (end == std::string::npos) end = absolute.size();
+        if (end > start) ends.push_back(end);
+        if (end == absolute.size()) break;
+        start = end + 1;
     }
-#endif
-    if (absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/') {
-        // A UNC share root is created by its server; only what lies below it
-        // is this function's business.
-        const std::size_t server_end = absolute.find('/', 2);
-        if (server_end == std::string::npos) return true;
-        const std::size_t share_end = absolute.find('/', server_end + 1);
-        if (share_end == std::string::npos) return true;
-    }
-    const std::string parent = parent_directory_of(absolute);
-    if (!parent.empty() && !make_directories_recursive(parent, error)) {
+
+    const std::size_t limit = easypb_schema::max_logical_path_components();
+    if (ends.size() > limit) {
+        error = absolute + ": cannot create directory (the path has " +
+                number_text(static_cast<unsigned long long>(ends.size())) +
+                " components, more than the " + number_text(limit) +
+                " this tool accepts)";
         return false;
     }
-    return create_directory_plain(absolute, error);
+
+    std::string path = absolute.substr(0, root_length);
+    std::size_t component_start = root_length;
+    for (std::size_t i = 0; i < ends.size(); ++i) {
+        if (!path.empty() && path[path.size() - 1] != '/') path.push_back('/');
+        path.append(absolute, component_start, ends[i] - component_start);
+        component_start = ends[i] + 1;
+        if (!create_directory_plain(path, error)) return false;
+    }
+    return true;
 }
 bool make_directories(const std::string& directory, std::string& error)
 {

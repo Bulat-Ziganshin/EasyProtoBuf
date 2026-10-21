@@ -382,5 +382,6 @@ The output publisher was brought to the same position on 2026-10-07. It had grow
 mechanisms — output-root containment, measured case-fold collision detection, native file identity and
 hardlink detection, and atomic per-file replacement through a temporary sibling — at 703 code lines
 against the reference compiler's roughly 80 for the same job. They were withdrawn by owner decision;
-see `header_output.hpp` for the measurements that justified each one, and for the one check that survives
-upstream of the publisher (`generated_header_path`, which still refuses an escaping logical name).
+see `header_output.hpp` for the measurements that justified each one, and for the name check that
+survives: the logical-name rule that `generated_header_path` applies, and — since 2026-10-21 — the
+same rule inside the publisher, so a hand-built output name cannot escape the output root either.

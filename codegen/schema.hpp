@@ -239,6 +239,28 @@ private:
 // FileDescriptorProto).
 typedef std::vector<int> DescriptorPath;
 
+// The deepest message nesting a schema may declare. The reference compiler
+// has the same limit and draws the line in the same place: its
+// MaxMessageDeclarationNestingDepth() is 32 (descriptor.h:3045) and it
+// refuses the 32nd level of nested messages - 31 levels are accepted, the
+// 32nd is not (compiler/parser.cc:785-789 and descriptor.cc:6364-6373, both
+// with the sentence "Reached maximum recursion limit for nested messages.").
+//
+// The rule lives here because three doors enforce it and they must not
+// disagree: the source parser refuses to descend deeper, the descriptor
+// loader refuses to decode a set that nests deeper, and the semantics layer
+// refuses a schema a library caller built by hand. A schema that passes all
+// three cannot make any later walk of the nesting recurse without a bound.
+//
+// The depth of a message is the number of LEVELS of its descriptor path: the
+// path holds a field number and an index per level
+// (easypb_schema::file_message_path, message_nested_path), so a file-level
+// message has two components and a message nested in it has four.
+inline int max_message_nesting_depth()
+{
+    return 32;
+}
+
 class SchemaFile;
 
 struct FieldSource

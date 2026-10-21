@@ -273,6 +273,7 @@ Define insertion macros before including the generated header. See the [Tutorial
 ## Current limitations and semantic differences
 
 - `oneof` declarations are parsed, but their alternatives are generated as ordinary fields. Codegen does not enforce mutual exclusion or generate a case discriminator.
+- A schema that nests messages deeper than 31 levels is refused with *"Reached maximum recursion limit for nested messages."* — the reference compiler's own limit and its own sentence (`MaxMessageDeclarationNestingDepth()` is 32, and it refuses the 32nd level). The bound holds on both input paths, and it is a bound on the *input*: a descriptor set that nests deeper is refused before it is decoded.
 - Declared `group` fields are not supported by Codegen. The EasyProtoBuf decoder can skip unknown groups encountered on the wire, but Codegen does not generate group fields or encoders.
 - The embedded parser validates and skips `service` and `rpc` declarations. It also validates `extend` declarations but does not retain them in the trimmed descriptor model. No RPC or extension APIs are generated.
 - Recursive message-value graphs are rejected by default because generated message fields and containers store values directly. Direct self-recursion through a repeated field or map value can be enabled explicitly with `--allow-self-recursive-containers`; other recursive message dependency graphs remain rejected. See [Self-recursive containers](#self-recursive-containers).

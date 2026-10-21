@@ -137,6 +137,16 @@ bool read_file(const std::string& filename, std::string& contents)
 FileDescriptorProto decode_single_file_descriptor(const std::string& filename,
                                                    const std::string& contents)
 {
+    // The nesting bound, before the decode: the decode descends into every
+    // nested message the set carries, so a set that nests deeper than the
+    // limit would overflow the stack inside the runtime's message codec. The
+    // check runs on the bytes and stops at the limit, so it cannot overflow
+    // the stack either.
+    easypb_schema::Diagnostic error;
+    if (!easypb_schema::check_descriptor_set_nesting(contents, filename,
+                                                     error)) {
+        throw std::runtime_error(filename + ": " + error.message);
+    }
     const FileDescriptorSet set = easypb::decode<FileDescriptorSet>(contents);
     if (set.file.empty()) {
         throw std::runtime_error(filename +

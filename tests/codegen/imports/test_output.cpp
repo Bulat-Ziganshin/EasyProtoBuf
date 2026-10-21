@@ -298,16 +298,22 @@ void test_publisher_rejects_duplicate_names_before_writing(
     CHECK(!path_exists(path_join(out, "one.pb.hpp")));
 }
 
-// The publisher writes the name it is handed, the way the reference compiler
-// does. A name that escapes the output root is refused one level earlier, where
-// the generator maps it: generated_header_path (the pure logical mapping)
-// throws for a logical name carrying "..", so that is the check a descriptor set
-// naming "../escape.proto" meets. Measured against protoc 30.1 on exactly that
-// input: protoc writes one directory ABOVE the output directory, rc=0.
-void test_unsafe_names_are_refused_by_the_mapping_not_the_publisher(
+// The publisher refuses a name that escapes the output root.
+//
+// The reference compiler writes such a name: protoc writes one directory
+// ABOVE --cpp_out when a descriptor set asks it to (measured against protoc
+// 30.1, build/plan5-code-review-1021-summary/verify/G2.md). This project
+// refuses it, by the owner's decision of 2026-10-21, and the refusal happens
+// in the publisher itself: the name a GeneratedFile carries is a logical path
+// (the contract codegen/header_paths.hpp states), and a name that is not one
+// never becomes a file.
+//
+// The mapping layer refuses the same spelling one layer up, so the check here
+// closes the hole a hand-built GeneratedFile would otherwise have.
+void test_publisher_refuses_a_name_that_escapes_the_root(
     const std::string& work)
 {
-    const std::string out = path_join(work, "unsafe");
+    const std::string out = path_join(work, "escaping");
     CHECK(make_directory(out));
 
     // The upstream refusal is the one that holds.
@@ -319,14 +325,60 @@ void test_unsafe_names_are_refused_by_the_mapping_not_the_publisher(
     }
     CHECK(threw);
 
-    // And a hand-built list still publishes what it is given: the publisher no
-    // longer re-validates, exactly like the reference.
+    // And the publisher refuses it too, with a diagnostic, and writes
+    // nothing.
     std::vector<easypb_codegen::GeneratedFile> files;
-    files.push_back(generated("good.pb.hpp", "GOOD"));
-
+    files.push_back(generated("../escape.pb.hpp", "ESCAPE"));
     easypb_schema::Diagnostic error;
-    CHECK(easypb_codegen::publish_headers(out, files, error));
-    CHECK(path_is_file(path_join(out, "good.pb.hpp")));
+    CHECK(!easypb_codegen::publish_headers(out, files, error));
+    CHECK(!error.message.empty());
+    CHECK(error.message.find("cannot be published") != std::string::npos);
+    CHECK(!path_exists(path_join(work, "escape.pb.hpp")));
+
+    // The same for a name that escapes through a nested component.
+    std::vector<easypb_codegen::GeneratedFile> nested;
+    nested.push_back(generated("sub/../../escape2.pb.hpp", "ESCAPE2"));
+    easypb_schema::Diagnostic nested_error;
+    CHECK(!easypb_codegen::publish_headers(out, nested, nested_error));
+    CHECK(!nested_error.message.empty());
+    CHECK(!path_exists(path_join(work, "escape2.pb.hpp")));
+
+    // A name that stays inside the root is still published.
+    std::vector<easypb_codegen::GeneratedFile> good;
+    good.push_back(generated("sub/inside.pb.hpp", "INSIDE"));
+    easypb_schema::Diagnostic good_error;
+    CHECK(easypb_codegen::publish_headers(out, good, good_error));
+    CHECK(good_error.message.empty());
+    CHECK(path_is_file(path_join(out, "sub/inside.pb.hpp")));
+}
+
+// The directory creation is bounded.
+//
+// The recursion this replaces walked one level per path component with no
+// bound, and a descriptor set whose logical name is a deep chain of
+// components drove it into a stack overflow (0xC00000FD). The chain is
+// created iteratively now, and a path with more components than the limit is
+// refused with a diagnostic - before the first directory is created, so a
+// refused path leaves no tree behind.
+void test_directory_creation_is_bounded(const std::string& work)
+{
+    // A shallow path is created.
+    const std::string shallow = path_join(work, "shallow");
+    std::string error;
+    CHECK(easypb_file::make_directories(path_join(shallow, "a/b/c"), error));
+    CHECK(error.empty());
+    CHECK(path_is_directory(path_join(shallow, "a/b/c")));
+
+    // A path with more components than the limit is refused, and nothing is
+    // created. The path is built in memory only: the tool must not build a
+    // tree of that depth to find out.
+    std::string deep = path_join(work, "deep");
+    for (std::size_t i = 0; i < 200; ++i) deep += "/d";
+    std::string deep_error;
+    CHECK(!easypb_file::make_directories(deep, deep_error));
+    CHECK(!deep_error.empty());
+    CHECK(deep_error.find("components") != std::string::npos);
+    CHECK(!path_exists(path_join(work, "deep")));
 }
 
 void test_publisher_reports_a_file_as_out_dir(const std::string& work)
@@ -445,7 +497,8 @@ int main()
     test_generated_header_path_maps_and_rejects();
     test_publisher_writes_and_replaces(root);
     test_publisher_rejects_duplicate_names_before_writing(root);
-    test_unsafe_names_are_refused_by_the_mapping_not_the_publisher(root);
+    test_publisher_refuses_a_name_that_escapes_the_root(root);
+    test_directory_creation_is_bounded(root);
     test_publisher_reports_a_file_as_out_dir(root);
     test_publisher_rejects_an_existing_directory_at_the_target(root);
     test_publisher_keeps_old_content_when_a_later_replace_fails(root);

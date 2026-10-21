@@ -1181,6 +1181,51 @@ bool check_symbol_name(const SchemaFile& file, const str_view& name,
     return fail_symbol_name(file, name, kind, scope, path, error);
 }
 
+// One message the nesting walk has not visited yet.
+struct PendingMessage
+{
+    const DescriptorProto* message;
+    int depth;
+    DescriptorPath path;
+};
+
+// The depth of the deepest message the file declares, or 0 when it declares no
+// message at all. The walk uses an explicit stack, so it never recurses, and
+// it stops at the limit, so the depth it measures never exceeds the limit it
+// enforces: a descriptor that nests deeper is reported, not descended into.
+//
+// The path of the message that is too deep is stored in `offending_path` (left
+// empty when the file is within the limit).
+int deepest_message_nesting(const FileDescriptorProto& file,
+                             DescriptorPath& offending_path)
+{
+    const int limit = max_message_nesting_depth();
+    std::vector<PendingMessage> pending;
+    for (std::size_t i = 0; i < file.message_type.size(); ++i) {
+        PendingMessage entry;
+        entry.message = &file.message_type[i];
+        entry.depth = 1;
+        entry.path = file_message_path(static_cast<int>(i));
+        pending.push_back(entry);
+    }
+    while (!pending.empty()) {
+        const PendingMessage entry = pending.back();
+        pending.pop_back();
+        if (entry.depth >= limit) {
+            offending_path = entry.path;
+            return entry.depth;
+        }
+        for (std::size_t i = 0; i < entry.message->nested_type.size(); ++i) {
+            PendingMessage nested;
+            nested.message = &entry.message->nested_type[i];
+            nested.depth = entry.depth + 1;
+            nested.path = message_nested_path(entry.path, static_cast<int>(i));
+            pending.push_back(nested);
+        }
+    }
+    return 0;
+}
+
 // The recursive half of validate_symbol_names: the message's own name, then its
 // fields, nested messages, nested enums (with their values) and oneofs, in the
 // order validate_message_scope_names uses, so a file with several malformed
@@ -2678,6 +2723,29 @@ bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error)
         }
     }
     return true;
+}
+
+bool validate_message_nesting_depth(const FileDescriptorProto& file,
+                                    const std::string& label,
+                                    Diagnostic& error)
+{
+    // The reference compiler refuses the 32nd level of nested messages with
+    // "Reached maximum recursion limit for nested messages."
+    // (compiler/parser.cc:785-789 for the source frontend,
+    // descriptor.cc:6364-6373 for the descriptor one), and its limit is
+    // MaxMessageDeclarationNestingDepth() == 32 (descriptor.h:3045). The
+    // sentence is the reference compiler's own, so a reader compares the two
+    // verdicts without translating between them.
+    DescriptorPath offending;
+    const int depth = deepest_message_nesting(file, offending);
+    if (depth < max_message_nesting_depth()) return true;
+    error.file = label;
+    error.location = unknown_location();
+    error.message = "Reached maximum recursion limit for nested messages.";
+    if (!offending.empty()) error.message += " at " + format_path(offending);
+    error.warning = false;
+    error.code = DIAGNOSTIC_GENERIC;
+    return false;
 }
 
 bool validate_symbol_names(SchemaFile& file, Diagnostic& error)

@@ -159,6 +159,28 @@ bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
 // enum or the first repeated number, in declaration order.
 bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error);
 
+// Validates the message nesting of one descriptor: no message may be nested
+// deeper than easypb_schema::max_message_nesting_depth() levels, which is
+// the reference compiler's own limit (MaxMessageDeclarationNestingDepth(),
+// descriptor.h:3045). The reference refuses the 32nd level of nested messages
+// with "Reached maximum recursion limit for nested messages."
+// (compiler/parser.cc:785-789, descriptor.cc:6364-6373), and this carries
+// the same sentence.
+//
+// The check exists because three walks follow the nesting and none of them
+// may run unbounded: the source parser descends into the nested messages,
+// the runtime decoder decodes them, and the linker walks the linked schema.
+// The rule is enforced at each of those doors, and this function is the one
+// the descriptor door and the library door ask.
+//
+// The walk behind it uses an explicit stack and stops at the limit, so it
+// cannot overflow the stack on the very input it refuses. `label` names the
+// file in the diagnostic; the offending message is named by its descriptor
+// path.
+bool validate_message_nesting_depth(const FileDescriptorProto& file,
+                                    const std::string& label,
+                                    Diagnostic& error);
+
 // Validates every declaration name in the file lexically, over the available
 // descriptor alone (contract clause 13; fix round r18, ledger D-39): a name must
 // be non-empty and carry only `[A-Za-z0-9_]`, which is protoc's own

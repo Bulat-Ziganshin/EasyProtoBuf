@@ -17,6 +17,14 @@
 // non-ASCII pair, review CR-1 of 2026-10-05), native file identity and hardlink
 // detection, and the atomic temp+rename replacement (protoc truncates in
 // place).
+//
+// What was added back, by owner decision of 2026-10-21: the publisher
+// validates every output name as a logical path itself. The walk-based
+// containment guard is still gone (a symlink below the output root is
+// followed, as it is in protoc), but a name that escapes the root by its own
+// spelling - "../escape.pb.hpp" - is refused with a diagnostic instead of
+// being written one directory above the root. protoc writes it; this project
+// refuses it, and the refusal happens before anything is written.
 
 #include "header_output.hpp"
 
@@ -75,6 +83,29 @@ bool publish_headers(const std::string& out_dir,
     if (files.empty()) {
         error = make_error(out_dir, "no generated headers to publish");
         return false;
+    }
+
+    // Every name the publisher is handed is a logical path (the contract
+    // codegen/header_paths.hpp states), and this is the last door before a
+    // name becomes a file: a name that escapes the output root
+    // ("../escape.pb.hpp") is refused here, with a diagnostic, instead of
+    // being written one directory above the root. The mapping layer
+    // (generated_header_path) refuses the same name one layer up, so this
+    // closes the hole a hand-built GeneratedFile would otherwise have.
+    //
+    // The reference compiler does not refuse it: protoc writes one directory
+    // above --cpp_out when a descriptor set asks it to (measured against
+    // protoc 30.1, build/plan5-code-review-1021-summary/verify/G2.md). This
+    // is therefore a deliberate divergence, the owner's decision of
+    // 2026-10-21.
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        std::string reason;
+        if (!easypb_schema::validate_logical_path(files[i].name, reason)) {
+            error = make_error(files[i].name,
+                               files[i].name + ": cannot be published: " +
+                                   reason);
+            return false;
+        }
     }
 
     // Two targets must not map to one output file. The reference compiler's

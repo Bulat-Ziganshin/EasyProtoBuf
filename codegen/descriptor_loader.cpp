@@ -11,6 +11,87 @@
 namespace easypb_schema {
 namespace {
 
+// The three field numbers the nesting walk needs (descriptor.proto, and the
+// same numbers codegen/descriptor.pb.hpp decodes): a FileDescriptorSet holds
+// its files in field 1, a FileDescriptorProto holds its messages in field 4,
+// and a DescriptorProto holds its nested messages in field 3.
+enum {
+    FILE_DESCRIPTOR_SET_FILE = 1,
+    FILE_DESCRIPTOR_PROTO_MESSAGE_TYPE = 4,
+    DESCRIPTOR_PROTO_NESTED_TYPE = 3
+};
+
+// The messages nested in one DescriptorProto, and the depth of the deepest of
+// them. `depth` is the depth of the message the reader is walking.
+//
+// The walk descends only into the nested messages and stops at the limit, so
+// its own recursion never exceeds the limit it enforces.
+int measure_message_nesting(easypb::Reader& reader, int depth, int limit)
+{
+    int deepest = depth;
+    while (reader.get_next_field()) {
+        if (reader.field_num != DESCRIPTOR_PROTO_NESTED_TYPE ||
+            reader.wire_type != easypb::WIRETYPE_LENGTH_DELIMITED) {
+            reader.skip_field();
+            continue;
+        }
+        const easypb::string_view nested = reader.parse_bytearray_value();
+        const int child_depth = depth + 1;
+        if (child_depth >= limit) return child_depth;
+        easypb::Reader nested_reader(nested);
+        const int child_deepest =
+            measure_message_nesting(nested_reader, child_depth, limit);
+        if (child_deepest > deepest) deepest = child_deepest;
+        if (deepest >= limit) return deepest;
+    }
+    return deepest;
+}
+
+// The depth of the deepest message the bytes of a descriptor set declare, or 0
+// when they declare none.
+//
+// The walk runs on the BYTES and not on a decoded tree, because the decode is
+// the recursion that overflows the stack: the runtime's message codec
+// descends into every nested message it reads, so a set that nests deeper
+// than the limit has to be refused before anything is decoded. The limit is
+// the reference compiler's own (descriptor.h:3045,
+// MaxMessageDeclarationNestingDepth() == 32) and the sentence is the one it
+// uses for the same shape ("Reached maximum recursion limit for nested
+// messages.", compiler/parser.cc:785-789 and descriptor.cc:6364-6373).
+//
+// The walk visits only the fields the decoder reads. A nested message hidden
+// in an unknown field is skipped by the decoder too, so it is not a nesting
+// the tool ever follows.
+int measure_set_nesting(const std::string& bytes)
+{
+    const int limit = max_message_nesting_depth();
+    easypb::Reader set(bytes.data(), bytes.size());
+    int deepest = 0;
+    while (set.get_next_field()) {
+        if (set.field_num != FILE_DESCRIPTOR_SET_FILE ||
+            set.wire_type != easypb::WIRETYPE_LENGTH_DELIMITED) {
+            set.skip_field();
+            continue;
+        }
+        const easypb::string_view file = set.parse_bytearray_value();
+        easypb::Reader file_reader(file);
+        while (file_reader.get_next_field()) {
+            if (file_reader.field_num != FILE_DESCRIPTOR_PROTO_MESSAGE_TYPE ||
+                file_reader.wire_type != easypb::WIRETYPE_LENGTH_DELIMITED) {
+                file_reader.skip_field();
+                continue;
+            }
+            const easypb::string_view message =
+                file_reader.parse_bytearray_value();
+            easypb::Reader message_reader(message);
+            const int depth = measure_message_nesting(message_reader, 1, limit);
+            if (depth > deepest) deepest = depth;
+            if (deepest >= limit) return deepest;
+        }
+    }
+    return deepest;
+}
+
 bool fail(const std::string& file, const std::string& message,
           SchemaSet& result, Diagnostic& error)
 {
@@ -77,6 +158,16 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
         const std::size_t before = result.files().size();
         FileDescriptorSet decoded;
         try {
+            // The nesting bound, before the decode. The decode descends into
+            // every nested message the set carries, so a set that nests deeper
+            // than the limit would overflow the stack inside the runtime's
+            // message codec - before any of this project's code could look at
+            // the bytes. The walk that measures the nesting runs on the bytes
+            // and stops at the limit, so it cannot overflow the stack either.
+            if (!check_descriptor_set_nesting(bytes, path, error)) {
+                const std::string message = path + ": " + error.message;
+                return fail(path, message, result, error);
+            }
             decoded = easypb::decode<FileDescriptorSet>(bytes);
         } catch (const std::exception& problem) {
             return fail(path, path + ": cannot decode descriptor set: " +
@@ -119,6 +210,29 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
         }
     }
     return true;
+}
+
+bool check_descriptor_set_nesting(const std::string& bytes,
+                                  const std::string& label,
+                                  Diagnostic& error)
+{
+    const int limit = max_message_nesting_depth();
+    int deepest = 0;
+    try {
+        deepest = measure_set_nesting(bytes);
+    } catch (const std::exception&) {
+        // The walk met bytes it cannot read. The decode meets the same bytes
+        // and reports the same problem, so the set is not refused here: the
+        // refusal belongs to the decode, which says what is wrong with it.
+        return true;
+    }
+    if (deepest < limit) return true;
+    error.file = label;
+    error.location = unknown_location();
+    error.message = "Reached maximum recursion limit for nested messages.";
+    error.warning = false;
+    error.code = DIAGNOSTIC_GENERIC;
+    return false;
 }
 
 } // namespace easypb_schema
