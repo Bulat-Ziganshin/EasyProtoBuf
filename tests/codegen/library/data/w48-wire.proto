@@ -1,0 +1,11 @@
+// W-48's wire control: a descriptor set that carries has_name and
+// has_package on the wire. Its hand-built twin clears both bits while
+// keeping the strings, and ingest must normalize the twin to the same shape.
+syntax = "proto2";
+
+package wire;
+
+message W
+{
+    optional int32 a = 1;
+}

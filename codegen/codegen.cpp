@@ -1671,10 +1671,22 @@ std::string easypb_codegen::generate_header(
     const easypb_schema::LinkedSchema& schema,
     const easypb_codegen::GenerationOptions& options)
 {
+    // The entry point normalizes the options; the caller does not have to.
+    // A default-constructed set is valid input and must give the CLI's
+    // header, so the derived template arguments are applied here rather than
+    // expected from every frontend. The copy keeps the caller's object
+    // untouched (W-11), which matters because finalization also mutates the
+    // type templates on the way to the contradiction check.
+    easypb_codegen::GenerationOptions normalized = options;
+    std::string option_error;
+    if (!easypb_codegen::finalize_generation_options(normalized,
+                                                     option_error)) {
+        throw std::runtime_error(option_error);
+    }
     const FileDescriptorProto& file = target.file;
     // Per-invocation state: nothing here survives the call, and the
     // classification is made exactly once (plan 5 A25).
-    const GenerationContext context(options, file);
+    const GenerationContext context(normalized, file);
     easypb_codegen::validate_cpp_package(context.package);
 
     // Build the lexical tree first. reserve() is important because the name
@@ -1789,6 +1801,18 @@ bool easypb_codegen::generate_files(
 {
     result.clear();
     error = easypb_schema::Diagnostic();
+    // The same normalization generate_header applies (W-11): the CLI already
+    // finalized its options, but a library caller may not have, and the
+    // normalized copy is what reaches every target. The caller's object is
+    // never mutated, so a rejected pair cannot leave a half-normalized
+    // configuration behind.
+    easypb_codegen::GenerationOptions normalized = options;
+    std::string option_error;
+    if (!easypb_codegen::finalize_generation_options(normalized, option_error)) {
+        error.location = easypb_schema::unknown_location();
+        error.message = option_error;
+        return false;
+    }
     if (schema.files == 0) {
         error.location = easypb_schema::unknown_location();
         error.message =
@@ -1837,7 +1861,7 @@ bool easypb_codegen::generate_files(
             return false;
         }
         try {
-            entry.content = generate_header(target, schema, options);
+            entry.content = generate_header(target, schema, normalized);
         } catch (const std::exception& problem) {
             error.file = logical;
             error.location = easypb_schema::unknown_location();

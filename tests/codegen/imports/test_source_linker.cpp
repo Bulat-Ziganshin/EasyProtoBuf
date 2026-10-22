@@ -91,13 +91,13 @@ void run_relative_case(const std::string& directory, const RelativeCase& item)
     CHECK(accepted == item.accept);
     if (item.accept) {
         CHECK(linked.files == &set);
-        CHECK(linked.complete);
+        CHECK(linked.local_only);
         return;
     }
     CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
     CHECK(error.message.find(item.substring) != std::string::npos);
     CHECK(linked.files == 0);
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
 }
 
 // A reference whose first component is a package node, spelled relatively, is
@@ -488,7 +488,7 @@ void test_buffers_and_options_destroyed_before_the_link(
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                      linked, error));
     CHECK(linked.files == &set);
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
 
     easypb_schema::SchemaFile* const report = set.find_file("report.proto");
     easypb_schema::SchemaFile* const state = set.find_file("state.proto");

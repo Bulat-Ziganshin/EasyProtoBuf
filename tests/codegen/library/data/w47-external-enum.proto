@@ -1,0 +1,13 @@
+// W-47's legal source shape: an external enum with a valid identifier
+// default. The reference compiler accepts it in a thin descriptor set, and
+// the compatibility path must keep accepting it.
+syntax = "proto2";
+
+package ext;
+
+import "w47-dep.proto";
+
+message Root
+{
+    optional dep.E e = 1 [default = A];
+}

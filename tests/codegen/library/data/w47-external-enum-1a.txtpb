@@ -1,0 +1,21 @@
+# W-47: the shape protoc refuses from source (an enum default that is not an
+# identifier). Encoded from this text with
+# `protoc --encode=google.protobuf.FileDescriptorSet`. It carries no
+# dependency edge on purpose: the --target control must reach type resolution
+# (`unresolved type .dep.E`), not stop at the missing import.
+file {
+  name: "w47-external-enum-1a.proto"
+  package: "ext"
+  message_type {
+    name: "Root"
+    field {
+      name: "e"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_ENUM
+      type_name: ".dep.E"
+      default_value: "1A"
+      json_name: "e"
+    }
+  }
+}

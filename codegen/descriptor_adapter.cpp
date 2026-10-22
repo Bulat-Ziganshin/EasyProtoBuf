@@ -88,6 +88,17 @@ void copy_descriptor(const FileDescriptorProto& source, SchemaFile& slot)
 {
     slot.file = source;
     intern_file_descriptor(slot.strings, slot.file);
+    // Presence of a file's name and package is not modeled information: the
+    // name is required and non-empty (validated before this copy), and a
+    // non-empty package is a package whatever bit the container carried
+    // (W-48). Normalizing here, at the one deep copy every descriptor path
+    // shares, makes the linker and the generator read one shape. A caller's
+    // hand-built descriptor may leave the bit false while carrying the text;
+    // the wire decoder sets it, so this is a no-op for `.pbs` bytes. The
+    // anonymous single-file path clears the name and its bit again after
+    // this call, because its name was only a container identity.
+    slot.file.has_name = true;
+    if (!slot.file.package.empty()) slot.file.has_package = true;
 }
 
 std::string own_text(str_view value)
@@ -138,10 +149,12 @@ bool fail(const std::string& label, const std::string& message,
 //
 // `W-36` makes two containers that carry the same logical file a merge instead
 // of a blanket refusal. "The same file" is decided over the modeled content:
-// every field descriptor.pb.hpp declares, presence flags included, because a
-// presence flag changes what the linker reads (an absent label is OPTIONAL, an
-// absent kind is resolved by protoc's default). Strings compare by value, so
-// the comparison is independent of which pool owns them.
+// every field descriptor.pb.hpp declares, with the presence flags that change
+// what the linker reads (an absent label is OPTIONAL, an absent kind is
+// resolved by protoc's default). The file's `name` and `package` are compared
+// by value; their presence bits are normalized at ingest (W-48) and are not
+// modeled identity. Strings compare by value, so the comparison is independent
+// of which pool owns them.
 //
 // The walk must grow with the model: a field added to descriptor.pb.hpp and
 // not compared here would make two different files look identical. The
@@ -286,10 +299,13 @@ bool same_descriptor(const ServiceDescriptorProto& left,
 bool same_descriptor_file(const FileDescriptorProto& left,
                           const FileDescriptorProto& right)
 {
+    // The presence bits of the file's name and package are not part of the
+    // modeled identity (W-48): the strings themselves are compared below, and
+    // ingest normalizes the bits, so a stored copy and an incoming copy of one
+    // file must not look different here. Every other presence bit still
+    // decides, because it changes what the linker reads.
     if (left.name != right.name || left.package != right.package ||
         left.syntax != right.syntax || left.edition != right.edition ||
-        left.has_name != right.has_name ||
-        left.has_package != right.has_package ||
         left.has_syntax != right.has_syntax ||
         left.has_edition != right.has_edition ||
         left.dependency.size() != right.dependency.size() ||

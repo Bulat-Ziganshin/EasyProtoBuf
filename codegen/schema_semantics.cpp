@@ -2029,9 +2029,42 @@ namespace internal {
 bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                       const std::set<const SchemaFile*>& visible_files,
                       const FieldDescriptorProto& field, bool unknown,
-                      const DescriptorPath& field_path, Diagnostic& error)
+                      bool external, const DescriptorPath& field_path,
+                      Diagnostic& error)
 {
     if (!field.has_default_value) return true;
+    // The declared kind is known even when the definition is not, so the
+    // kind-decided half of the rule is checked BEFORE the unknown-kind
+    // deferral: compatibility mode leaves both flags true for an external
+    // reference, and only the membership half needs the definition (W-47).
+    // A message default is never legal, and an enum default must at least be
+    // an identifier. The A5 warning already deferred membership to the
+    // dependency header. A scalar kind cannot be external - the compatibility
+    // classifier tolerates only message and enum references - so an unexpected
+    // scalar falls through to the ordinary path below.
+    const std::string value = view_text(field.default_value);
+    if (external) {
+        if (field.type == FieldDescriptorProto::TYPE_MESSAGE ||
+            field.type == FieldDescriptorProto::TYPE_GROUP) {
+            return fail_at(file, "message fields cannot have defaults",
+                           field_default_location(file, field_path),
+                           field_path, error);
+        }
+        if (field.type == FieldDescriptorProto::TYPE_ENUM) {
+            if (value.empty()) {
+                return fail_at(file, "enum default must name an enum value",
+                               field_default_location(file, field_path),
+                               field_path, error);
+            }
+            if (!is_identifier(value)) {
+                return fail_at(file,
+                               "Default value for an enum field must be an identifier.",
+                               field_default_location(file, field_path),
+                               field_path, error);
+            }
+            return true;
+        }
+    }
     // An unresolvable named type may be an imported enum (whose default is
     // then legal) or an imported message (whose default complete linking
     // will reject). Either way validation is deferred with a warning instead
@@ -2047,7 +2080,6 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
     if (field.type == FieldDescriptorProto::TYPE_STRING) {
         return true;
     }
-    const std::string value = view_text(field.default_value);
     std::int32_t signed32 = 0;
     std::int64_t signed64 = 0;
     switch (field.type) {
@@ -2122,6 +2154,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                                field_path, error);
             }
         case FieldDescriptorProto::TYPE_MESSAGE:
+        case FieldDescriptorProto::TYPE_GROUP:
             return fail_at(file, "message fields cannot have defaults",
                            field_default_location(file, field_path),
                            field_path, error);
@@ -2356,9 +2389,9 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                         Diagnostic& error)
 {
     // Set when the compatibility policy permitted an external reference:
-    // the declared metadata is kept verbatim and the field's default is
-    // not validated, because the external definition cannot answer and the
-    // A5 warning already states that defaults were not validated.
+    // the declared metadata is kept verbatim. The default is still checked
+    // for what the declared kind decides (W-47); only membership of a named
+    // enum value needs the definition, which the set does not carry.
     if (field.has_type_name) {
         if (!link_types) {
             // Deferred: never resolve locally. The resolved kind is
@@ -2631,15 +2664,18 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
     }
     // Scalar kinds are known without linking; named kinds are validated
     // only when linking (link_types) so a shadowed local match cannot
-    // decide packed/default validity ahead of import linking.
+    // decide packed/default validity ahead of import linking. A tolerated
+    // external reference still reaches the rule (W-47): the declared kind is
+    // known, so the message/enum half of the default rule applies even
+    // though the definition does not.
     if (!field.has_type_name) {
-        if (!validate_default(file, symbols, visible_files, field, false,
+        if (!validate_default(file, symbols, visible_files, field, false, false,
                               field_path, error)) {
             return false;
         }
-    } else if (link_types && !external_reference) {
+    } else if (link_types) {
         if (!validate_default(file, symbols, visible_files, field, unknown,
-                              field_path, error)) {
+                              external_reference, field_path, error)) {
             return false;
         }
     }

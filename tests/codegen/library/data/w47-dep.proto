@@ -1,0 +1,16 @@
+// W-47's dependency. The thin descriptor sets in this lane carry only the
+// root file, so everything this file declares is external to the linked set.
+syntax = "proto2";
+
+package dep;
+
+message Missing
+{
+    optional int32 value = 1;
+}
+
+enum E
+{
+    A = 0;
+    B = 1;
+}

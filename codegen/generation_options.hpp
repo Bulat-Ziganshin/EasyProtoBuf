@@ -28,6 +28,12 @@ struct GenerationOptions
 // option sets. Returns false and fills `error` for the caller to report; on
 // success `options` is normalized (for example a repeated-type template
 // without a placeholder gains "<{}>").
+//
+// The generation entry points call this themselves on a copy (W-11): a
+// caller that never touches the CLI may pass a default-constructed set, and
+// finalization is part of the call, not a precondition of it. A caller that
+// wants the normalized values in its own object calls this directly; the
+// function is idempotent.
 bool finalize_generation_options(GenerationOptions& options, std::string& error);
 
 } // namespace easypb_codegen

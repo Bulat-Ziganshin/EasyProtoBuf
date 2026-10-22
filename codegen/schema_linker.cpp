@@ -288,20 +288,22 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
         return false;
     }
 
-    // A4: `complete` describes the input. Any null-target edge produced above
-    // or any permitted external reference makes it false; it stays true only
-    // for a thin descriptor whose whole dependency graph and every field
-    // resolved locally. A10's warning hygiene is not repeated here: a
-    // descriptor-origin file carries no stale warnings from the parser's
-    // standalone pass, and this mode resolves no external reference whose
-    // warning a later pass could make stale.
+    // W-58: the flag names the one thing a link result can say about its
+    // input - whether the link rested on local information alone. Any
+    // null-target edge produced above or any permitted external reference
+    // makes it false; it stays true only for a thin descriptor whose whole
+    // dependency graph and every field resolved locally. The mode itself is
+    // the caller's argument, not a property of the result. A10's warning
+    // hygiene is not repeated here: a descriptor-origin file carries no stale
+    // warnings from the parser's standalone pass, and this mode resolves no
+    // external reference whose warning a later pass could make stale.
     bool missing_edge = false;
     for (std::size_t i = 0; i < file.edges.size(); ++i) {
         if (file.edges[i].target == 0) missing_edge = true;
     }
 
     linked.files = &files;
-    linked.complete = !missing_edge && !missing_external;
+    linked.local_only = !missing_edge && !missing_external;
     result = std::move(linked);
     return true;
 }
@@ -427,7 +429,7 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // returned before this line leaves `result` in the invalid empty state set
     // at entry, never a partial view.
     linked.files = &files;
-    linked.complete = true;
+    linked.local_only = true;
     // A move, not a copy (fix round r5, ledger H-8/P-05). `LinkedSchema`
     // declares only a user-provided default constructor, which does not
     // suppress the implicit move assignment, and every member moves in O(1):

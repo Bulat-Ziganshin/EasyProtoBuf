@@ -30,14 +30,18 @@ struct GeneratedFile
 // initializers through the linked visible definitions, never inferred from
 // zero or from a name.
 //
-// `schema.complete == false` is the thin-descriptor compatibility path: it
-// omits automatic dependency includes and keeps the external-declaration
-// contract, exactly as before plan 5.
+// `schema.visible_files` decides which imported definitions are in scope.
+// `schema.local_only` is not consulted here: the include planner emits every
+// direct dependency in both link modes (W-68), and the compatibility
+// tolerance decides which references the schema may keep, never whether the
+// header names the file it came from.
 //
 // The result owns its text and keeps no view into the schema; common code
 // never prints, never selects a stream and never exits. A semantic failure
 // throws std::runtime_error (or std::exception from a helper); frontends that
-// own a Diagnostic use generate_files, which converts the failure.
+// own a Diagnostic use generate_files, which converts the failure. The options
+// are normalized by this call on a local copy (W-11), so a default-constructed
+// set is valid input and the caller's object is not mutated.
 std::string generate_header(const easypb_schema::SchemaFile& target,
                             const easypb_schema::LinkedSchema& schema,
                             const GenerationOptions& options);
@@ -51,7 +55,10 @@ std::string generate_header(const easypb_schema::SchemaFile& target,
 // with no partial success. Duplicate mapped output names (as strings) are
 // refused here; platform-specific aliases (letter case on a folding
 // filesystem, hardlinks) are the publisher's half. `result` follows the
-// requested target order.
+// requested target order. The options are normalized on a local copy before
+// the first target is generated (W-11), so a default-constructed set is valid
+// and a contradictory pair is reported through `error` like any other
+// semantic refusal.
 bool generate_files(const easypb_schema::LinkedSchema& schema,
                     const GenerationOptions& options,
                     std::vector<GeneratedFile>& result,

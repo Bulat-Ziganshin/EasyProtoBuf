@@ -85,14 +85,18 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
 
 // The type-dependent validator behind rule 3's default dispatch (check 12):
 // exposed separately so one scalar or named default can be probed without a
-// field-encoding fixture. It is the only anonymous helper this seam reaches;
+// field-encoding fixture. `unknown` defers an unresolvable named type with a
+// warning; `external` says the reference itself was tolerated as external, so
+// the kind-decided part of the rule runs while enum membership is deferred to
+// the dependency header. It is the only anonymous helper this seam reaches;
 // the other large validators - validate_symbol_names,
 // validate_enum_value_numbers and validate_map_entry_shapes - are already
 // public in schema_semantics.hpp and need no seam.
 bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                       const std::set<const SchemaFile*>& visible_files,
                       const FieldDescriptorProto& field, bool unknown,
-                      const DescriptorPath& field_path, Diagnostic& error);
+                      bool external, const DescriptorPath& field_path,
+                      Diagnostic& error);
 
 // The message-level validators behind the public sweeps (validate_symbol_names,
 // validate_enum_value_numbers, validate_map_entry_shapes). They stay anonymous

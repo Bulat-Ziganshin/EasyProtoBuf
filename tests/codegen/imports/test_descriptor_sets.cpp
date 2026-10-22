@@ -373,7 +373,7 @@ void test_adapter_owns_a_decoded_buffer_and_generates_after_destruction(
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE, linked,
                                      error));
     CHECK(linked.files == &set);
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
 
     // D1, generation half: the poisoned-buffer ingestion generates the same
     // bytes as a fresh ingestion of the same container through the same
@@ -431,7 +431,7 @@ void test_loader_loads_a_complete_container(const std::string& fixture_dir)
     easypb_schema::LinkedSchema linked;
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE, linked,
                                      error));
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
 }
 
 // An empty container is refused, not quietly ignored: zero FileDescriptorProto
@@ -644,7 +644,7 @@ void test_loader_custom_type_strings_survive_the_container(
         set, easypb_schema::LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY, linked,
         error));
     CHECK(linked.files == &set);
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(file.warnings.empty());
 
     // Generation, live vs owned: the custom template is read from the option,

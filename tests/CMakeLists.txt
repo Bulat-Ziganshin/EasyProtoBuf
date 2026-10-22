@@ -572,6 +572,63 @@ if(BUILD_TESTING)
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_parity_dir}/test_parity.cmake)
 
+    # Plan 5 follow-up S6 (W-11, W-47, W-48, W-58): the library API. A caller
+    # that links easypb_codegen_core must get the CLI's answer: the entry
+    # points finalize a copy of the options, the compatibility link checks a
+    # default for its declared kind, ingest normalizes the file's name and
+    # package presence bits, and the link result says one thing (`local_only`).
+    # The lane links only the core, so it is parser-free and runs in the lite
+    # profile; the `.proto` control is guarded by FULL_BUILD. The W-11 header
+    # is compiled by the build through the binary's emit mode (a compiler
+    # started from a test script outside the Visual Studio environment cannot
+    # find its own standard library headers), and the driver compares the
+    # library's header with the CLI's byte for byte.
+    set(codegen_library_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/library)
+    set(codegen_library_data_dir ${codegen_library_dir}/data)
+    set(codegen_library_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-library)
+    file(MAKE_DIRECTORY ${codegen_library_generated_dir})
+
+    add_executable(codegen_library_test codegen/library/test_library.cpp)
+    target_link_libraries(codegen_library_test PRIVATE easypb_codegen_core)
+
+    set(codegen_library_options_header
+        ${codegen_library_generated_dir}/options-default.pb.hpp)
+    add_custom_command(
+        OUTPUT ${codegen_library_options_header}
+        COMMAND $<TARGET_FILE:codegen_library_test>
+            --emit-options-default ${codegen_library_options_header}
+            ${codegen_library_data_dir}
+        DEPENDS
+            codegen_library_test
+            ${codegen_library_data_dir}/options-default.pbs
+        VERBATIM)
+    add_custom_target(codegen_library_options_generated
+        DEPENDS ${codegen_library_options_header})
+
+    set(codegen_library_compile_source
+        ${codegen_library_generated_dir}/compile-options-default.cpp)
+    file(WRITE ${codegen_library_compile_source}
+        "#include \"options-default.pb.hpp\"\n")
+    add_library(codegen_library_compile_check STATIC
+        ${codegen_library_compile_source})
+    add_dependencies(codegen_library_compile_check
+        codegen_library_options_generated)
+    set_source_files_properties(${codegen_library_compile_source} PROPERTIES
+        OBJECT_DEPENDS ${codegen_library_options_header})
+    target_include_directories(codegen_library_compile_check PRIVATE
+        ${easypb_test_include_dir} ${codegen_library_generated_dir})
+
+    add_test(NAME codegen.library
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DLIBRARY_TEST=$<TARGET_FILE:codegen_library_test>
+            -DDATA_DIR=${codegen_library_data_dir}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-library
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_library_dir}/test_library.cmake)
+
     set(codegen_packages_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/packages)
     set(codegen_packages_data_dir ${codegen_packages_dir}/data)

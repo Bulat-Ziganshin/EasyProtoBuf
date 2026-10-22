@@ -152,7 +152,7 @@ void check_duplicate_failure(easypb_schema::SchemaSet& set,
     CHECK(error.message != "link_schema: not implemented");
     CHECK(error.file == redeclaring);
     CHECK(linked.files == 0);
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(linked.symbols.symbols.empty());
     CHECK(linked.visible_files.empty());
 }
@@ -332,11 +332,11 @@ bool link_verdict(easypb_schema::SchemaSet& set,
         set, easypb_schema::LINK_COMPLETE, linked, error);
     if (linked_ok) {
         CHECK(linked.files == &set);
-        CHECK(linked.complete);
+        CHECK(linked.local_only);
     } else {
         // Publish-on-failure (A1, E3): nothing readable survives a failure.
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     return linked_ok;
 }
@@ -560,7 +560,7 @@ void test_complete_link_publishes_after_every_stage()
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                      linked, error));
     CHECK(linked.files == &set);
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
     // Stage 5: the field resolved against a's visible set and was rewritten to
     // the absolute name the index holds.
     CHECK(text(chain.a->file.message_type[0].field[0].type_name) ==
@@ -590,7 +590,7 @@ void test_complete_link_publishes_after_every_stage()
     CHECK(!error.message.empty());
     CHECK(error.message != "link_schema: not implemented");
     CHECK(linked.files == 0);
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(linked.symbols.symbols.empty());
     CHECK(linked.visible_files.empty());
 
@@ -603,7 +603,7 @@ void test_complete_link_publishes_after_every_stage()
     CHECK(!easypb_schema::link_schema(cyclic, easypb_schema::LINK_COMPLETE,
                                       reused, error));
     CHECK(reused.files == 0);
-    CHECK(!reused.complete);
+    CHECK(!reused.local_only);
     CHECK(reused.visible_files.empty());
 
     // The same rule for the resolution stage: the failure below is reported by
@@ -620,7 +620,7 @@ void test_complete_link_publishes_after_every_stage()
                                       error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
     CHECK(reused.files == 0);
-    CHECK(!reused.complete);
+    CHECK(!reused.local_only);
     CHECK(reused.symbols.symbols.empty());
     CHECK(reused.visible_files.empty());
 }
@@ -949,7 +949,7 @@ void test_conflicting_declaration_reports_one_code()
         CHECK(error.file == "a.proto");
         CHECK(error.message.find("Same") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     // Producer 2: the same collision split over two files.
     {
@@ -967,7 +967,7 @@ void test_conflicting_declaration_reports_one_code()
         errors[1] = error;
         CHECK(error.message.find("Same") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
 
     CHECK(codes[0] == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
@@ -2435,7 +2435,7 @@ void test_descriptor_origin_field_numbers_are_validated()
         // appends the descriptor path (fail_at_code's convention).
         CHECK(error.message.find(" at [") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     // The legal bounds on both sides stay legal: number 1, one below the
     // reserved range, one above it, and the maximum itself.
@@ -2500,7 +2500,7 @@ void test_descriptor_origin_named_kind_needs_type_name()
         CHECK(error.message.find(sentence) == 0);
         CHECK(error.message.find(" at [") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     // A scalar kind with no type_name is the ordinary case and links.
     {
@@ -2766,7 +2766,7 @@ void test_unsupported_syntax_is_refused_before_resolution()
         CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
         CHECK(error.file == "z.proto");
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
         CHECK(linked.symbols.symbols.empty());
     }
     // proto3 is not refused: the classification is the subject, so the fixture
@@ -2800,7 +2800,7 @@ void test_unsupported_syntax_is_refused_before_resolution()
             linked, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
 }
 
@@ -2959,7 +2959,7 @@ void test_input_order_and_targets_do_not_decide_the_verdict()
         easypb_schema::Diagnostic error;
         CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                           linked, error));
-        CHECK(linked.complete);
+        CHECK(linked.local_only);
         // Two package scopes, three messages and one field.
         CHECK(linked.symbols.symbols.size() == 6);
         const std::string names = resolved_field_names(set);
@@ -4042,7 +4042,7 @@ void test_unsupported_syntax_beats_the_cross_syntax_rule()
         CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
         CHECK(error.file == "z.proto");
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
 }
 
@@ -4099,7 +4099,7 @@ bool link_compat(easypb_schema::SchemaSet& set,
         CHECK(linked.files == &set);
     } else {
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     return linked_ok;
 }
@@ -4137,7 +4137,7 @@ bool read_binary_file(const std::string& path, std::string& contents)
 }
 
 // 7.3 row 1 and 2: a classified external message is accepted even though its
-// dependency is absent, `complete == false` comes from the null-target edge
+// dependency is absent, `local_only == false` comes from the null-target edge
 // alone (A4), and the same input under LINK_COMPLETE is a missing import.
 void test_compat_accepts_a_classified_external_message()
 {
@@ -4155,7 +4155,7 @@ void test_compat_accepts_a_classified_external_message()
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
         CHECK(link_compat(set, linked, error));
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
         CHECK(file.warnings.size() == 1);
         CHECK(file.warnings[0].warning);
         CHECK(file.warnings[0].code == easypb_schema::DIAGNOSTIC_GENERIC);
@@ -4280,7 +4280,7 @@ void test_compat_missing_dependency_without_external_references()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(file.warnings.empty());
     const FieldDescriptorProto& field = file.file.message_type[0].field[0];
     CHECK(field.type == FieldDescriptorProto::TYPE_ENUM);
@@ -4308,7 +4308,7 @@ void test_compat_warns_once_per_external_type_name()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(file.warnings.size() == 1);
     CHECK(file.warnings[0].location.line == 0);
     CHECK(file.warnings[0].message.find(".ext.Type") != std::string::npos);
@@ -4389,7 +4389,7 @@ void test_compat_resolves_local_references_normally()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
     CHECK(file.warnings.empty());
     const FieldDescriptorProto& field = file.file.message_type[0].field[0];
     CHECK(field.type == FieldDescriptorProto::TYPE_ENUM);
@@ -4654,7 +4654,7 @@ void test_compat_binder_still_rejects_malformed_indexes()
 }
 
 // 7.3 row 15: a weak import of an absent file is tolerated exactly like a
-// normal missing target (A18): a null-target edge and `complete == false`,
+// normal missing target (A18): a null-target edge and `local_only == false`,
 // never silence - while the same fixture under LINK_COMPLETE stays the hard
 // error it has always been.
 void test_compat_tolerates_a_missing_weak_target()
@@ -4668,7 +4668,7 @@ void test_compat_tolerates_a_missing_weak_target()
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
         CHECK(link_compat(set, linked, error));
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
         CHECK(file.warnings.empty());
         CHECK(file.edges.size() == 1);
         CHECK(file.edges[0].target == 0);
@@ -4708,7 +4708,7 @@ void test_compat_preserves_an_external_enum_default()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(file.warnings.size() == 1);
     CHECK(file.warnings[0].code == easypb_schema::DIAGNOSTIC_GENERIC);
     const FieldDescriptorProto& field = file.file.message_type[0].field[0];
@@ -4740,7 +4740,7 @@ void test_compat_then_complete_never_consults_the_escape_hatch()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
 
     easypb_schema::Diagnostic complete_error;
     CHECK(!link_verdict(set, complete_error));
@@ -4753,8 +4753,8 @@ void test_compat_then_complete_never_consults_the_escape_hatch()
 // (dependency absent, no external reference) + external (dependency absent,
 // external references) + empty (no file) + integration-multi (two files).
 enum CorpusVerdict {
-    CORPUS_CLEAN,             // accept, complete == true, no warnings
-    CORPUS_INCOMPLETE,        // accept, complete == false
+    CORPUS_CLEAN,             // accept, local_only == true, no warnings
+    CORPUS_INCOMPLETE,        // accept, local_only == false
     CORPUS_PRECONDITION,      // reject at 7.1 (no file / two files)
     CORPUS_MALFORMED_ENTRY    // reject at A26's entry-shape check
 };
@@ -4862,7 +4862,7 @@ void test_corpus_compatibility_mode(const std::string& fixture_dir)
             CHECK(linked.files == &set);
         } else {
             CHECK(linked.files == 0);
-            CHECK(!linked.complete);
+            CHECK(!linked.local_only);
             // The checkpoint's non-count assertion (A25): NO fixture may be
             // refused as an unsupported syntax. Such a refusal would mean the
             // classifier turned a supported value into an unsupported one,
@@ -4876,14 +4876,14 @@ void test_corpus_compatibility_mode(const std::string& fixture_dir)
         case CORPUS_CLEAN:
             CHECK(accepted);
             if (accepted) {
-                CHECK(linked.complete);
+                CHECK(linked.local_only);
                 CHECK(set.files()[0]->warnings.empty());
             }
             break;
         case CORPUS_INCOMPLETE:
             CHECK(accepted);
             if (accepted) {
-                CHECK(!linked.complete);
+                CHECK(!linked.local_only);
                 CHECK(set.files()[0]->warnings.size() == fixture.warnings);
             }
             break;
@@ -6264,7 +6264,7 @@ void test_pool_growth_after_link_keeps_every_published_name()
     easypb_schema::Diagnostic error;
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                      linked, error));
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
 
     CHECK(text(a.file.message_type[0].field[0].type_name) == ".shared.Value");
     CHECK(text(a.file.message_type[0].field[1].type_name) == ".shared.Other");
@@ -6406,7 +6406,7 @@ void test_descriptor_only_isolation_reports_a_descriptor_path()
         CHECK(error.file == "iso.pbs");
         CHECK(error.message.find("at [4, 0, 2, 0]") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     // (b) a declared dependency the set does not contain: an in-memory graph
     // error naming the importing logical file and the missing logical import,
@@ -6524,7 +6524,7 @@ void test_repeated_runs_publish_identical_views()
         CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                          first, error));
         CHECK(first.files == &set);
-        CHECK(first.complete);
+        CHECK(first.local_only);
         const std::string first_view = view_fingerprint(set, first);
         // Lines are sorted by logical name, so the root's line is the last
         // one; what matters is that it names the resolved absolute type and
@@ -6538,7 +6538,7 @@ void test_repeated_runs_publish_identical_views()
         CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                          second, second_error));
         CHECK(second.files == &set);
-        CHECK(second.complete);
+        CHECK(second.local_only);
         CHECK(view_fingerprint(set, second) == first_view);
         // The visibility sets are compared directly too, key for key: the
         // fingerprints above compare the names they resolve to, this compares
@@ -6561,7 +6561,7 @@ void test_repeated_runs_publish_identical_views()
         CHECK(easypb_schema::link_schema(backward_set,
                                          easypb_schema::LINK_COMPLETE,
                                          backward, backward_error));
-        CHECK(backward.complete);
+        CHECK(backward.local_only);
         CHECK(view_fingerprint(backward_set, backward) ==
               view_fingerprint(forward_set, forward));
 
@@ -6656,7 +6656,7 @@ void test_iterator_rules_stability_across_file_order()
         easypb_schema::Diagnostic error;
         CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                          linked, error));
-        CHECK(linked.complete);
+        CHECK(linked.local_only);
         const easypb_schema::SchemaFile* const a = set.find_file("a.proto");
         CHECK(a != 0);
         CHECK(text(a->file.message_type[0].field[1].type_name) == ".sub.X");

@@ -30,7 +30,7 @@ Every generated header starts with its provenance line - `// Source: <logical na
 
 Two compiler-support imports are special-cased: `easypb/options.proto` and `google/protobuf/descriptor.proto` produce no dependency include while they are only option metadata. The exception ends — and the include appears — when a field names a declaration that file owns, or when the import is public, because a re-export must stay usable for the including translation unit. These files always stay in the linked set, so a missing one is still a link error.
 
-The thin single-file descriptor compatibility mode keeps the external-declaration tolerance, but not a different include contract: it emits the same includes as the complete link, and its header is byte-identical to the header the complete closure produces for the same schema.
+The thin single-file descriptor compatibility mode keeps the external-declaration tolerance, but not a different include contract: it emits the same includes as the complete link, and its header is byte-identical to the header the complete closure produces for the same schema. The tolerance covers the external type, not a default its declared kind decides: a message field with a default is refused, and an enum default must be an identifier.
 
 ## Nested messages and declaration ordering
 

@@ -1379,7 +1379,7 @@ void test_rule_default_validator_directly()
         field.has_default_value = true;
         easypb_schema::Diagnostic error;
         CHECK(easypb_schema::internal::validate_default(
-            file, symbols, visible, field, false, field_path, error));
+            file, symbols, visible, field, false, false, field_path, error));
     }
     // One past INT32_MAX is refused.
     {
@@ -1389,7 +1389,7 @@ void test_rule_default_validator_directly()
         field.has_default_value = true;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::internal::validate_default(
-            file, symbols, visible, field, false, field_path, error));
+            file, symbols, visible, field, false, false, field_path, error));
         CHECK(error.message.find("does not fit signed 32-bit field") !=
               std::string::npos);
     }
@@ -1401,7 +1401,7 @@ void test_rule_default_validator_directly()
         field.has_default_value = true;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::internal::validate_default(
-            file, symbols, visible, field, false, field_path, error));
+            file, symbols, visible, field, false, false, field_path, error));
         CHECK(error.message.find("bool default must be true or false") !=
               std::string::npos);
     }
@@ -1413,7 +1413,7 @@ void test_rule_default_validator_directly()
         field.has_default_value = true;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::internal::validate_default(
-            file, symbols, visible, field, false, field_path, error));
+            file, symbols, visible, field, false, false, field_path, error));
         CHECK(error.message.find("message fields cannot have defaults") !=
               std::string::npos);
     }
@@ -1425,7 +1425,7 @@ void test_rule_default_validator_directly()
         field.has_default_value = true;
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::internal::validate_default(
-            file, symbols, visible, field, false, field_path, error));
+            file, symbols, visible, field, false, false, field_path, error));
         CHECK(error.message.find("invalid escaping in bytes default value") !=
               std::string::npos);
     }
@@ -1437,7 +1437,7 @@ void test_rule_default_validator_directly()
         easypb_schema::Diagnostic error;
         const std::size_t before = file.warnings.size();
         CHECK(easypb_schema::internal::validate_default(
-            file, symbols, visible, field, true, field_path, error));
+            file, symbols, visible, field, true, false, field_path, error));
         CHECK(file.warnings.size() == before + 1);
     }
     // A field with no default is a no-op, even for a message kind.
@@ -1446,7 +1446,7 @@ void test_rule_default_validator_directly()
             make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_MESSAGE);
         easypb_schema::Diagnostic error;
         CHECK(easypb_schema::internal::validate_default(
-            file, symbols, visible, field, false, field_path, error));
+            file, symbols, visible, field, false, false, field_path, error));
     }
 }
 
