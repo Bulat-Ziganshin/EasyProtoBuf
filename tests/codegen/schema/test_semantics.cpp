@@ -1528,6 +1528,23 @@ void test_rule_symbol_names_directly()
         CHECK(!easypb_schema::validate_symbol_names(file, error));
         CHECK(error.message.find("has no name") != std::string::npos);
     }
+    // A package component that is not a legal symbol name is refused, and the
+    // diagnostic carries the package field's own descriptor path - [2], the
+    // field number of `package` in FileDescriptorProto. The path is what the
+    // checker walks with, so its value is part of the diagnostic: it is
+    // spelled as an initializer list in the checker, because the
+    // two-argument spelling also reads as the iterator-pair constructor and
+    // clang 3.1 cannot discard that reading (the clang 3.1 lane of
+    // 2026-10-22 died on it).
+    {
+        easypb_schema::SchemaFile file;
+        file.file.package = file.strings.save("bad-name");
+        file.file.has_package = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_symbol_names(file, error));
+        CHECK(error.message.find("package component") != std::string::npos);
+        CHECK(error.message.find("at [2]") != std::string::npos);
+    }
     // Well-formed declarations pass.
     {
         easypb_schema::SchemaFile file;

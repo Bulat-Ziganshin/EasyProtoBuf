@@ -2776,7 +2776,17 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
         // per-file form cost a 4-byte allocation for every file that declares a
         // package, whether or not this check ever has anything to report, and
         // `check_symbol_name` only reads the path.
-        static const DescriptorPath package_path(1, 2);
+        //
+        // The vector is spelled as an initializer list, not as
+        // `DescriptorPath(1, 2)`: the two-argument form also reads as the
+        // iterator-pair constructor, and clang 3.1 cannot discard that
+        // reading - libstdc++ 4.8's iterator_traits of a non-iterator is a
+        // hard error there, not a substitution failure, so the lane died with
+        // "no type named 'iterator_category' in 'std::iterator_traits<int>'"
+        // (measured: the clang 3.1 lane of 2026-10-22). The list form is the
+        // one reading that cannot be mistaken for the other: one element, the
+        // value 2 - the package field's descriptor path.
+        static const DescriptorPath package_path = {2};
         std::size_t start = 0;
         for (;;) {
             const std::size_t dot = package.find('.', start);

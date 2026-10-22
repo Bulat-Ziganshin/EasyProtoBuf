@@ -16,9 +16,9 @@
 //   P8  directory creation reports failure as failure
 //   P10 the logical mapping stays pure and platform-free
 // P1/P2's CLI-level snapshots live in `codegen.imports.cli`; the per-file
-// half of P2 is injected here directly, because a denied directory (POSIX) or
-// a read-only replacement target (Windows) is a publisher-level failure with
-// an observable the CLI cannot stage portably.
+// half of P2 is injected here directly, because a refused replacement target
+// (a read-only file on Windows, a directory on POSIX) is a publisher-level
+// failure with an observable the CLI cannot stage portably.
 //
 // Scratch lives in a per-process directory named after this process id below
 // the pinned working directory, so a rerun never reads a previous run's tree
@@ -430,6 +430,25 @@ void test_publisher_rejects_an_existing_directory_at_the_target(
 
 
 // --- P2: a later-file failure leaves earlier files replaced, no partial ------
+//
+// The publisher writes one file at a time, in byte-wise name order, and stops
+// at the first failure, reporting it as a diagnostic. The files it wrote
+// before the failure stay written: there is no rollback, and the failure is
+// never hidden.
+//
+// The refusal is staged where it needs no privilege. On Windows a read-only
+// target does it. On POSIX a read-only target would do it too - but only for
+// an ordinary user, and the container jobs run as root, which ignores the
+// permission bits: the publication SUCCEEDED there and this test failed on
+// every POSIX lane (measured: the matrix of 2026-10-22). A read-only
+// *directory*, the injection this test used before, does not refuse the
+// write at all: the publisher truncates the target in place, the way the
+// reference compiler does, and truncating a file needs no permission on the
+// directory that holds it.
+//
+// So on POSIX the target is a directory, which no user can open for writing.
+// The write fails where the file would have been opened, so the target keeps
+// what it held, and the publisher reports the failure.
 
 void test_publisher_keeps_old_content_when_a_later_replace_fails(
     const std::string& work)
@@ -440,32 +459,33 @@ void test_publisher_keeps_old_content_when_a_later_replace_fails(
     const std::string second_dir = path_join(out, "sub");
     const std::string second = path_join(second_dir, "second.pb.hpp");
     CHECK(make_directory(second_dir));
-    CHECK(write_text_file(second, "OLD SECOND"));
 
-    std::vector<easypb_codegen::GeneratedFile> files;
-    files.push_back(generated("first.pb.hpp", "NEW FIRST"));
-    files.push_back(generated("sub/second.pb.hpp", "NEW SECOND"));
-
-    // The injection makes the second replacement fail after the first file is
-    // already in place: a read-only target on Windows, a read-only directory
-    // on POSIX. Either way the promised observable is the same.
+    // The target of the second file, and the "old content" it holds.
 #ifdef _WIN32
+    CHECK(write_text_file(second, "OLD SECOND"));
     std::vector<wchar_t> wide_second;
     CHECK(easypb_file::wide_win32_path(second, wide_second) &&
           !wide_second.empty());
     wide_second.push_back(L'\0');
     CHECK(SetFileAttributesW(&wide_second[0], FILE_ATTRIBUTE_READONLY) != 0);
 #else
-    CHECK(::chmod(second_dir.c_str(), 0500) == 0);
+    CHECK(make_directory(second));
+    const std::string marker = path_join(second, "marker.txt");
+    CHECK(write_text_file(marker, "OLD SECOND"));
 #endif
+
+    std::vector<easypb_codegen::GeneratedFile> files;
+    files.push_back(generated("first.pb.hpp", "NEW FIRST"));
+    files.push_back(generated("sub/second.pb.hpp", "NEW SECOND"));
+    // A third file, written after the failing one: the publisher stops at the
+    // first failure, so this one is never written.
+    files.push_back(generated("third.pb.hpp", "NEW THIRD"));
 
     easypb_schema::Diagnostic error;
     const bool published = easypb_codegen::publish_headers(out, files, error);
 
 #ifdef _WIN32
     SetFileAttributesW(&wide_second[0], FILE_ATTRIBUTE_NORMAL);
-#else
-    CHECK(::chmod(second_dir.c_str(), 0700) == 0);
 #endif
 
     CHECK(!published);
@@ -474,8 +494,13 @@ void test_publisher_keeps_old_content_when_a_later_replace_fails(
     std::string content;
     CHECK(read_text_file(first, content));
     CHECK(content == "NEW FIRST");          // per-file replacement happened
+#ifdef _WIN32
     CHECK(read_text_file(second, content));
+#else
+    CHECK(read_text_file(marker, content));
+#endif
     CHECK(content == "OLD SECOND");         // the failed file kept its bytes
+    CHECK(!path_exists(path_join(out, "third.pb.hpp")));  // it stopped there
     bool leftovers = false;
     CHECK(any_temporary_files(out, leftovers));
     CHECK(!leftovers);
