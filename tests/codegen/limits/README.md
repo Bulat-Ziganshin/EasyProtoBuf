@@ -20,6 +20,26 @@ fix in the three ways the session's brief names.
    generated header with the tree's own compiler and the tree's own standard
    (`-std=c++17` in the full profile, `-std=c++11` in the C++11 profile), and
    the build compiles the same header into the runtime checker.
+
+   This one step has an exception, and only this one: **MSVC cannot compile
+   the accepted header.** The accepted nesting is printed as a chain of
+   nested struct definitions (`struct M0 { struct M1 { … }; };`), and MSVC's
+   compiler limit is 16 levels of them — C1046, *compiler limit: struct
+   nested too deeply* — so it refuses at the 17th. Every MSVC lane of
+   2026-10-22 died in the build of the runtime checker, and with it the
+   whole Windows half of the CI: the build failure ends the job before
+   ctest runs.
+
+   The **limit itself does not move**: it stays the reference compiler's own
+   (31 accepted, the 32nd refused), and the generator keeps printing the
+   nesting the way it does. What the MSVC profile gives up is the compile of
+   that one header and the runtime check that reads it. The other two things
+   need no compiler and still run there: both input paths agree byte for
+   byte, the 32nd level is refused, the deep name is refused. Nested types
+   themselves stay covered on MSVC by the nested lane, which is shallower.
+
+   The driver is told which profile it runs in (`COMPILE_ACCEPTED`), and
+   says in its output which steps it skipped.
 3. **The refusal is a diagnostic.** A non-zero exit, an empty stdout and a
    stderr that names the offending thing. A crash is a failure, not a
    refusal: the whole point of the rows is that a deep input used to end the
@@ -76,3 +96,8 @@ Running the lane never needs `protoc`: the fixtures are committed.
 
 The lane runs in every build profile: the full C++17 tree, the full C++11
 tree, the lite (parser-off) tree, and the legacy toolchains.
+
+The MSVC profile runs the same lane with the two steps it cannot do left out
+— the compile of the accepted header and the runtime check that reads it (see
+"the header compiles" above). Every other step of the lane, and every other
+test of the tree, runs there as everywhere else.

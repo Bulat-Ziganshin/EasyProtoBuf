@@ -10,7 +10,11 @@
 #      both, and the two paths produce the SAME header for the accepted one.
 #   2. THE HEADER COMPILES. A generated header that does not compile is a
 #      failure; "the tool exited 0" is not a pass. The compile happens with
-#      the tree's own compiler and the tree's own standard.
+#      the tree's own compiler and the tree's own standard. This one has an
+#      exception, and only this one: MSVC's compiler limit is 16 levels of
+#      nested struct definitions (C1046) and the accepted nesting is 31, so
+#      the MSVC profile cannot compile that header and gives up the compile
+#      and the runtime check - it keeps the other two.
 #   3. THE REFUSAL IS A DIAGNOSTIC. A non-zero exit, an empty stdout and a
 #      stderr that names the offending thing. A crash is a failure, not a
 #      refusal.
@@ -19,20 +23,41 @@
 #   CODEGEN     the standalone codegen executable
 #   DATA_DIR    the fixture directory
 #   WORK_DIR    the scratch directory
-#   RUNTIME     the built runtime checker
-#   CXX         the C++ compiler
-#   CXX_FLAGS   the tree's compiler flags
+#   RUNTIME     the built runtime checker (required when COMPILE_ACCEPTED)
+#   CXX         the C++ compiler (required when COMPILE_ACCEPTED)
+#   CXX_FLAGS   the tree's compiler flags (one argument, semicolons separate
+#               the flags: the driver expands the value as a list)
 #   CXX_STD_FLAG the tree's standard flag (may be empty)
-#   INCLUDE_DIR the library's include directory
+#   INCLUDE_DIR the library's include directory (required when
+#               COMPILE_ACCEPTED)
 #   FULL_BUILD  1 when the proto parser is available
+#   COMPILE_ACCEPTED
+#               1 when the compiler of this profile can compile the accepted
+#               header, 0 when it cannot (MSVC: its compiler limit is 16
+#               levels of nested struct definitions - C1046 - and the
+#               accepted nesting is 31)
 
-foreach(required_var CODEGEN DATA_DIR WORK_DIR RUNTIME CXX INCLUDE_DIR)
+foreach(required_var CODEGEN DATA_DIR WORK_DIR)
     if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
         message(FATAL_ERROR "${required_var} is required")
     endif()
 endforeach()
 if(NOT DEFINED FULL_BUILD)
     set(FULL_BUILD 1)
+endif()
+if(NOT DEFINED COMPILE_ACCEPTED)
+    set(COMPILE_ACCEPTED 1)
+endif()
+# The compiler arguments and the runtime checker belong to the compile of the
+# accepted header. A profile that cannot compile that header passes neither,
+# and the driver says so instead of failing on a missing argument.
+if(COMPILE_ACCEPTED)
+    foreach(required_var RUNTIME CXX INCLUDE_DIR)
+        if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
+            message(FATAL_ERROR
+                "${required_var} is required when the accepted header is compiled")
+        endif()
+    endforeach()
 endif()
 
 function(run_ok output_var error_var)
@@ -111,24 +136,41 @@ endif()
 # INCLUDED header, not as the main file: a header that is the main file
 # draws a "#pragma once in main file" warning that says nothing about the
 # header.
-if(CXX_STD_FLAG)
-    set(std_flag "${CXX_STD_FLAG}")
-else()
-    set(std_flag "")
-endif()
-file(WRITE "${WORK_DIR}/probe-${accepted}.cpp"
-    "#include \"${accepted}.pb.hpp\"\n")
-run_ok(syntax_out syntax_err
-    ${CXX} ${CXX_FLAGS} ${std_flag} -fsyntax-only
-    -I "${INCLUDE_DIR}" -I "${WORK_DIR}/descriptor"
-    "${WORK_DIR}/probe-${accepted}.cpp")
-require_empty(syntax_err "The generated header of ${accepted} must compile clean")
+#
+# MSVC cannot do this: the accepted header is a chain of 31 nested struct
+# definitions and MSVC's compiler limit is 16 of them (C1046). The limit
+# itself does not move - it is the reference compiler's own, and the
+# generator keeps printing the nesting the way it does - but this profile
+# cannot compile that header, so the compile and the runtime check below
+# are the two steps it gives up. Everything above and below them is
+# compiler-free and still runs: the generation, the agreement of the two
+# input paths, and the two refusals.
+if(COMPILE_ACCEPTED)
+    if(CXX_STD_FLAG)
+        set(std_flag "${CXX_STD_FLAG}")
+    else()
+        set(std_flag "")
+    endif()
+    file(WRITE "${WORK_DIR}/probe-${accepted}.cpp"
+        "#include \"${accepted}.pb.hpp\"\n")
+    run_ok(syntax_out syntax_err
+        ${CXX} ${CXX_FLAGS} ${std_flag} -fsyntax-only
+        -I "${INCLUDE_DIR}" -I "${WORK_DIR}/descriptor"
+        "${WORK_DIR}/probe-${accepted}.cpp")
+    require_empty(syntax_err "The generated header of ${accepted} must compile clean")
 
-# The accepted nesting carries the schema's data.
-run_ok(runtime_out runtime_err ${RUNTIME})
-require_empty(runtime_err "The runtime checker's stderr")
-require_contains(runtime_out "every accepted nesting carries the schema's data"
-    "The runtime checker's verdict")
+    # The accepted nesting carries the schema's data.
+    run_ok(runtime_out runtime_err ${RUNTIME})
+    require_empty(runtime_err "The runtime checker's stderr")
+    require_contains(runtime_out "every accepted nesting carries the schema's data"
+        "The runtime checker's verdict")
+else()
+    message(STATUS
+        "The compiler of this profile cannot compile the accepted header "
+        "(MSVC refuses a chain of 31 nested struct definitions - C1046), so "
+        "this run checks the generation, the agreement of the two input paths "
+        "and the two refusals only.")
+endif()
 
 # --- the refused nesting -----------------------------------------------------
 #

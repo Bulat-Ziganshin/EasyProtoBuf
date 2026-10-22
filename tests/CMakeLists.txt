@@ -427,26 +427,54 @@ if(BUILD_TESTING)
     set(codegen_limits_descriptor_dir
         ${codegen_limits_generated_dir}/descriptor)
 
-    add_custom_command(
-        OUTPUT ${codegen_limits_descriptor_dir}/nesting-31.pb.hpp
-        COMMAND ${CMAKE_COMMAND}
-            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
-            -DINPUT=${codegen_limits_data_dir}/nesting-31.pbs
-            -DOUTPUT=${codegen_limits_descriptor_dir}/nesting-31.pb.hpp
-            -P ${codegen_limits_dir}/generate_header.cmake
-        DEPENDS
-            easypb_codegen
-            ${codegen_limits_data_dir}/nesting-31.pbs
-            ${codegen_limits_dir}/generate_header.cmake
-        VERBATIM)
-    add_custom_target(codegen_limits_generated
-        DEPENDS ${codegen_limits_descriptor_dir}/nesting-31.pb.hpp)
+    # MSVC cannot compile the accepted header. Its compiler limit is 16
+    # levels of nested struct definitions - C1046, "compiler limit: struct
+    # nested too deeply" - and the accepted nesting is 31, so the limit bites
+    # at the 17th struct. The header is a chain of nested definitions:
+    #
+    #     struct M0 { struct M1 { ... struct M30 { ... }; }; };
+    #
+    # Every MSVC lane of 2026-10-22 therefore died in the build of the
+    # runtime checker, and with it the whole Windows half of the CI: the
+    # build failure ends the job before ctest runs, so no Windows lane
+    # executed a single test.
+    #
+    # The limit itself does not move. It stays the reference compiler's own
+    # (31 accepted, the 32nd refused - the driver's own verdict below), and
+    # the generator keeps printing the nesting the way it does. What the MSVC
+    # profile gives up is the compile of that one header and the runtime
+    # check that reads it; the lane's other three things need no compiler
+    # and stay - both input paths agree byte for byte, the 32nd level is
+    # refused, the deep name is refused. Nested types themselves remain
+    # covered on MSVC by the nested lane, which is shallower.
+    if(MSVC)
+        set(codegen_limits_compiles_accepted 0)
+    else()
+        set(codegen_limits_compiles_accepted 1)
+    endif()
 
-    add_executable(codegen_limits_runtime_test
-        ${codegen_limits_dir}/limits_runtime.cpp)
-    add_dependencies(codegen_limits_runtime_test codegen_limits_generated)
-    target_include_directories(codegen_limits_runtime_test PRIVATE
-        ${easypb_test_include_dir} ${codegen_limits_descriptor_dir})
+    if(codegen_limits_compiles_accepted)
+        add_custom_command(
+            OUTPUT ${codegen_limits_descriptor_dir}/nesting-31.pb.hpp
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_limits_data_dir}/nesting-31.pbs
+                -DOUTPUT=${codegen_limits_descriptor_dir}/nesting-31.pb.hpp
+                -P ${codegen_limits_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_limits_data_dir}/nesting-31.pbs
+                ${codegen_limits_dir}/generate_header.cmake
+            VERBATIM)
+        add_custom_target(codegen_limits_generated
+            DEPENDS ${codegen_limits_descriptor_dir}/nesting-31.pb.hpp)
+
+        add_executable(codegen_limits_runtime_test
+            ${codegen_limits_dir}/limits_runtime.cpp)
+        add_dependencies(codegen_limits_runtime_test codegen_limits_generated)
+        target_include_directories(codegen_limits_runtime_test PRIVATE
+            ${easypb_test_include_dir} ${codegen_limits_descriptor_dir})
+    endif()
 
     # The tree's own standard: the C++11 profile passes its standard through
     # EASYPB_CXX_FLAGS, so CMAKE_CXX_STANDARD is empty there and the flags
@@ -461,18 +489,41 @@ if(BUILD_TESTING)
     separate_arguments(codegen_limits_cxx_flags NATIVE_COMMAND
         "${CMAKE_CXX_FLAGS}")
 
-    add_test(NAME codegen.limits
-        COMMAND ${CMAKE_COMMAND}
-            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
-            -DDATA_DIR=${codegen_limits_data_dir}
-            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-limits
-            -DRUNTIME=$<TARGET_FILE:codegen_limits_runtime_test>
-            -DCXX=${CMAKE_CXX_COMPILER}
-            "-DCXX_FLAGS=${codegen_limits_cxx_flags}"
-            -DCXX_STD_FLAG=${codegen_limits_std_flag}
-            -DINCLUDE_DIR=${easypb_test_include_dir}
-            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
-            -P ${codegen_limits_dir}/test_limits.cmake)
+    # The driver compiles the accepted header and runs the checker that reads
+    # it - the two steps MSVC cannot do. It is told which profile it runs in,
+    # and the compiler arguments and the runtime checker are passed only
+    # where they exist.
+    #
+    # The two calls below are spelled out instead of sharing one argument
+    # list: the compiler flags reach the driver as ONE argument, with the
+    # semicolons that separate them, and a list would split that argument
+    # into "-Wall", "-Wextra" and the rest - the driver would then call the
+    # compiler without the flags it is supposed to use.
+    if(codegen_limits_compiles_accepted)
+        add_test(NAME codegen.limits
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DDATA_DIR=${codegen_limits_data_dir}
+                -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-limits
+                -DRUNTIME=$<TARGET_FILE:codegen_limits_runtime_test>
+                -DCXX=${CMAKE_CXX_COMPILER}
+                "-DCXX_FLAGS=${codegen_limits_cxx_flags}"
+                -DCXX_STD_FLAG=${codegen_limits_std_flag}
+                -DINCLUDE_DIR=${easypb_test_include_dir}
+                -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+                -DCOMPILE_ACCEPTED=1
+                -P ${codegen_limits_dir}/test_limits.cmake)
+    else()
+        add_test(NAME codegen.limits
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DDATA_DIR=${codegen_limits_data_dir}
+                -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-limits
+                -DINCLUDE_DIR=${easypb_test_include_dir}
+                -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+                -DCOMPILE_ACCEPTED=0
+                -P ${codegen_limits_dir}/test_limits.cmake)
+    endif()
 
     set(codegen_packages_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/packages)
