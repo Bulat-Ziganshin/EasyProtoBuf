@@ -1,11 +1,15 @@
 #include "schema_semantics.hpp"
 #include "schema_semantics_internal.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cerrno>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <iomanip>
 #include <limits>
+#include <locale>
 #include <sstream>
 #include <utility>
 
@@ -188,6 +192,142 @@ bool is_float_text(const std::string& text)
     errno = 0;
     (void)std::strtod(text.c_str(), &end);
     return end != text.c_str() && *end == '\0' && errno != ERANGE;
+}
+
+namespace {
+
+// protobuf's SimpleFtoa/SimpleDtoa keep at least two exponent digits but drop
+// redundant leading zeros (older MSVCRT versions emit e-008). The formatting
+// half is shared by both input paths after W-04.
+std::string normalize_float_exponent(std::string text)
+{
+    const std::size_t marker = text.find_first_of("eE");
+    if (marker == std::string::npos) return text;
+
+    std::size_t first_digit = marker + 1;
+    if (first_digit < text.size() &&
+        (text[first_digit] == '+' || text[first_digit] == '-')) {
+        ++first_digit;
+    }
+
+    while (first_digit + 2 < text.size() && text[first_digit] == '0') {
+        text.erase(first_digit, 1);
+    }
+    return text;
+}
+
+std::string format_float(double value, int precision)
+{
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << std::setprecision(precision) << value;
+    return normalize_float_exponent(output.str());
+}
+
+// W-04's second predicate: a full parse whose value is a finite subnormal.
+// The MSVC CRT reports ERANGE for the shortest decimal that round-trips, so
+// `is_float_text` is false for the canonical text too and the validator would
+// reject its own normalization without this distinction. The first-character
+// gate keeps a leading `+` (W-40) and a leading space (W-03) outside the
+// predicate, exactly as the adapter's normalizer does.
+bool is_subnormal_float_text(const std::string& text)
+{
+    if (text.empty()) return false;
+    const char first = text[0];
+    if (!(first == '-' || first == '.' ||
+          (first >= '0' && first <= '9'))) {
+        return false;
+    }
+    char* end = 0;
+    errno = 0;
+    const double parsed = std::strtod(text.c_str(), &end);
+    return end != text.c_str() && *end == '\0' &&
+           std::fpclassify(parsed) == FP_SUBNORMAL;
+}
+
+} // namespace
+
+bool canonical_float_default(const std::string& text, bool single_precision,
+                             std::string& result)
+{
+    if (text.empty()) return false;
+
+    std::size_t start = 0;
+    if (text[0] == '+' || text[0] == '-') start = 1;
+    const std::string body = text.substr(start);
+    if (body == "inf") {
+        result = (!text.empty() && text[0] == '-') ? "-inf" : "inf";
+        return true;
+    }
+    if (body == "nan") {
+        result = "nan";
+        return true;
+    }
+
+    char* end = 0;
+    errno = 0;
+    const double parsed = std::strtod(text.c_str(), &end);
+    if (end == text.c_str() || *end != '\0') return false;
+
+    // W-04: overflow is not a refusal. `strtod` returns +-infinity and sets
+    // ERANGE; protoc stores exactly `inf` / `-inf` and keeps going.
+    if (std::isinf(parsed)) {
+        result = std::signbit(parsed) ? "-inf" : "inf";
+        return true;
+    }
+    if (std::isnan(parsed)) {
+        result = "nan";
+        return true;
+    }
+
+    if (single_precision) {
+        const float value = static_cast<float>(parsed);
+        std::string formatted =
+            format_float(value, std::numeric_limits<float>::digits10);
+        char* parsed_end = 0;
+        const float round_trip =
+            static_cast<float>(std::strtod(formatted.c_str(), &parsed_end));
+        if (parsed_end == formatted.c_str() || *parsed_end != '\0' ||
+            round_trip != value) {
+            formatted =
+                format_float(value, std::numeric_limits<float>::digits10 + 3);
+        }
+        result.swap(formatted);
+        return true;
+    }
+
+    std::string formatted =
+        format_float(parsed, std::numeric_limits<double>::digits10);
+    char* parsed_end = 0;
+    const double round_trip = std::strtod(formatted.c_str(), &parsed_end);
+    if (parsed_end == formatted.c_str() || *parsed_end != '\0' ||
+        round_trip != parsed) {
+        formatted =
+            format_float(parsed, std::numeric_limits<double>::digits10 + 2);
+    }
+    result.swap(formatted);
+    return true;
+}
+
+std::string to_json_name(const std::string& name)
+{
+    bool capitalize_next = false;
+    std::string result;
+    result.reserve(name.size());
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        const char character = name[i];
+        if (character == '_') {
+            capitalize_next = true;
+        } else if (capitalize_next) {
+            result.push_back(character >= 'a' && character <= 'z'
+                                 ? static_cast<char>(character - 'a' + 'A')
+                                 : character);
+            capitalize_next = false;
+        } else {
+            result.push_back(character);
+        }
+    }
+    return result;
 }
 
 namespace {
@@ -1522,6 +1662,68 @@ bool validate_message_map_entries(const SchemaFile& file,
     return true;
 }
 
+// W-42's port of protoc's two helpers: `EnumValueToPascalCase`
+// (descriptor.cc:853-872) and `PrefixRemover` (:875-935). The folded key is
+// what makes `FOO`/`foo` and `E_FOO`/`FOO` collide even when the exact-name
+// rule and the number rule would not.
+std::string enum_value_to_pascal_case(const std::string& input)
+{
+    bool next_upper = true;
+    std::string result;
+    result.reserve(input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        const char character = input[i];
+        if (character == '_') {
+            next_upper = true;
+        } else {
+            if (next_upper && character >= 'a' && character <= 'z') {
+                result.push_back(static_cast<char>(character - 'a' + 'A'));
+            } else if (!next_upper && character >= 'A' &&
+                       character <= 'Z') {
+                result.push_back(static_cast<char>(character - 'A' + 'a'));
+            } else {
+                result.push_back(character);
+            }
+            next_upper = false;
+        }
+    }
+    return result;
+}
+
+struct EnumPrefixRemover
+{
+    explicit EnumPrefixRemover(const std::string& prefix)
+    {
+        for (std::size_t i = 0; i < prefix.size(); ++i) {
+            const char character = prefix[i];
+            if (character == '_') continue;
+            prefix_.push_back(character >= 'A' && character <= 'Z'
+                                  ? static_cast<char>(character - 'A' + 'a')
+                                  : character);
+        }
+    }
+
+    std::string maybe_remove(const std::string& input) const
+    {
+        std::size_t i = 0;
+        std::size_t j = 0;
+        for (; i < input.size() && j < prefix_.size(); ++i) {
+            if (input[i] == '_') continue;
+            const char lower = input[i] >= 'A' && input[i] <= 'Z'
+                                   ? static_cast<char>(input[i] - 'A' + 'a')
+                                   : input[i];
+            if (lower != prefix_[j++]) return input;
+        }
+        if (j < prefix_.size()) return input;
+        while (i < input.size() && input[i] == '_') ++i;
+        if (i == input.size()) return input;
+        return input.substr(i);
+    }
+
+private:
+    std::string prefix_;
+};
+
 // D-28 (fix round r13, contract clause 12): every enum's value numbers, over
 // every available file, before anything is resolved and in both linking modes -
 // A26's reference-free precedent, one sweep beside the entry-shape sweep,
@@ -1582,6 +1784,48 @@ bool validate_enum_value_numbers_in_enum(const SchemaFile& file,
                 " as its first value; the first proto3 enum value must be zero",
             declaration_location(file, value_path), value_path,
             DIAGNOSTIC_PROTO3_ENUM_FIRST_VALUE, error);
+    }
+    // W-42: protoc compares enum value names after stripping the enum-name
+    // prefix and PascalCasing the remainder (`CheckEnumValueUniqueness`,
+    // descriptor.cc:6957-7021). The check runs before the allow_alias early
+    // return because the option licenses same-number aliases, not two
+    // different names that fold together: `E_FOO = 0; FOO = 1;` is refused
+    // even with allow_alias. A pair that maps to the same number is skipped
+    // here and handled by the number rule below (or accepted as an alias);
+    // a pair with the identical name is skipped for the exact-name rule.
+    const std::string enum_prefix = view_text(enumeration.name);
+    const EnumPrefixRemover remover(enum_prefix);
+    std::map<std::string, std::size_t> folded_names;
+    for (std::size_t i = 0; i < enumeration.value.size(); ++i) {
+        const str_view& value_name = enumeration.value[i].name;
+        const std::string folded = enum_value_to_pascal_case(
+            remover.maybe_remove(view_text(value_name)));
+        const std::pair<std::map<std::string, std::size_t>::iterator, bool>
+            inserted = folded_names.insert(
+                std::map<std::string, std::size_t>::value_type(folded, i));
+        if (inserted.second) continue;
+        const EnumValueDescriptorProto& earlier =
+            enumeration.value[inserted.first->second];
+        if (earlier.name == value_name || earlier.number == enumeration.value[i].number) {
+            continue;
+        }
+        const bool allow_alias =
+            enumeration.options.has_allow_alias &&
+            enumeration.options.allow_alias;
+        std::string message =
+            "Enum name " + view_text(value_name) + " has the same name as " +
+            view_text(earlier.name) +
+            " if you ignore case and strip out the enum name prefix (if any).";
+        if (allow_alias) {
+            message +=
+                " (If you are using allow_alias, please assign the same "
+                "number to each enum value name.)";
+        }
+        const DescriptorPath value_path =
+            enum_value_path(enum_path, static_cast<int>(i));
+        return fail_at_code(
+            file, message, declaration_location(file, value_path),
+            value_path, DIAGNOSTIC_DUPLICATE_SYMBOL, error);
     }
     if (enumeration.options.has_allow_alias &&
         enumeration.options.allow_alias) {
@@ -1861,7 +2105,7 @@ bool valid_bytes_default_escape(const std::string& text)
             escaped == '"' || escaped == '?') {
             continue;
         }
-        if (escaped == 'x') {
+        if (escaped == 'x' || escaped == 'X') {
             std::uint32_t value = 0;
             std::size_t digits = 0;
             while (i + 1 < text.size() && is_hex_digit(text[i + 1])) {
@@ -1944,7 +2188,8 @@ bool decode_bytes_escape(const std::string& text, std::string& result)
             case '\'': decoded.push_back('\''); break;
             case '"': decoded.push_back('"'); break;
             case '?': decoded.push_back('?'); break;
-            case 'x': {
+            case 'x':
+            case 'X': {
                 std::uint32_t value = 0;
                 std::size_t digits = 0;
                 while (i + 1 < text.size() && is_hex_digit(text[i + 1])) {
@@ -2080,6 +2325,33 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
     if (field.type == FieldDescriptorProto::TYPE_STRING) {
         return true;
     }
+    // W-40 (option B): every leading `+` on a numeric default is refused on
+    // both paths. The source half is asked in the parser before the type
+    // switch; this descriptor half is the one rule for a hand-written `.pbs`.
+    // `protoc` itself accepts `+7` here because its integer path uses
+    // `strtol`, but a descriptor generated from source never carries the
+    // sign, so the stricter uniform answer is the owner's recorded decision.
+    // The check is before the numeric switch, so `+1e400`/`+1e-400` are
+    // refused before W-04's canonicalizer can see them (the adapter leaves
+    // every leading `+` alone for the same reason).
+    const bool numeric_default_type =
+        field.type == FieldDescriptorProto::TYPE_FLOAT ||
+        field.type == FieldDescriptorProto::TYPE_DOUBLE ||
+        field.type == FieldDescriptorProto::TYPE_INT32 ||
+        field.type == FieldDescriptorProto::TYPE_INT64 ||
+        field.type == FieldDescriptorProto::TYPE_UINT32 ||
+        field.type == FieldDescriptorProto::TYPE_UINT64 ||
+        field.type == FieldDescriptorProto::TYPE_SINT32 ||
+        field.type == FieldDescriptorProto::TYPE_SINT64 ||
+        field.type == FieldDescriptorProto::TYPE_FIXED32 ||
+        field.type == FieldDescriptorProto::TYPE_FIXED64 ||
+        field.type == FieldDescriptorProto::TYPE_SFIXED32 ||
+        field.type == FieldDescriptorProto::TYPE_SFIXED64;
+    if (numeric_default_type && !value.empty() && value[0] == '+') {
+        return fail_at(file, "numeric default value may not start with '+'",
+                       field_default_location(file, field_path), field_path,
+                       error);
+    }
     std::int32_t signed32 = 0;
     std::int64_t signed64 = 0;
     switch (field.type) {
@@ -2106,7 +2378,12 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
             return true;
         case FieldDescriptorProto::TYPE_FLOAT:
         case FieldDescriptorProto::TYPE_DOUBLE:
-            if (!is_float_text(value)) {
+            // W-04: the strict predicate still refuses an ERANGE text that
+            // bypassed the adapter (a hand-built SchemaFile in a unit test),
+            // but a canonical finite subnormal also reports ERANGE on this
+            // CRT. The second predicate is exactly that case and accepts it.
+            if (!is_float_text(value) &&
+                !is_subnormal_float_text(value)) {
                 return fail_at(file, "invalid floating-point default",
                                field_default_location(file, field_path),
                                field_path, error);
@@ -3058,6 +3335,139 @@ bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error)
     return true;
 }
 
+namespace {
+
+std::string json_conflict_message(const FieldDescriptorProto& later,
+                                  const std::string& later_json,
+                                  bool later_custom,
+                                  const FieldDescriptorProto& earlier,
+                                  const std::string& earlier_json,
+                                  bool earlier_custom)
+{
+    const char* later_kind = later_custom ? "custom" : "default";
+    const char* earlier_kind = earlier_custom ? "custom" : "default";
+    std::string message =
+        std::string("The ") + later_kind + " JSON name of field \"" +
+        view_text(later.name) + "\" (\"" + later_json +
+        "\") conflicts with the " + earlier_kind +
+        " JSON name of field \"" + view_text(earlier.name) + "\"";
+    if (later_json != earlier_json) {
+        message += " (\"" + earlier_json + "\")";
+    }
+    message += ".";
+    return message;
+}
+
+bool validate_message_json_names(SchemaFile& file,
+                                 const DescriptorProto& message,
+                                 const DescriptorPath& message_path,
+                                 Diagnostic& error)
+{
+    const bool is_proto3 =
+        classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3;
+    const std::size_t count = message.field.size();
+    std::vector<std::string> default_names;
+    default_names.reserve(count);
+
+    // Pass 1: every field's default JSON name. A collision is an error in
+    // proto3 and the reference compiler's LEGACY_BEST_EFFORT warning in
+    // proto2; generation continues in the latter case.
+    std::map<std::string, std::size_t> default_by_name;
+    for (std::size_t i = 0; i < count; ++i) {
+        const FieldDescriptorProto& field = message.field[i];
+        default_names.push_back(to_json_name(view_text(field.name)));
+        const std::pair<std::map<std::string, std::size_t>::iterator, bool>
+            inserted = default_by_name.insert(
+                std::map<std::string, std::size_t>::value_type(
+                    default_names.back(), i));
+        if (inserted.second) continue;
+
+        const FieldDescriptorProto& earlier =
+            message.field[inserted.first->second];
+        const DescriptorPath field_path =
+            message_field_path(message_path, static_cast<int>(i));
+        const std::string message_text = json_conflict_message(
+            field, default_names.back(), false, earlier,
+            default_names[inserted.first->second], false);
+        if (is_proto3) {
+            return fail_at_code(
+                file, message_text, declaration_location(file, field_path),
+                field_path, DIAGNOSTIC_DUPLICATE_SYMBOL, error);
+        }
+        warn_once(file, message_text, DIAGNOSTIC_DUPLICATE_SYMBOL,
+                  declaration_location(file, field_path), field_path);
+    }
+
+    // Pass 2: the effective names. A pair of two default names was already
+    // reported by pass 1 and is skipped; every pair involving a custom name
+    // follows the same proto2-warning/proto3-error split, except that two
+    // custom names are an error in both syntaxes.
+    std::map<std::string, std::size_t> effective_by_name;
+    for (std::size_t i = 0; i < count; ++i) {
+        const FieldDescriptorProto& field = message.field[i];
+        const std::string default_name = default_names[i];
+        const bool custom =
+            field.has_json_name &&
+            view_text(field.json_name) != default_name;
+        const std::string effective =
+            custom ? view_text(field.json_name) : default_name;
+        const std::pair<std::map<std::string, std::size_t>::iterator, bool>
+            inserted = effective_by_name.insert(
+                std::map<std::string, std::size_t>::value_type(effective, i));
+        if (inserted.second) continue;
+
+        const std::size_t earlier_index = inserted.first->second;
+        const FieldDescriptorProto& earlier = message.field[earlier_index];
+        const bool earlier_custom =
+            earlier.has_json_name &&
+            view_text(earlier.json_name) != default_names[earlier_index];
+        if (!custom && !earlier_custom) continue;
+
+        const DescriptorPath field_path =
+            message_field_path(message_path, static_cast<int>(i));
+        const std::string message_text = json_conflict_message(
+            field, effective, custom, earlier,
+            earlier_custom ? view_text(earlier.json_name)
+                           : default_names[earlier_index],
+            earlier_custom);
+        if (is_proto3 || (custom && earlier_custom)) {
+            return fail_at_code(
+                file, message_text, declaration_location(file, field_path),
+                field_path, DIAGNOSTIC_DUPLICATE_SYMBOL, error);
+        }
+        warn_once(file, message_text, DIAGNOSTIC_DUPLICATE_SYMBOL,
+                  declaration_location(file, field_path), field_path);
+    }
+
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_json_names(
+                file, message.nested_type[i],
+                message_nested_path(message_path, static_cast<int>(i)),
+                error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool validate_json_names(SchemaFile& file, Diagnostic& error)
+{
+    // W-43: the reference compiler runs two passes per message
+    // (`CheckFieldJsonNameUniqueness`, descriptor.cc:6489-6584): default
+    // names first, then the effective names with custom `json_name` values.
+    // This walk mirrors that shape over the available descriptor alone.
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!validate_message_json_names(
+                file, file.file.message_type[i],
+                file_message_path(static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool validate_extension_ranges(SchemaFile& file, Diagnostic& error)
 {
     // The same reference-free walk as validate_enum_value_numbers: top-level
@@ -3120,6 +3530,22 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
     const std::string prefix = package_prefix(file);
     const str_view& package = file.file.package;
     if (file.file.has_package && !package.empty()) {
+        // W-38: protoc's limit counts DOTS, not components
+        // (`kPackageLimit = 100`, descriptor.cc:96; `std::count(...) >
+        // kPackageLimit`, :6024-6030). The accepted boundary is therefore
+        // 101 components and the first refusal is 102, measured against
+        // libprotoc 30.1. The rule runs in this reference-free sweep so both
+        // link modes and both input paths answer it before indexing.
+        const std::size_t dots =
+            static_cast<std::size_t>(std::count(package.begin(),
+                                                package.end(), '.'));
+        if (dots > 100u) {
+            static const DescriptorPath package_path = {2};
+            return fail_at(file,
+                           "package depth exceeds the maximum of 101 components",
+                           declaration_location(file, package_path),
+                           package_path, error);
+        }
         // D-59 (fix round r25): a package component belongs to the package, so
         // its scope is the package's own name, and its location is the
         // package field's descriptor path ([2], the path

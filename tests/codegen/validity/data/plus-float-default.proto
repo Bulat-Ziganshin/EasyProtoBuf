@@ -1,0 +1,7 @@
+syntax = "proto2";
+
+// W-40: a leading plus is refused on a float default too.
+message PlusFloatDefault
+{
+    optional double value = 1 [default = +1.0];
+}

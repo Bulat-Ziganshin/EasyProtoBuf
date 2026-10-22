@@ -1,0 +1,11 @@
+# W-42: stripping the enum-name prefix makes E_FOO and FOO collide after case
+# folding.
+file {
+  name: "enum-name-collision-prefix.proto"
+  syntax: "proto2"
+  enum_type {
+    name: "E"
+    value { name: "E_FOO" number: 0 }
+    value { name: "FOO" number: 1 }
+  }
+}

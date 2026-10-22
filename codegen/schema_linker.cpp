@@ -266,6 +266,7 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
     if (!validate_symbol_names(file, error)) return false;
     if (!validate_map_entry_shapes(file, error)) return false;
     if (!validate_enum_value_numbers(file, error)) return false;
+    if (!validate_json_names(file, error)) return false;
     if (!validate_extension_ranges(file, error)) return false;
 
     // Everything is built into a local and assigned once, at the end (A1).
@@ -384,6 +385,7 @@ bool link_schema(SchemaSet& files, LinkMode mode,
         if (!validate_symbol_names(*ordered[i], error)) return false;
         if (!validate_map_entry_shapes(*ordered[i], error)) return false;
         if (!validate_enum_value_numbers(*ordered[i], error)) return false;
+        if (!validate_json_names(*ordered[i], error)) return false;
         if (!validate_extension_ranges(*ordered[i], error)) return false;
     }
 

@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+// W-43: a custom name colliding with another field's default name is a
+// warning in proto2 and generation continues.
+message JsonCustomVsDefaultProto2
+{
+    optional int32 foo_bar = 1;
+    optional int32 b = 2 [json_name = "fooBar"];
+}

@@ -1,0 +1,16 @@
+# W-43: the same custom-vs-default pair is an error in proto3.
+file {
+  name: "json-name-custom-vs-default-proto3.proto"
+  syntax: "proto3"
+  message_type {
+    name: "JsonCustomVsDefaultProto3"
+    field { name: "foo_bar" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+    field {
+      name: "b"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      json_name: "fooBar"
+    }
+  }
+}

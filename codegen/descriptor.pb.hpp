@@ -122,6 +122,7 @@ struct FieldDescriptorProto
     str_view default_value;
     FieldOptions options;
     int32_t oneof_index = 0;
+    str_view json_name;
 
     bool has_name = false;
     bool has_number = false;
@@ -131,6 +132,7 @@ struct FieldDescriptorProto
     bool has_default_value = false;
     bool has_options = false;
     bool has_oneof_index = false;
+    bool has_json_name = false;
 };
 
 
@@ -344,6 +346,7 @@ inline void decode(easypb::Decoder pb, FieldDescriptorProto &x)
             case 7: pb.get_string(&x.default_value, &x.has_default_value); break;
             case 8: pb.get_message(&x.options,      &x.has_options); break;
             case 9: pb.get_int32 (&x.oneof_index,   &x.has_oneof_index); break;
+            case 10: pb.get_string(&x.json_name,    &x.has_json_name); break;
             default: pb.skip_field();
         }
     }

@@ -736,6 +736,9 @@ std::string float_default_str(const FieldDescriptorProto& field)
     if (text == "nan") {
         return myformat(" = ::std::numeric_limits<{0}>::quiet_NaN()", limits);
     }
+    // W-04: the canonical text for negative zero is "-0", but the C++ token
+    // `-0` is an integer zero and would initialize a floating member as +0.0.
+    if (text == "-0") return " = -0.0";
     return myformat(" = {0}", stored);
 }
 

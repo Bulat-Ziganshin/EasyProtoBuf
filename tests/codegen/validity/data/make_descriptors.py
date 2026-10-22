@@ -14,7 +14,14 @@ Two shapes come from protoc:
 - the crafted fixtures (`*.txtpb`) are encoded with
   `--encode=google.protobuf.FileDescriptorSet`, because protoc cannot produce
   them from source text: an enum value named `1A`, a field whose type is 99, a
-  field with no type at all, a proto2 group, and a file name with a newline.
+  field with no type at all, a proto2 group, a file name with a newline, a raw
+  out-of-range or leading-plus default, and the W-42/W-43 collision shapes.
+
+A crafted `.pbs` wins over the `.proto` of the same stem: the raw spelling is
+the point of `defaults-float-overflow`, `defaults-bytes-upper-hex`,
+`plus-int-descriptor` and their siblings, so the second loop must not replace
+it with protoc's canonical form. The source-only fixtures in
+`SOURCE_ONLY_FIXTURES` are skipped entirely.
 
 ONE crafted shape needs one byte that protoc's text format will not carry:
 `field-type-unknown` declares `type: 99`, and the text format answers
@@ -53,6 +60,20 @@ DESCRIPTOR_DIRS = [
     os.path.join(REPO, "build", "protobuf-30.1-src", "protobuf-30.1", "src"),
     os.path.join(REPO, "tests", "codegen", "parser", "differential", "corpus"),
 ]
+
+# The source-only fixtures: protoc refuses most of them, and a generated `.pbs`
+# would either fail the script or add an unintended descriptor twin. The
+# validity lane drives these from the `.proto` directly (W-15, W-40, W-41).
+SOURCE_ONLY_FIXTURES = {
+    "bom",
+    "bom-control",
+    "empty-syntax",
+    "json-name-map-collision",
+    "plus-enum-value",
+    "plus-float-default",
+    "plus-inf-nan",
+    "plus-int-default",
+}
 
 # The one fixture whose text protoc will not parse, and the two legal type
 # values it is encoded with instead (both are one-byte varints, so the two
@@ -171,7 +192,14 @@ def main():
     for name in sorted(os.listdir(HERE)):
         if not name.endswith(".proto"):
             continue
-        target = os.path.join(HERE, name[:-len(".proto")] + ".pbs")
+        stem = name[:-len(".proto")]
+        if stem in SOURCE_ONLY_FIXTURES:
+            print("skipped %s.proto (source-only)" % stem)
+            continue
+        target = os.path.join(HERE, stem + ".pbs")
+        if os.path.exists(os.path.join(HERE, stem + ".txtpb")):
+            print("kept crafted %s" % os.path.basename(target))
+            continue
         run([protoc, "--proto_path=" + HERE, "--descriptor_set_out=" + target,
              os.path.basename(name)])
         print("wrote %s (%d bytes)" % (os.path.basename(target),

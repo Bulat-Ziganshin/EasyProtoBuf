@@ -18,6 +18,8 @@
 #include <string>
 
 #include "defaults-backslash.pb.hpp"
+#include "defaults-bytes-upper-hex.pb.hpp"
+#include "defaults-float-overflow.pb.hpp"
 #include "defaults-inf.pb.hpp"
 #include "defaults-nan.pb.hpp"
 #include "defaults-newline.pb.hpp"
@@ -25,6 +27,18 @@
 #include "defaults-quote-byte.pb.hpp"
 #include "defaults-quote.pb.hpp"
 #include "defaults-trigraph.pb.hpp"
+#include "empty-syntax-descriptor.pb.hpp"
+#include "enum-alias-same-number.pb.hpp"
+#include "json-name-custom-vs-default-proto2.pb.hpp"
+#include "json-name-proto2-warning.pb.hpp"
+#include "json-names-distinct.pb.hpp"
+#include "packages-deep-101.pb.hpp"
+#include "plus-controls.pb.hpp"
+#include "plus-descriptor-controls.pb.hpp"
+
+// W-38's accepted boundary: the 101-component package compiles and its
+// message can be named.
+namespace deep_package = c001::c002::c003::c004::c005::c006::c007::c008::c009::c010::c011::c012::c013::c014::c015::c016::c017::c018::c019::c020::c021::c022::c023::c024::c025::c026::c027::c028::c029::c030::c031::c032::c033::c034::c035::c036::c037::c038::c039::c040::c041::c042::c043::c044::c045::c046::c047::c048::c049::c050::c051::c052::c053::c054::c055::c056::c057::c058::c059::c060::c061::c062::c063::c064::c065::c066::c067::c068::c069::c070::c071::c072::c073::c074::c075::c076::c077::c078::c079::c080::c081::c082::c083::c084::c085::c086::c087::c088::c089::c090::c091::c092::c093::c094::c095::c096::c097::c098::c099::c100::c101;
 
 namespace {
 
@@ -94,6 +108,60 @@ int main()
         const char less[] = { 'a', '?', '?', '<', 'b' };
         report("trigraph <", is_bytes(value.less, less, sizeof less));
     }
+    // W-04: the canonicalized ERANGE family. The header text is the value
+    // protoc stores, and the runtime distinguishes the two silent cases:
+    // underflow to negative zero and a finite subnormal.
+    {
+        FloatOverflowDefaults value;
+        report("overflow", std::isinf(value.overflow) && value.overflow > 0);
+        report("underflow", value.underflow == 0 &&
+                               !std::signbit(value.underflow));
+        report("neg underflow", value.negative_underflow == 0 &&
+                                   std::signbit(value.negative_underflow));
+        report("subnormal", std::fpclassify(value.subnormal) == FP_SUBNORMAL);
+    }
+    // W-39: the uppercase escape decodes to the letter A.
+    {
+        UpperHexBytes value;
+        const char expected[] = { 'A' };
+        report("upper hex", is_bytes(value.data, expected, sizeof expected));
+    }
+    // W-40: the accepted controls beside the refused plus spellings.
+    {
+        PlusControls value;
+        report("plus int", value.i == 7);
+        report("plus float", value.d == 1.0);
+        report("plus inf", std::isinf(value.positive_infinity) &&
+                               value.positive_infinity > 0);
+        report("plus nan", std::isnan(value.quiet_nan));
+    }
+    {
+        PlusDescriptorControls value;
+        report("desc int", value.i == -7);
+        report("desc float", value.d == -1.0);
+    }
+    // W-43: the warning fixtures and the carried names compile and keep the
+    // descriptor text. Their values are not part of the runtime verdict.
+    {
+        JsonNamesDistinct value;
+        (void)value;
+        JsonCustomVsDefaultProto2 warning_value;
+        (void)warning_value;
+        JsonProto2Warning second_warning;
+        (void)second_warning;
+        EmptySyntaxDescriptor empty_syntax;
+        (void)empty_syntax;
+    }
+    {
+        AliasSame alias = ALIAS_SAME_FOO;
+        report("alias same", alias == ALIAS_SAME_FOO);
+    }
+    {
+        deep_package::DeepPackage101 deep;
+        deep.value = 1;
+        report("deep package", deep.value == 1);
+    }
+
     // The special floating-point defaults.
     {
         InfDefaults value;

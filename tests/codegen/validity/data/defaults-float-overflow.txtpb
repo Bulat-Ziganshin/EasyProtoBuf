@@ -1,0 +1,38 @@
+# W-04: the raw ERANGE spellings a hand-written descriptor may carry. The
+# adapter canonicalizes them before the validator sees them, exactly as the
+# source parser stores the same values.
+file {
+  name: "defaults-float-overflow.proto"
+  syntax: "proto2"
+  message_type {
+    name: "FloatOverflowDefaults"
+    field {
+      name: "overflow"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "1e400"
+    }
+    field {
+      name: "underflow"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "1e-400"
+    }
+    field {
+      name: "negative_underflow"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "-1e-400"
+    }
+    field {
+      name: "subnormal"
+      number: 4
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "1e-320"
+    }
+  }
+}

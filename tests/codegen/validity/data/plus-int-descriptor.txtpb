@@ -1,0 +1,16 @@
+# W-40: protoc's descriptor integer path accepts +7 because it uses strtol;
+# codegen refuses every leading + uniformly (owner decision B).
+file {
+  name: "plus-int-descriptor.proto"
+  syntax: "proto2"
+  message_type {
+    name: "PlusIntDescriptor"
+    field {
+      name: "i"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      default_value: "+7"
+    }
+  }
+}

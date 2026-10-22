@@ -1,0 +1,16 @@
+# W-43: a custom name colliding with a default name is a proto2 warning.
+file {
+  name: "json-name-custom-vs-default-proto2.proto"
+  syntax: "proto2"
+  message_type {
+    name: "JsonCustomVsDefaultProto2"
+    field { name: "foo_bar" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+    field {
+      name: "b"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      json_name: "fooBar"
+    }
+  }
+}

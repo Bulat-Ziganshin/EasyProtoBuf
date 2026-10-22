@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <ostream>
 
+#include "schema_semantics.hpp"
+
 namespace easypb_proto {
 
 namespace {
@@ -10,6 +12,36 @@ namespace {
 std::string view_text(const str_view& value)
 {
     return std::string(value.data(), value.size());
+}
+
+// C-escape a custom JSON name for the diagnostic printer. The value is
+// arbitrary text the schema may carry, so quotes, backslashes and control
+// bytes must not change the printed shape.
+std::string escape_json_name(const std::string& value)
+{
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(value[i]);
+        switch (c) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (c >= 32u && c <= 126u) {
+                    escaped.push_back(static_cast<char>(c));
+                } else {
+                    escaped.push_back('\\');
+                    escaped.push_back(static_cast<char>('0' + ((c >> 6) & 7u)));
+                    escaped.push_back(static_cast<char>('0' + ((c >> 3) & 7u)));
+                    escaped.push_back(static_cast<char>('0' + (c & 7u)));
+                }
+                break;
+        }
+    }
+    return escaped;
 }
 
 void indent(std::ostream& output, unsigned level)
@@ -61,6 +93,14 @@ void print_message(const DescriptorProto& descriptor, std::ostream& output, unsi
         output << ' ' << view_text(field.name) << " = " << field.number;
         if (field.has_default_value) {
             output << " [default=" << view_text(field.default_value) << ']';
+        }
+        if (field.has_json_name) {
+            const std::string name = view_text(field.name);
+            const std::string json_name = view_text(field.json_name);
+            if (json_name != easypb_schema::to_json_name(name)) {
+                output << " [json_name=\"" << escape_json_name(json_name)
+                       << "\"]";
+            }
         }
         if (field.has_options && field.options.has_packed) {
             output << " [packed=" << (field.options.packed ? "true" : "false") << ']';

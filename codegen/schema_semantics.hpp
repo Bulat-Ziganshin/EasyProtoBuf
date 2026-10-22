@@ -20,6 +20,24 @@ bool parse_unsigned_integer(const std::string& text, std::uint64_t& result);
 bool parse_signed_32(const std::string& text, std::int32_t& result);
 bool is_float_text(const std::string& text);
 
+// Canonicalize a floating-point default the way protobuf's SimpleFtoa /
+// SimpleDtoa do. `single_precision` narrows the parsed value to float before
+// formatting; a double keeps its own precision. The function accepts the same
+// spellings the source grammar and the descriptor field carry, including
+// `inf`, `-inf` and `nan`. An out-of-range parse is not a refusal: overflow
+// becomes `inf`/`-inf`, underflow to zero becomes `0`/`-0`, and a finite
+// subnormal becomes the shortest decimal that round-trips, exactly as the
+// reference compiler stores the value (W-04). A text with no digits, trailing
+// text, or a malformed spelling returns false and leaves `result` untouched.
+bool canonical_float_default(const std::string& text, bool single_precision,
+                             std::string& result);
+
+// The default JSON spelling of a protobuf field name: every `_` is dropped and
+// the following ASCII letter is uppercased (`descriptor.cc:123-140`). The same
+// helper feeds the source frontend's `json_name` option, the pretty printer,
+// and the uniqueness validator so they cannot disagree.
+std::string to_json_name(const std::string& name);
+
 // Decode the C-escaped text a bytes default carries into the bytes it
 // denotes. The grammar is the one `valid_bytes_default_escape` accepts and
 // the one the reference compiler applies with `absl::CUnescape` while it
@@ -158,6 +176,18 @@ bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
 // reference for the answer. Returns false and fills error at the first empty
 // enum or the first repeated number, in declaration order.
 bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error);
+
+// Validates the JSON-name uniqueness protoc enforces per message (W-43).
+// Two default names that fold to one JSON spelling are an error in proto3 and
+// a warning in proto2, matching the reference compiler's LEGACY_BEST_EFFORT
+// behaviour. Two custom `json_name` values that collide are an error in both
+// syntaxes; a custom name that collides with a default one follows the same
+// proto2-warning/proto3-error split. A pair of two non-custom names is
+// reported by the first pass only. Runs in both linking modes on the
+// descriptor alone, before resolution and indexing, like the enum-number
+// sweep beside it; a proto2 warning is stored on the file and printed after a
+// successful link.
+bool validate_json_names(SchemaFile& file, Diagnostic& error);
 
 // Validates every extension range the file's messages declare, top-level and
 // nested, over the available descriptor alone (plan 5 follow-up S5, W-45).

@@ -85,7 +85,7 @@ void test_proto2_defaults_and_literals()
         " optional string s = 1 [default = 'a\\n' \"b\\u263a\"];\n"
         " optional bytes b = 2 [default = \"\\x00\\377A\"];\n"
         " optional int32 i = 3 [default = -0x2a];\n"
-        " optional double d = 4 [default = +1e3];\n"
+        " optional double d = 4 [default = 1e3];\n"
         " repeated sint64 xs = 5 [packed = true];\n"
         "}\n";
 
@@ -1187,6 +1187,162 @@ void test_parsed_metadata_survives_source_destruction()
     CHECK(counts && counts->type == FieldDescriptorProto::TYPE_MESSAGE);
 }
 
+// W-15: an explicit empty syntax value is not the absent descriptor syntax.
+void test_empty_syntax_statement_is_refused()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto("empty-syntax.proto",
+        "syntax = \"\"; message M { optional int32 x = 1; }", parsed, error));
+    CHECK(error.message.find("syntax must be") != std::string::npos);
+    CHECK(error.location.line == 1);
+    CHECK(error.location.column == 10);
+
+    CHECK(easypb_proto::parse_proto("proto2.proto",
+        "syntax = \"proto2\"; message M { optional int32 x = 1; }", parsed, error));
+    CHECK(easypb_proto::parse_proto("proto3.proto",
+        "syntax = \"proto3\"; message M { int32 x = 1; }", parsed, error));
+    CHECK(easypb_proto::parse_proto("absent.proto",
+        "message M { optional int32 x = 1; }", parsed, error));
+}
+
+// W-41: the lexer consumes a leading BOM and leaves the same syntax and
+// declarations as the no-BOM twin.
+void test_bom_is_consumed_by_the_lexer()
+{
+    const std::string source =
+        "syntax = \"proto3\";\n"
+        "message M { int32 x = 1; }\n";
+    easypb_proto::ParsedProto plain;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("plain.proto", source, plain, error));
+
+    easypb_proto::ParsedProto bom;
+    const std::string with_bom = "\xEF\xBB\xBF" + source;
+    CHECK(easypb_proto::parse_proto("bom.proto", with_bom, bom, error));
+    CHECK(bom.file.has_syntax);
+    CHECK(text(bom.file.syntax) == "proto3");
+    CHECK(bom.file.message_type.size() == plain.file.message_type.size());
+}
+
+// W-04: the parser stores the canonical text protoc writes, including the
+// ERANGE family; a normal value is unchanged.
+void test_float_defaults_are_canonicalized()
+{
+    const std::string source =
+        "syntax = \"proto2\";\n"
+        "message M {\n"
+        "  optional double overflow = 1 [default = 1e400];\n"
+        "  optional double underflow = 2 [default = 1e-400];\n"
+        "  optional double negative_underflow = 3 [default = -1e-400];\n"
+        "  optional double subnormal = 4 [default = 1e-320];\n"
+        "  optional double normal = 5 [default = 1.5];\n"
+        "}\n";
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("floats.proto", source, parsed, error));
+    const DescriptorProto& m = parsed.file.message_type[0];
+    CHECK(text(find_field(m, "overflow")->default_value) == "inf");
+    CHECK(text(find_field(m, "underflow")->default_value) == "0");
+    CHECK(text(find_field(m, "negative_underflow")->default_value) == "-0");
+    CHECK(text(find_field(m, "subnormal")->default_value) ==
+          "9.99988867182683e-321");
+    CHECK(text(find_field(m, "normal")->default_value) == "1.5");
+}
+
+// W-39: the source tokenizer and the bytes escaping agree on the uppercase
+// hex escape. The source width stays at two digits.
+void test_bytes_upper_hex_escape_is_decoded()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    const std::string source =
+        "syntax = \"proto2\";\n"
+        "message M {\n"
+        "  optional bytes upper = 1 [default = \"\\X41\"];\n"
+        "  optional bytes lower = 2 [default = \"\\x41\"];\n"
+        "  optional bytes narrow = 3 [default = \"\\x041\"];\n"
+        "}\n";
+    CHECK(easypb_proto::parse_proto("bytes.proto", source, parsed, error));
+    const DescriptorProto& m = parsed.file.message_type[0];
+    CHECK(text(find_field(m, "upper")->default_value) == "A");
+    CHECK(text(find_field(m, "lower")->default_value) == "A");
+    CHECK(text(find_field(m, "narrow")->default_value) == "\\0041");
+}
+
+// W-40 (option B): every leading plus on a numeric default or enum value is
+// refused; the controls stay accepted.
+void test_leading_plus_is_refused()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto("plus-int.proto",
+        "syntax = \"proto2\"; message M { optional int32 x = 1 [default = +7]; }",
+        parsed, error));
+    CHECK(error.message.find("Expected integer") != std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("plus-enum.proto",
+        "syntax = \"proto2\"; enum E { A = +0; }", parsed, error));
+    CHECK(error.message.find("Expected integer") != std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("plus-float.proto",
+        "syntax = \"proto2\"; message M { optional double x = 1 [default = +1.0]; }",
+        parsed, error));
+    CHECK(error.message.find("Expected number") != std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("plus-inf.proto",
+        "syntax = \"proto2\"; message M { optional double x = 1 [default = +inf]; }",
+        parsed, error));
+    CHECK(error.message.find("Expected number") != std::string::npos);
+
+    CHECK(easypb_proto::parse_proto("controls.proto",
+        "syntax = \"proto2\"; enum E { A = 0; } "
+        "message M { optional int32 x = 1 [default = 7]; "
+        "optional double d = 2 [default = 1.0]; "
+        "optional double i = 3 [default = inf]; "
+        "optional double n = 4 [default = nan]; "
+        "optional E e = 5 [default = A]; }",
+        parsed, error));
+}
+
+// W-43: the source option is retained and its shape is checked by the parser.
+void test_json_name_option_is_retained()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    const std::string source =
+        "syntax = \"proto2\";\n"
+        "message M { optional int32 a = 1 [json_name = \"alpha\"]; }\n";
+    CHECK(easypb_proto::parse_proto("json.proto", source, parsed, error));
+    const FieldDescriptorProto* field =
+        find_field(parsed.file.message_type[0], "a");
+    CHECK(field != 0 && field->has_json_name);
+    CHECK(field && text(field->json_name) == "alpha");
+
+    CHECK(!easypb_proto::parse_proto("json-dup.proto",
+        "syntax = \"proto2\"; message M { optional int32 a = 1 "
+        "[json_name = \"a\", json_name = \"b\"]; }",
+        parsed, error));
+    CHECK(error.message.find("duplicate json_name") != std::string::npos);
+
+    CHECK(!easypb_proto::parse_proto("json-token.proto",
+        "syntax = \"proto2\"; message M { optional int32 a = 1 [json_name = 1]; }",
+        parsed, error));
+    CHECK(error.message.find("json_name must be a string literal") !=
+          std::string::npos);
+
+    // A map field expands to a repeated synthetic-entry field; the custom
+    // name belongs to the source field that the user wrote.
+    CHECK(easypb_proto::parse_proto("map-json.proto",
+        "syntax = \"proto3\"; message M { "
+        "map<string, int32> m = 1 [json_name = \"alpha\"]; }",
+        parsed, error));
+    const FieldDescriptorProto* map =
+        find_field(parsed.file.message_type[0], "m");
+    CHECK(map != 0 && map->has_json_name);
+    CHECK(map && text(map->json_name) == "alpha");
+}
+
 void test_decode_oneof_index()
 {
     const char encoded[] = { '\x0a', '\x01', 'x', '\x48', '\x00' };
@@ -1202,6 +1358,12 @@ int main()
 {
     test_complex_proto3();
     test_proto2_defaults_and_literals();
+    test_empty_syntax_statement_is_refused();
+    test_bom_is_consumed_by_the_lexer();
+    test_float_defaults_are_canonicalized();
+    test_bytes_upper_hex_escape_is_decoded();
+    test_leading_plus_is_refused();
+    test_json_name_option_is_retained();
     test_rejects_proto3_required();
     test_rejects_invalid_field_numbers();
     test_map_keyword_can_be_a_type_name();

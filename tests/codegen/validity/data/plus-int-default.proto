@@ -1,0 +1,7 @@
+syntax = "proto2";
+
+// W-40: a leading plus is not a numeric sign in this grammar.
+message PlusIntDefault
+{
+    optional int32 value = 1 [default = +7];
+}

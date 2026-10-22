@@ -277,7 +277,17 @@ if(BUILD_TESTING)
         defaults-quote-byte
         defaults-trigraph
         defaults-inf
-        defaults-nan)
+        defaults-nan
+        defaults-float-overflow
+        defaults-bytes-upper-hex
+        packages-deep-101
+        enum-alias-same-number
+        json-names-distinct
+        json-name-custom-vs-default-proto2
+        json-name-proto2-warning
+        empty-syntax-descriptor
+        plus-controls
+        plus-descriptor-controls)
 
     foreach(name ${codegen_validity_fixtures})
         add_custom_command(
@@ -302,7 +312,17 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/defaults-quote-byte.pb.hpp
             ${codegen_validity_descriptor_dir}/defaults-trigraph.pb.hpp
             ${codegen_validity_descriptor_dir}/defaults-inf.pb.hpp
-            ${codegen_validity_descriptor_dir}/defaults-nan.pb.hpp)
+            ${codegen_validity_descriptor_dir}/defaults-nan.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-float-overflow.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-bytes-upper-hex.pb.hpp
+            ${codegen_validity_descriptor_dir}/packages-deep-101.pb.hpp
+            ${codegen_validity_descriptor_dir}/enum-alias-same-number.pb.hpp
+            ${codegen_validity_descriptor_dir}/json-names-distinct.pb.hpp
+            ${codegen_validity_descriptor_dir}/json-name-custom-vs-default-proto2.pb.hpp
+            ${codegen_validity_descriptor_dir}/json-name-proto2-warning.pb.hpp
+            ${codegen_validity_descriptor_dir}/empty-syntax-descriptor.pb.hpp
+            ${codegen_validity_descriptor_dir}/plus-controls.pb.hpp
+            ${codegen_validity_descriptor_dir}/plus-descriptor-controls.pb.hpp)
 
     add_executable(codegen_validity_runtime_test
         ${codegen_validity_dir}/validity_runtime.cpp)

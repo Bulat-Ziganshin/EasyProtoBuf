@@ -397,6 +397,43 @@ void test_adapter_owns_a_decoded_buffer_and_generates_after_destruction(
     }
 }
 
+// W-43/D2: the newly modeled `json_name` is interned like every other
+// retained string. Read it after the decoded buffer was poisoned.
+void test_adapter_owns_json_name(const std::string& fixture_dir)
+{
+    const std::string path =
+        fixture_dir + "/codegen/validity/data/json-names-distinct.pbs";
+    std::string bytes;
+    CHECK(read_binary_file(path, bytes));
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    {
+        const FileDescriptorSet decoded =
+            easypb::decode<FileDescriptorSet>(bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() != 1) return;
+        CHECK(easypb_schema::append_descriptor_files(decoded.file, path, set,
+                                                     error));
+    }
+    if (!bytes.empty()) {
+        std::memset(&bytes[0], '\xA5', bytes.size());
+    }
+    bytes.clear();
+    bytes.shrink_to_fit();
+
+    CHECK(set.files().size() == 1);
+    if (set.files().size() != 1) return;
+    const easypb_schema::SchemaFile& file = *set.files()[0];
+    const FieldDescriptorProto* a =
+        find_field(file, "JsonNamesDistinct", "a");
+    const FieldDescriptorProto* b =
+        find_field(file, "JsonNamesDistinct", "b");
+    CHECK(a != 0 && a->has_json_name);
+    CHECK(b != 0 && b->has_json_name);
+    CHECK(a != 0 && text(a->json_name) == "alpha");
+    CHECK(b != 0 && text(b->json_name) == "beta");
+}
+
 // --- the standalone container wrapper --------------------------------------
 
 // D5/D6: a multi-file container is addressed by container path, and each file
@@ -700,6 +737,7 @@ int main(int argc, char** argv)
     test_adapter_rejects_duplicate_names_within_and_across_calls();
     test_adapter_owns_a_decoded_buffer_and_generates_after_destruction(
         fixture_dir);
+    test_adapter_owns_json_name(fixture_dir);
     test_loader_loads_a_complete_container(fixture_dir);
     test_loader_rejects_an_empty_container(fixture_dir);
     test_loader_rejects_an_unnamed_file_in_a_multi_file_container();

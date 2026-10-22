@@ -1,0 +1,22 @@
+# W-40: the negative controls stay accepted on the descriptor path.
+file {
+  name: "plus-descriptor-controls.proto"
+  syntax: "proto2"
+  message_type {
+    name: "PlusDescriptorControls"
+    field {
+      name: "i"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      default_value: "-7"
+    }
+    field {
+      name: "d"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "-1.0"
+    }
+  }
+}

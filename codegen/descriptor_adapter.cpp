@@ -36,7 +36,37 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         field.name = intern_text(strings, field.name);
         field.type_name = intern_text(strings, field.type_name);
         field.default_value = intern_text(strings, field.default_value);
+        field.json_name = intern_text(strings, field.json_name);
         field.options.cpp.type = intern_text(strings, field.options.cpp.type);
+
+        // W-04: the reference compiler's descriptor builder rewrites the
+        // out-of-range spellings `strtod` reports, so a hand-written `.pbs`
+        // carrying `1e400`, `1e-400` or a finite subnormal is re-serialized
+        // as the canonical text `inf`, `0`, `-0` or the subnormal decimal.
+        // Copy that one range, and only when the raw text starts with a
+        // digit, `-` or `.`: a leading `+` belongs to W-40's refusal and a
+        // leading space belongs to W-03's accepted spelling, so neither may
+        // be normalized behind those rules. A normal float text is left
+        // exactly as the descriptor carries it; protoc writes canonical text
+        // and rewriting it would move `--print-descriptor` bytes for no row.
+        if (field.has_default_value && field.has_type &&
+            (field.type == FieldDescriptorProto::TYPE_FLOAT ||
+             field.type == FieldDescriptorProto::TYPE_DOUBLE)) {
+            const std::string raw(field.default_value.data(),
+                                  field.default_value.size());
+            const bool normalizable =
+                !raw.empty() &&
+                (raw[0] == '-' || raw[0] == '.' ||
+                 (raw[0] >= '0' && raw[0] <= '9'));
+            if (normalizable && !is_float_text(raw)) {
+                std::string normalized;
+                if (canonical_float_default(
+                        raw, field.type == FieldDescriptorProto::TYPE_FLOAT,
+                        normalized)) {
+                    field.default_value = strings.save(normalized);
+                }
+            }
+        }
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
         intern_message(strings, message.nested_type[i]);
@@ -181,6 +211,7 @@ bool same_descriptor(const FieldDescriptorProto& left,
            left.type_name == right.type_name &&
            left.default_value == right.default_value &&
            left.oneof_index == right.oneof_index &&
+           left.json_name == right.json_name &&
            same_descriptor(left.options, right.options) &&
            left.has_name == right.has_name &&
            left.has_number == right.has_number &&
@@ -189,7 +220,8 @@ bool same_descriptor(const FieldDescriptorProto& left,
            left.has_type_name == right.has_type_name &&
            left.has_default_value == right.has_default_value &&
            left.has_options == right.has_options &&
-           left.has_oneof_index == right.has_oneof_index;
+           left.has_oneof_index == right.has_oneof_index &&
+           left.has_json_name == right.has_json_name;
 }
 
 bool same_descriptor(const MessageOptions& left, const MessageOptions& right)

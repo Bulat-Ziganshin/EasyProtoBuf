@@ -147,7 +147,7 @@ set(refusal_fixtures
     "nested-flag|collides with the presence flag"
     "escape-field|would both be named"
     "escape-message|would both be named"
-    "escape-enum-value|would both be named"
+    "escape-enum-value|same name as"
     "escape-enum-message|would both be named")
 
 foreach(entry ${refusal_fixtures})

@@ -1,0 +1,16 @@
+syntax = "proto2";
+
+// W-40: the accepted controls beside the refused plus spellings.
+enum PlusControlEnum
+{
+    PLUS_CONTROL_A = 0;
+}
+
+message PlusControls
+{
+    optional int32 i = 1 [default = 7];
+    optional double d = 2 [default = 1.0];
+    optional double positive_infinity = 3 [default = inf];
+    optional double quiet_nan = 4 [default = nan];
+    optional PlusControlEnum e = 5 [default = PLUS_CONTROL_A];
+}

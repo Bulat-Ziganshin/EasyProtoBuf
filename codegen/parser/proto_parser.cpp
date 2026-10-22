@@ -184,7 +184,24 @@ class Lexer
 {
 public:
     Lexer(const char* source, std::size_t source_size)
-        : source_(source), source_size_(source_size), offset_(0), line_(1), column_(1) {}
+        : source_(source), source_size_(source_size), offset_(0), line_(1), column_(1)
+    {
+        // W-41: protoc consumes a UTF-8 BOM only at the start of the file
+        // (`io/tokenizer.cc:845-856`). The lexer is the one door every source
+        // text passes, including an in-memory `parse_proto`, so the bytes are
+        // consumed here rather than in the shared disk reader (a `.pbs` is
+        // binary and must keep its first three bytes as data). `advance()`
+        // three times keeps the column arithmetic aligned with protoc: a
+        // following `1:10` error is reported as `1:13`.
+        if (source_size_ >= 3 &&
+            static_cast<unsigned char>(source_[0]) == 0xEFu &&
+            static_cast<unsigned char>(source_[1]) == 0xBBu &&
+            static_cast<unsigned char>(source_[2]) == 0xBFu) {
+            advance();
+            advance();
+            advance();
+        }
+    }
 
     // Lexical dispatcher: whitespace* (Identifier / IntegerToken /
     // FloatToken / StringAtom / punctuation / end-of-input).
@@ -389,7 +406,8 @@ private:
                 case '\'': token.text.push_back('\''); break;
                 case '"': token.text.push_back('"'); break;
                 case '?': token.text.push_back('?'); break;
-                case 'x': {
+                case 'x':
+                case 'X': {
                     if (!ascii_hex(peek())) {
                         throw ParseFailure(escape_location, "\\x escape has no hexadecimal digits");
                     }
@@ -439,77 +457,12 @@ private:
     }
 };
 
-// The shared helpers parse_unsigned_integer, parse_signed_32, is_float_text
-// and the scalar-type classifiers (builtin_type, packable_type,
-// valid_map_key_type) live in schema_semantics.hpp/.cpp so the parser and
-// the shared semantic passes classify types and validate scalar defaults
-// identically. The 64-bit default-range helpers stay private to the semantic
-// module: default range validation moved there with validate_default.
-
-// FileDescriptorProto stores floating defaults in the same canonical form as
-// protobuf's SimpleFtoa/SimpleDtoa: first try a non-over-precise decimal
-// representation, then fall back to enough digits for exact round-tripping.
-std::string normalize_exponent(std::string text)
-{
-    const std::size_t marker = text.find_first_of("eE");
-    if (marker == std::string::npos) return text;
-
-    std::size_t first_digit = marker + 1;
-    if (first_digit < text.size() &&
-        (text[first_digit] == '+' || text[first_digit] == '-')) {
-        ++first_digit;
-    }
-
-    // Older MSVCRT versions emit three-digit exponents such as e-008.
-    // Protobuf keeps at least two digits but drops redundant leading zeros.
-    while (first_digit + 2 < text.size() && text[first_digit] == '0') {
-        text.erase(first_digit, 1);
-    }
-    return text;
-}
-
-// Format floating-point values only.  Exponent normalization assumes that an
-// 'e' or 'E' in the stream output starts a scientific-notation exponent.
-std::string format_FP(double value, int precision)
-{
-    std::ostringstream output;
-    output.imbue(std::locale::classic());
-    output << std::setprecision(precision) << value;
-    return normalize_exponent(output.str());
-}
-
-std::string canonical_float_default(const std::string& text, bool single_precision)
-{
-    std::size_t start = 0;
-    if (!text.empty() && (text[0] == '+' || text[0] == '-')) start = 1;
-    const std::string body = text.substr(start);
-    if (body == "inf") return (!text.empty() && text[0] == '-') ? "-inf" : "inf";
-    if (body == "nan") return "nan";
-
-    char* end = 0;
-    errno = 0;
-    const double parsed = std::strtod(text.c_str(), &end);
-    if (end == text.c_str() || *end != '\0' || errno == ERANGE) return text;
-
-    if (single_precision) {
-        const float value = static_cast<float>(parsed);
-        std::string result = format_FP(value, std::numeric_limits<float>::digits10);
-        char* parsed_end = 0;
-        const float round_trip = static_cast<float>(std::strtod(result.c_str(), &parsed_end));
-        if (parsed_end == result.c_str() || *parsed_end != '\0' || round_trip != value) {
-            result = format_FP(value, std::numeric_limits<float>::digits10 + 3);
-        }
-        return result;
-    }
-
-    std::string result = format_FP(parsed, std::numeric_limits<double>::digits10);
-    char* parsed_end = 0;
-    const double round_trip = std::strtod(result.c_str(), &parsed_end);
-    if (parsed_end == result.c_str() || *parsed_end != '\0' || round_trip != parsed) {
-        result = format_FP(parsed, std::numeric_limits<double>::digits10 + 2);
-    }
-    return result;
-}
+// The shared helpers parse_unsigned_integer, parse_signed_32, is_float_text,
+// canonical_float_default and the scalar-type classifiers (builtin_type,
+// packable_type, valid_map_key_type) live in schema_semantics.hpp/.cpp so the
+// parser and the shared semantic passes classify types and validate scalar
+// defaults identically. The 64-bit default-range helpers stay private to the
+// semantic module: default range validation moved there with validate_default.
 
 std::string escape_bytes(const std::string& bytes)
 {
@@ -562,10 +515,12 @@ struct FieldOptionState
     SourceLocation packed_location;
     bool has_cpp_type;
     std::string cpp_type;
+    bool has_json_name;
+    std::string json_name;
 
     FieldOptionState()
         : has_default(false), has_packed(false), packed(false),
-          has_cpp_type(false) {}
+          has_cpp_type(false), has_json_name(false) {}
 };
 
 // Source provenance captured while parsing one field. The caller records it
@@ -793,7 +748,16 @@ private:
     {
         accept_keyword("syntax");
         expect_symbol('=');
+        // W-15: an explicit empty value is not the absent descriptor syntax
+        // (which is proto2). Capture the value's position before the string
+        // sequence consumes it, so the refusal points at the value rather
+        // than at the trailing semicolon, as protoc's does.
+        const SourceLocation value_location = current_.location;
         const std::string value = string_sequence();
+        if (value.empty()) {
+            throw ParseFailure(value_location,
+                               "syntax must be \"proto2\" or \"proto3\"");
+        }
         // The one classifier decides whether an explicit value names a syntax
         // this project models; the literal comparison lives inside
         // classify_file_syntax (E7), not here.
@@ -1069,6 +1033,21 @@ private:
                 state.has_packed = true;
                 state.packed = value.text == "true";
                 state.packed_location = value.location;
+            } else if (name == "json_name") {
+                // W-43: protoc routes `json_name` to `ParseJsonName`
+                // (`parser.cc:1363-1386`), which requires a string and
+                // refuses a second assignment. The value is retained in the
+                // model so the shared uniqueness check can compare it.
+                if (state.has_json_name) {
+                    throw ParseFailure(option_location,
+                                       "duplicate json_name field option");
+                }
+                if (value.kind != Constant::STRING_VALUE) {
+                    throw ParseFailure(value.location,
+                                       "json_name must be a string literal");
+                }
+                state.has_json_name = true;
+                state.json_name = std::move(value.text);
             } else if (name == "(easypb.cpp).type") {
                 if (state.has_cpp_type) {
                     throw ParseFailure(option_location,
@@ -1132,7 +1111,13 @@ private:
     {
         std::string sign;
         const SourceLocation where = current_.location;
-        if (current_.kind == TOKEN_SYMBOL && (current_.symbol == '+' || current_.symbol == '-')) {
+        // W-40: protoc's `ConsumeSignedInteger` consumes `-` only
+        // (`parser.cc:191-203`), so a leading `+` is not a sign here. Keep
+        // `-` accepted and refuse `+` at the value, before consuming it.
+        if (current_.kind == TOKEN_SYMBOL && current_.symbol == '+') {
+            throw ParseFailure(where, "Expected integer.");
+        }
+        if (current_.kind == TOKEN_SYMBOL && current_.symbol == '-') {
             sign.assign(1, current_.symbol);
             advance();
         }
@@ -1180,6 +1165,26 @@ private:
             throw ParseFailure(value.location, "default value is not allowed on repeated or oneof fields");
         }
 
+        // W-40 (option B): refuse every leading `+` on a numeric constant
+        // before the type switch. The sign parser in `constant()` stays: the
+        // error points at the value, and other option consumers may still
+        // need the token consumed. `protoc` calls `ConsumeInteger64` /
+        // `ConsumeNumber` without a unary-plus branch (`parser.cc:1272`,
+        // `:1312`), so these spellings never reach its value parsers either.
+        if ((value.kind == Constant::INTEGER_VALUE ||
+             value.kind == Constant::FLOAT_VALUE) &&
+            !value.text.empty() && value.text[0] == '+') {
+            if (field.type == FieldDescriptorProto::TYPE_FLOAT ||
+                field.type == FieldDescriptorProto::TYPE_DOUBLE) {
+                throw ParseFailure(value.location, "Expected number.");
+            }
+            if (!field.has_type && field.has_type_name) {
+                throw ParseFailure(value.location, "Expected integer.");
+            }
+            throw ParseFailure(value.location,
+                               "Expected integer for field default value.");
+        }
+
         std::string stored;
         if (field.type == FieldDescriptorProto::TYPE_STRING) {
             if (value.kind != Constant::STRING_VALUE) {
@@ -1201,11 +1206,16 @@ private:
             if (value.kind != Constant::INTEGER_VALUE && value.kind != Constant::FLOAT_VALUE) {
                 throw ParseFailure(value.location, "floating-point default must be numeric, inf, or nan");
             }
-            if (!easypb_schema::is_float_text(value.text)) {
-                throw ParseFailure(value.location, "invalid floating-point default");
+            // W-04: the shared canonicalizer owns the ERANGE family now
+            // (`1e400` -> inf, `1e-400` -> 0, `-1e-400` -> -0 and finite
+            // subnormals -> their shortest decimal), so the parser and the
+            // descriptor adapter store the same text.
+            if (!easypb_schema::canonical_float_default(
+                    value.text,
+                    field.type == FieldDescriptorProto::TYPE_FLOAT, stored)) {
+                throw ParseFailure(value.location,
+                                   "invalid floating-point default");
             }
-            stored = canonical_float_default(
-                value.text, field.type == FieldDescriptorProto::TYPE_FLOAT);
         } else if (field.has_type_name) {
             if (value.kind != Constant::IDENTIFIER_VALUE) {
                 throw ParseFailure(value.location, "enum default must be an identifier");
@@ -1310,6 +1320,10 @@ private:
             field.has_oneof_index = true;
         }
         if (options.has_default) apply_default(field, options.default_value);
+        if (options.has_json_name) {
+            field.json_name = out_.strings.save(options.json_name);
+            field.has_json_name = true;
+        }
         if (options.has_packed) {
             field.options.packed = options.packed;
             field.options.has_packed = true;
@@ -1433,6 +1447,14 @@ private:
             field.options.cpp.has_type = true;
             field.options.has_cpp = true;
             field.has_options = true;
+        }
+        // W-43: `json_name` is a property of the source map field too, even
+        // though the field's type is the synthetic entry. Keep it beside the
+        // repeated descriptor field so the shared JSON-name sweep sees the
+        // same custom name protoc sees.
+        if (options.has_json_name) {
+            field.json_name = out_.strings.save(options.json_name);
+            field.has_json_name = true;
         }
 
         message.nested_type.push_back(std::move(entry));

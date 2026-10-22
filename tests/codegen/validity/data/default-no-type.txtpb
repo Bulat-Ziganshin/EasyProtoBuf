@@ -1,0 +1,15 @@
+# W-07: a field with a default but no declared type is refused by W-10's
+# absent-type rule before default validation.
+file {
+  name: "default-no-type.proto"
+  syntax: "proto2"
+  message_type {
+    name: "DefaultNoType"
+    field {
+      name: "f"
+      number: 1
+      label: LABEL_OPTIONAL
+      default_value: "1"
+    }
+  }
+}

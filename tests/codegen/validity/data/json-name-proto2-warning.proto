@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+// W-43: two default JSON names that fold together are a warning in proto2.
+message JsonProto2Warning
+{
+    optional int32 foo_bar = 1;
+    optional int32 fooBar = 2;
+}
