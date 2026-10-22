@@ -650,27 +650,25 @@ std::string number_text(unsigned long long code)
     message << code;
     return message.str();
 }
+
+// The two messages below are the Win32 ones. The POSIX write and the POSIX
+// directory creation build their own text from strerror, so these helpers
+// have no caller there: they live in the Windows guard for that reason.
+// Outside it they are dead code, and a dead function is a warning in every
+// POSIX build (measured: the gcc and clang lanes of 2026-10-22).
+#ifdef _WIN32
 std::string write_error_text(const std::string& path, unsigned long long code)
 {
-#ifdef _WIN32
     return path + ": cannot write file (Win32 error " +
            number_text(code) + ")";
-#else
-    (void)code;
-    return path + ": cannot write file";
-#endif
 }
 std::string create_directory_error_text(const std::string& path,
                                         unsigned long long code)
 {
-#ifdef _WIN32
     return path + ": cannot create directory (Win32 error " +
            number_text(code) + ")";
-#else
-    (void)code;
-    return path + ": cannot create directory";
-#endif
 }
+#endif
 
 // The length of the part of an absolute path that the filesystem provides and
 // this module never creates: the drive root ("C:/"), the UNC share

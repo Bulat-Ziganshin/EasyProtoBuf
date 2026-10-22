@@ -2029,7 +2029,7 @@ void test_foreign_map_entry_references_are_rejected()
     {
         easypb_schema::SchemaSet set;
         make_map_fixture(set, "foo", "ItemEntry");
-        easypb_schema::SchemaFile& file = *set.find_file("a.proto");
+        CHECK(set.find_file("a.proto") != 0);
         easypb_schema::Diagnostic error;
         CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
@@ -2299,7 +2299,7 @@ void test_task2_pair_links_and_its_two_mutations_fail()
     // check fires first (A7 is tested with a declared kind below).
     {
         easypb_schema::SchemaSet set;
-        const StateReport pair = make_state_report_fixture(set, true);
+        make_state_report_fixture(set, true);
         easypb_schema::Diagnostic error;
         CHECK(!link_verdict(set, error));
         CHECK(error.file == "report.proto");

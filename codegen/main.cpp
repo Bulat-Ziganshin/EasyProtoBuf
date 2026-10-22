@@ -121,6 +121,12 @@ bool collect_arguments(int argc, char** argv, std::vector<std::string>& argument
 #endif
 }
 
+// The two helpers below belong to the parser-enabled profile: the descriptor
+// printing and the parser benchmark are the only callers, and the profile
+// without the parser refuses those modes before they are reached. Outside the
+// guard they are dead code, and a dead function is a warning in every build
+// of that profile (measured: the lite build of 2026-10-22).
+#if EASYPB_CODEGEN_WITH_PROTO_PARSER
 bool read_file(const std::string& filename, std::string& contents)
 {
     // The native read: wide on Windows, so a non-ASCII spelling and a path
@@ -158,6 +164,7 @@ FileDescriptorProto decode_single_file_descriptor(const std::string& filename,
     }
     return set.file[0];
 }
+#endif
 
 #if EASYPB_CODEGEN_WITH_PROTO_PARSER
 std::string format_diagnostic(const easypb_proto::Diagnostic& diagnostic)

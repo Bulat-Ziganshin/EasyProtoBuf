@@ -169,41 +169,6 @@ bool any_temporary_files(const std::string& directory, bool& found)
 #endif
 }
 
-std::vector<std::string> list_names(const std::string& directory)
-{
-    std::vector<std::string> names;
-#ifdef _WIN32
-    WIN32_FIND_DATAW entry;
-    std::vector<wchar_t> wide_pattern;
-    const std::string pattern = directory + "/*";
-    if (!easypb_file::wide_win32_path(pattern, wide_pattern) ||
-        wide_pattern.empty()) {
-        return names;
-    }
-    wide_pattern.push_back(L'\0');
-    HANDLE handle = FindFirstFileW(&wide_pattern[0], &entry);
-    if (handle == INVALID_HANDLE_VALUE) return names;
-    do {
-        std::string name;
-        if (!easypb_file::utf8_from_wide(entry.cFileName, name)) continue;
-        if (name == "." || name == "..") continue;
-        names.push_back(name);
-    } while (FindNextFileW(handle, &entry));
-    FindClose(handle);
-#else
-    DIR* dir = ::opendir(directory.c_str());
-    if (dir == 0) return names;
-    struct dirent* entry = 0;
-    while ((entry = ::readdir(dir)) != 0) {
-        const std::string name(entry->d_name);
-        if (name == "." || name == "..") continue;
-        names.push_back(name);
-    }
-    ::closedir(dir);
-#endif
-    return names;
-}
-
 easypb_codegen::GeneratedFile generated(const std::string& name,
                                         const std::string& content)
 {
