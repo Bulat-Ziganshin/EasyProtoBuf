@@ -28,6 +28,7 @@
 
 #include "header_output.hpp"
 
+#include <map>
 #include <set>
 
 #include "file_paths.hpp"
@@ -135,13 +136,32 @@ bool publish_headers(const std::string& out_dir,
     // been made by hand - the reference compiler's TryCreateParentDirectory
     // does the same from the relative name's components
     // (command_line_interface.cc:181-201).
+    //
+    // The files are written in byte-wise name order. The reference compiler
+    // keeps its outputs in a map keyed by output name and writes them in that
+    // order (command_line_interface.cc:541-610), so when two output names are
+    // one file on a case-folding filesystem the survivor is the byte-wise
+    // greater spelling whatever order the targets were named in. Reproducing
+    // the order makes this publisher agree with that rule; case aliases stay
+    // accepted (the case-fold probing was removed on purpose, trim `fbdcc0e`,
+    // ledger W-27) - only the survivor stops depending on --target order
+    // (S4/W-26). Exact duplicates were refused above, so the map is one entry
+    // per file.
+    std::map<std::string, const GeneratedFile*> ordered;
     for (std::size_t i = 0; i < files.size(); ++i) {
+        ordered[files[i].name] = &files[i];
+    }
+
+    for (std::map<std::string, const GeneratedFile*>::const_iterator entry =
+             ordered.begin();
+         entry != ordered.end(); ++entry) {
+        const GeneratedFile& file = *entry->second;
         const std::string target =
             easypb_file::lexical_absolute(
-                easypb_file::join_disk_path(out_dir, files[i].name));
+                easypb_file::join_disk_path(out_dir, file.name));
         if (target.empty()) {
-            error = make_error(files[i].name,
-                               files[i].name + ": cannot resolve the output path");
+            error = make_error(file.name,
+                               file.name + ": cannot resolve the output path");
             return false;
         }
         const std::string parent = parent_of_absolute(target);
@@ -153,7 +173,7 @@ bool publish_headers(const std::string& out_dir,
             }
         }
         std::string write_error;
-        if (!easypb_file::write_disk_file(target, files[i].content,
+        if (!easypb_file::write_disk_file(target, file.content,
                                          write_error)) {
             error = make_error(target, write_error);
             return false;

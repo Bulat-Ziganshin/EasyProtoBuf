@@ -474,10 +474,11 @@ void test_loader_rejects_an_unnamed_file_in_a_multi_file_container()
 }
 
 // D5: a container holding exactly one unnamed file keeps the legacy stdout
-// compatibility path. The container path is an internal identity that keys
-// the set and labels diagnostics, and it is never written into the copied
-// descriptor.
-void test_loader_single_anonymous_file_keeps_the_identity_out_of_the_descriptor()
+// compatibility path. The container path is an internal identity that labels
+// diagnostics and is never written into the copied descriptor; it is not a
+// logical name, so after the ingest it is not addressable through the set
+// (S4/W-18: `--target <container>` must not select the unnamed file).
+void test_loader_single_anonymous_file_is_not_addressable()
 {
     const std::string scratch = "imports-descriptor-anonymous.pbs";
     CHECK(write_binary_file(scratch, anonymous_file_set()));
@@ -488,12 +489,14 @@ void test_loader_single_anonymous_file_keeps_the_identity_out_of_the_descriptor(
     CHECK(set.files().size() == 1);
     CHECK(set.targets().empty());
     if (set.files().size() == 1) {
-        const easypb_schema::SchemaFile* slot = set.find_file(scratch);
+        const easypb_schema::SchemaFile* slot = set.files()[0].get();
         CHECK(slot != 0);
         if (slot != 0) {
             CHECK(slot->from_descriptor_set);
             CHECK(slot->file.name.empty());
             CHECK(!slot->file.has_name);
+            CHECK(set.find_file(scratch) == 0);
+            CHECK(set.find_file("") == 0);
             // The rest of the file is interned normally: the package and the
             // message name survive the container bytes.
             CHECK(text(slot->file.package) == "legacy");
@@ -677,7 +680,7 @@ int main(int argc, char** argv)
     test_loader_loads_a_complete_container(fixture_dir);
     test_loader_rejects_an_empty_container(fixture_dir);
     test_loader_rejects_an_unnamed_file_in_a_multi_file_container();
-    test_loader_single_anonymous_file_keeps_the_identity_out_of_the_descriptor();
+    test_loader_single_anonymous_file_is_not_addressable();
     test_loader_rejects_duplicate_names_within_one_container();
     test_loader_rejects_duplicate_names_across_containers(fixture_dir);
     test_loader_custom_type_strings_survive_the_container(fixture_dir);

@@ -5,9 +5,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <exception>
-#include <fstream>
 #include <iostream>
-#include <iterator>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -124,14 +123,12 @@ bool collect_arguments(int argc, char** argv, std::vector<std::string>& argument
 
 bool read_file(const std::string& filename, std::string& contents)
 {
-    // Native file calls truncate at an embedded NUL while the spelling
-    // keeps its full length: refuse instead of reading a prefix.
-    if (filename.find('\0') != std::string::npos) return false;
-    std::ifstream input(filename.c_str(), std::ios::in | std::ios::binary);
-    if (!input) return false;
-    contents.assign(std::istreambuf_iterator<char>(input),
-                    std::istreambuf_iterator<char>());
-    return input.good() || input.eof();
+    // The native read: wide on Windows, so a non-ASCII spelling and a path
+    // beyond MAX_PATH stay addressable on the utility modes exactly as they
+    // are on the generation path (S4/W-24). The embedded-NUL guard lives
+    // there too.
+    std::string error;
+    return easypb_file::read_disk_file(filename, contents, error);
 }
 
 FileDescriptorProto decode_single_file_descriptor(const std::string& filename,
@@ -211,8 +208,26 @@ void report_schema_diagnostic(const easypb_schema::Diagnostic& diagnostic)
                << diagnostic.location.column;
     }
     if (output.tellp() > 0) output << ": ";
+    if (diagnostic.warning) output << "warning: ";
     output << diagnostic.message;
     std::cerr << output.str() << '\n';
+}
+
+// The warnings the load and the link stored - a dropped `extend` declaration,
+// a compatibility reference into a missing dependency - belong to the run, not
+// to the source frontend that happened to produce them. They are printed once,
+// on stderr, before generation; the exit code stays 0 and stdout stays the
+// header only (S4/W-14). The print path keeps its own per-file loop because it
+// never links.
+void report_schema_warnings(const easypb_schema::SchemaSet& schema)
+{
+    const std::vector<std::unique_ptr<easypb_schema::SchemaFile> >& files =
+        schema.files();
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        for (std::size_t j = 0; j < files[i]->warnings.size(); ++j) {
+            report_schema_diagnostic(files[i]->warnings[j]);
+        }
+    }
 }
 
 easypb_schema::Diagnostic make_schema_diagnostic(const std::string& file,
@@ -233,6 +248,7 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
 #if !EASYPB_CODEGEN_WITH_PROTO_PARSER
     for (std::size_t i = 1; i < arguments.size(); ++i) {
         const std::string& argument = arguments[i];
+        if (argument == "--") break;
         if (argument == "--print-descriptor" ||
             argument == "--benchmark-parser" ||
             argument == "--benchmark-ms" ||
@@ -333,6 +349,18 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     parser.parse(static_cast<int>(arguments.size()),
                  argv_pointers.empty() ? static_cast<const char* const*>(0)
                                        : &argv_pointers[0]);
+
+    // An unknown or misspelled option is refused instead of silently ignored.
+    // The parser records it and never applies it, so a typo such as
+    // "--no-has-field" for "--no-has-fields" would otherwise generate a header
+    // that keeps the feature the caller asked to drop. The check runs before
+    // help is honoured, matching the reference compiler: protoc reports the
+    // unknown flag even when --help is present (S4/W-20). A token after "--"
+    // is positional by definition and never reaches this list.
+    if (!parser.unknown_options().empty()) {
+        throw std::runtime_error("Unknown flag: " +
+                                 parser.unknown_options()[0]);
+    }
 
     // print auto-generated help message
     if (groff_option->is_set()) {
@@ -570,6 +598,12 @@ int run_generation(const CommandLine& command)
         report_schema_diagnostic(error);
         return 1;
     }
+
+    // The load and the link stored every warning the schema produced. The
+    // generation path used to drop them, although OPTIONS.md promises the
+    // compatibility warning; print them once, before generation, with the
+    // exit code still 0 and stdout still the header only (S4/W-14).
+    report_schema_warnings(schema);
 
     const std::vector<easypb_schema::SchemaFile*>& targets = schema.targets();
     if (targets.empty()) {

@@ -1020,20 +1020,26 @@ inline void OptionParser::parse(int argc, const char* const argv[])
         const std::string arg(argv[n]);
         if (arg == "--")
         {
-            /// from here on only non opt args
+            /// from here on only non opt args: the first -- ends option
+            /// parsing, so the tail must not be visited by this loop again
+            /// (the old branch appended the tail and kept parsing it, which
+            /// processed every tail token twice)
             for (int m = n + 1; m < argc; ++m)
                 non_option_args_.emplace_back(argv[m]);
+            break;
         }
         else if (arg.find("--") == 0)
         {
             /// long option arg
             std::string opt = arg.substr(2);
             std::string optarg;
+            bool has_inline_value = false;
             size_t equalIdx = opt.find('=');
             if (equalIdx != std::string::npos)
             {
                 optarg = opt.substr(equalIdx + 1);
                 opt.resize(equalIdx);
+                has_inline_value = true;
             }
 
             Option_ptr option = find_option(opt);
@@ -1048,8 +1054,19 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                 }
                 else if (option->argument_type() == Argument::required)
                 {
-                    if (optarg.empty() && n < argc - 1)
-                        optarg = argv[++n];
+                    if (!has_inline_value)
+                    {
+                        /// a required value is the next token only when that
+                        /// token is not another option ("-" is not a value
+                        /// either, exactly like the reference compiler's
+                        /// "Missing value for flag" rule)
+                        if (n < argc - 1 && argv[n + 1][0] != '-')
+                            optarg = argv[++n];
+                        else
+                            throw invalid_option(option.get(),
+                                invalid_option::Error::missing_argument,
+                                "Missing value for flag: --" + opt);
+                    }
                 }
             }
 
@@ -1077,9 +1094,19 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                     {
                         /// use the rest of the current argument as optarg
                         optarg = opt.substr(m + 1);
-                        /// or the next arg
-                        if (optarg.empty() && n < argc - 1)
-                            optarg = argv[++n];
+                        /// or the next arg, when it is a value and not an
+                        /// option (the same missing-value rule as the long
+                        /// form above)
+                        if (optarg.empty())
+                        {
+                            if (n < argc - 1 && argv[n + 1][0] != '-')
+                                optarg = argv[++n];
+                            else
+                                throw invalid_option(option.get(),
+                                    invalid_option::Error::missing_argument,
+                                    "Missing value for flag: -" +
+                                        std::string(1, c));
+                        }
                         m = opt.size();
                     }
                     else if (option->argument_type() == Argument::optional)

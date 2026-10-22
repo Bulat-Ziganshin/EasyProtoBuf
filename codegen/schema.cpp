@@ -163,6 +163,11 @@ SchemaFile* SchemaSet::find_file(const std::string& logical_name) const
     return found->second;
 }
 
+void SchemaSet::remove_file_name(const std::string& logical_name)
+{
+    index_.erase(logical_name);
+}
+
 const std::vector<std::unique_ptr<SchemaFile> >& SchemaSet::files() const
 {
     return files_;

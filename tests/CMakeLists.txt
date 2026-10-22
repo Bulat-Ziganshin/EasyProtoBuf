@@ -734,6 +734,7 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>
             -DDATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/codegen/parser/data
+            -DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/codegen/cli/data
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-cli
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/cli/test_codegen_cli.cmake)

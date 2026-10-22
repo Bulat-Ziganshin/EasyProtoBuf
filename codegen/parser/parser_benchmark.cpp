@@ -13,7 +13,6 @@
 #endif
 #include <cstddef>
 #include <cstdint>
-#include <fstream>
 #include <iomanip>
 #include <memory>
 #include <ostream>
@@ -22,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "file_paths.hpp"
 #include "proto_parser.hpp"
 
 namespace easypb_proto {
@@ -83,13 +83,10 @@ std::string format_diagnostic(const Diagnostic& diagnostic)
 
 bool read_file(const std::string& path, std::string& contents)
 {
-    std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
-    if (!input) return false;
-    std::ostringstream buffer;
-    buffer << input.rdbuf();
-    if (!input.good() && !input.eof()) return false;
-    contents = buffer.str();
-    return true;
+    // The same native read the generation path uses: wide on Windows, so a
+    // non-ASCII spelling and a long path stay readable here too (S4/W-24).
+    std::string error;
+    return easypb_file::read_disk_file(path, contents, error);
 }
 
 bool is_map_entry(const DescriptorProto& message)

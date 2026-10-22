@@ -58,19 +58,25 @@ codegen --descriptor-set project.pbs \
     --out-dir build/generated
 ```
 
-A single-file set without `--target` keeps the thin compatibility path: external type declarations only, automatic dependency includes omitted, and a reference into a missing dependency tolerated with a warning, as before plan 5. Naming an explicit `--target` links the loaded set strictly instead, so a missing dependency is an error. `protoc --include_imports` produces the complete closure intended for that mode; dependency headers it declares must exist for the generated C++ to compile. `--target` is valid only with `--descriptor-set`.
+A single-file set without `--target` keeps the thin compatibility path: external type declarations only, automatic dependency includes omitted, and a reference into a missing dependency tolerated with a warning printed on stderr, as before plan 5. Naming an explicit `--target` links the loaded set strictly instead, so a missing dependency is an error. A descriptor file with no logical name has no `--target` spelling: an unnamed single-file set is reachable only through this no-target compatibility path. `protoc --include_imports` produces the complete closure intended for that mode; dependency headers it declares must exist for the generated C++ to compile. `--target` is valid only with `--descriptor-set`.
 
 Descriptor-set input is useful when descriptor files are already available or when another tool produces them. Definitions of imported C++ types are never emitted inside the target's own header; a complete link includes the dependency header instead, so generate the dependencies as well. Fully qualified Protobuf names map to absolute C++ names in their package namespaces. See [Packages and C++ namespaces](GENERATED_CODE.md#packages-and-c-namespaces) for the generated names.
 
 Without `--descriptor-set`, Codegen infers the common input mode from file extensions: an invocation containing both `.pbs` and non-`.pbs` names is rejected. `--descriptor-set` forces every positional input to be decoded as a binary descriptor set; it does not enable mixing descriptor sets with `.proto` source files.
 
+## Option syntax
+
+Options may appear before or after the positional inputs. A first `--` ends option parsing: every later token is an input spelling, even if it starts with `-`, and `--help` after it is a file name rather than the help switch (`protoc` has no such separator; this is a Codegen extension).
+
+An unknown or misspelled option is an error, not a silent no-op: `--nope`, `-Z` and a typo such as `--no-has-field` are refused with `Unknown flag: <token>`. A required value is taken from the next token only when that token does not start with `-`; otherwise the run is refused with `Missing value for flag: <option>`, so `--out-dir --help` cannot create a directory named `--help`. Write `--name=-value` when a value itself starts with a dash. `--name=` (an explicitly empty value) is refused as well.
+
 ## Target selection and output
 
-- `--target NAME` — a logical `.proto` name to generate from a descriptor set. Repeatable; order preserved, duplicates dropped. Valid only with `--descriptor-set`. Without it, a single-file set uses the compatibility path and a multi-file set fails with target-selection guidance.
+- `--target NAME` — a logical `.proto` name to generate from a descriptor set. Repeatable; order preserved, duplicates dropped. Valid only with `--descriptor-set`. Without it, a single-file set uses the compatibility path and a multi-file set fails with target-selection guidance. A file with no logical name cannot be named by `--target`.
 - `--out-dir DIR` — write one generated header per selected target below `DIR` instead of stdout. Relative subdirectories of a logical name are recreated below `DIR`. `DIR` may be given only once. Required whenever more than one header would be written.
 - Without `--out-dir`, exactly one selected header is written to stdout; several selected headers without `--out-dir` fail with a guidance error.
 
-Publication writes each generated header in place below `DIR`: the output directory and every parent directory of an output are created first, then each file is created or truncated and written. It refuses two targets that map to one output file, and it reports the first failure without claiming partial success. It is not a transaction across files: a run that fails after writing one header leaves the earlier headers written, and a process interrupted mid-write may leave that one header truncated — the same guarantee the reference compiler gives.
+Publication writes each generated header in place below `DIR`: the output directory and every parent directory of an output are created first, then each file is created or truncated and written. It refuses two targets that map to one output file, and it reports the first failure without claiming partial success. It is not a transaction across files: a run that fails after writing one header leaves the earlier headers written, and a process interrupted mid-write may leave that one header truncated — the same guarantee the reference compiler gives. Files are written in byte-wise output-name order, so on a case-folding filesystem two names that differ only in case (`api/x.pb.hpp`, `api/X.pb.hpp`) always leave the same survivor, whatever order the targets were named in — the rule the reference compiler's name-keyed output map applies.
 
 Two bounds apply to the output side. An output name must be a logical path, so a name that escapes `DIR` by its own spelling (`../escape.pb.hpp`) is refused before anything is written; the reference compiler writes such a name one directory above the output root, and Codegen refuses it. And a path with more than 100 components is refused — a logical name that carries more than 100 of them is refused at the mapping layer, before the publisher creates anything.
 
@@ -120,7 +126,7 @@ codegen --benchmark-parser [--benchmark-ms 500] a.proto b.proto
 
 For a reproducible real-world workload, pass schemas from the [`tests/codegen/parser/differential/corpus/`](../tests/codegen/parser/differential/corpus/) directory. Tests on a 4 GHz Zen3 CPU showed 100–200 MB/s parsing throughput.
 
-Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation links the loaded set first, so imported types resolve; the run stops only when an import cannot be found or a reference stays unresolved, instead of guessing whether the type is a message or enum.
+Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation reports the warnings its load and link stored — a dropped `extend` declaration, a compatibility reference into a missing dependency — on stderr before it writes the header, with the exit code still 0; stdout stays the header only. The generation run stops only when an import cannot be found or a reference stays unresolved, instead of guessing whether the type is a message or enum.
 
 `--print-descriptor` and `--benchmark-parser` cannot be used together. `--benchmark-parser` accepts `.proto` source files, not descriptor-set input. Structural, packed-field, and C++ type generation options cannot be combined with either utility mode.
 

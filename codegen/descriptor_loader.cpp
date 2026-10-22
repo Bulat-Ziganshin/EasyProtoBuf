@@ -133,6 +133,11 @@ bool append_anonymous_descriptor(const FileDescriptorProto& file,
     }
     slot->file.name = str_view();
     slot->file.has_name = false;
+    // The container path was an internal identity only. With the name gone,
+    // the file has no logical name to find it by, so the identity must not
+    // stay in the index: `--target anon.pbs` used to match it and silently
+    // switch the file from the compatibility path to strict linking (S4/W-18).
+    result.remove_file_name(container_path);
     return true;
 }
 

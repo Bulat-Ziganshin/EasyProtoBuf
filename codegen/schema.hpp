@@ -327,6 +327,13 @@ public:
 
     SchemaFile& add_file(const std::string& logical_name);
     SchemaFile* find_file(const std::string& logical_name) const;
+    // Drops the logical-name index entry, leaving the file itself in the set.
+    // The single-file `.pbs` compatibility path keys its borrowed file by the
+    // container path while it ingests it, then clears the descriptor's name;
+    // that internal identity must not stay addressable as a logical name
+    // (`--target anon.pbs` must not select a file the descriptor itself does
+    // not name).
+    void remove_file_name(const std::string& logical_name);
     const std::vector<std::unique_ptr<SchemaFile> >& files() const;
     void add_target(SchemaFile& file);
     const std::vector<SchemaFile*>& targets() const;
