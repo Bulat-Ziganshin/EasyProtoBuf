@@ -1,4 +1,4 @@
-# The validity lane: generate -> compile -> run -> refuse.
+# The validity lane: generate -> run -> refuse.
 #
 # One lane for the five rows of the plan-5 follow-up's session S1 (W-02,
 # W-03, W-05, W-10, W-12). The three things every row needs:
@@ -8,8 +8,13 @@
 #      frontends store a default value the same way, so the emitter must
 #      read it the same way.
 #   2. THE HEADER COMPILES. A generated header that does not compile is a
-#      failure; "the tool exited 0" is not a pass. The compile happens with
-#      the tree's own compiler and the tree's own standard.
+#      failure; "the tool exited 0" is not a pass. The compile belongs to
+#      the build: the runtime target compiles every descriptor-path header
+#      with the tree's own compiler and standard, and the byte-for-byte
+#      comparison above extends that proof to the source path. The driver
+#      does not invoke the compiler itself, because cl.exe started outside
+#      the Visual Studio environment cannot find its own standard library
+#      headers (C1083 on <cstdint>).
 #   3. THE VALUE IS RIGHT. The runtime program checks the BYTES of every
 #      default, because the two silent defects (a backslash that became a
 #      backspace, a NUL that truncated the value) compile cleanly and are
@@ -20,13 +25,9 @@
 #   DATA_DIR    the fixture directory
 #   WORK_DIR    the scratch directory
 #   RUNTIME     the built runtime checker
-#   CXX         the C++ compiler
-#   CXX_FLAGS   the tree's compiler flags
-#   CXX_STD_FLAG the tree's standard flag (may be empty)
-#   INCLUDE_DIR the library's include directory
 #   FULL_BUILD  1 when the proto parser is available
 
-foreach(required_var CODEGEN DATA_DIR WORK_DIR RUNTIME CXX INCLUDE_DIR)
+foreach(required_var CODEGEN DATA_DIR WORK_DIR RUNTIME)
     if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
         message(FATAL_ERROR "${required_var} is required")
     endif()
@@ -115,22 +116,10 @@ foreach(name ${paired_fixtures})
         endif()
     endif()
 
-    # The header compiles, in the tree's own standard. It is compiled as an
-    # INCLUDED header, not as the main file: a header that is the main file
-    # draws a "#pragma once in main file" warning that says nothing about the
-    # header.
-    if(CXX_STD_FLAG)
-        set(std_flag "${CXX_STD_FLAG}")
-    else()
-        set(std_flag "")
-    endif()
-    file(WRITE "${WORK_DIR}/probe-${name}.cpp"
-        "#include \"${name}.pb.hpp\"\n")
-    run_ok(syntax_out syntax_err
-        ${CXX} ${CXX_FLAGS} ${std_flag} -fsyntax-only
-        -I "${INCLUDE_DIR}" -I "${WORK_DIR}/descriptor"
-        "${WORK_DIR}/probe-${name}.cpp")
-    require_empty(syntax_err "The generated header of ${name} must compile clean")
+    # The header is compiled by the build's runtime target, which includes
+    # the descriptor-path header of every fixture. When the source path
+    # runs, the comparison above proves its header is the same file, so it
+    # compiles too.
 endforeach()
 
 # The values are right.

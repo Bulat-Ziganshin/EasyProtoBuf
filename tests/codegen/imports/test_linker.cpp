@@ -41,6 +41,17 @@ std::string text(const str_view& value)
     return std::string(value.data(), value.size());
 }
 
+// The (count, value) constructor of a vector of integers is ambiguous on the
+// earliest supported Clang: with both arguments `int`, the iterator-pair
+// template deduces `InputIt = int` and is preferred over the non-template
+// overload, so libstdc++ 4.8 rejects the instantiation. Spelling the count as
+// a size_type makes the template non-viable and keeps this constructor.
+std::vector<std::int32_t> repeated_indexes(std::size_t count,
+                                           std::int32_t value)
+{
+    return std::vector<std::int32_t>(count, value);
+}
+
 // Adds a descriptor-origin file with the given logical name and dependency
 // lists (the make_file shape test_graph.cpp uses). Indexes in public_indexes
 // and weak_indexes address positions in deps. physical_name is left empty to
@@ -4619,7 +4630,7 @@ void test_compat_binder_still_rejects_malformed_indexes()
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = make_file(
             set, "thin.pbs", std::vector<std::string>(1, "a.proto"),
-            std::vector<std::int32_t>(1, 5), std::vector<std::int32_t>());
+            repeated_indexes(1, 5), std::vector<std::int32_t>());
         file.from_descriptor_set = true;
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
@@ -4632,7 +4643,7 @@ void test_compat_binder_still_rejects_malformed_indexes()
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = make_file(
             set, "thin.pbs", std::vector<std::string>(1, "a.proto"),
-            std::vector<std::int32_t>(2, 0), std::vector<std::int32_t>());
+            repeated_indexes(2, 0), std::vector<std::int32_t>());
         file.from_descriptor_set = true;
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
@@ -4652,7 +4663,7 @@ void test_compat_tolerates_a_missing_weak_target()
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = make_file(
             set, "thin.pbs", std::vector<std::string>(1, "gone.proto"),
-            std::vector<std::int32_t>(), std::vector<std::int32_t>(1, 0));
+            std::vector<std::int32_t>(), repeated_indexes(1, 0));
         file.from_descriptor_set = true;
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
@@ -4666,7 +4677,7 @@ void test_compat_tolerates_a_missing_weak_target()
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = make_file(
             set, "thin.pbs", std::vector<std::string>(1, "gone.proto"),
-            std::vector<std::int32_t>(), std::vector<std::int32_t>(1, 0));
+            std::vector<std::int32_t>(), repeated_indexes(1, 0));
         file.from_descriptor_set = true;
         easypb_schema::Diagnostic error;
         CHECK(!link_verdict(set, error));

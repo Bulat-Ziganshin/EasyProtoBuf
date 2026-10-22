@@ -20,9 +20,13 @@ schema was accepted by one path and refused by the other.
    source half runs only in a parser-on profile; `FULL_BUILD=0` skips it and
    the descriptor half still runs.
 2. **The header compiles.** A generated header that does not compile is a
-   failure; "the tool exited 0" is not a pass. The driver compiles every
-   accepted header with the tree's own compiler and the tree's own standard
-   (`-std=c++17` in the full profile, `-std=c++11` in the C++11 profile).
+   failure; "the tool exited 0" is not a pass. The build's compile check
+   target compiles every accepted descriptor-path header with the tree's own
+   compiler and standard (`-std=c++17` in the full profile, `-std=c++11` in
+   the C++11 profile), and the driver's byte-for-byte comparison extends
+   that compile to the source path. The driver does not start the compiler
+   itself: cl.exe outside the Visual Studio environment cannot find its own
+   standard library headers (`C1083` on `<cstdint>`).
 3. **The refusal is the same on both paths.** Every shape the source path
    refuses, the descriptor path refuses too — and the other way round — with
    a non-zero exit, an empty stdout and a diagnostic that names the offending

@@ -254,12 +254,14 @@ if(BUILD_TESTING)
 
     # Plan 5 follow-up S1 (W-02, W-03, W-05, W-10, W-12): the emitter's value
     # and field-type layer. The lane generates every fixture through BOTH
-    # input paths, compiles the generated headers with the tree's own
-    # compiler, runs the runtime check of the default values, and drives the
-    # refusals through the CLI. The descriptor path builds the headers the
-    # runtime checker reads, because it is the one every build profile has;
-    # the driver compares the source path's header with the descriptor path's
-    # byte for byte.
+    # input paths, runs the runtime check of the default values, and drives
+    # the refusals through the CLI. The descriptor path builds the headers
+    # the runtime checker reads, because it is the one every build profile
+    # has; the driver compares the source path's header with the descriptor
+    # path's byte for byte. Compiling the descriptor-path header is the
+    # build's job (cl.exe started from a test script outside the Visual
+    # Studio environment cannot find its own standard library headers), and
+    # the equality check extends that compile to the source path.
     set(codegen_validity_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/validity)
     set(codegen_validity_data_dir ${codegen_validity_dir}/data)
@@ -308,40 +310,26 @@ if(BUILD_TESTING)
     target_include_directories(codegen_validity_runtime_test PRIVATE
         ${easypb_test_include_dir} ${codegen_validity_descriptor_dir})
 
-    # The tree's own standard: the C++11 profile passes its standard through
-    # EASYPB_CXX_FLAGS, so CMAKE_CXX_STANDARD is empty there and the flags
-    # carry it. The flags are split into a list, because the profile's
-    # standard arrives as one string with a leading space, and a compiler
-    # does not read " -std=c++11" as the option it is.
-    if(CMAKE_CXX_STANDARD)
-        set(codegen_validity_std_flag "-std=c++${CMAKE_CXX_STANDARD}")
-    else()
-        set(codegen_validity_std_flag "")
-    endif()
-    separate_arguments(codegen_validity_cxx_flags NATIVE_COMMAND
-        "${CMAKE_CXX_FLAGS}")
-
     add_test(NAME codegen.validity
         COMMAND ${CMAKE_COMMAND}
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>
             -DDATA_DIR=${codegen_validity_data_dir}
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-validity
             -DRUNTIME=$<TARGET_FILE:codegen_validity_runtime_test>
-            -DCXX=${CMAKE_CXX_COMPILER}
-            "-DCXX_FLAGS=${codegen_validity_cxx_flags}"
-            -DCXX_STD_FLAG=${codegen_validity_std_flag}
-            -DINCLUDE_DIR=${easypb_test_include_dir}
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_validity_dir}/test_validity.cmake)
 
     # Plan 5 follow-up S2 (W-08, W-09): the emitter's name layer. The lane
-    # generates every fixture through BOTH input paths, compiles the
-    # generated headers with the tree's own compiler and standard, checks
-    # that every escaped name still carries the data the schema names, and
-    # drives the presence-flag collision through the CLI. The descriptor
-    # path builds the headers the runtime checker reads, because it is the
-    # one every build profile has; the driver compares the source path's
-    # header with the descriptor path's byte for byte.
+    # generates every fixture through BOTH input paths, checks that every
+    # escaped name still carries the data the schema names, and drives the
+    # presence-flag collision through the CLI. The descriptor path builds the
+    # headers the runtime checker reads, because it is the one every build
+    # profile has; the driver compares the source path's header with the
+    # descriptor path's byte for byte. Compiling the descriptor-path header
+    # is the build's job (cl.exe started from a test script outside the
+    # Visual Studio environment cannot find its own standard library
+    # headers), and the equality check extends that compile to the source
+    # path.
     set(codegen_names_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/names)
     set(codegen_names_data_dir ${codegen_names_dir}/data)
@@ -384,29 +372,12 @@ if(BUILD_TESTING)
     target_include_directories(codegen_names_runtime_test PRIVATE
         ${easypb_test_include_dir} ${codegen_names_descriptor_dir})
 
-    # The tree's own standard: the C++11 profile passes its standard through
-    # EASYPB_CXX_FLAGS, so CMAKE_CXX_STANDARD is empty there and the flags
-    # carry it. The flags are split into a list, because the profile's
-    # standard arrives as one string with a leading space, and a compiler
-    # does not read " -std=c++11" as the option it is.
-    if(CMAKE_CXX_STANDARD)
-        set(codegen_names_std_flag "-std=c++${CMAKE_CXX_STANDARD}")
-    else()
-        set(codegen_names_std_flag "")
-    endif()
-    separate_arguments(codegen_names_cxx_flags NATIVE_COMMAND
-        "${CMAKE_CXX_FLAGS}")
-
     add_test(NAME codegen.names
         COMMAND ${CMAKE_COMMAND}
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>
             -DDATA_DIR=${codegen_names_data_dir}
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-names
             -DRUNTIME=$<TARGET_FILE:codegen_names_runtime_test>
-            -DCXX=${CMAKE_CXX_COMPILER}
-            "-DCXX_FLAGS=${codegen_names_cxx_flags}"
-            -DCXX_STD_FLAG=${codegen_names_std_flag}
-            -DINCLUDE_DIR=${easypb_test_include_dir}
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_names_dir}/test_names.cmake)
 
@@ -527,36 +498,77 @@ if(BUILD_TESTING)
 
     # Plan 5 follow-up S5 (W-16, W-36, W-37, W-44, W-45, W-68): one rule,
     # two input paths. The lane drives every accepted fixture through BOTH
-    # fronts and requires one header byte for byte, compiles the accepted
-    # headers with the tree's own compiler and standard, and requires every
+    # fronts and requires one header byte for byte, and requires every
     # refusal the source path makes on the descriptor path too. The
     # descriptor halves are committed, so the lane never calls protoc.
+    #
+    # The accepted headers are compiled by the build, not by the driver:
+    # cl.exe started from a test script outside the Visual Studio
+    # environment cannot find its own standard library headers (C1083 on
+    # <cstdint>). One compile unit per fixture is generated here because
+    # several fixtures declare the same package-scope name (parity::M), and
+    # the driver's byte-for-byte comparison extends the compile to the
+    # source path.
     set(codegen_parity_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/parity)
     set(codegen_parity_data_dir ${codegen_parity_dir}/data)
+    set(codegen_parity_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-parity)
+    file(MAKE_DIRECTORY ${codegen_parity_generated_dir})
 
-    # The tree's own standard: the C++11 profile passes its standard through
-    # EASYPB_CXX_FLAGS, so CMAKE_CXX_STANDARD is empty there and the flags
-    # carry it. The flags are split into a list, because the profile's
-    # standard arrives as one string with a leading space, and a compiler
-    # does not read " -std=c++11" as the option it is.
-    if(CMAKE_CXX_STANDARD)
-        set(codegen_parity_std_flag "-std=c++${CMAKE_CXX_STANDARD}")
-    else()
-        set(codegen_parity_std_flag "")
-    endif()
-    separate_arguments(codegen_parity_cxx_flags NATIVE_COMMAND
-        "${CMAKE_CXX_FLAGS}")
+    set(codegen_parity_compile_fixtures
+        methods-ok
+        map-ok
+        enum-ok
+        ext-ok
+        w36-same
+        w68-root
+        w68-dep)
+    set(codegen_parity_compile_sources)
+    set(codegen_parity_headers)
+    foreach(name ${codegen_parity_compile_fixtures})
+        # The merged W-36 header is the header of a single identical
+        # container; the test proves the merge produces those same bytes.
+        if("${name}" STREQUAL "w36-same")
+            set(codegen_parity_input
+                ${codegen_parity_data_dir}/w36-same-a.pbs)
+        else()
+            set(codegen_parity_input ${codegen_parity_data_dir}/${name}.pbs)
+        endif()
+        set(codegen_parity_header
+            ${codegen_parity_generated_dir}/${name}.pb.hpp)
+        add_custom_command(
+            OUTPUT ${codegen_parity_header}
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_parity_input}
+                -DOUTPUT=${codegen_parity_header}
+                -P ${codegen_parity_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_parity_input}
+                ${codegen_parity_dir}/generate_header.cmake
+            VERBATIM)
+        file(WRITE
+            ${codegen_parity_generated_dir}/compile-${name}.cpp
+            "#include \"${name}.pb.hpp\"\n")
+        list(APPEND codegen_parity_compile_sources
+            ${codegen_parity_generated_dir}/compile-${name}.cpp)
+        list(APPEND codegen_parity_headers ${codegen_parity_header})
+    endforeach()
+    add_custom_target(codegen_parity_generated
+        DEPENDS ${codegen_parity_headers})
+    add_library(codegen_parity_compile_check STATIC
+        ${codegen_parity_compile_sources})
+    add_dependencies(codegen_parity_compile_check codegen_parity_generated)
+    target_include_directories(codegen_parity_compile_check PRIVATE
+        ${easypb_test_include_dir} ${codegen_parity_generated_dir})
 
     add_test(NAME codegen.parity
         COMMAND ${CMAKE_COMMAND}
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>
             -DDATA_DIR=${codegen_parity_data_dir}
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-parity
-            -DCXX=${CMAKE_CXX_COMPILER}
-            "-DCXX_FLAGS=${codegen_parity_cxx_flags}"
-            -DCXX_STD_FLAG=${codegen_parity_std_flag}
-            -DINCLUDE_DIR=${easypb_test_include_dir}
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_parity_dir}/test_parity.cmake)
 

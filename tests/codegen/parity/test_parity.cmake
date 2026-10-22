@@ -10,8 +10,13 @@
 #      the same bytes. A rule that lives on one path only shows up here as a
 #      difference, even when both exits are zero.
 #   2. THE HEADER COMPILES. A generated header that does not compile is a
-#      failure; "the tool exited 0" is not a pass. The compile happens with
-#      the tree's own compiler and the tree's own standard.
+#      failure; "the tool exited 0" is not a pass. The compile belongs to
+#      the build: the lane's compile check target compiles every accepted
+#      descriptor-path header with the tree's own compiler and standard, and
+#      the byte-for-byte comparison above extends that proof to the source
+#      path. The driver does not invoke the compiler itself, because cl.exe
+#      started outside the Visual Studio environment cannot find its own
+#      standard library headers (C1083 on <cstdint>).
 #   3. THE REFUSAL IS THE SAME ON BOTH PATHS. Every shape the source path
 #      refuses, the descriptor path refuses too - and the other way round -
 #      with a diagnostic that names the offending thing.
@@ -35,13 +40,9 @@
 #   CODEGEN     the standalone codegen executable
 #   DATA_DIR    the fixture directory
 #   WORK_DIR    the scratch directory
-#   CXX         the C++ compiler
-#   CXX_FLAGS   the tree's compiler flags (semicolons separate the flags)
-#   CXX_STD_FLAG the tree's standard flag (may be empty)
-#   INCLUDE_DIR the library's include directory
 #   FULL_BUILD  1 when the proto parser is available
 
-foreach(required_var CODEGEN DATA_DIR WORK_DIR CXX INCLUDE_DIR)
+foreach(required_var CODEGEN DATA_DIR WORK_DIR)
     if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
         message(FATAL_ERROR "${required_var} is required")
     endif()
@@ -101,24 +102,6 @@ function(expect_refusal description expected)
     endif()
 endfunction()
 
-# The accepted header is compiled as an INCLUDED header, not as the main
-# file: a header that is the main file draws a "#pragma once in main file"
-# warning that says nothing about the header.
-function(compile_header header_dir name description)
-    if(CXX_STD_FLAG)
-        set(std_flag "${CXX_STD_FLAG}")
-    else()
-        set(std_flag "")
-    endif()
-    file(WRITE "${WORK_DIR}/probe-${name}.cpp"
-        "#include \"${name}.pb.hpp\"\n")
-    run_ok(syntax_out syntax_err
-        ${CXX} ${CXX_FLAGS} ${std_flag} -fsyntax-only
-        -I "${INCLUDE_DIR}" -I "${header_dir}"
-        "${WORK_DIR}/probe-${name}.cpp")
-    require_empty(syntax_err "${description} must compile clean")
-endfunction()
-
 file(REMOVE_RECURSE "${WORK_DIR}")
 file(MAKE_DIRECTORY "${WORK_DIR}/descriptor")
 file(MAKE_DIRECTORY "${WORK_DIR}/source")
@@ -163,8 +146,6 @@ foreach(name ${paired_fixtures})
         endif()
     endif()
 
-    compile_header("${WORK_DIR}/descriptor" "${name}"
-        "The generated header of ${name}")
 endforeach()
 
 # --- W-16: method endpoints and duplicate names ------------------------------
@@ -235,8 +216,6 @@ if(NOT w36_target_out STREQUAL w36_merged_out)
     message(FATAL_ERROR
         "The merged W-36 header must not depend on --target")
 endif()
-compile_header("${WORK_DIR}/descriptor" "w36-same"
-    "The merged W-36 header")
 
 expect_refusal("The descriptor path must refuse two different definitions of one logical file"
     "two containers carry different definitions of one logical file"
@@ -357,14 +336,8 @@ if(NOT w68_closure_out STREQUAL w68_thin_out)
         "The thin-set and complete-closure headers of W-68 differ")
 endif()
 
-# The header is self-contained once the dependency's header is beside it.
-file(WRITE "${WORK_DIR}/probe-w68-root.cpp"
-    "#include \"w68-root.pb.hpp\"\n")
-run_ok(w68_syntax_out w68_syntax_err
-    ${CXX} ${CXX_FLAGS} ${CXX_STD_FLAG} -fsyntax-only
-    -I "${INCLUDE_DIR}" -I "${WORK_DIR}/w68"
-    "${WORK_DIR}/probe-w68-root.cpp")
-require_empty(w68_syntax_err "The W-68 header must compile clean")
+# The header is self-contained once the dependency's header is beside it;
+# the build's compile check includes exactly that pair.
 
 # Complete mode refuses the thin set, because the import is genuinely absent.
 expect_refusal("The descriptor path must refuse a missing import in complete mode"

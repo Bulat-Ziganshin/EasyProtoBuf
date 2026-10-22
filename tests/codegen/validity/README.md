@@ -14,10 +14,13 @@ brief names.
    The driver compares the two headers byte for byte (the source half runs
    only in a parser-on profile).
 2. **The header compiles.** A generated header that does not compile is a
-   failure; "the tool exited 0" is not a pass. The driver compiles every
-   generated header with the tree's own compiler and the tree's own standard
-   (`-std=c++17` in the full profile, `-std=c++11` in the C++11 profile), and
-   the build compiles the same headers into the runtime checker.
+   failure; "the tool exited 0" is not a pass. The build compiles every
+   descriptor-path header into the runtime checker with the tree's own
+   compiler and standard (`-std=c++17` in the full profile, `-std=c++11` in
+   the C++11 profile), and the driver's byte-for-byte comparison extends
+   that compile to the source path. The driver does not start the compiler
+   itself: cl.exe outside the Visual Studio environment cannot find its own
+   standard library headers (`C1083` on `<cstdint>`).
 3. **The value is right.** The runtime checker compares the **bytes** of
    every default, not its size. Two of the defects are silent: a backslash
    that became a backspace and a NUL that truncated the value both compile
@@ -82,7 +85,7 @@ Running the lane never needs `protoc`: the `.pbs` files are committed.
 
 | Test | Where |
 | --- | --- |
-| `codegen.validity` | this lane: generate, compile, run, refuse |
+| `codegen.validity` | this lane: generate, run, refuse; the build compiles the headers |
 | `codegen.imports.parity` | the descriptor path's verdicts against `protoc` |
 | `codegen.imports.runtime` | the source path's header against the descriptor path's |
 

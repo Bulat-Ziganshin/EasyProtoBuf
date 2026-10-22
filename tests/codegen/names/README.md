@@ -17,10 +17,13 @@ session's brief names.
    way. The driver compares the two headers byte for byte (the source half
    runs only in a parser-on profile).
 2. **The header compiles.** A generated header that does not compile is a
-   failure; "the tool exited 0" is not a pass. The driver compiles every
-   generated header with the tree's own compiler and the tree's own standard
-   (`-std=c++17` in the full profile, `-std=c++11` in the C++11 profile), and
-   the build compiles the same headers into the runtime checker.
+   failure; "the tool exited 0" is not a pass. The build compiles every
+   descriptor-path header into the runtime checker with the tree's own
+   compiler and standard (`-std=c++17` in the full profile, `-std=c++11` in
+   the C++11 profile), and the driver's byte-for-byte comparison extends
+   that compile to the source path. The driver does not start the compiler
+   itself: cl.exe outside the Visual Studio environment cannot find its own
+   standard library headers (`C1083` on `<cstdint>`).
 3. **The name carries the data.** An escaped member must still hold the value
    the schema names, and the value must still travel under the field number
    the schema gives it. The runtime checker writes every escaped member,
@@ -72,7 +75,7 @@ Running the lane never needs `protoc`: the `.pbs` files are committed.
 
 | Test | Where |
 | --- | --- |
-| `codegen.names` | this lane: generate, compile, run, refuse |
+| `codegen.names` | this lane: generate, run, refuse; the build compiles the headers |
 | `codegen.packages.naming` | the unit rows of the name rules themselves |
 | `codegen.imports.runtime` | the source path's header against the descriptor path's |
 
