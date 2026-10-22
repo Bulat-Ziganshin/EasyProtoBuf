@@ -1058,12 +1058,15 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                     {
                         /// a required value is the next token, whatever that
                         /// token looks like: a token that starts with "-" is
-                        /// the value too (the owner's decision of 2026-10-22,
-                        /// which reverses the "Missing value for flag" rule
-                        /// the S4 session copied from the reference compiler).
-                        /// The "--" separator is the one exception: it ends
-                        /// option parsing and is therefore never a value.
-                        if (n < argc - 1 && std::string(argv[n + 1]) != "--")
+                        /// the value too, the "--" separator included (the
+                        /// owner's decision of 2026-10-22, which reverses the
+                        /// "Missing value for flag" rule the S4 session
+                        /// copied from the reference compiler, and which
+                        /// follows the POSIX getopt, whose long-option branch
+                        /// takes the next argv element as it is). The
+                        /// separator still ends option parsing where an
+                        /// option is expected.
+                        if (n < argc - 1)
                             optarg = argv[++n];
                         else
                             throw invalid_option(option.get(),
@@ -1102,7 +1105,7 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                         /// long form above)
                         if (optarg.empty())
                         {
-                            if (n < argc - 1 && std::string(argv[n + 1]) != "--")
+                            if (n < argc - 1)
                                 optarg = argv[++n];
                             else
                                 throw invalid_option(option.get(),

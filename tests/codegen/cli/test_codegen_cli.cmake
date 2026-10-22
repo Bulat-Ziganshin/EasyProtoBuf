@@ -375,12 +375,25 @@ if(FULL_BUILD)
     require_contains(w22_trailing_err "Missing value for flag: --out-dir"
         "W-22 a trailing option names the missing value")
 
-    # The "--" separator ends option parsing, so it is never a value.
-    run_fail(w22_separator_out w22_separator_err
-        ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir --
-                "${FIXTURE_DIR}/hasfield.proto")
-    require_contains(w22_separator_err "Missing value for flag: --out-dir"
-        "W-22 the separator is not a value")
+    # The separator is a value in the value position, exactly as the POSIX
+    # getopt takes the next argv element as it is: "--out-dir --" names an
+    # output directory "--", and the separator is not a separator there.
+    execute_process(
+        COMMAND ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir --
+                "${FIXTURE_DIR}/hasfield.proto"
+        WORKING_DIRECTORY "${w22}"
+        RESULT_VARIABLE w22_sep_result
+        OUTPUT_VARIABLE w22_sep_out
+        ERROR_VARIABLE w22_sep_err)
+    if(NOT w22_sep_result EQUAL 0)
+        message(FATAL_ERROR
+            "W-22 --out-dir -- failed\nstdout:\n${w22_sep_out}\nstderr:\n${w22_sep_err}")
+    endif()
+    require_empty(w22_sep_out "W-22 the separator value prints nothing on stdout")
+    if(NOT EXISTS "${w22}/--/hasfield.pb.hpp")
+        message(FATAL_ERROR
+            "W-22 the separator was not the value: no -- directory with the header")
+    endif()
 
     # The control: the ordinary spelling still publishes.
     set(w22_ok "${s4}/w22-ok")
