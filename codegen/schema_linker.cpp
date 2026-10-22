@@ -252,8 +252,9 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
     // available descriptor, not a by-product of a reference, and
     // `maps/data/malformed_map.pbs` is the fixture consumed here. D-28's
     // enum-number rule rides the same reference-free stage for the same reason,
-    // D-32's empty-enum rule rides it too, and so does D-39's lexical name rule
-    // (Step 7.2 repeats all four).
+    // D-32's empty-enum rule rides it too, so does D-39's lexical name rule,
+    // and S5's range and proto3-first-value rules (W-45, W-44) are the same
+    // kind of descriptor-only fact (Step 7.2 repeats all of them).
     //
     // The nesting bound rides the same stage and comes first: the sweeps below
     // descend into the nested messages, and a descriptor that nests deeper than
@@ -265,6 +266,7 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
     if (!validate_symbol_names(file, error)) return false;
     if (!validate_map_entry_shapes(file, error)) return false;
     if (!validate_enum_value_numbers(file, error)) return false;
+    if (!validate_extension_ranges(file, error)) return false;
 
     // Everything is built into a local and assigned once, at the end (A1).
     LinkedSchema linked;
@@ -363,7 +365,9 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // descriptor and an unreferenced declaration still reaches the generator
     // (contract clause 13). It is asked FIRST so the reported failure is the
     // most fundamental one, and because a name that is not a symbol name should
-    // not be indexed, compared for collisions or walked as an entry.
+    // not be indexed, compared for collisions or walked as an entry. S5 adds
+    // two more descriptor-only facts to the stage: a proto3 enum's first value
+    // (`W-44`) and every extension range's shape (`W-45`).
     for (std::size_t i = 0; i < ordered.size(); ++i) {
         // The nesting of the linked schema is bounded before the first walk
         // that follows it: the sweeps below descend into the nested messages,
@@ -378,6 +382,7 @@ bool link_schema(SchemaSet& files, LinkMode mode,
         if (!validate_symbol_names(*ordered[i], error)) return false;
         if (!validate_map_entry_shapes(*ordered[i], error)) return false;
         if (!validate_enum_value_numbers(*ordered[i], error)) return false;
+        if (!validate_extension_ranges(*ordered[i], error)) return false;
     }
 
     // Everything is built into a local and assigned once, at the end (A1).

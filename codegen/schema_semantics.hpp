@@ -159,6 +159,22 @@ bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
 // enum or the first repeated number, in declaration order.
 bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error);
 
+// Validates every extension range the file's messages declare, top-level and
+// nested, over the available descriptor alone (plan 5 follow-up S5, W-45).
+// Five shapes share DIAGNOSTIC_INVALID_EXTENSION_RANGE, because they are one
+// category - the declaration does not describe usable extension numbers: a
+// range in a proto3 file, a non-positive start, an exclusive end that does not
+// exceed its start, a range that includes a declared field number, and two
+// overlapping ranges. protoc refuses all five while it builds a file
+// (descriptor.cc:6884-6896, :7898, :6426-6430, :6454-6482) and the source path
+// refuses every one of them as text (proto_parser.cpp's extension-range
+// parser), so this is the descriptor-origin half of the same frontend parity
+// rule. An unreferenced message is still descriptor input, so the check is
+// unconditional and runs before any resolution, in both linking modes, beside
+// the entry-shape and enum-number sweeps (A26's precedent). Returns false and
+// fills error at the first offending range, in declaration order.
+bool validate_extension_ranges(SchemaFile& file, Diagnostic& error);
+
 // Validates the message nesting of one descriptor: no message may be nested
 // deeper than easypb_schema::max_message_nesting_depth() levels, which is
 // the reference compiler's own limit (MaxMessageDeclarationNestingDepth(),

@@ -1,0 +1,13 @@
+file {
+  name: "w36_conflict.proto"
+  package: "parity"
+  message_type {
+    name: "Right"
+    field {
+      name: "b"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+    }
+  }
+}

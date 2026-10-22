@@ -1,0 +1,15 @@
+syntax = "proto2";
+
+package parity;
+
+message Request {
+  optional int32 id = 1;
+}
+
+message Response {
+  optional int32 id = 1;
+}
+
+service S {
+  rpc Go (Request) returns (Response);
+}

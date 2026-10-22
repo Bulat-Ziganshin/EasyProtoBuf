@@ -4824,7 +4824,7 @@ void test_corpus_compatibility_mode(const std::string& fixture_dir)
                 const bool entry = message.options.has_map_entry &&
                                    message.options.map_entry;
                 if (entry) {
-                    CHECK(message.extension_range_count == 0);
+                    CHECK(message.extension_range.empty());
                     CHECK(message.extension_count == 0);
                 }
             }
@@ -6698,11 +6698,20 @@ ServiceDescriptorProto& add_service_named(
 }
 
 void add_method(easypb_schema::SchemaFile& file,
-                ServiceDescriptorProto& service, const char* name)
+                ServiceDescriptorProto& service, const char* name,
+                const char* input_type = 0, const char* output_type = 0)
 {
     MethodDescriptorProto method;
     method.name = file.strings.save(name);
     method.has_name = true;
+    if (input_type != 0) {
+        method.input_type = file.strings.save(input_type);
+        method.has_input_type = true;
+    }
+    if (output_type != 0) {
+        method.output_type = file.strings.save(output_type);
+        method.has_output_type = true;
+    }
     service.method.push_back(method);
 }
 
@@ -7023,11 +7032,19 @@ void build_map_entry_shape(easypb_schema::SchemaFile& file,
             break;
         }
         case MAP_SHAPE_EXTENSION_RANGE:
-            // D-62: the counters stand for DescriptorProto's wire fields 5 and
-            // 6, which no other reader of this model wants. The decode-level
-            // twin - that these counters can only be filled by those fields -
-            // is test_map_entry_extension_data_is_counted_and_refused.
-            entry.extension_range_count = 1;
+            // D-62: wire field 5 is modelled as a range list since W-45, so the
+            // shape carries one range; the sweep refuses its PRESENCE, which is
+            // all the map-entry rule asks. The decode-level twin - that the
+            // range survives the decoder with its numbers - is
+            // test_map_entry_extension_data_is_counted_and_refused.
+            {
+                DescriptorProto_ExtensionRange range;
+                range.start = 10;
+                range.end = 20;
+                range.has_start = true;
+                range.has_end = true;
+                entry.extension_range.push_back(range);
+            }
             break;
         case MAP_SHAPE_EXTENSION_MEMBER:
             entry.extension_count = 1;
@@ -7181,10 +7198,16 @@ void test_map_entry_extension_data_is_counted_and_refused()
         if (decoded.file[0].message_type.size() != 1) return;
         const DescriptorProto& entry =
             decoded.file[0].message_type[0].nested_type[0];
-        // The decoder's own read of wire fields 5 and 6 - and the sweep asks
-        // exactly these two counters.
-        CHECK(entry.extension_range_count == (shape == 1 ? 1 : 0));
+        // The decoder's own read of wire fields 5 and 6 - the sweep asks the
+        // range list and the extension count.
+        CHECK(entry.extension_range.size() == (shape == 1 ? 1u : 0u));
         CHECK(entry.extension_count == (shape == 2 ? 1 : 0));
+        if (shape == 1 && entry.extension_range.size() == 1) {
+            CHECK(entry.extension_range[0].start == 10);
+            CHECK(entry.extension_range[0].end == 20);
+            CHECK(entry.extension_range[0].has_start);
+            CHECK(entry.extension_range[0].has_end);
+        }
 
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = set.add_file("root.proto");
@@ -7598,15 +7621,19 @@ void test_descriptor_origin_method_names_are_validated()
         CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
         CHECK(error.message.find("go") != std::string::npos);
     }
-    // Control: a well-formed service with two distinct method names links.
+    // Control: a well-formed service with two distinct method names whose
+    // endpoints resolve to messages of the same file links. The endpoints are
+    // required since W-16, so a named-but-bare method is not "well-formed".
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
             make_simple_file(set, "method-ok.pbs", "pkg");
         file.from_descriptor_set = true;
+        add_message(file, "Request");
+        add_message(file, "Response");
         ServiceDescriptorProto& service = add_service_named(file, "S");
-        add_method(file, service, "go");
-        add_method(file, service, "stop");
+        add_method(file, service, "go", ".pkg.Request", ".pkg.Response");
+        add_method(file, service, "stop", ".pkg.Request", ".pkg.Response");
 
         easypb_schema::Diagnostic error;
         CHECK(accepted_in_both_modes(set, error));

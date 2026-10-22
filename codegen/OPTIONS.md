@@ -30,7 +30,7 @@ codegen -I schemas --out-dir build/generated common/state.proto common/node.prot
 
 `--target` is not used with source input: the input list itself is the selection.
 
-Top-level `service` and `rpc` declarations are validated and skipped while message codecs from the same file are generated. Codegen does not generate RPC client or server APIs.
+Top-level `service` and `rpc` declarations are validated, and every method's name and endpoint types are linked, while message codecs from the same file are generated. A duplicate method name or an endpoint that is missing or is not a message type is refused; method options are validated and discarded. Codegen does not generate RPC client or server APIs.
 
 ### Descriptor-set input
 
@@ -58,9 +58,9 @@ codegen --descriptor-set project.pbs \
     --out-dir build/generated
 ```
 
-A single-file set without `--target` keeps the thin compatibility path: external type declarations only, automatic dependency includes omitted, and a reference into a missing dependency tolerated with a warning printed on stderr, as before plan 5. Naming an explicit `--target` links the loaded set strictly instead, so a missing dependency is an error. A descriptor file with no logical name has no `--target` spelling: an unnamed single-file set is reachable only through this no-target compatibility path. `protoc --include_imports` produces the complete closure intended for that mode; dependency headers it declares must exist for the generated C++ to compile. `--target` is valid only with `--descriptor-set`.
+A single-file set without `--target` keeps the thin compatibility path: external type declarations only, and a reference into a missing dependency tolerated with a warning printed on stderr, as before plan 5. The generated header still includes every direct dependency it names, exactly as the complete link does. Naming an explicit `--target` links the loaded set strictly instead, so a missing dependency is an error. A descriptor file with no logical name has no `--target` spelling: an unnamed single-file set is reachable only through this no-target compatibility path. `protoc --include_imports` produces the complete closure intended for that mode; dependency headers it declares must exist for the generated C++ to compile. `--target` is valid only with `--descriptor-set`.
 
-Descriptor-set input is useful when descriptor files are already available or when another tool produces them. Definitions of imported C++ types are never emitted inside the target's own header; a complete link includes the dependency header instead, so generate the dependencies as well. Fully qualified Protobuf names map to absolute C++ names in their package namespaces. See [Packages and C++ namespaces](GENERATED_CODE.md#packages-and-c-namespaces) for the generated names.
+Descriptor-set input is useful when descriptor files are already available or when another tool produces them. Definitions of imported C++ types are never emitted inside the target's own header; the header includes the dependency header instead, in both link modes, so generate the dependencies as well. Fully qualified Protobuf names map to absolute C++ names in their package namespaces. See [Packages and C++ namespaces](GENERATED_CODE.md#packages-and-c-namespaces) for the generated names.
 
 Without `--descriptor-set`, Codegen infers the common input mode from file extensions: an invocation containing both `.pbs` and non-`.pbs` names is rejected. `--descriptor-set` forces every positional input to be decoded as a binary descriptor set; it does not enable mixing descriptor sets with `.proto` source files.
 

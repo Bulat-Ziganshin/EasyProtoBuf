@@ -142,6 +142,23 @@ struct MessageOptions
 };
 
 
+// One `extensions START to END;` declaration. `start` is inclusive and `end`
+// exclusive, exactly as descriptor.proto defines the pair
+// (`DescriptorProto.ExtensionRange.start`/`.end`). The plan-5 follow-up's
+// session S5 (`W-45`) models the pair instead of counting it: protoc refuses a
+// proto3 extension range and a range that includes a declared field number
+// (`descriptor.cc:6426-6430`, `:7898`), and neither question can be answered
+// from a count.
+struct DescriptorProto_ExtensionRange
+{
+    int32_t start = 0;  // field 1, inclusive
+    int32_t end = 0;    // field 2, exclusive
+
+    bool has_start = false;
+    bool has_end = false;
+};
+
+
 // Message
 struct DescriptorProto
 {
@@ -151,18 +168,14 @@ struct DescriptorProto
     std::vector<EnumDescriptorProto> enum_type;
     std::vector<OneofDescriptorProto> oneof_decl;
     MessageOptions options;
-    // Wire fields 5 (`extension_range`) and 6 (`extension`). NEITHER is
-    // modelled: no component here reads extension metadata, and validating it
-    // is outside the linker's scope (contract clause 12). Only the PRESENCE of
-    // each is counted, because protoc's `ValidateMapEntry` refuses a map entry
-    // that declares either (`descriptor.cc:8448-8452`: "must not contain
-    // extensions, extension range or nested message or enums"), and without
-    // the counts a crafted synthetic entry's extension data is invisible to the
-    // sweep that rule needs (ledger `D-62`, fix round r26). Counts rather than
-    // decoded members: a declaration's contents are none of this model's
-    // business, and a count cannot throw on a required member of a shape
-    // nothing else reads.
-    int32_t extension_range_count = 0;  // field 5, occurrence count
+    // Wire field 5: the extension ranges themselves, decoded since `W-45`
+    // (the proto3 and field-overlap rules need their numbers).
+    std::vector<DescriptorProto_ExtensionRange> extension_range;
+    // Wire field 6 (`extension`). Still counted, not decoded: no component
+    // reads extension members, and the only question asked about them is
+    // whether a synthetic map entry declares any (protoc's `ValidateMapEntry`,
+    // `descriptor.cc:8448-8452`, ledger `D-62`). A count cannot throw on a
+    // required member of a shape nothing else reads.
     int32_t extension_count = 0;        // field 6, occurrence count
 
     bool has_name = false;
@@ -170,18 +183,21 @@ struct DescriptorProto
 };
 
 
-// Single .proto method. Only the NAME is retained, and only so the lexical
-// name sweep can check it (ledger `D-57`): EasyProtoBuf Codegen generates
-// message codecs rather than RPC client/server APIs, and nothing resolves an
-// input/output type. protoc validates a method name like any other declaration
-// name (`ValidateSymbolName`, descriptor.cc:7208/7228) and records it in its
-// service's scope, so dropping the field left a malformed or duplicated method
-// name invisible to every check.
+// Single .proto method. The NAME is retained so the lexical name sweep can
+// check it (ledger `D-57`), and the input/output type names are retained so the
+// linker can resolve them (`W-16`): protoc's `CrossLinkMethod` refuses a name
+// that resolves nowhere and one that resolves to something other than a
+// message (`descriptor.cc:7714-7757`), and the source frontend used to discard
+// the whole method table, so neither shape could ever be refused there.
 struct MethodDescriptorProto
 {
     str_view name;
+    str_view input_type;   // field 2
+    str_view output_type;  // field 3
 
     bool has_name = false;
+    bool has_input_type = false;
+    bool has_output_type = false;
 };
 
 
@@ -351,6 +367,20 @@ inline void decode(easypb::Decoder pb, MessageOptions &x)
 }
 
 
+inline void decode(easypb::Decoder pb, DescriptorProto_ExtensionRange &x)
+{
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 1: pb.get_int32(&x.start, &x.has_start); break;
+            case 2: pb.get_int32(&x.end, &x.has_end); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
 inline void decode(easypb::Decoder pb, DescriptorProto &x)
 {
     while(pb.get_next_field())
@@ -361,10 +391,10 @@ inline void decode(easypb::Decoder pb, DescriptorProto &x)
             case 2: pb.get_repeated_message(&x.field); break;
             case 3: pb.get_repeated_message(&x.nested_type); break;
             case 4: pb.get_repeated_message(&x.enum_type); break;
-            // Fields 5 and 6 are counted, not decoded (see the struct): the
-            // skip is the whole read, and the count is what A26's sweep asks
+            case 5: pb.get_repeated_message(&x.extension_range); break;
+            // Field 6 is counted, not decoded (see the struct): the skip is
+            // the whole read, and the count is what A26's sweep asks
             // (ledger `D-62`).
-            case 5: ++x.extension_range_count; pb.skip_field(); break;
             case 6: ++x.extension_count; pb.skip_field(); break;
             case 8: pb.get_repeated_message(&x.oneof_decl); break;
             case 7: pb.get_message(&x.options, &x.has_options); break;
@@ -385,6 +415,8 @@ inline void decode(easypb::Decoder pb, MethodDescriptorProto &x)
         switch(pb.field_num)
         {
             case 1: pb.get_string(&x.name, &x.has_name); break;
+            case 2: pb.get_string(&x.input_type, &x.has_input_type); break;
+            case 3: pb.get_string(&x.output_type, &x.has_output_type); break;
             default: pb.skip_field();
         }
     }

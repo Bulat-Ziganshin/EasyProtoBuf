@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+package parity;
+
+message M {
+  optional int32 a = 1;
+  extensions 100 to 199;
+}

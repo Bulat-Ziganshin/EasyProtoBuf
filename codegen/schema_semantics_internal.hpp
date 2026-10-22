@@ -51,6 +51,14 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
                      const std::string& parent, const DescriptorPath& message_path,
                      Diagnostic& error);
 
+// The service half of the same walk (`W-16`): both endpoint types of every
+// method, after the messages. A missing endpoint field is refused in every
+// mode; a name is resolved only when link_types is true.
+bool resolve_services(SchemaFile& file, const SymbolIndex& symbols,
+                      const std::set<const SchemaFile*>& visible_files,
+                      const UnresolvedPolicy& unresolved_policy,
+                      bool link_types, Diagnostic& error);
+
 // 1. the shape a field declares - always asked, in both modes
 bool validate_field_declared_shape(SchemaFile& file, FieldDescriptorProto& field,
                                    const DescriptorPath& field_path,

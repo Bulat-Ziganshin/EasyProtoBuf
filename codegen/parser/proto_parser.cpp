@@ -971,33 +971,47 @@ private:
     // Rpc <- "rpc" Identifier "(" "stream"? TypeName ")"
     //        "returns" "(" "stream"? TypeName ")" (RpcBody / ";")
     // The caller has consumed "rpc". Request/response names and method
-    // options are validated syntactically and then discarded.
-    void parse_rpc()
+    // options are validated syntactically; the method's name and both endpoint
+    // type names are retained (S5/W-16), because protoc resolves the two
+    // endpoints like field type names and refuses a method whose type resolves
+    // nowhere or resolves to a non-message (`CrossLinkMethod`,
+    // descriptor.cc:7714-7757). Method options are still discarded.
+    MethodDescriptorProto parse_rpc(SourceLocation* name_location)
     {
-        (void)identifier();
+        *name_location = current_.location;
+        MethodDescriptorProto method;
+        const std::string name = identifier();
+        method.name = out_.strings.save(name);
+        method.has_name = true;
         expect_symbol('(');
         (void)accept_keyword("stream");
-        (void)full_identifier(true);
+        const std::string input_type = full_identifier(true);
+        method.input_type = out_.strings.save(input_type);
+        method.has_input_type = true;
         expect_symbol(')');
         if (!accept_keyword("returns")) fail("expected 'returns' in rpc declaration");
         expect_symbol('(');
         (void)accept_keyword("stream");
-        (void)full_identifier(true);
+        const std::string output_type = full_identifier(true);
+        method.output_type = out_.strings.save(output_type);
+        method.has_output_type = true;
         expect_symbol(')');
-        if (accept_symbol(';')) return;
+        if (accept_symbol(';')) return method;
         if (current_.kind == TOKEN_SYMBOL && current_.symbol == '{') {
             parse_rpc_body();
-            return;
+            return method;
         }
         fail("expected ';' or rpc body");
+        return method;
     }
 
     // Service <- "service" Identifier "{" ServiceElement* "}"
     // ServiceElement <- EmptyStatement / OptionStatement / Rpc
     // Services are accepted so message schemas can be consumed by Codegen.
-    // Only the service names are retained in the trimmed descriptor model
-    // because EasyProtoBuf generates message codecs rather than RPC APIs;
-    // the names still participate in package-scope collision validation.
+    // The service name participates in package-scope collision validation and
+    // the methods are retained (S5/W-16) so the lexical name sweep can refuse
+    // a duplicate method and the linker can resolve the endpoint types; no
+    // RPC API is generated.
     void parse_service()
     {
         const SourceLocation name_location = current_.location;
@@ -1018,7 +1032,12 @@ private:
                 continue;
             }
             if (accept_keyword("rpc")) {
-                parse_rpc();
+                SourceLocation method_location;
+                ServiceDescriptorProto& service_slot = out_.file.service.back();
+                const std::size_t method_index = service_slot.method.size();
+                service_slot.method.push_back(parse_rpc(&method_location));
+                out_.declaration_locations[easypb_schema::service_method_path(
+                    path, static_cast<int>(method_index))] = method_location;
                 continue;
             }
             fail("expected rpc, option, or ';' in service body");

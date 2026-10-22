@@ -149,7 +149,31 @@ enum DiagnosticCode
     // descriptor origin, because a source-origin field carries no declared
     // kind: deferred parsing leaves has_type unset and the kind is written
     // during resolution.
-    DIAGNOSTIC_INVALID_FIELD_TYPE
+    DIAGNOSTIC_INVALID_FIELD_TYPE,
+    // Plan 5 follow-up S5 (W-44): the first value of a proto3 enum is not
+    // zero. protoc refuses the shape when it builds the file ("The first enum
+    // value must be zero for open enums.", descriptor.cc:8245) and our parser
+    // refuses the source twin as text ("the first proto3 enum value must be
+    // zero", proto_parser.cpp's enum rule), so this is the descriptor-origin
+    // half of that frontend parity rule. Only a proto3 file is asked: proto2
+    // gives the first value no special meaning. The check rides the
+    // reference-free enum sweep, so an enum nothing references is covered too.
+    DIAGNOSTIC_PROTO3_ENUM_FIRST_VALUE,
+    // Plan 5 follow-up S5 (W-45): an extension range a descriptor declares is
+    // not a range protoc would build. Four shapes share the code because they
+    // are one category - the declaration cannot describe extension numbers:
+    // a range in a proto3 file ("Extension ranges are not allowed in
+    // proto3.", descriptor.cc:7898), a non-positive start, a range whose
+    // exclusive end does not exceed its start (`BuildExtensionRange`,
+    // descriptor.cc:6884-6898), a range that includes a declared field number
+    // ("Extension range $0 to $1 includes field \"$2\" ($3).",
+    // descriptor.cc:6426-6430), and two overlapping ranges (`:6454-6482`).
+    // The source path refuses every one of them as text
+    // (proto_parser.cpp:1761/1794/1814), so this is the descriptor-origin half
+    // of the same parity rule. Descriptor-origin only: the parser refuses the
+    // same shapes as text before they reach the model, and its ranges are not
+    // retained in the descriptor tree at all.
+    DIAGNOSTIC_INVALID_EXTENSION_RANGE
 };
 
 struct Diagnostic
@@ -386,6 +410,17 @@ inline DescriptorPath service_method_path(const DescriptorPath& service_path,
     return path;
 }
 
+// `MethodDescriptorProto.input_type` is field 2 and `.output_type` is field 3
+// (descriptor.proto). Unlike the name, the two are references, so a diagnostic
+// about one names the type field itself; `field_number` is 2 or 3.
+inline DescriptorPath service_method_type_path(const DescriptorPath& method_path,
+                                               int field_number)
+{
+    DescriptorPath path = method_path;
+    path.push_back(field_number);
+    return path;
+}
+
 inline DescriptorPath message_field_path(const DescriptorPath& message_path,
                                          int field_index)
 {
@@ -419,6 +454,18 @@ inline DescriptorPath message_oneof_path(const DescriptorPath& message_path,
     DescriptorPath path = message_path;
     path.push_back(8);
     path.push_back(oneof_index);
+    return path;
+}
+
+// `DescriptorProto.extension_range` is field 5. The model carries the ranges
+// themselves since `W-45`, so a range can be named by a descriptor path like
+// every other declaration.
+inline DescriptorPath message_extension_range_path(
+    const DescriptorPath& message_path, int range_index)
+{
+    DescriptorPath path = message_path;
+    path.push_back(5);
+    path.push_back(range_index);
     return path;
 }
 

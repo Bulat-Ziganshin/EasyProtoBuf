@@ -39,6 +39,15 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                              const std::string& diagnostic_label,
                              SchemaSet& result, Diagnostic& error);
 
+// True when two decoded files carry the same modeled content: every field
+// descriptor.pb.hpp declares, presence flags included, compared by value. The
+// descriptor loader uses it for the overlap rule of `W-36` - a file two
+// containers both carry is merged when the two copies agree, and refused as a
+// conflict when they do not - and the rule is about the content this project
+// reads, not about the two containers' bytes.
+bool same_descriptor_file(const FileDescriptorProto& left,
+                          const FileDescriptorProto& right);
+
 } // namespace easypb_schema
 
 #endif

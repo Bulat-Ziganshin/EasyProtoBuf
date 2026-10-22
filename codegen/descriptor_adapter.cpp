@@ -72,8 +72,10 @@ void intern_file_descriptor(StringPool& strings, FileDescriptorProto& file)
         ServiceDescriptorProto& service = file.service[i];
         service.name = intern_text(strings, service.name);
         for (std::size_t j = 0; j < service.method.size(); ++j) {
-            service.method[j].name =
-                intern_text(strings, service.method[j].name);
+            MethodDescriptorProto& method = service.method[j];
+            method.name = intern_text(strings, method.name);
+            method.input_type = intern_text(strings, method.input_type);
+            method.output_type = intern_text(strings, method.output_type);
         }
     }
 }
@@ -132,7 +134,188 @@ bool fail(const std::string& label, const std::string& message,
     return false;
 }
 
+// --- structural equality of two modeled descriptors -------------------------
+//
+// `W-36` makes two containers that carry the same logical file a merge instead
+// of a blanket refusal. "The same file" is decided over the modeled content:
+// every field descriptor.pb.hpp declares, presence flags included, because a
+// presence flag changes what the linker reads (an absent label is OPTIONAL, an
+// absent kind is resolved by protoc's default). Strings compare by value, so
+// the comparison is independent of which pool owns them.
+//
+// The walk must grow with the model: a field added to descriptor.pb.hpp and
+// not compared here would make two different files look identical. The
+// unit suite pins that with the identity fixture of the loader lane.
+
+bool same_descriptor(const CppFieldOptions& left, const CppFieldOptions& right)
+{
+    return left.type == right.type && left.has_type == right.has_type;
+}
+
+bool same_descriptor(const FieldOptions& left, const FieldOptions& right)
+{
+    return left.packed == right.packed &&
+           left.has_packed == right.has_packed && left.cpp.type == right.cpp.type &&
+           left.cpp.has_type == right.cpp.has_type &&
+           left.has_cpp == right.has_cpp;
+}
+
+bool same_descriptor(const FieldDescriptorProto& left,
+                     const FieldDescriptorProto& right)
+{
+    return left.name == right.name && left.number == right.number &&
+           left.label == right.label && left.type == right.type &&
+           left.type_name == right.type_name &&
+           left.default_value == right.default_value &&
+           left.oneof_index == right.oneof_index &&
+           same_descriptor(left.options, right.options) &&
+           left.has_name == right.has_name &&
+           left.has_number == right.has_number &&
+           left.has_label == right.has_label &&
+           left.has_type == right.has_type &&
+           left.has_type_name == right.has_type_name &&
+           left.has_default_value == right.has_default_value &&
+           left.has_options == right.has_options &&
+           left.has_oneof_index == right.has_oneof_index;
+}
+
+bool same_descriptor(const MessageOptions& left, const MessageOptions& right)
+{
+    return left.map_entry == right.map_entry &&
+           left.has_map_entry == right.has_map_entry;
+}
+
+bool same_descriptor(const DescriptorProto_ExtensionRange& left,
+                     const DescriptorProto_ExtensionRange& right)
+{
+    return left.start == right.start && left.end == right.end &&
+           left.has_start == right.has_start && left.has_end == right.has_end;
+}
+
+bool same_descriptor(const EnumValueDescriptorProto& left,
+                     const EnumValueDescriptorProto& right)
+{
+    return left.name == right.name && left.number == right.number &&
+           left.has_name == right.has_name && left.has_number == right.has_number;
+}
+
+bool same_descriptor(const EnumOptions& left, const EnumOptions& right)
+{
+    return left.allow_alias == right.allow_alias &&
+           left.has_allow_alias == right.has_allow_alias;
+}
+
+bool same_descriptor(const EnumDescriptorProto& left,
+                     const EnumDescriptorProto& right)
+{
+    if (left.name != right.name || left.has_name != right.has_name ||
+        left.has_options != right.has_options ||
+        !same_descriptor(left.options, right.options) ||
+        left.value.size() != right.value.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.value.size(); ++i) {
+        if (!same_descriptor(left.value[i], right.value[i])) return false;
+    }
+    return true;
+}
+
+bool same_descriptor(const OneofDescriptorProto& left,
+                     const OneofDescriptorProto& right)
+{
+    return left.name == right.name && left.has_name == right.has_name;
+}
+
+bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right)
+{
+    if (left.name != right.name || left.has_name != right.has_name ||
+        left.has_options != right.has_options ||
+        left.extension_count != right.extension_count ||
+        !same_descriptor(left.options, right.options) ||
+        left.field.size() != right.field.size() ||
+        left.nested_type.size() != right.nested_type.size() ||
+        left.enum_type.size() != right.enum_type.size() ||
+        left.oneof_decl.size() != right.oneof_decl.size() ||
+        left.extension_range.size() != right.extension_range.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.field.size(); ++i) {
+        if (!same_descriptor(left.field[i], right.field[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.nested_type.size(); ++i) {
+        if (!same_descriptor(left.nested_type[i], right.nested_type[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.enum_type.size(); ++i) {
+        if (!same_descriptor(left.enum_type[i], right.enum_type[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.oneof_decl.size(); ++i) {
+        if (!same_descriptor(left.oneof_decl[i], right.oneof_decl[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.extension_range.size(); ++i) {
+        if (!same_descriptor(left.extension_range[i], right.extension_range[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool same_descriptor(const MethodDescriptorProto& left,
+                     const MethodDescriptorProto& right)
+{
+    return left.name == right.name && left.input_type == right.input_type &&
+           left.output_type == right.output_type && left.has_name == right.has_name &&
+           left.has_input_type == right.has_input_type &&
+           left.has_output_type == right.has_output_type;
+}
+
+bool same_descriptor(const ServiceDescriptorProto& left,
+                     const ServiceDescriptorProto& right)
+{
+    if (left.name != right.name || left.has_name != right.has_name ||
+        left.method.size() != right.method.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.method.size(); ++i) {
+        if (!same_descriptor(left.method[i], right.method[i])) return false;
+    }
+    return true;
+}
+
 } // namespace
+
+bool same_descriptor_file(const FileDescriptorProto& left,
+                          const FileDescriptorProto& right)
+{
+    if (left.name != right.name || left.package != right.package ||
+        left.syntax != right.syntax || left.edition != right.edition ||
+        left.has_name != right.has_name ||
+        left.has_package != right.has_package ||
+        left.has_syntax != right.has_syntax ||
+        left.has_edition != right.has_edition ||
+        left.dependency.size() != right.dependency.size() ||
+        left.public_dependency != right.public_dependency ||
+        left.weak_dependency != right.weak_dependency ||
+        left.message_type.size() != right.message_type.size() ||
+        left.enum_type.size() != right.enum_type.size() ||
+        left.service.size() != right.service.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.dependency.size(); ++i) {
+        if (left.dependency[i] != right.dependency[i]) return false;
+    }
+    for (std::size_t i = 0; i < left.message_type.size(); ++i) {
+        if (!same_descriptor(left.message_type[i], right.message_type[i])) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < left.enum_type.size(); ++i) {
+        if (!same_descriptor(left.enum_type[i], right.enum_type[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.service.size(); ++i) {
+        if (!same_descriptor(left.service[i], right.service[i])) return false;
+    }
+    return true;
+}
 
 bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                              const std::string& diagnostic_label,

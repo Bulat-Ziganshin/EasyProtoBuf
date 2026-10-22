@@ -9,7 +9,9 @@
 // build/plan5-codegen-integration-process/invariants.md, group D):
 //   D1 inputs are deep-copied; buffers may be destroyed after ingestion
 //   D2 every retained string is interned in the owning pool
-//   D3 duplicate logical names are rejected within and across calls
+//   D3 duplicate logical names are rejected within one container and across
+//      different definitions; an identical copy from another container merges
+//      (plan 5 follow-up S5/W-36)
 //   D4 ingestion never selects targets
 //   D5 descriptor origin is labeled without inventing a file
 //   D6 no common operation requires physical_name to exist on disk
@@ -537,10 +539,12 @@ void test_loader_rejects_duplicate_names_within_one_container()
     std::remove(distinct.c_str());
 }
 
-// D3 across containers: the adapter's second call sees the first container's
-// file. Both the two-containers-in-one-call shape and the second call on an
-// already-populated set are refused, and each failure clears the set.
-void test_loader_rejects_duplicate_names_across_containers(
+// D3 across containers, under W-36: one logical file several containers carry
+// is one file. An identical copy is merged (the load succeeds and the set keeps
+// one file), while two DIFFERENT definitions of the same logical name are
+// refused - silently keeping one of them would generate a header from a schema
+// the caller may not have meant - and the diagnostic names both containers.
+void test_loader_merges_duplicate_names_across_containers(
     const std::string& fixture_dir)
 {
     const std::string path =
@@ -550,19 +554,38 @@ void test_loader_rejects_duplicate_names_across_containers(
     easypb_schema::Diagnostic error;
     CHECK(easypb_schema::load_descriptor_sets(once, set, error));
     CHECK(set.files().size() == 1);
-    CHECK(!easypb_schema::load_descriptor_sets(once, set, error));
+    // The same container again: its one file is identical, so it is merged and
+    // the set stays usable with the first copy.
+    CHECK(easypb_schema::load_descriptor_sets(once, set, error));
+    CHECK(set.files().size() == 1);
+    CHECK(set.find_file("integration-proto2.proto") != 0);
+
+    // Two containers carrying one logical name, in a single call: merged.
+    std::vector<std::string> twice(2, path);
+    CHECK(easypb_schema::load_descriptor_sets(twice, set, error));
+    CHECK(set.files().size() == 1);
+
+    // The conflict half: a second container defines the SAME logical name with
+    // a different package, which no merge can reconcile.
+    const std::string conflicting = "imports-descriptor-conflict.pbs";
+    std::string changed;
+    changed += wire_message_field(
+        1, named_file("integration-proto2.proto") +
+               wire_text_field(2, "conflict"));
+    CHECK(write_binary_file(conflicting, changed));
+    std::vector<std::string> inputs;
+    inputs.push_back(path);
+    inputs.push_back(conflicting);
+    CHECK(!easypb_schema::load_descriptor_sets(inputs, set, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
-    CHECK(error.file == path);
+    CHECK(error.file == conflicting);
     CHECK(error.message.find("\"integration-proto2.proto\"") !=
           std::string::npos);
-    CHECK(set.files().empty());
-
-    // Two containers carrying one logical name, in a single call.
-    std::vector<std::string> twice(2, path);
-    CHECK(!easypb_schema::load_descriptor_sets(twice, set, error));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(error.message.find(path) != std::string::npos);
+    CHECK(error.message.find(conflicting) != std::string::npos);
     CHECK(set.files().empty());
     CHECK(set.targets().empty());
+    std::remove(conflicting.c_str());
 }
 
 // D2, the custom half: `(easypb.cpp).type` strings are interned like every
@@ -682,7 +705,7 @@ int main(int argc, char** argv)
     test_loader_rejects_an_unnamed_file_in_a_multi_file_container();
     test_loader_single_anonymous_file_is_not_addressable();
     test_loader_rejects_duplicate_names_within_one_container();
-    test_loader_rejects_duplicate_names_across_containers(fixture_dir);
+    test_loader_merges_duplicate_names_across_containers(fixture_dir);
     test_loader_custom_type_strings_survive_the_container(fixture_dir);
 
     if (failures != 0) {

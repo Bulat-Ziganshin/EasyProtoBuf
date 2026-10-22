@@ -1591,9 +1591,18 @@ std::string dependency_includes(const easypb_schema::SchemaFile& target,
             if (!needed) {
                 const easypb_schema::SchemaFile* dependency =
                     schema.files == 0 ? 0 : schema.files->find_file(logical);
-                // A dependency the set does not carry cannot be proven to be
-                // metadata-only, so its include stays.
-                needed = dependency == 0 ||
+                // A support file the set does not carry - the compatibility
+                // single-file workflow, whose thin descriptor names its
+                // imports but holds only the target - is metadata-only by
+                // NAME: the closed list above is exactly the two known
+                // support files, and the reference check below needs the
+                // dependency's declarations, which the thin set cannot
+                // provide. When the dependency IS carried, a real reference
+                // to one of its declarations restores the include. This is
+                // what keeps the compatibility output byte-identical to the
+                // complete-closure output of the same schema (I2), now that
+                // dependency includes are emitted in both modes (W-68).
+                needed = dependency != 0 &&
                          file_names_owner(file, *dependency, schema);
             }
         }
@@ -1753,8 +1762,14 @@ std::string easypb_codegen::generate_header(
         : owned_descriptor_text(file.name);
     std::string header = myformat(FILE_TEMPLATE, provenance);
     // Dependency includes belong outside package namespaces, exactly like the
-    // fixed runtime includes above them; thin compatibility omits them all.
-    if (schema.complete) {
+    // fixed runtime includes above them. They are emitted in BOTH linking
+    // modes (W-68): a compatibility-mode header used to carry none at all,
+    // so a field naming an imported type reached the caller as `::q::Ext`
+    // with nothing that declares it and did not compile. The header now
+    // declares every direct dependency, exactly as a complete link does; the
+    // compatibility mode's tolerance decides which references the schema may
+    // keep, never whether the header names the file it came from.
+    {
         const std::string includes = dependency_includes(target, schema);
         if (!includes.empty()) {
             header += includes;

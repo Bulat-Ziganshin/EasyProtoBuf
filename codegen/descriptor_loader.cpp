@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <exception>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -93,19 +94,27 @@ int measure_set_nesting(const std::string& bytes)
 }
 
 bool fail(const std::string& file, const std::string& message,
-          SchemaSet& result, Diagnostic& error)
+          SchemaSet& result, Diagnostic& error,
+          DiagnosticCode code = DIAGNOSTIC_GENERIC)
 {
     result.clear();
     error = Diagnostic();
     error.file = file;
     error.location = unknown_location();
     error.message = message;
+    error.code = code;
     return false;
 }
 
 std::string count_text(std::size_t value)
 {
     return easypb::detail::number_to_string(static_cast<uint64_t>(value));
+}
+
+std::string own_text(str_view value)
+{
+    if (value.empty()) return std::string();
+    return std::string(value.data(), value.size());
 }
 
 // One file with no logical name: the legacy single-file `.pbs` workflow. The
@@ -204,8 +213,51 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
                                              error)) {
                 return false;
             }
-        } else if (!append_descriptor_files(decoded.file, path, result, error)) {
-            return false;
+        } else {
+            // `W-36`: a file several containers carry is one file, not a
+            // collision. protoc merges the copies and keeps the first
+            // (measured 2026-10-22, the G4b probe pair), and so does this:
+            // an identical copy is dropped, and only two DIFFERENT
+            // definitions of one logical name are refused, because silently
+            // keeping one of them would generate a header from a schema the
+            // caller may not have meant. The comparison is over the modeled
+            // descriptor (same_descriptor_file), not over the two containers'
+            // bytes: a re-encoded set and its source are the same file.
+            std::vector<FileDescriptorProto> fresh;
+            // Two copies of one name INSIDE one container stay refused: the
+            // merge below is the cross-container rule (W-36), and a set that
+            // names one file twice is malformed whoever else carries it.
+            std::set<std::string> carried_names;
+            for (std::size_t j = 0; j < decoded.file.size(); ++j) {
+                const FileDescriptorProto& file = decoded.file[j];
+                const std::string logical = own_text(file.name);
+                if (!carried_names.insert(logical).second) {
+                    return fail(
+                        path,
+                        path + ": duplicate logical file name \"" + logical +
+                            "\" in descriptor source \"" + path +
+                            "\" (a file with this name was already appended)",
+                        result, error, DIAGNOSTIC_DUPLICATE_SYMBOL);
+                }
+                SchemaFile* existing = result.find_file(logical);
+                if (existing == 0) {
+                    fresh.push_back(file);
+                    continue;
+                }
+                if (same_descriptor_file(existing->file, file)) continue;
+                return fail(
+                    path,
+                    path + ": descriptor file \"" + logical +
+                        "\" conflicts with the copy carried by \"" +
+                        existing->physical_name +
+                        "\": two containers carry different definitions of "
+                        "one logical file",
+                    result, error, DIAGNOSTIC_DUPLICATE_SYMBOL);
+            }
+            if (!fresh.empty() &&
+                !append_descriptor_files(fresh, path, result, error)) {
+                return false;
+            }
         }
 
         // The wrapper is the only layer that knows the container; retain it

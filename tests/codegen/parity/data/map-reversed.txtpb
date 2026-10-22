@@ -1,0 +1,32 @@
+file {
+  name: "map-reversed.proto"
+  package: "parity"
+  message_type {
+    name: "M"
+    field {
+      name: "items"
+      number: 1
+      label: LABEL_REPEATED
+      type: TYPE_MESSAGE
+      type_name: ".parity.M.ItemsEntry"
+    }
+    nested_type {
+      name: "ItemsEntry"
+      field {
+        name: "value"
+        number: 2
+        label: LABEL_OPTIONAL
+        type: TYPE_INT32
+      }
+      field {
+        name: "key"
+        number: 1
+        label: LABEL_OPTIONAL
+        type: TYPE_STRING
+      }
+      options {
+        map_entry: true
+      }
+    }
+  }
+}

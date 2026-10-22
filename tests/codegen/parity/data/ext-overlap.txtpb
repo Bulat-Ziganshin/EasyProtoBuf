@@ -1,0 +1,15 @@
+file {
+  name: "ext-overlap.proto"
+  package: "parity"
+  message_type {
+    name: "M"
+    extension_range {
+      start: 100
+      end: 200
+    }
+    extension_range {
+      start: 150
+      end: 250
+    }
+  }
+}
