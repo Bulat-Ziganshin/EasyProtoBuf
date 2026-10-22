@@ -1,0 +1,18 @@
+# A descriptor whose enum declares the two values `class` and `class_`. The
+# escape rule is not injective, so the two Protobuf names are one C++ name
+# and the enumerators of the enum would collide.
+#
+# The fixture is crafted, because the reference compiler refuses the schema
+# outright: "Enum name class_ has the same name as class if you ignore case
+# and strip out the enum name prefix (if any)." protoc cannot produce this
+# descriptor from source text.
+file {
+  name: "escape-enum-value.proto"
+  syntax: "proto2"
+  package: "escapeenumvalue"
+  enum_type {
+    name: "E"
+    value { name: "class" number: 0 }
+    value { name: "class_" number: 1 }
+  }
+}

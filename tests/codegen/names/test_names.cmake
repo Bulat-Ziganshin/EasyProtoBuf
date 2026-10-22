@@ -2,7 +2,11 @@
 #
 # One lane for the two rows of the plan-5 follow-up's session S2: W-08 (a
 # C++ keyword in a declaration name) and W-09 (a presence flag that collides
-# with a member of the same message). The three things every row needs:
+# with a member of the same message), and for the post-closure review of
+# 2026-10-22 that found both rules incomplete: a nested type collides with a
+# presence flag as well (PC-01), and the escape rule is not injective, so two
+# Protobuf names can be one C++ name (PC-02). The three things every row
+# needs:
 #
 #   1. BOTH input paths. The source path (.proto) and the descriptor path
 #      (.pbs) must produce the SAME header for the same schema. The two
@@ -139,24 +143,41 @@ require_empty(runtime_err "The runtime checker's stderr")
 require_contains(runtime_out "every escaped name carries the data the schema names"
     "The runtime checker's verdict")
 
-# --- the refusal ------------------------------------------------------------
+# --- the refusals ------------------------------------------------------------
 #
-# A field named `has_foo` next to a field named `foo`: the presence flag of
-# `foo` is named `has_foo`, so the struct would declare two members with that
-# name. The shape is refused with a diagnostic, in proto2 and in proto3.
+# A name collision in one C++ scope. A scope cannot hold two declarations
+# with one name, and the escape rule is not injective: `class` and `class_`
+# are two Protobuf names and one C++ name. The shapes are refused with a
+# diagnostic, in proto2 and in proto3, on both input paths.
+#
+# Each entry is the fixture and the words its diagnostic must carry.
 
-foreach(name has-collision has-collision-p3)
+set(refusal_fixtures
+    "has-collision|collides with the presence flag"
+    "has-collision-p3|collides with the presence flag"
+    "nested-flag|collides with the presence flag"
+    "escape-field|would both be named"
+    "escape-message|would both be named"
+    "escape-enum-value|would both be named"
+    "escape-enum-message|would both be named")
+
+foreach(entry ${refusal_fixtures})
+    string(REPLACE "|" ";" parts "${entry}")
+    list(GET parts 0 name)
+    list(GET parts 1 expected)
+
     run_fail(collision_out collision_err
         ${CODEGEN} --descriptor-set "${DATA_DIR}/${name}.pbs")
     require_empty(collision_out "The collision refusal stdout for ${name}")
-    require_contains(collision_err "collides with the presence flag"
+    require_contains(collision_err "${expected}"
         "The collision refusal for ${name}")
 
     if(FULL_BUILD)
         run_fail(source_out source_err
             ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
-        require_empty(source_out "The collision refusal stdout for ${name}")
-        require_contains(source_err "collides with the presence flag"
+        require_empty(source_out
+            "The collision refusal stdout for ${name} on the source path")
+        require_contains(source_err "${expected}"
             "The collision refusal for ${name} on the source path")
     endif()
 endforeach()

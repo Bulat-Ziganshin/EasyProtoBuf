@@ -1,0 +1,18 @@
+//
+// The collision inside one enum: the enumerators `class` and `class_` are
+// two Protobuf names and one C++ name.
+//
+// The reference compiler refuses this schema outright ("Enum name class_ has
+// the same name as class if you ignore case and strip out the enum name
+// prefix"), so the descriptor half of this fixture is crafted: protoc cannot
+// produce it.
+
+syntax = "proto2";
+
+package escapeenumvalue;
+
+enum E
+{
+    class = 0;
+    class_ = 1;
+}

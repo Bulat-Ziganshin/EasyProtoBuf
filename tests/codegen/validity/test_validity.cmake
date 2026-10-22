@@ -173,3 +173,25 @@ run_fail(name_out name_err
     ${CODEGEN} --descriptor-set "${DATA_DIR}/descriptor-name-newline.pbs")
 require_empty(name_out "The control-character refusal stdout")
 require_contains(name_err "control character" "The control-character refusal")
+
+# A default value with an embedded NUL cannot travel in a C++ string literal:
+# it needs the two-argument form std::string(literal, length), and only
+# std::string can be built from a literal and a length. With another string
+# type the value cannot be carried at all, so the schema is refused with a
+# diagnostic instead of a header that cannot mean what the schema says (the
+# owner's decision of 2026-10-21).
+run_fail(type_out type_err
+    ${CODEGEN} --descriptor-set --string-type "::my::String"
+    "${DATA_DIR}/defaults-nul.pbs")
+require_empty(type_out "The custom-string-type refusal stdout")
+require_contains(type_err "cannot carry it" "The custom-string-type refusal")
+
+if(FULL_BUILD)
+    run_fail(source_type_out source_type_err
+        ${CODEGEN} -I "${DATA_DIR}" --string-type "::my::String"
+        "${DATA_DIR}/defaults-nul.proto")
+    require_empty(source_type_out
+        "The custom-string-type refusal stdout on the source path")
+    require_contains(source_type_err "cannot carry it"
+        "The custom-string-type refusal on the source path")
+endif()

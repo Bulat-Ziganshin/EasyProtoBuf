@@ -390,6 +390,97 @@ std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* ma
 }
 
 
+// One declaration of one C++ scope.
+//
+// A C++ scope cannot hold two declarations with the same name: a struct
+// cannot declare a member twice, and a scope cannot hold two types with one
+// name. The Protobuf names of a scope are unique, but the C++ spelling is
+// not: the escape rule (cpp_identifier) gives a keyword a suffix, and a
+// second declaration may already own the suffixed name - `class` and
+// `class_` both become `class_`.
+struct ScopeMember
+{
+    std::string cpp_name;      // the name the header spells
+    std::string description;   // what the declaration is, for the diagnostic
+    bool presence_flag;        // the member is a presence flag
+};
+
+
+// The description of a member in a diagnostic: "field 'x'", "nested enum
+// 'x'", "presence flag of the field 'x'".
+std::string member_description(const std::string& kind,
+                               const std::string& name)
+{
+    return myformat("{0} '{1}'", kind, name);
+}
+
+
+// Refuse a scope that would declare the same C++ name twice.
+//
+// The reference compiler escapes a keyword the same way (its ResolveKeyword
+// appends "_", compiler/cpp/helpers.cc:509-514), so it has the same hole:
+// two messages named `class` and `class_` become two `class_` classes and
+// its header does not compile, and two enum values named `class` and
+// `class_` make it refuse the schema outright ("Enum name class_ has the
+// same name as class if you ignore case and strip out the enum name prefix",
+// measured against protoc 30.1). This project refuses every shape: a
+// diagnostic instead of a header that cannot mean what the schema says.
+void refuse_duplicate_cpp_names(const std::vector<ScopeMember>& members,
+                                const std::string& scope)
+{
+    std::map<std::string, ScopeMember> seen;
+    for (std::size_t i = 0; i < members.size(); ++i) {
+        const std::map<std::string, ScopeMember>::const_iterator found =
+            seen.find(members[i].cpp_name);
+        if (found != seen.end()) {
+            // The presence flag keeps the wording session S2 established for
+            // it: the diagnostic names the field and the flag it collides
+            // with, which is more precise than the generic one.
+            if (found->second.presence_flag || members[i].presence_flag) {
+                const ScopeMember& flag = found->second.presence_flag
+                    ? found->second : members[i];
+                const ScopeMember& other = found->second.presence_flag
+                    ? members[i] : found->second;
+                throw std::runtime_error(
+                    myformat("The {0} of {1} collides with the {2}: both "
+                             "members would be named '{3}'",
+                             other.description, scope, flag.description,
+                             members[i].cpp_name));
+            }
+            throw std::runtime_error(
+                myformat("In {0}, the {1} and the {2} would both be named "
+                         "'{3}' in C++",
+                         scope, found->second.description,
+                         members[i].description, members[i].cpp_name));
+        }
+        seen.insert(std::make_pair(members[i].cpp_name, members[i]));
+    }
+}
+
+
+// The enumerators of one enum.
+//
+// An unscoped enum's enumerators are members of the enum's own scope, so
+// two of them cannot carry the same C++ name.
+void check_enum_value_names(const EnumDescriptorProto& enum_type)
+{
+    std::vector<ScopeMember> members;
+    for (const auto& value: enum_type.value) {
+        ScopeMember member;
+        member.cpp_name = easypb_codegen::cpp_identifier(
+            descriptor_text(value.name));
+        member.description = member_description("enum value",
+                                                descriptor_text(value.name));
+        member.presence_flag = false;
+        members.push_back(member);
+    }
+    if (members.empty()) return;
+    refuse_duplicate_cpp_names(members,
+                               myformat("the enum '{0}'",
+                                        descriptor_text(enum_type.name)));
+}
+
+
 // Generate an unscoped C++ enum with a fixed int32_t representation.  The
 // fixed underlying type lets an open proto3 enum retain any unknown int32 value.
 //
@@ -1191,44 +1282,101 @@ std::vector<MessageInfo*> dependency_safe_order(std::vector<MessageInfo>& messag
 }
 
 
-// Refuse a message whose presence flags collide with its own members.
+// The members of one message's struct.
 //
-// The presence flag of a field is named after the field, so two fields of one
-// message can ask for the same member name: the field `foo` wants the flag
-// `has_foo`, and the field `has_foo` wants the member `has_foo`. A struct
-// cannot declare both, so the shape is refused with a diagnostic instead of a
-// header that does not compile.
+// The struct holds four kinds of declaration, and all four live in the same
+// C++ scope: the fields, the presence flags, the nested enums and the nested
+// messages. Two of them can ask for the same name even when the Protobuf
+// names are all different:
 //
-// The reference compiler accepts the schema. In proto3 a scalar field has no
-// presence accessor, so nothing collides there; in proto2 it generates two
-// accessors that differ only in their return type, which C++ forbids. There
-// is no working protoc output to match, so a diagnostic is the better
-// answer.
+//   - the presence flag of a field is named after the field, so the field
+//     `foo` wants the flag `has_foo` and the field `has_foo` wants the
+//     member `has_foo`;
+//   - a nested type is a member of its parent, so the nested message
+//     `has_foo` wants the member `has_foo` as well;
+//   - the escape rule is not injective, so the fields `class` and `class_`
+//     both want the member `class_`.
+//
+// The reference compiler accepts the first two shapes. In proto3 a scalar
+// field has no presence accessor, so nothing collides there; in proto2 it
+// generates two accessors that differ only in their return type, which C++
+// forbids - and there is no working protoc output to match. A nested type
+// does not collide there either: protoc flattens it to `Outer_HasFoo` and
+// spells its accessors as methods. So a diagnostic is the better answer.
 //
 // The check is gated on the generation options and not on the schema: the
 // flag exists only while the flags are enabled, so a run with
 // --no-has-fields accepts the shape.
-void check_presence_flag_collisions(const MessageInfo& info,
-                                    const GenerationContext& context)
+std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
+                                                const GenerationContext& context)
 {
-    std::map<std::string, std::string> members;  // member name -> field name
+    std::vector<ScopeMember> members;
     for (const auto& field: info.descriptor->field) {
-        members[field_member_name(field)] = descriptor_text(field.name);
+        ScopeMember member;
+        member.cpp_name = field_member_name(field);
+        member.description = member_description("field",
+                                                descriptor_text(field.name));
+        member.presence_flag = false;
+        members.push_back(member);
     }
-
     for (const auto& field: info.descriptor->field) {
         if (! hasfield_enabled(field, context)) continue;
-        const std::string flag = field_flag_name(field);
-        const std::map<std::string, std::string>::const_iterator found =
-            members.find(flag);
-        if (found == members.end()) continue;
-        throw std::runtime_error(
-            myformat("Field '{0}' of message '{1}' collides with the presence "
-                     "flag of the field '{2}': both members would be named "
-                     "'{3}'",
-                     found->second, info.proto_name,
-                     descriptor_text(field.name), flag));
+        ScopeMember member;
+        member.cpp_name = field_flag_name(field);
+        member.description =
+            myformat("presence flag of the field '{0}'",
+                     descriptor_text(field.name));
+        member.presence_flag = true;
+        members.push_back(member);
     }
+    for (const auto& enum_type: info.descriptor->enum_type) {
+        ScopeMember member;
+        member.cpp_name = easypb_codegen::cpp_identifier(
+            descriptor_text(enum_type.name));
+        member.description = member_description("nested enum",
+                                                descriptor_text(enum_type.name));
+        member.presence_flag = false;
+        members.push_back(member);
+    }
+    for (std::size_t i = 0; i < info.children.size(); ++i) {
+        ScopeMember member;
+        member.cpp_name = info.children[i].cpp_name;
+        member.description = member_description("nested message",
+                                                info.children[i].simple_name);
+        member.presence_flag = false;
+        members.push_back(member);
+    }
+    return members;
+}
+
+
+// The declarations of one file's scope.
+//
+// A file's scope holds the top-level messages and the top-level enums; a
+// nested declaration belongs to the scope of its own parent.
+void check_file_scope_names(const FileDescriptorProto& file,
+                            const std::vector<MessageInfo>& roots)
+{
+    std::vector<ScopeMember> members;
+    for (const auto& enum_type: file.enum_type) {
+        ScopeMember member;
+        member.cpp_name = easypb_codegen::cpp_identifier(
+            descriptor_text(enum_type.name));
+        member.description = member_description("enum",
+                                                descriptor_text(enum_type.name));
+        member.presence_flag = false;
+        members.push_back(member);
+    }
+    for (std::size_t i = 0; i < roots.size(); ++i) {
+        ScopeMember member;
+        member.cpp_name = roots[i].cpp_name;
+        member.description = member_description("message",
+                                                roots[i].simple_name);
+        member.presence_flag = false;
+        members.push_back(member);
+    }
+    if (members.empty()) return;
+    refuse_duplicate_cpp_names(members, "the file scope");
 }
 
 
@@ -1248,6 +1396,12 @@ std::string generate_message(MessageInfo& info,
         const std::string child_indent = indent + CPP_INDENT;
         // Enum declarations precede nested messages and fields that may use them.
         for (const auto& enum_type: info.descriptor->enum_type) {
+            // The enumerators live in the enum's own scope, and the escape
+            // rule is not injective: `class` and `class_` would both be
+            // spelled `class_`. The check runs even when the classes are not
+            // generated: the codecs spell the enumerators, so the collision
+            // would reach the caller's own declaration.
+            check_enum_value_names(enum_type);
             nested_defs += generate_enum(enum_type, child_indent);
         }
         for (auto* child: dependency_safe_order(info.children)) {
@@ -1258,7 +1412,10 @@ std::string generate_message(MessageInfo& info,
 
     std::string field_defs, has_field_defs, encoder, decoder, check_required_fields;
 
-    check_presence_flag_collisions(info, context);
+    // The C++ scope of this struct: its fields, its presence flags and its
+    // nested types. Two declarations of it cannot carry the same C++ name.
+    refuse_duplicate_cpp_names(message_scope_members(info, context),
+                               myformat("message '{0}'", info.proto_name));
 
     for (const auto& field: info.descriptor->field)
     {
@@ -1519,6 +1676,10 @@ std::string easypb_codegen::generate_header(
         roots.push_back(make_message_info(message_type, "", context));
     }
 
+    // The C++ scope of the file: the top-level messages and the top-level
+    // enums. Two of them cannot carry the same C++ name.
+    check_file_scope_names(file, roots);
+
     // Resolve field type names to MessageInfo pointers only after the tree is
     // complete, then reject every dependency pattern impossible by C++ value.
     MessageByProtoName index;
@@ -1545,6 +1706,12 @@ std::string easypb_codegen::generate_header(
 
     std::string enum_defs, class_defs, encoders, decoders;
     // Top-level enums must be complete before any message field uses them.
+    // Their enumerators are checked even when the classes are not generated:
+    // the codecs spell the enumerators, so the collision would reach the
+    // caller's own declaration.
+    for (const auto& enum_type: file.enum_type) {
+        check_enum_value_names(enum_type);
+    }
     if (! context.options.no_class) {
         for (const auto& enum_type: file.enum_type) {
             enum_defs += generate_enum(enum_type, "");

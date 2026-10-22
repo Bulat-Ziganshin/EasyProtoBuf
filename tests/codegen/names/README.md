@@ -2,9 +2,12 @@
 
 One lane for the two rows of the plan-5 follow-up's session S2: `W-08` (a
 C++ keyword in a declaration name) and `W-09` (a presence flag that collides
-with a member of the same message). Every row is a counter-example against
-`protoc` 30.1, and the lane proves the fix in the three ways the session's
-brief names.
+with a member of the same message), and for the post-closure review of
+2026-10-22 that found both rules incomplete: a nested type collides with a
+presence flag as well (`PC-01`), and the escape rule is not injective, so two
+Protobuf names can be one C++ name (`PC-02`). Every row is a counter-example
+against `protoc` 30.1, and the lane proves the fix in the three ways the
+session's brief names.
 
 ## The three things every row needs
 
@@ -39,12 +42,20 @@ empty stdout, and a diagnostic that names the collision.
 | a nested message and a nested enum named after keywords | `data/keyword-nested.proto` / `.pbs` | `W-08` |
 | a field named `has_foo` next to a field named `foo` (proto2) | `data/has-collision.proto` / `.pbs` | `W-09` |
 | the same shape in proto3 | `data/has-collision-p3.proto` / `.pbs` | `W-09` |
+| a nested message named `has_foo` next to a field named `foo` | `data/nested-flag.proto` / `.pbs` | `PC-01` |
+| the fields `class` and `class_` | `data/escape-field.proto` / `.pbs` | `PC-02` |
+| the messages `class` and `class_` | `data/escape-message.proto` / `.pbs` | `PC-02` |
+| the enum values `class` and `class_` | `data/escape-enum-value.proto` / `.pbs` | `PC-02` |
+| the enum `class` next to the message `class_` | `data/escape-enum-message.proto` / `.pbs` | `PC-02` |
 
 Every fixture exists twice: as `.proto` source text and as the `.pbs`
-descriptor of the same schema. The two refusal fixtures are the shapes the
-reference compiler accepts (in proto3 it even generates working code), so
-there is nothing crafted here — every `.pbs` is protoc's own encoding of the
-`.proto` beside it.
+descriptor of the same schema. ONE descriptor is crafted rather than
+compiled: `escape-enum-value` declares the two enumerators `class` and
+`class_`, and the reference compiler refuses that schema outright ("Enum
+name class_ has the same name as class if you ignore case and strip out the
+enum name prefix"), so protoc cannot produce it — its `.pbs` is encoded from
+`data/escape-enum-value.txtpb` with `protoc --encode`. Every other `.pbs` is
+protoc's own encoding of the `.proto` beside it.
 
 ## Rebuilding the fixtures
 

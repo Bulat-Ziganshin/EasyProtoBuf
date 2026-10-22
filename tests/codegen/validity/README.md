@@ -48,6 +48,13 @@ The seven paired fixtures exist twice: as `.proto` source text and as the
 `.pbs` descriptor of the same schema. The five crafted fixtures are
 descriptor-only, and their readable form is the `.txtpb` beside them.
 
+One refusal needs no fixture of its own: the NUL default of
+`data/defaults-nul.pbs` is refused again when the string type is not
+`::std::string` — the two-argument form `std::string(literal, length)` is the
+only way to hand a length to a string, and only `std::string` can be built
+from a literal and a length. The driver runs that fixture with
+`--string-type ::my::String` and expects the diagnostic.
+
 ## Rebuilding the fixtures
 
 ```sh
