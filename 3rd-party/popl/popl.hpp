@@ -1056,11 +1056,14 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                 {
                     if (!has_inline_value)
                     {
-                        /// a required value is the next token only when that
-                        /// token is not another option ("-" is not a value
-                        /// either, exactly like the reference compiler's
-                        /// "Missing value for flag" rule)
-                        if (n < argc - 1 && argv[n + 1][0] != '-')
+                        /// a required value is the next token, whatever that
+                        /// token looks like: a token that starts with "-" is
+                        /// the value too (the owner's decision of 2026-10-22,
+                        /// which reverses the "Missing value for flag" rule
+                        /// the S4 session copied from the reference compiler).
+                        /// The "--" separator is the one exception: it ends
+                        /// option parsing and is therefore never a value.
+                        if (n < argc - 1 && std::string(argv[n + 1]) != "--")
                             optarg = argv[++n];
                         else
                             throw invalid_option(option.get(),
@@ -1094,12 +1097,12 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                     {
                         /// use the rest of the current argument as optarg
                         optarg = opt.substr(m + 1);
-                        /// or the next arg, when it is a value and not an
-                        /// option (the same missing-value rule as the long
-                        /// form above)
+                        /// or the next arg, which is the value whatever it
+                        /// looks like (the same missing-value rule as the
+                        /// long form above)
                         if (optarg.empty())
                         {
-                            if (n < argc - 1 && argv[n + 1][0] != '-')
+                            if (n < argc - 1 && std::string(argv[n + 1]) != "--")
                                 optarg = argv[++n];
                             else
                                 throw invalid_option(option.get(),

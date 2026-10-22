@@ -333,13 +333,15 @@ if(FULL_BUILD)
         "W-21 an option after -- is treated as an input root")
 endif()
 
-# --- W-22: a required value never swallows an option ------------------------
+# --- W-22: a required value is the next token, whatever it looks like -------
 
 if(FULL_BUILD)
     set(w22 "${s4}/w22")
     file(MAKE_DIRECTORY "${w22}")
-    # The bug wrote a directory literally named --help below the working
-    # directory, so the row pins the working directory and checks the tree.
+    # The owner's decision of 2026-10-22 reverses the S4 rule: the value of
+    # a required option is the next token, even when that token starts with
+    # "-". The row pins the working directory, because the run now publishes
+    # into a directory named after the value.
     execute_process(
         COMMAND ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir --help
                 "${FIXTURE_DIR}/hasfield.proto"
@@ -347,28 +349,38 @@ if(FULL_BUILD)
         RESULT_VARIABLE w22_result
         OUTPUT_VARIABLE w22_out
         ERROR_VARIABLE w22_err)
-    if(w22_result EQUAL 0)
+    if(NOT w22_result EQUAL 0)
         message(FATAL_ERROR
-            "W-22 --out-dir --help unexpectedly succeeded\nstderr:\n${w22_err}")
+            "W-22 --out-dir --help failed\nstdout:\n${w22_out}\nstderr:\n${w22_err}")
     endif()
-    require_empty(w22_out "W-22 long missing value stdout")
-    require_contains(w22_err "Missing value for flag: --out-dir"
-        "W-22 long option names the missing value")
-    if(EXISTS "${w22}/--help")
+    require_empty(w22_out "W-22 the value token prints nothing on stdout")
+    require_not_contains(w22_out "Usage:"
+        "W-22 the value token is not the help switch")
+    if(NOT EXISTS "${w22}/--help/hasfield.pb.hpp")
         message(FATAL_ERROR
-            "W-22 the value was swallowed: a --help directory was created")
+            "W-22 the next token was not the value: no --help directory with the header")
     endif()
 
+    # The short form takes the next token as well: "-I" swallows "--out-dir",
+    # and "DIR" becomes the positional input the run then cannot load.
     run_fail(w22_short_out w22_short_err
         ${CODEGEN} -I --out-dir DIR "${FIXTURE_DIR}/hasfield.proto")
-    require_empty(w22_short_out "W-22 short missing value stdout")
-    require_contains(w22_short_err "Missing value for flag: -I"
-        "W-22 short option names the missing value")
+    require_empty(w22_short_out "W-22 short value stdout")
+    require_contains(w22_short_err "DIR"
+        "W-22 the short option takes the next token as its value")
 
+    # A flag with no next token at all is still refused.
     run_fail(w22_trailing_out w22_trailing_err
         ${CODEGEN} "${FIXTURE_DIR}/hasfield.proto" --out-dir)
     require_contains(w22_trailing_err "Missing value for flag: --out-dir"
         "W-22 a trailing option names the missing value")
+
+    # The "--" separator ends option parsing, so it is never a value.
+    run_fail(w22_separator_out w22_separator_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir --
+                "${FIXTURE_DIR}/hasfield.proto")
+    require_contains(w22_separator_err "Missing value for flag: --out-dir"
+        "W-22 the separator is not a value")
 
     # The control: the ordinary spelling still publishes.
     set(w22_ok "${s4}/w22-ok")

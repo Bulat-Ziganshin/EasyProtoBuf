@@ -68,7 +68,7 @@ Without `--descriptor-set`, Codegen infers the common input mode from file exten
 
 Options may appear before or after the positional inputs. A first `--` ends option parsing: every later token is an input spelling, even if it starts with `-`, and `--help` after it is a file name rather than the help switch (`protoc` has no such separator; this is a Codegen extension).
 
-An unknown or misspelled option is an error, not a silent no-op: `--nope`, `-Z` and a typo such as `--no-has-field` are refused with `Unknown flag: <token>`. A required value is taken from the next token only when that token does not start with `-`; otherwise the run is refused with `Missing value for flag: <option>`, so `--out-dir --help` cannot create a directory named `--help`. Write `--name=-value` when a value itself starts with a dash. `--name=` (an explicitly empty value) is refused as well.
+An unknown or misspelled option is an error, not a silent no-op: `--nope`, `-Z` and a typo such as `--no-has-field` are refused with `Unknown flag: <token>`. A required value is **the next token, whatever that token looks like**: `--out-dir --help` names an output directory `--help`, and `-I --out-dir` names a search root `--out-dir`. A value is refused only when there is no next token at all (`Missing value for flag: <option>`) or when the next token is the `--` separator, which ends option parsing and is therefore never a value. The inline form `--name=-value` writes the value directly and stays available when the next token must not be consumed. `--name=` (an explicitly empty value) is refused as well. (`protoc` refuses a next token that starts with `-`; this is a deliberate Codegen divergence, decided on 2026-10-22.)
 
 ## Target selection and output
 
