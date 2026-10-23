@@ -230,9 +230,11 @@ bool is_ascii_whitespace(char c)
 }
 
 // W-04's second predicate: a full parse whose value is a finite subnormal.
-// The MSVC CRT reports ERANGE for the shortest decimal that round-trips, so
-// `is_float_text` is false for the canonical text too and the validator would
-// reject its own normalization without this distinction. The first-character
+// glibc reports ERANGE for every subnormal result, the canonical shortest
+// decimal included, so `is_float_text` is false for the canonical text too and
+// the validator would reject its own normalization without this distinction.
+// (The MSVC CRT reports the opposite - errno stays clear, which is the
+// disagreement that used to split the two input paths.) The first-character
 // gate keeps a non-canonical spelling outside the predicate for the same
 // reason the adapter's normalizer does: a leading `+` (W-40) and a leading
 // space (W-03) are refused by validate_default, so the predicate must not

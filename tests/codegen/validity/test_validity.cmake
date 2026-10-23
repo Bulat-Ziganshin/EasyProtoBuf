@@ -118,8 +118,32 @@ foreach(name ${paired_fixtures})
         file(READ "${WORK_DIR}/descriptor/${name}.pb.hpp" descriptor_header)
         file(READ "${WORK_DIR}/source/${name}.pb.hpp" source_header)
         if(NOT source_header STREQUAL descriptor_header)
+            # Name the first line that differs: the two fronts run the same
+            # canonicalizers, so a disagreement is a defect in one of them and
+            # the sentence alone does not say which way it went.
+            string(REPLACE "\n" ";" descriptor_lines "${descriptor_header}")
+            string(REPLACE "\n" ";" source_lines "${source_header}")
+            list(LENGTH descriptor_lines descriptor_count)
+            list(LENGTH source_lines source_count)
+            set(limit "${descriptor_count}")
+            if(source_count LESS limit)
+                set(limit "${source_count}")
+            endif()
+            set(difference "the files differ past the ${limit} lines they share")
+            math(EXPR last_index "${limit} - 1")
+            if(limit GREATER 0)
+                foreach(index RANGE 0 ${last_index})
+                    list(GET descriptor_lines ${index} descriptor_line)
+                    list(GET source_lines ${index} source_line)
+                    if(NOT source_line STREQUAL descriptor_line)
+                        set(difference
+                            "line ${index}:\n  descriptor: ${descriptor_line}\n  source:     ${source_line}")
+                        break()
+                    endif()
+                endforeach()
+            endif()
             message(FATAL_ERROR
-                "The source path and the descriptor path disagree for ${name}")
+                "The source path and the descriptor path disagree for ${name} (${difference})")
         endif()
     endif()
 

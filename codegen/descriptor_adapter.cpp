@@ -46,10 +46,19 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         // Copy that one range, and only when the raw text starts with a
         // digit, `-` or `.`: a leading `+` (W-40) and a leading space (W-03)
         // are refusals, not spellings, so the adapter must not normalize them
-        // - that would hide the diagnostic behind a rewritten value. A normal
-        // float text is left
-        // exactly as the descriptor carries it; protoc writes canonical text
-        // and rewriting it would move `--print-descriptor` bytes for no row.
+        // - that would hide the diagnostic behind a rewritten value.
+        //
+        // The canonicalizer runs on every normalizable spelling, exactly as
+        // the source parser runs it, and the gate is the leading byte alone.
+        // An `is_float_text` gate used to decide this and it split the two
+        // paths on MSVC: the CRTs disagree about ERANGE for a finite
+        // subnormal (`strtod("1e-320")` sets ERANGE on glibc and leaves
+        // errno clear on the MSVC CRT), so the descriptor path kept the raw
+        // spelling while the source path stored the canonical one, and the
+        // two generated headers stopped matching for `defaults-float-overflow`.
+        // The canonical output is idempotent: the text a protoc-written
+        // descriptor already carries comes back unchanged, so
+        // `--print-descriptor` bytes do not move for any accepted row.
         if (field.has_default_value && field.has_type &&
             (field.type == FieldDescriptorProto::TYPE_FLOAT ||
              field.type == FieldDescriptorProto::TYPE_DOUBLE)) {
@@ -60,11 +69,12 @@ void intern_message(StringPool& strings, DescriptorProto& message)
                 !raw.empty() &&
                 (raw[0] == '-' || raw[0] == '.' ||
                  (raw[0] >= '0' && raw[0] <= '9'));
-            if (normalizable && !is_float_text(raw)) {
+            if (normalizable) {
                 std::string normalized;
                 if (canonical_float_default(
                         raw, field.type == FieldDescriptorProto::TYPE_FLOAT,
-                        normalized)) {
+                        normalized) &&
+                    normalized != raw) {
                     field.default_value = strings.save(normalized);
                 }
             }
