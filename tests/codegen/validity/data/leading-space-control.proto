@@ -1,0 +1,13 @@
+syntax = "proto2";
+
+package leadingspace;
+
+// W-03's numeric-only control: the whitespace here is not part of a value.
+// The float token `inf` is spelled after the `=` and a space, and the string
+// default keeps its leading space as data. Both must stay accepted after the
+// descriptor default `" inf"` becomes a refusal.
+message LeadingSpaceControl
+{
+    optional float positive_infinity = 1 [default =  inf];
+    optional string spaced = 2 [default = " x"];
+}

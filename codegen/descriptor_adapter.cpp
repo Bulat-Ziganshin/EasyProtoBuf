@@ -44,9 +44,10 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         // carrying `1e400`, `1e-400` or a finite subnormal is re-serialized
         // as the canonical text `inf`, `0`, `-0` or the subnormal decimal.
         // Copy that one range, and only when the raw text starts with a
-        // digit, `-` or `.`: a leading `+` belongs to W-40's refusal and a
-        // leading space belongs to W-03's accepted spelling, so neither may
-        // be normalized behind those rules. A normal float text is left
+        // digit, `-` or `.`: a leading `+` (W-40) and a leading space (W-03)
+        // are refusals, not spellings, so the adapter must not normalize them
+        // - that would hide the diagnostic behind a rewritten value. A normal
+        // float text is left
         // exactly as the descriptor carries it; protoc writes canonical text
         // and rewriting it would move `--print-descriptor` bytes for no row.
         if (field.has_default_value && field.has_type &&

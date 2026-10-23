@@ -32,6 +32,7 @@
 #include "json-name-custom-vs-default-proto2.pb.hpp"
 #include "json-name-proto2-warning.pb.hpp"
 #include "json-names-distinct.pb.hpp"
+#include "leading-space-control.pb.hpp"
 #include "packages-deep-101.pb.hpp"
 #include "plus-controls.pb.hpp"
 #include "plus-descriptor-controls.pb.hpp"
@@ -61,6 +62,15 @@ bool is_bytes(const std::string& value, const char* expected, std::size_t size)
 
 int main()
 {
+    // W-03's numeric-only control: whitespace before a source token is not
+    // part of the value, and a string default keeps its leading space.
+    {
+        leadingspace::LeadingSpaceControl value;
+        report("leadspace", std::isinf(value.positive_infinity) &&
+                            value.positive_infinity > 0.0f);
+        const char expected[] = { ' ', 'x' };
+        report("leadstr", is_bytes(value.spaced, expected, sizeof expected));
+    }
     // A quote inside a string default: three bytes, the quote among them.
     {
         QuoteDefaults value;

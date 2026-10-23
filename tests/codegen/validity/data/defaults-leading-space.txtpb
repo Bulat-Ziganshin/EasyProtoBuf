@@ -1,0 +1,18 @@
+# W-03's last sub-case: a descriptor numeric default whose stored text starts
+# with a space. `strtod` skips the space, so the old validator said yes and the
+# emitter trimmed it; protoc refuses the same bytes.
+file {
+  name: "defaults-leading-space.proto"
+  package: "leadingspace"
+  syntax: "proto2"
+  message_type {
+    name: "LeadingSpaceDefaults"
+    field {
+      name: "f"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_FLOAT
+      default_value: " inf"
+    }
+  }
+}

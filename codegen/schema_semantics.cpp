@@ -224,12 +224,22 @@ std::string format_float(double value, int precision)
     return normalize_float_exponent(output.str());
 }
 
+// ASCII whitespace, spelled out: `std::isspace` is locale-dependent, and a
+// default value is bytes, not a locale's text.
+bool is_ascii_whitespace(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+           c == '\v' || c == '\f';
+}
+
 // W-04's second predicate: a full parse whose value is a finite subnormal.
 // The MSVC CRT reports ERANGE for the shortest decimal that round-trips, so
 // `is_float_text` is false for the canonical text too and the validator would
 // reject its own normalization without this distinction. The first-character
-// gate keeps a leading `+` (W-40) and a leading space (W-03) outside the
-// predicate, exactly as the adapter's normalizer does.
+// gate keeps a non-canonical spelling outside the predicate for the same
+// reason the adapter's normalizer does: a leading `+` (W-40) and a leading
+// space (W-03) are refused by validate_default, so the predicate must not
+// quietly accept a spelling the validator rejects.
 bool is_subnormal_float_text(const std::string& text)
 {
     if (text.empty()) return false;
@@ -2378,6 +2388,19 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
             return true;
         case FieldDescriptorProto::TYPE_FLOAT:
         case FieldDescriptorProto::TYPE_DOUBLE:
+            // W-03's last sub-case: a floating-point default whose stored text
+            // starts with whitespace is refused, as the reference compiler
+            // refuses it (`Couldn't parse default value " inf"`). `strtod`
+            // skips the space, so `is_float_text` used to say yes and the
+            // emitter's trim hid the shape. The source path cannot produce
+            // it: the lexer skips whitespace before the token and stores the
+            // value alone.
+            if (!value.empty() && is_ascii_whitespace(value[0])) {
+                return fail_at(file,
+                               "floating-point default value may not have leading whitespace",
+                               field_default_location(file, field_path),
+                               field_path, error);
+            }
             // W-04: the strict predicate still refuses an ERANGE text that
             // bypassed the adapter (a hand-built SchemaFile in a unit test),
             // but a canonical finite subnormal also reports ERANGE on this

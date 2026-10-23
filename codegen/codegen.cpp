@@ -692,15 +692,6 @@ std::string string_default_str(const FieldDescriptorProto& field,
 }
 
 
-// True for the ASCII whitespace the C library's isspace recognizes in the
-// classic locale.
-bool is_ascii_space(char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' ||
-           c == '\r';
-}
-
-
 // The initializer of a float or double member.
 //
 // The reference compiler resolves exactly three spellings of a
@@ -708,22 +699,16 @@ bool is_ascii_space(char c)
 // They are not C++ identifiers, so the emitter spells them the way the
 // reference compiler's own generated code does.
 //
-// A descriptor may carry a spelling the reference compiler refuses - "+inf",
-// "+nan", a leading space - and those are still ACCEPTED here (the owner's
-// decision of 2026-10-21: the acceptance divergence stays open), so the
-// emitter normalizes them instead of pasting them: the value the schema asks
-// for is the same one, and the header stays compilable.
+// Every other spelling is refused before the emitter runs: the source lexer
+// stores the token alone, and `validate_default` refuses a leading `+` (W-40)
+// and a leading space (W-03) on the descriptor path. The text this function
+// reads is therefore canonical, and it translates rather than normalizes - a
+// trim here would hide the diagnostic the validator just produced.
 std::string float_default_str(const FieldDescriptorProto& field)
 {
     if (field.default_value.empty()) return "";
-    const std::string stored(field.default_value.data(),
-                             field.default_value.size());
-    std::size_t start = 0;
-    while (start < stored.size() && is_ascii_space(stored[start])) ++start;
-    std::size_t end = stored.size();
-    while (end > start && is_ascii_space(stored[end - 1])) --end;
-    std::string text = stored.substr(start, end - start);
-    if (!text.empty() && text[0] == '+') text.erase(0, 1);
+    const std::string text(field.default_value.data(),
+                           field.default_value.size());
 
     const std::string limits =
         field.type == FieldDescriptorProto::TYPE_FLOAT ? "float" : "double";
@@ -739,7 +724,7 @@ std::string float_default_str(const FieldDescriptorProto& field)
     // W-04: the canonical text for negative zero is "-0", but the C++ token
     // `-0` is an integer zero and would initialize a floating member as +0.0.
     if (text == "-0") return " = -0.0";
-    return myformat(" = {0}", stored);
+    return myformat(" = {0}", text);
 }
 
 

@@ -97,7 +97,8 @@ set(paired_fixtures
     packages-deep-101
     enum-alias-same-number
     json-names-distinct
-    plus-controls)
+    plus-controls
+    leading-space-control)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -322,6 +323,15 @@ run_fail(plus_desc_float_out plus_desc_float_err
     ${CODEGEN} --descriptor-set "${DATA_DIR}/plus-float-descriptor.pbs")
 require_empty(plus_desc_float_out "The plus descriptor-float stdout")
 require_contains(plus_desc_float_err "may not start with" "The plus descriptor-float refusal")
+
+# W-03's last sub-case: a descriptor floating-point default whose stored text
+# starts with a space is refused, as protoc refuses it. The accepted control
+# is the paired `leading-space-control` above: whitespace before a source
+# token and a string default's leading space both stay legal.
+run_fail(leading_space_out leading_space_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/defaults-leading-space.pbs")
+require_empty(leading_space_out "The leading-space default stdout")
+require_contains(leading_space_err "leading whitespace" "The leading-space default refusal")
 
 # W-42: folded enum names are refused on both paths; the same-number alias is
 # accepted above.

@@ -70,6 +70,8 @@ and the lane proves the fix in the three ways the session briefs name.
 | accepted `7`, `1.0`, `inf`, `nan`, `A = 0` controls | `.proto` + `.pbs` | `W-40` |
 | a descriptor integer `+7` and float `+1.0` | crafted `.pbs` only | `W-40` |
 | descriptor `-7` and `-1.0` controls | crafted `.pbs` only | `W-40` |
+| a descriptor float default `" inf"` (refused) | crafted `.pbs` | `W-03` |
+| source `[default =  inf]` and a string `" x"` (accepted) | `.proto` + `.pbs` | `W-03` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted
