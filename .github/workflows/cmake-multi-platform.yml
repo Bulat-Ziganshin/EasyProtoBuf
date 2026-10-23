@@ -331,18 +331,10 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    # Cache the apt archives of the pinned compilers. Outside it: the stock
-    # compilers are preinstalled and docker reinstalls from its own image by
-    # design. Bump apt-v1 when the pinned package set changes.
-    - name: Restore cached apt packages
-      id: apt-cache
-      if: runner.os == 'Linux'
-      uses: actions/cache/restore@v5
-      with:
-        key: ${{ env.APT_CACHE_PREFIX }}-${{ runner.os }}-${{ runner.arch }}-${{ matrix.cpp_compiler }}
-        path: /var/cache/apt/archives
-
-    - name: Install Linux compiler and standard library if needed
+    # One owner of "what does this row install": the preinstalled stock
+    # compilers need neither a download nor a cache entry.
+    - name: Resolve the compiler package
+      id: apt-need
       if: runner.os == 'Linux'
       run: |
         compiler='${{ matrix.cpp_compiler }}'
@@ -357,17 +349,37 @@ jobs:
         fi
 
         if [ -n "$(printf '%s' "$packages" | tr -d '[:space:]')" ]; then
-          echo 'APT::Keep-Downloaded-Packages "true";' | sudo tee /etc/apt/apt.conf.d/99easypb-keep-debs
-          sudo apt-get update
-          # --no-download installs from the local archives; fall back to the
-          # network fetch when a resolved version is missing from them.
-          # Matrix package names are fixed by this workflow, so intentional word splitting is appropriate here.
-          sudo apt-get install -y --no-download $packages \
-            || sudo apt-get install -y $packages
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+        else
+          echo "needed=false" >> "$GITHUB_OUTPUT"
         fi
 
+    # Cache the apt archives of the pinned compilers. Outside it: the stock
+    # compilers are preinstalled and docker reinstalls from its own image by
+    # design. Bump apt-v1 when the pinned package set changes.
+    - name: Restore cached apt packages
+      id: apt-cache
+      if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true'
+      uses: actions/cache/restore@v5
+      with:
+        key: ${{ env.APT_CACHE_PREFIX }}-${{ runner.os }}-${{ runner.arch }}-${{ matrix.cpp_compiler }}
+        path: /var/cache/apt/archives
+
+    - name: Install Linux compiler and standard library if needed
+      if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true'
+      run: |
+        packages='${{ steps.apt-need.outputs.packages }}'
+        echo 'APT::Keep-Downloaded-Packages "true";' | sudo tee /etc/apt/apt.conf.d/99easypb-keep-debs
+        sudo apt-get update
+        # --no-download installs from the local archives; fall back to the
+        # network fetch when a resolved version is missing from them.
+        # Matrix package names are fixed by this workflow, so intentional word splitting is appropriate here.
+        sudo apt-get install -y --no-download $packages \
+          || sudo apt-get install -y $packages
+
     - name: Save cached apt packages
-      if: runner.os == 'Linux' && steps.apt-cache.outputs.cache-hit != 'true'
+      if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true' && steps.apt-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v5
       with:
         key: ${{ steps.apt-cache.outputs.cache-primary-key }}
