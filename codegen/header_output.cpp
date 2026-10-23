@@ -103,8 +103,7 @@ bool publish_headers(const std::string& out_dir,
         std::string reason;
         if (!easypb_schema::validate_logical_path(files[i].name, reason)) {
             error = make_error(files[i].name,
-                               files[i].name + ": cannot be published: " +
-                                   reason);
+                               "cannot be published: " + reason);
             return false;
         }
     }
@@ -162,16 +161,18 @@ bool publish_headers(const std::string& out_dir,
         if (target.empty()) {
             error = make_error(
                 file.name,
-                file.name +
-                    ": cannot resolve the output path (the current working "
-                    "directory is unknown)");
+                "cannot resolve the output path (the current working "
+                "directory is unknown)");
             return false;
         }
         const std::string parent = parent_of_absolute(target);
         if (!parent.empty()) {
             std::string parent_error;
             if (!easypb_file::make_directories(parent, parent_error)) {
-                error = make_error(target, parent_error);
+                // The failure belongs to the parent directory the call was
+                // about, not to the header below it; the reason names no
+                // path, so the diagnostic supplies it once (W-29).
+                error = make_error(parent, parent_error);
                 return false;
             }
         }

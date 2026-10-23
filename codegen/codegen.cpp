@@ -1826,8 +1826,7 @@ bool easypb_codegen::generate_files(
             error.file = target.physical_name;
             error.location = easypb_schema::unknown_location();
             error.message =
-                target.physical_name +
-                ": this target has no logical name, so it has no output name; "
+                "this target has no logical name, so it has no output name; "
                 "only the single-target stdout compatibility path may "
                 "generate an anonymous descriptor";
             return false;

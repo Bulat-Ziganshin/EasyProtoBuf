@@ -189,6 +189,17 @@ void test_generated_header_path_maps_and_rejects()
     CHECK(easypb_codegen::generated_header_path("a/b/c") == "a/b/c.pb.hpp");
     CHECK(easypb_codegen::generated_header_path("a.protobuf") ==
           "a.protobuf.pb.hpp");
+    // W-25: a final `.protodevel` is stripped first, exactly like the
+    // reference compiler (compiler/code_generator_lite.cc:41-48); only the
+    // final suffix is removed, and `.protodevel` beats `.proto`.
+    CHECK(easypb_codegen::generated_header_path("legacy.protodevel") ==
+          "legacy.pb.hpp");
+    CHECK(easypb_codegen::generated_header_path("dir/legacy.protodevel") ==
+          "dir/legacy.pb.hpp");
+    CHECK(easypb_codegen::generated_header_path("legacy.protodevel.proto") ==
+          "legacy.protodevel.pb.hpp");
+    CHECK(easypb_codegen::generated_header_path("legacy.proto.protodevel") ==
+          "legacy.proto.pb.hpp");
     // Only the FINAL suffix is a `.proto` replacement, and a dot-leading
     // component is still a component.
     CHECK(easypb_codegen::generated_header_path("x.proto/y") ==
@@ -375,7 +386,28 @@ void test_publisher_rejects_an_existing_directory_at_the_target(
 
     easypb_schema::Diagnostic error;
     CHECK(!easypb_codegen::publish_headers(out, files, error));
-    CHECK(!error.message.empty());
+    // W-29: the condition is named, and the reason carries no path: the
+    // publisher's Diagnostic names the target itself.
+    CHECK(error.message == "cannot write file (the target is a directory)");
+    CHECK(error.message.find(out) == std::string::npos);
+    CHECK(error.file == easypb_file::lexical_absolute(
+                            path_join(out, "blocked.pb.hpp")));
+    CHECK(path_is_directory(path_join(out, "blocked.pb.hpp")));
+}
+
+// W-29: a directory at the write target is its own failure on both platforms
+// (Win32 answers ERROR_ACCESS_DENIED, POSIX EISDIR), and the action entry
+// returns the reason alone; the caller names the path.
+void test_write_reports_a_directory_target(const std::string& work)
+{
+    const std::string target = path_join(work, "write-directory.pb.hpp");
+    CHECK(make_directory(target));
+
+    std::string error;
+    CHECK(!easypb_file::write_disk_file(target, "X", error));
+    CHECK(error == "cannot write file (the target is a directory)");
+    CHECK(error.find(target) == std::string::npos);
+    CHECK(path_is_directory(target));
 }
 
 // --- P6: containment --------------------------------------------------------
@@ -739,6 +771,7 @@ int main()
     test_directory_creation_is_bounded(root);
     test_publisher_reports_a_file_as_out_dir(root);
     test_publisher_rejects_an_existing_directory_at_the_target(root);
+    test_write_reports_a_directory_target(root);
     test_publisher_keeps_old_content_when_a_later_replace_fails(root);
     test_writer_shares_a_concurrent_reader(root);
     test_relative_output_uses_a_known_cwd(root);

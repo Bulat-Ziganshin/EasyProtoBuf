@@ -1,10 +1,11 @@
 """Rebuild the crafted `.pbs` fixtures of the CLI lane (S4).
 
-`anon.pbs`, `external-anon.pbs` and `casepair.pbs` cannot be produced by
-`protoc`: the first two carry no `FileDescriptorProto.name` (protoc always
-writes one), and the third is a deliberately case-only pair of logical names.
-They are encoded here with the same minimal wire writer the plan-5 review
-probes used, so the bytes are reproducible without a protobuf runtime.
+`anon.pbs`, `external-anon.pbs`, `casepair.pbs`, `bad-anon.pbs`,
+`anon-two.pbs` and `mixed-anon.pbs` cannot be produced by
+`protoc`: the unnamed ones carry no `FileDescriptorProto.name` (protoc always
+writes one), and `casepair.pbs` is a deliberately case-only pair of logical
+names. They are encoded here with the same minimal wire writer the plan-5
+review probes used, so the bytes are reproducible without a protobuf runtime.
 
 The `.proto` fixtures beside this file are ordinary source and are the source
 half of the same lane; this script writes only the `.pbs` files.
@@ -35,6 +36,7 @@ FILE_DESCRIPTOR_SET_FILE = 1
 
 LABEL_OPTIONAL = 1
 TYPE_INT32 = 5
+TYPE_STRING = 9
 TYPE_MESSAGE = 11
 
 
@@ -116,4 +118,31 @@ write("casepair.pbs",
       m(FILE_DESCRIPTOR_SET_FILE,
         file_proto("api/X.proto", "api", "Upper", [scalar_field("v", 1)])))
 
-print("wrote anon.pbs, external-anon.pbs and casepair.pbs")
+# W-19: one unnamed file whose message declares field number 1 twice. The
+# semantic pass refuses it, and the diagnostic must label the file by its
+# container (the name is absent on purpose, so there is nothing else to use).
+write("bad-anon.pbs",
+      m(FILE_DESCRIPTOR_SET_FILE,
+        file_proto(None, "", "M",
+                   [scalar_field("a", 1, TYPE_STRING),
+                    scalar_field("b", 1, TYPE_STRING)])))
+
+# W-19: two unnamed files. The loader refuses the shape, and the container
+# path must print once (before the fix it printed twice).
+write("anon-two.pbs",
+      m(FILE_DESCRIPTOR_SET_FILE,
+        file_proto(None, "", "M", [scalar_field("a", 1, TYPE_STRING)])) +
+      m(FILE_DESCRIPTOR_SET_FILE,
+        file_proto(None, "", "M", [scalar_field("a", 1, TYPE_STRING)])))
+
+# W-19: one named and one unnamed file. The same refusal and the same
+# one-path rule as `anon-two.pbs`.
+write("mixed-anon.pbs",
+      m(FILE_DESCRIPTOR_SET_FILE,
+        file_proto("mixed-named.proto", "mx", "Named",
+                   [scalar_field("v", 1)])) +
+      m(FILE_DESCRIPTOR_SET_FILE,
+        file_proto(None, "mx", "Anon", [scalar_field("v", 1)])))
+
+print("wrote anon.pbs, external-anon.pbs, casepair.pbs, bad-anon.pbs, "
+      "anon-two.pbs and mixed-anon.pbs")

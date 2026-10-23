@@ -266,22 +266,12 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     }
 #endif
 
-    // A long option spelled `--name=` hands the parser an empty value, and
-    // the option parser would consume the NEXT argument as that value. Refuse
-    // the spelling before any argument is interpreted (plan 5 C1: empty
-    // values are rejected).
-    for (std::size_t i = 1; i < arguments.size(); ++i) {
-        const std::string& argument = arguments[i];
-        if (argument == "--") break;
-        if (argument.size() > 2 && argument[0] == '-' && argument[1] == '-') {
-            const std::size_t equals = argument.find('=');
-            if (equals != std::string::npos && equals + 1 == argument.size()) {
-                throw std::runtime_error(
-                    argument.substr(0, equals) +
-                    " requires a non-empty value");
-            }
-        }
-    }
+    // The prescan that used to reject `--name=` here is gone: the option
+    // parser distinguishes an inline empty value from an absent one and its
+    // Value<std::string>/Value<T> refuse the empty string. The parser's own
+    // failure is translated below into the sentence this tool documents, so
+    // the grammar stays in one place and the value position is not inspected
+    // (W-22, W-23).
 
     CommandLine command;
     OptionParser parser("Allowed options");
@@ -353,9 +343,24 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     for (std::size_t i = 0; i < arguments.size(); ++i) {
         argv_pointers.push_back(arguments[i].c_str());
     }
-    parser.parse(static_cast<int>(arguments.size()),
-                 argv_pointers.empty() ? static_cast<const char* const*>(0)
-                                       : &argv_pointers[0]);
+    try {
+        parser.parse(static_cast<int>(arguments.size()),
+                     argv_pointers.empty() ? static_cast<const char* const*>(0)
+                                           : &argv_pointers[0]);
+    } catch (const popl::invalid_option& problem) {
+        // Value<std::string>::parse and Value<T>::parse refuse an empty value
+        // with this error and the spelling the user typed. An option the
+        // parser itself reports as missing a value ("Missing value for flag:
+        // -s") has no name here, so it keeps its own sentence.
+        if (problem.error() == popl::invalid_option::Error::missing_argument &&
+            problem.option() != 0 &&
+            problem.what_name() != popl::OptionName::unspecified) {
+            throw std::runtime_error(
+                problem.option()->name(problem.what_name(), true) +
+                " requires a non-empty value");
+        }
+        throw;
+    }
 
     // An unknown or misspelled option is refused instead of silently ignored.
     // The parser records it and never applies it, so a typo such as
@@ -397,10 +402,10 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         command.proto_paths.push_back(proto_path_option->value(i));
     }
     for (std::size_t i = 0; i < target_option->count(); ++i) {
+        // An empty value cannot reach this loop: every Value<std::string>
+        // refuses it in the parser, and the translation above turns that into
+        // the tool's sentence.
         const std::string target = target_option->value(i);
-        if (target.empty()) {
-            throw std::runtime_error("--target requires a non-empty name");
-        }
         bool seen = false;
         for (std::size_t j = 0; j < command.targets.size(); ++j) {
             if (command.targets[j] == target) {
@@ -630,13 +635,18 @@ int run_generation(const CommandLine& command)
                 make_schema_diagnostic(std::string(), message.str()));
             return 1;
         }
-        // Generate into memory first: a failure must leave stdout empty.
+        // Generate into memory first: a failure must leave stdout empty. The
+        // failure is a diagnostic, not an exception text: the --out-dir path
+        // builds the same one (generate_files), so both print one line in one
+        // shape, naming the target (W-66).
         std::string header;
         try {
             header = easypb_codegen::generate_header(*targets[0], linked,
                                                      command.generation_options);
         } catch (const std::exception& problem) {
-            std::fprintf(stderr, "Exception: %s\n", problem.what());
+            report_schema_diagnostic(make_schema_diagnostic(
+                easypb_schema::schema_file_label(*targets[0]),
+                problem.what()));
             return 1;
         }
         std::cout << header;

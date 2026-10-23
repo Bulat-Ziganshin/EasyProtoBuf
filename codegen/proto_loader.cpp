@@ -233,8 +233,10 @@ bool read_and_parse_source(const std::string& logical,
     {
         std::string read_error;
         if (!easypb_file::read_disk_file(disk_path, contents, read_error)) {
+            // The renderer already prints the file label; the reason names
+            // no path (W-19/W-29). The chain suffix stays.
             std::ostringstream message;
-            message << "file \"" << logical << "\": " << read_error;
+            message << read_error;
             if (!chain.empty()) {
                 message << " (chain " << chain_text(chain, logical) << ")";
             }

@@ -619,7 +619,11 @@ void test_loader_merges_duplicate_names_across_containers(
     CHECK(error.message.find("\"integration-proto2.proto\"") !=
           std::string::npos);
     CHECK(error.message.find(path) != std::string::npos);
-    CHECK(error.message.find(conflicting) != std::string::npos);
+    // W-19/W-29: the conflicting container IS the diagnostic's file
+    // (`error.file`, checked above), so the message names it once - as the
+    // label - and not a second time in its text.
+    CHECK(error.message.find(conflicting) == std::string::npos);
+    CHECK(error.message.find(conflicting + ": ") != 0);
     CHECK(set.files().empty());
     CHECK(set.targets().empty());
     std::remove(conflicting.c_str());

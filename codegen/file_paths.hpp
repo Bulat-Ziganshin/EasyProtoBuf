@@ -61,7 +61,8 @@ std::string join_disk_path(const std::string& directory,
 //     names one is reported distinctly instead of "not found";
 //   - FILE_STATUS_ERROR: the file exists but cannot be reached (denied
 //     access), or the spelling itself is unusable (embedded NUL). The
-//     reason is stored in error.
+//     reason is stored in error, and it names the candidate that was
+//     probed (a probe keeps the path; see the action/probe boundary below).
 enum FileStatus {
     FILE_STATUS_ABSENT,
     FILE_STATUS_FILE,
@@ -71,7 +72,8 @@ enum FileStatus {
 FileStatus disk_file_status(const std::string& path, std::string& error);
 
 // Read an entire file as bytes. Returns false and stores a short reason
-// (including the path) in error on failure.
+// without the path in error on failure: the caller names the path it passed
+// (the action-entry rule below).
 bool read_disk_file(const std::string& path, std::string& contents,
                     std::string& error);
 
@@ -161,17 +163,26 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 // name. The Windows writer shares the target with concurrent readers and with
 // holders that have write access (FILE_SHARE_READ | FILE_SHARE_WRITE, the share
 // set the reference's _wopen carries); it does not share delete.
+//
+// The boundary between an action and a probe: an ACTION entry
+// (read_disk_file, make_directories, write_disk_file) returns the reason
+// alone and the caller names the path it passed, so a Diagnostic that carries
+// the path in its `file` prints it once. A PROBE (disk_file_status) names the
+// candidate it probed, because a caller may have several candidates and the
+// text has to say which one answered (W-29).
 // ---------------------------------------------------------------------------
 
 // Create every missing directory on the way to `directory`; existing
-// directories are accepted. Returns false with a reason on failure, including
-// a directory spelling that cannot be made absolute because the working
-// directory is unknown.
+// directories are accepted. Returns false with a reason (without the path:
+// the caller names it) on failure, including a directory spelling that cannot
+// be made absolute because the working directory is unknown.
 bool make_directories(const std::string& directory, std::string& error);
 
 // Write `contents` to `target`, creating or truncating it. The target keeps
 // either its previous content or the complete new content unless the process
-// dies mid-write; a failure removes nothing and reports the reason. This is
+// dies mid-write; a failure removes nothing and reports the reason without
+// the path (the caller names it). A directory at `target` is refused as
+// `cannot write file (the target is a directory)` on both platforms. This is
 // the reference compiler's write model - no temporary file, no rename. A
 // target containing an embedded NUL is refused on every platform.
 bool write_disk_file(const std::string& target,

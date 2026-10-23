@@ -333,6 +333,12 @@ private:
     SchemaFile& operator=(const SchemaFile&);
 };
 
+// The label a diagnostic uses for a file: the logical name when the file has
+// one, the container path it came from otherwise (the anonymous single-file
+// `.pbs` shape, where the name is cleared on purpose). A failure must never
+// render an empty label for a file the user named on the command line (W-19).
+std::string schema_file_label(const SchemaFile& file);
+
 // Owns a set of schema files. Files live on the heap, so their addresses
 // stay stable while the owning vector grows. Logical-name index keys are
 // owned strings. Duplicate logical names are rejected with an exception.

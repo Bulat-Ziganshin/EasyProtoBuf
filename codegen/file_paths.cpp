@@ -42,13 +42,13 @@ bool has_embedded_nul(const std::string& text)
 // access is denied" on every platform, the same wording the status query
 // uses and the same fact the reference compiler reports for EACCES;
 // every other failure keeps its platform error code, which is still more
-// than the reference compiler prints for them.
-std::string read_error_text(const std::string& path, unsigned long code,
-                            bool denied)
+// than the reference compiler prints for them. The caller names the path:
+// an action entry returns the reason only (W-29).
+std::string read_error_text(unsigned long code, bool denied)
 {
-    if (denied) return path + ": read access is denied";
+    if (denied) return "read access is denied";
     std::ostringstream message;
-    message << path << ": cannot read file";
+    message << "cannot read file";
 #ifdef _WIN32
     message << " (Win32 error " << code << ")";
 #else
@@ -397,7 +397,7 @@ bool read_disk_file(const std::string& path, std::string& contents,
                     std::string& error)
 {
     if (has_embedded_nul(path)) {
-        error = path + ": path contains NUL character";
+        error = "path contains NUL character";
         return false;
     }
 #ifdef _WIN32
@@ -406,7 +406,7 @@ bool read_disk_file(const std::string& path, std::string& contents,
     // addressable, exactly like the reference compiler's io_win32 layer.
     std::vector<wchar_t> wide;
     if (!wide_win32_path(path, wide) || wide.empty()) {
-        error = path + ": cannot read file";
+        error = "cannot read file";
         return false;
     }
     nul_terminate(wide);
@@ -416,7 +416,7 @@ bool read_disk_file(const std::string& path, std::string& contents,
                                 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (handle == INVALID_HANDLE_VALUE) {
         const DWORD code = GetLastError();
-        error = read_error_text(path, code, code == ERROR_ACCESS_DENIED);
+        error = read_error_text(code, code == ERROR_ACCESS_DENIED);
         return false;
     }
     contents.clear();
@@ -425,7 +425,7 @@ bool read_disk_file(const std::string& path, std::string& contents,
         DWORD chunk = 0;
         if (!ReadFile(handle, buffer, sizeof(buffer), &chunk, 0)) {
             const DWORD code = GetLastError();
-            error = read_error_text(path, code, code == ERROR_ACCESS_DENIED);
+            error = read_error_text(code, code == ERROR_ACCESS_DENIED);
             CloseHandle(handle);
             return false;
         }
@@ -442,14 +442,14 @@ bool read_disk_file(const std::string& path, std::string& contents,
     errno = 0;
     std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
     if (!input) {
-        error = read_error_text(path, static_cast<unsigned long>(errno),
+        error = read_error_text(static_cast<unsigned long>(errno),
                                 errno == EACCES);
         return false;
     }
     contents.assign(std::istreambuf_iterator<char>(input),
                     std::istreambuf_iterator<char>());
     if (!input.eof() && input.fail()) {
-        error = path + ": cannot read file";
+        error = "cannot read file";
         return false;
     }
     return true;
@@ -746,22 +746,29 @@ std::string number_text(unsigned long long code)
     return message.str();
 }
 
+// After a failed open, a directory at the target is its own failure: Win32
+// reports ERROR_ACCESS_DENIED and POSIX EISDIR, and neither sentence says
+// what is actually there. The check runs only on the failure path, so no
+// successful write pays for an extra query (W-29).
+bool write_target_is_directory(const std::string& target)
+{
+    std::string ignored;
+    return disk_file_status(target, ignored) == FILE_STATUS_DIRECTORY;
+}
+
 // The two messages below are the Win32 ones. The POSIX write and the POSIX
 // directory creation build their own text from strerror, so these helpers
 // have no caller there: they live in the Windows guard for that reason.
 // Outside it they are dead code, and a dead function is a warning in every
 // POSIX build (measured: the gcc and clang lanes of 2026-10-22).
 #ifdef _WIN32
-std::string write_error_text(const std::string& path, unsigned long long code)
+std::string write_error_text(unsigned long long code)
 {
-    return path + ": cannot write file (Win32 error " +
-           number_text(code) + ")";
+    return "cannot write file (Win32 error " + number_text(code) + ")";
 }
-std::string create_directory_error_text(const std::string& path,
-                                        unsigned long long code)
+std::string create_directory_error_text(unsigned long long code)
 {
-    return path + ": cannot create directory (Win32 error " +
-           number_text(code) + ")";
+    return "cannot create directory (Win32 error " + number_text(code) + ")";
 }
 #endif
 
@@ -799,7 +806,7 @@ bool create_directory_plain(const std::string& path, std::string& error)
 #ifdef _WIN32
     std::vector<wchar_t> wide;
     if (!wide_win32_path(path, wide) || wide.empty()) {
-        error = path + ": cannot create directory";
+        error = "cannot create directory";
         return false;
     }
     nul_terminate(wide);
@@ -813,10 +820,10 @@ bool create_directory_plain(const std::string& path, std::string& error)
         if (disk_file_status(path, status_error) == FILE_STATUS_DIRECTORY) {
             return true;
         }
-        error = path + ": output path is an existing file, not a directory";
+        error = "output path is an existing file, not a directory";
         return false;
     }
-    error = create_directory_error_text(path, code);
+    error = create_directory_error_text(code);
     return false;
 #else
     if (::mkdir(path.c_str(), 0777) == 0) return true;
@@ -825,11 +832,11 @@ bool create_directory_plain(const std::string& path, std::string& error)
         if (disk_file_status(path, status_error) == FILE_STATUS_DIRECTORY) {
             return true;
         }
-        error = path + ": output path is an existing file, not a directory";
+        error = "output path is an existing file, not a directory";
         return false;
     }
     const int code = errno;
-    error = path + ": cannot create directory (" + std::strerror(code) + ")";
+    error = "cannot create directory (" + std::string(std::strerror(code)) + ")";
     return false;
 #endif
 }
@@ -866,7 +873,7 @@ bool make_directories_recursive(const std::string& absolute, std::string& error)
 
     const std::size_t limit = easypb_schema::max_logical_path_components();
     if (ends.size() > limit) {
-        error = absolute + ": cannot create directory (the path has " +
+        error = "cannot create directory (the path has " +
                 number_text(static_cast<unsigned long long>(ends.size())) +
                 " components, more than the " + number_text(limit) +
                 " this tool accepts)";
@@ -891,13 +898,12 @@ bool make_directories(const std::string& directory, std::string& error)
         return false;
     }
     if (has_embedded_nul(directory)) {
-        error = directory + ": path contains NUL character";
+        error = "path contains NUL character";
         return false;
     }
     const std::string absolute = lexical_absolute(directory);
     if (absolute.empty()) {
-        error = directory +
-                ": cannot resolve directory (the current working directory "
+        error = "cannot resolve directory (the current working directory "
                 "is unknown)";
         return false;
     }
@@ -918,13 +924,13 @@ bool write_disk_file(const std::string& target, const std::string& contents,
         // The same rule the read path applies: a NUL never survives a native
         // call, and truncating it would write at a different spelling than
         // the caller named. Refuse before either platform branch.
-        error = target + ": path contains NUL character";
+        error = "path contains NUL character";
         return false;
     }
 #ifdef _WIN32
     std::vector<wchar_t> wide;
     if (!wide_win32_path(target, wide) || wide.empty()) {
-        error = target + ": cannot write file";
+        error = "cannot write file";
         return false;
     }
     nul_terminate(wide);
@@ -936,7 +942,13 @@ bool write_disk_file(const std::string& target, const std::string& contents,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
     if (handle == INVALID_HANDLE_VALUE) {
-        error = write_error_text(target, GetLastError());
+        // A directory answers ERROR_ACCESS_DENIED on Windows; name the
+        // condition instead of the generic code (W-29).
+        if (write_target_is_directory(target)) {
+            error = "cannot write file (the target is a directory)";
+            return false;
+        }
+        error = write_error_text(GetLastError());
         return false;
     }
     std::size_t done = 0;
@@ -949,13 +961,13 @@ bool write_disk_file(const std::string& target, const std::string& contents,
             written != chunk) {
             const DWORD code = GetLastError();
             CloseHandle(handle);
-            error = write_error_text(target, code);
+            error = write_error_text(code);
             return false;
         }
         done += chunk;
     }
     if (!CloseHandle(handle)) {
-        error = write_error_text(target, GetLastError());
+        error = write_error_text(GetLastError());
         return false;
     }
     return true;
@@ -968,7 +980,12 @@ bool write_disk_file(const std::string& target, const std::string& contents,
     } while (descriptor < 0 && errno == EINTR);
     if (descriptor < 0) {
         const int code = errno;
-        error = target + ": cannot write file (" + std::strerror(code) + ")";
+        // A directory answers EISDIR; name the condition (W-29).
+        if (write_target_is_directory(target)) {
+            error = "cannot write file (the target is a directory)";
+            return false;
+        }
+        error = "cannot write file (" + std::string(std::strerror(code)) + ")";
         return false;
     }
     // One bounded request at a time: the cap changes no output byte, only
@@ -987,20 +1004,19 @@ bool write_disk_file(const std::string& target, const std::string& contents,
         if (written < 0) {
             const int code = errno;
             ::close(descriptor);
-            error = target + ": cannot write file (" + std::strerror(code) + ")";
+            error = "cannot write file (" + std::string(std::strerror(code)) + ")";
             return false;
         }
         if (written == 0) {
             ::close(descriptor);
-            error = target +
-                    ": cannot write file (the write made no progress)";
+            error = "cannot write file (the write made no progress)";
             return false;
         }
         done += static_cast<std::size_t>(written);
     }
     if (::close(descriptor) != 0) {
         const int code = errno;
-        error = target + ": cannot write file (" + std::strerror(code) + ")";
+        error = "cannot write file (" + std::string(std::strerror(code)) + ")";
         return false;
     }
     return true;

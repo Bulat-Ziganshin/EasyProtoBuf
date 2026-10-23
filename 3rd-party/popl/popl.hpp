@@ -1013,6 +1013,18 @@ inline void OptionParser::parse(const std::string& ini_filename)
     }
 }
 
+/// A short option's value may be written after '=' exactly as a long one's:
+/// "-s=V" names the value "V" and "-s=" names the empty value. One leading
+/// '=' is the separator; a value that really begins with '=' is written
+/// "-s==V". The reference compiler's -I=dir has the same effect through its
+/// virtual=disk split (command_line_interface.cc:2062-2108).
+inline std::string short_option_value(const std::string& rest)
+{
+    if (!rest.empty() && rest[0] == '=')
+        return rest.substr(1);
+    return rest;
+}
+
 inline void OptionParser::parse(int argc, const char* const argv[])
 {
     for (int n = 1; n < argc; ++n)
@@ -1099,11 +1111,14 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                     if (option->argument_type() == Argument::required)
                     {
                         /// use the rest of the current argument as optarg
-                        optarg = opt.substr(m + 1);
+                        const std::string rest = opt.substr(m + 1);
                         /// or the next arg, which is the value whatever it
                         /// looks like (the same missing-value rule as the
-                        /// long form above)
-                        if (optarg.empty())
+                        /// long form above). A non-empty rest is the value
+                        /// even when it is only '=': "-s=" is an explicitly
+                        /// empty value, refused by Value<T>::parse, and must
+                        /// not consume the next token.
+                        if (rest.empty())
                         {
                             if (n < argc - 1)
                                 optarg = argv[++n];
@@ -1113,12 +1128,18 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                                     "Missing value for flag: -" +
                                         std::string(1, c));
                         }
+                        else
+                        {
+                            optarg = short_option_value(rest);
+                        }
                         m = opt.size();
                     }
                     else if (option->argument_type() == Argument::optional)
                     {
-                        /// use the rest of the current argument as optarg
-                        optarg = opt.substr(m + 1);
+                        /// use the rest of the current argument as optarg;
+                        /// the same one-leading-'=' rule as the required
+                        /// branch, so the two cannot drift
+                        optarg = short_option_value(opt.substr(m + 1));
                         m = opt.size();
                     }
                 }

@@ -384,7 +384,7 @@ bool report_scope_collision(const SchemaFile& file,
         existing_kind;
     SourceLocation location = declaration_location(file, path);
     if (location.line == 0) message += " at " + format_path(path);
-    error.file = view_text(file.file.name);
+    error.file = schema_file_label(file);
     error.location = location;
     error.message = message;
     error.warning = false;
@@ -614,17 +614,17 @@ bool add_symbol(const SchemaFile& file, SymbolIndex& symbols,
         // file has no recorded position, so its path stands in for one.
         const SchemaFile* previous = inserted.first->second.owner;
         SourceLocation location = declaration_location(file, path);
-        std::string text = message + " in \"" + view_text(file.file.name) + "\"";
+        std::string text = message + " in \"" + schema_file_label(file) + "\"";
         if (location.line == 0 && !path.empty()) {
             text += " at " + format_path(path);
         }
-        text += "; already defined in \"" + view_text(previous->file.name) + "\"";
+        text += "; already defined in \"" + schema_file_label(*previous) + "\"";
         const SourceLocation previous_location =
             declaration_location(*previous, inserted.first->second.path);
         if (previous_location.line == 0 && !inserted.first->second.path.empty()) {
             text += " at " + format_path(inserted.first->second.path);
         }
-        error.file = view_text(file.file.name);
+        error.file = schema_file_label(file);
         error.location = location;
         error.message = text;
         error.warning = false;
@@ -1176,7 +1176,7 @@ void warn_once(SchemaFile& file, const std::string& message,
         }
     }
     Diagnostic diagnostic;
-    diagnostic.file = view_text(file.file.name);
+    diagnostic.file = schema_file_label(file);
     diagnostic.location = location;
     diagnostic.warning = true;
     diagnostic.message = stored;
@@ -1231,7 +1231,7 @@ bool fail_at_code(const SchemaFile& file, const std::string& message,
     // empty descriptor path into the message (ledger `D-59`). Every caller that
     // passes a real path keeps the suffix.
     if (location.line == 0 && !path.empty()) text += " at " + format_path(path);
-    error.file = view_text(file.file.name);
+    error.file = schema_file_label(file);
     error.location = location;
     error.message = text;
     error.warning = false;
@@ -1526,7 +1526,7 @@ bool fail_malformed_map_entry(const SchemaFile& file,
                               const std::string& entry_name, Diagnostic& error)
 {
     error = Diagnostic();
-    error.file = view_text(file.file.name);
+    error.file = schema_file_label(file);
     error.location = unknown_location();
     error.message = "Malformed map entry " + entry_name +
                     ": fields 1 and 2 are required";
@@ -2018,10 +2018,10 @@ std::string reference_failure_message(const SchemaFile& file,
         const std::string defining = defining_file_name(symbols, resolved);
         std::string message = "type \"" + resolved + "\"";
         if (defining.empty()) {
-            message += " is not visible from \"" + view_text(file.file.name) + "\"";
+            message += " is not visible from \"" + schema_file_label(file) + "\"";
         } else {
             message += " is defined in \"" + defining + "\", which is not visible "
-                       "from \"" + view_text(file.file.name) + "\"";
+                       "from \"" + schema_file_label(file) + "\"";
         }
         message += "; add the import of that file";
         return message;

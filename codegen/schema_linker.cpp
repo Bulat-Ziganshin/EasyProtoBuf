@@ -133,13 +133,13 @@ std::string unsupported_edition_text(int32_t edition)
 bool fail_unsupported_syntax(const SchemaFile& file, Diagnostic& error)
 {
     error = Diagnostic();
-    error.file = view_text(file.file.name);
+    error.file = schema_file_label(file);
     error.location = unknown_location();
     const std::string decided =
         file.file.has_edition
             ? "edition " + unsupported_edition_text(file.file.edition)
             : "syntax \"" + view_text(file.file.syntax) + "\"";
-    error.message = "file \"" + view_text(file.file.name) + "\" declares " +
+    error.message = "file \"" + schema_file_label(file) + "\" declares " +
                     decided + ", which is not supported: " +
                     "only absent, \"proto2\", and \"proto3\" are accepted";
     error.warning = false;

@@ -136,8 +136,7 @@ bool append_anonymous_descriptor(const FileDescriptorProto& file,
         // so a future change cannot silently leave the identity in the
         // descriptor.
         return fail(container_path,
-                    container_path +
-                        ": internal identity lost during descriptor ingestion",
+                    "internal identity lost during descriptor ingestion",
                     result, error);
     }
     slot->file.name = str_view();
@@ -179,18 +178,22 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
             // the bytes. The walk that measures the nesting runs on the bytes
             // and stops at the limit, so it cannot overflow the stack either.
             if (!check_descriptor_set_nesting(bytes, path, error)) {
-                const std::string message = path + ": " + error.message;
-                return fail(path, message, result, error);
+                // The nesting check filled `error` with the container label;
+                // its sentence and code are the diagnostic, and `fail`
+                // supplies the label (W-19: the path prints once).
+                const std::string message = error.message;
+                const DiagnosticCode code = error.code;
+                return fail(path, message, result, error, code);
             }
             decoded = easypb::decode<FileDescriptorSet>(bytes);
         } catch (const std::exception& problem) {
-            return fail(path, path + ": cannot decode descriptor set: " +
+            return fail(path, std::string("cannot decode descriptor set: ") +
                                     problem.what(),
                         result, error);
         }
         if (decoded.file.empty()) {
             return fail(path,
-                        path + ": descriptor set contains no FileDescriptorProto",
+                        "descriptor set contains no FileDescriptorProto",
                         result, error);
         }
 
@@ -200,7 +203,7 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
         }
         if (unnamed != 0 && decoded.file.size() != 1) {
             return fail(path,
-                        path + ": descriptor set holds " +
+                        "descriptor set holds " +
                             count_text(decoded.file.size()) + " files and " +
                             count_text(unnamed) +
                             " of them have no logical name; only a single-file "
@@ -234,7 +237,7 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
                 if (!carried_names.insert(logical).second) {
                     return fail(
                         path,
-                        path + ": duplicate logical file name \"" + logical +
+                        "duplicate logical file name \"" + logical +
                             "\" in descriptor source \"" + path +
                             "\" (a file with this name was already appended)",
                         result, error, DIAGNOSTIC_DUPLICATE_SYMBOL);
@@ -247,7 +250,7 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
                 if (same_descriptor_file(existing->file, file)) continue;
                 return fail(
                     path,
-                    path + ": descriptor file \"" + logical +
+                    "descriptor file \"" + logical +
                         "\" conflicts with the copy carried by \"" +
                         existing->physical_name +
                         "\": two containers carry different definitions of "
