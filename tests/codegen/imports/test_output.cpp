@@ -48,6 +48,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -473,6 +474,253 @@ void test_publisher_keeps_old_content_when_a_later_replace_fails(
     CHECK(!leftovers);
 }
 
+// --- W-28: the writer's share mode -----------------------------------------
+
+#ifdef _WIN32
+HANDLE open_holder(const std::string& path, DWORD access, DWORD share)
+{
+    std::vector<wchar_t> wide;
+    if (!easypb_file::wide_win32_path(path, wide) || wide.empty()) {
+        return INVALID_HANDLE_VALUE;
+    }
+    wide.push_back(L'\0');
+    return CreateFileW(&wide[0], access, share, 0, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_NORMAL, 0);
+}
+
+std::string backslash_spelling(const std::string& path)
+{
+    std::string result = path;
+    for (std::size_t i = 0; i < result.size(); ++i) {
+        if (result[i] == '/') result[i] = '\\';
+    }
+    return result;
+}
+
+std::string slash_spelling(const std::string& path)
+{
+    std::string result = path;
+    for (std::size_t i = 0; i < result.size(); ++i) {
+        if (result[i] == '\\') result[i] = '/';
+    }
+    return result;
+}
+
+// The canonical prefixed form of an absolute path: a drive spelling takes
+// "\\?\", a network spelling takes "\\?\UNC\". The work directory can be on
+// a share, so the test must not assume a drive.
+std::string prefixed_spelling(const std::string& absolute)
+{
+    if (absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/') {
+        return "\\\\?\\UNC\\" + backslash_spelling(absolute.substr(2));
+    }
+    return "\\\\?\\" + backslash_spelling(absolute);
+}
+#endif
+
+// The Windows writer must not deny a concurrent reader that permits a writer,
+// nor a holder that already has write access. The share set is the measured
+// one of the reference's _wopen (_SH_DENYNO): read and write, not delete. A
+// reader that denies writers still blocks the open, in both tools.
+void test_writer_shares_a_concurrent_reader(const std::string& work)
+{
+#ifdef _WIN32
+    const std::string out = path_join(work, "share-mode");
+    CHECK(make_directory(out));
+    const std::string target = path_join(out, "shared.pb.hpp");
+    std::string content;
+    std::string error;
+
+    // A reader that permits a writer.
+    CHECK(write_text_file(target, "OLD"));
+    HANDLE reader = open_holder(target, GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE);
+    CHECK(reader != INVALID_HANDLE_VALUE);
+    CHECK(easypb_file::write_disk_file(target, "NEW", error));
+    CHECK(error.empty());
+    if (reader != INVALID_HANDLE_VALUE) CloseHandle(reader);
+    CHECK(read_text_file(target, content));
+    CHECK(content == "NEW");
+
+    // An existing holder with write access: this is the case that separates
+    // FILE_SHARE_READ from FILE_SHARE_READ | FILE_SHARE_WRITE.
+    CHECK(write_text_file(target, "OLD2"));
+    HANDLE writer = open_holder(target, GENERIC_READ | GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE);
+    CHECK(writer != INVALID_HANDLE_VALUE);
+    error.clear();
+    CHECK(easypb_file::write_disk_file(target, "NEW2", error));
+    CHECK(error.empty());
+    if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+    CHECK(read_text_file(target, content));
+    CHECK(content == "NEW2");
+
+    // The control: a reader that denies writers. protoc fails here too, and
+    // the bytes already on disk must survive.
+    CHECK(write_text_file(target, "OLD3"));
+    HANDLE exclusive = open_holder(target, GENERIC_READ, FILE_SHARE_READ);
+    CHECK(exclusive != INVALID_HANDLE_VALUE);
+    error.clear();
+    CHECK(!easypb_file::write_disk_file(target, "NEW3", error));
+    CHECK(error.find("cannot write file") != std::string::npos);
+    if (exclusive != INVALID_HANDLE_VALUE) CloseHandle(exclusive);
+    CHECK(read_text_file(target, content));
+    CHECK(content == "OLD3");
+#else
+    (void)work;
+#endif
+}
+
+// --- W-31: a relative output root with an unknown working directory ---------
+
+// The natural trigger on POSIX is a deleted working directory: the process
+// keeps running, but getcwd no longer has an answer. The child must refuse
+// the relative spelling instead of anchoring it at the filesystem root.
+void test_relative_output_uses_a_known_cwd(const std::string& work)
+{
+#ifndef _WIN32
+    const std::string doomed = path_join(work, "deleted-cwd");
+    CHECK(make_directory(doomed));
+    const std::string absolute = easypb_file::lexical_absolute(doomed);
+    CHECK(!absolute.empty());
+
+    std::ostringstream relative_name;
+    relative_name << "s7b-relative-output-" << process_id();
+    const std::string name = relative_name.str();
+
+    // Do not duplicate buffered output into the child.
+    std::cout.flush();
+    std::cerr.flush();
+    const pid_t child = ::fork();
+    CHECK(child >= 0);
+    if (child == 0) {
+        if (::chdir(doomed.c_str()) != 0) ::_exit(10);
+        if (::rmdir(absolute.c_str()) != 0) ::_exit(11);
+
+        std::string error;
+        if (easypb_file::make_directories(name, error)) ::_exit(12);
+        if (error.find("current working directory") == std::string::npos) {
+            ::_exit(13);
+        }
+        std::string status_error;
+        if (easypb_file::disk_file_status("/" + name, status_error) !=
+            easypb_file::FILE_STATUS_ABSENT) {
+            ::_exit(14);
+        }
+        ::_exit(0);
+    }
+
+    int status = 0;
+    CHECK(::waitpid(child, &status, 0) == child);
+    const bool exited = WIFEXITED(status) != 0;
+    if (!exited || WEXITSTATUS(status) != 0) {
+        std::cerr << "deleted-cwd child failed with status " << status << '\n';
+    }
+    CHECK(exited);
+    CHECK(exited && WEXITSTATUS(status) == 0);
+    // The parent's working directory is untouched, and the scratch directory
+    // the child removed stays removed.
+    CHECK(!path_exists(doomed));
+#else
+    (void)work;
+#endif
+}
+
+// --- W-34: an embedded NUL is refused at every write/create entry -----------
+
+void test_embedded_nul_is_refused_on_write(const std::string& work)
+{
+    const std::string out = path_join(work, "nul-write");
+    CHECK(make_directory(out));
+    const std::string prefix = path_join(out, "nul-target");
+    const std::string with_nul =
+        prefix + std::string(1, '\0') + ".pb.hpp";
+
+    std::string error;
+    CHECK(!easypb_file::write_disk_file(with_nul, "CONTENT", error));
+    CHECK(error.find("path contains NUL character") != std::string::npos);
+    CHECK(!path_exists(prefix));
+
+    error.clear();
+    CHECK(!easypb_file::make_directories(with_nul, error));
+    CHECK(error.find("path contains NUL character") != std::string::npos);
+    CHECK(!path_exists(prefix));
+
+    // The publisher reaches the same shared entry through its out-dir.
+    std::vector<easypb_codegen::GeneratedFile> files;
+    files.push_back(generated("nul-target.pb.hpp", "CONTENT"));
+    easypb_schema::Diagnostic publish_error;
+    CHECK(!easypb_codegen::publish_headers(with_nul, files, publish_error));
+    CHECK(publish_error.message.find("path contains NUL character") !=
+          std::string::npos);
+    CHECK(!path_exists(prefix));
+}
+
+// --- W-46: the long-path prefix is a transport spelling ---------------------
+
+void test_long_path_prefix_is_translated(const std::string& work)
+{
+#ifdef _WIN32
+    // The two prefix spellings and the two bodies the module accepts.
+    const std::string plain_drive = "C:/s7b-prefix/a/b";
+    CHECK(easypb_file::lexical_absolute("\\\\?\\C:\\s7b-prefix\\a\\b") ==
+          easypb_file::lexical_absolute(plain_drive));
+    CHECK(easypb_file::lexical_absolute("//?/C:/s7b-prefix/a/b") ==
+          easypb_file::lexical_absolute(plain_drive));
+    CHECK(easypb_file::lexical_absolute(
+              "\\\\?\\UNC\\server\\share\\x") ==
+          easypb_file::lexical_absolute("//server/share/x"));
+    CHECK(easypb_file::lexical_absolute("//?/UNC/server/share/x") ==
+          easypb_file::lexical_absolute("//server/share/x"));
+
+    const std::string out = path_join(work, "long-prefix");
+    CHECK(make_directory(out));
+    const std::string absolute_out = easypb_file::lexical_absolute(out);
+    CHECK(!absolute_out.empty());
+    const std::string prefixed_out = prefixed_spelling(absolute_out);
+    const std::string forward_out = slash_spelling(prefixed_out);
+
+    std::string error;
+    const std::string target_plain =
+        path_join(absolute_out, "prefix.pb.hpp");
+    CHECK(easypb_file::write_disk_file(
+        prefixed_out + "\\prefix.pb.hpp", "PREFIXED", error));
+    CHECK(error.empty());
+    std::string content;
+    CHECK(read_text_file(target_plain, content));
+    CHECK(content == "PREFIXED");
+
+    // The forward-slash spelling of the same prefix.
+    error.clear();
+    CHECK(easypb_file::write_disk_file(
+        forward_out + "/forward.pb.hpp", "FORWARD", error));
+    CHECK(error.empty());
+    CHECK(read_text_file(path_join(absolute_out, "forward.pb.hpp"),
+                         content));
+    CHECK(content == "FORWARD");
+
+    // Directory creation sees the same spelling.
+    error.clear();
+    CHECK(easypb_file::make_directories(
+        prefixed_out + "\\nested\\tree", error));
+    CHECK(error.empty());
+    CHECK(path_is_directory(path_join(out, "nested/tree")));
+
+    // The publisher accepts the prefixed out-dir end to end.
+    std::vector<easypb_codegen::GeneratedFile> files;
+    files.push_back(generated("published.pb.hpp", "PUBLISHED"));
+    easypb_schema::Diagnostic publish_error;
+    CHECK(easypb_codegen::publish_headers(prefixed_out, files,
+                                          publish_error));
+    CHECK(publish_error.message.empty());
+    CHECK(read_text_file(path_join(absolute_out, "published.pb.hpp"),
+                         content));
+    CHECK(content == "PUBLISHED");
+#else
+    (void)work;
+#endif
+}
+
 } // namespace
 
 int main()
@@ -492,6 +740,10 @@ int main()
     test_publisher_reports_a_file_as_out_dir(root);
     test_publisher_rejects_an_existing_directory_at_the_target(root);
     test_publisher_keeps_old_content_when_a_later_replace_fails(root);
+    test_writer_shares_a_concurrent_reader(root);
+    test_relative_output_uses_a_known_cwd(root);
+    test_embedded_nul_is_refused_on_write(root);
+    test_long_path_prefix_is_translated(root);
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

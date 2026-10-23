@@ -112,38 +112,102 @@ bool has_long_path_prefix(const std::string& path)
     return path.size() >= length &&
            path.compare(0, length, kLongPathPrefix) == 0;
 }
+
+// Recognizes "\\?\" and "//?/" and translates the two bodies this module can
+// name into the plain spelling the rest of the path layer uses:
+//   \\?\C:\a\b            -> C:/a/b
+//   \\?\UNC\host\share\x  -> //host/share/x
+// The forward-slash form is the same prefix spelled with '/' (a user may type
+// either); "UNC" is case-insensitive, as it is on Windows. Any other body is
+// left alone and returns false: a device path is not a file path this module
+// can normalize, and the caller keeps its verbatim passthrough.
+bool translate_long_path_prefix(const std::string& path, std::string& plain)
+{
+    plain.clear();
+    std::size_t prefix_length = 0;
+    const std::size_t backslash_length = sizeof(kLongPathPrefix) - 1;
+    if (path.size() >= backslash_length &&
+        path.compare(0, backslash_length, kLongPathPrefix) == 0) {
+        prefix_length = backslash_length;
+    } else if (path.size() >= 4 && path.compare(0, 4, "//?/") == 0) {
+        prefix_length = 4;
+    } else {
+        return false;
+    }
+
+    std::string body = path.substr(prefix_length);
+    for (std::size_t i = 0; i < body.size(); ++i) {
+        if (body[i] == '\\') body[i] = '/';
+    }
+
+    // A drive-absolute body: the object manager's "C:" form.
+    if (body.size() >= 3 && is_alpha(body[0]) && body[1] == ':' &&
+        body[2] == '/') {
+        plain.swap(body);
+        return true;
+    }
+
+    // A network body: "UNC\server\share[\...]". Both the server and the share
+    // must be named; a trailing component is optional.
+    if (body.size() > 4 && (body[0] == 'U' || body[0] == 'u') &&
+        (body[1] == 'N' || body[1] == 'n') &&
+        (body[2] == 'C' || body[2] == 'c') && body[3] == '/') {
+        const std::size_t host_start = 4;
+        const std::size_t host_end = body.find('/', host_start);
+        if (host_end != std::string::npos && host_end > host_start) {
+            const std::size_t share_end = body.find('/', host_end + 1);
+            if (share_end != host_end + 1) {
+                plain = "//";
+                plain.append(body, host_start, body.size() - host_start);
+                return true;
+            }
+        }
+    }
+    return false;
+}
 #endif
 
-std::string current_working_directory()
+// The working directory as a stored spelling. Returns false when the process
+// cannot obtain it; a caller must not substitute "." or the root for an answer
+// the operating system refused to give.
+bool current_working_directory(std::string& result)
 {
+    result.clear();
 #ifdef _WIN32
     // Wide query converted back to UTF-8: the narrow working directory
     // stays in the same encoding as every other path here.
     const DWORD needed = GetCurrentDirectoryW(0, 0);
-    if (needed == 0) return std::string(".");
+    if (needed == 0) return false;
     std::vector<wchar_t> buffer(needed);
     const DWORD length = GetCurrentDirectoryW(needed, &buffer[0]);
-    if (length == 0 || length >= needed) return std::string(".");
-    std::string result;
+    if (length == 0 || length >= needed) return false;
     if (!wide_to_utf8(&buffer[0], static_cast<int>(length), result)) {
-        return std::string(".");
+        return false;
     }
     // A query that cannot answer must not silently become a different
     // directory: an empty conversion means exactly that. Win32 caps the
     // working directory at MAX_PATH in any case - SetCurrentDirectoryW
     // refuses a spelling longer than 258 characters, the prefix included -
     // so this is defence in depth rather than a live case.
-    if (result.empty()) return std::string(".");
-    return result;
+    return !result.empty();
 #else
     char* cwd = ::getcwd(0, 0);
-    if (cwd == 0) return std::string(".");
-    const std::string result(cwd);
+    if (cwd == 0) return false;
+    result.assign(cwd);
     // getcwd with malloc allocation must be freed; free is async-safe
     // here because no other thread touches this pointer.
     ::free(cwd);
-    return result;
+    return !result.empty();
 #endif
+}
+
+bool resolve_with_working_directory(const std::string& path,
+                                    std::string& result)
+{
+    std::string cwd;
+    if (!current_working_directory(cwd)) return false;
+    result = join_disk_path(cwd, path);
+    return true;
 }
 
 std::string trim_trailing_separators(const std::string& path)
@@ -166,18 +230,31 @@ std::string trim_trailing_separators(const std::string& path)
 #endif
 }
 
-// Absolute spelling of a disk path without any filesystem query. On
-// Windows a relative spelling is joined with the working directory and the
-// other non-fully-qualified forms (drive-relative "C:x", rooted "\x") are
-// resolved through the platform path API, so equivalent spellings compare
-// equal; POSIX prepends the working directory. Textual normalization only:
-// it never proves that two spellings name the same entry, and no case
-// folding is involved.
-std::string resolve_absolute(const std::string& path)
+// Absolute spelling of a disk path without any filesystem query beyond the
+// working directory. Returns false when the working directory is unknown and
+// a relative spelling needs it. On Windows a relative spelling is joined with
+// the working directory and the other non-fully-qualified forms (drive-relative
+// "C:x", rooted "\x") are resolved through the platform path API, so equivalent
+// spellings compare equal; POSIX prepends the working directory. Textual
+// normalization only: it never proves that two spellings name the same entry,
+// and no case folding is involved.
+bool resolve_absolute(const std::string& path, std::string& result)
 {
-    if (path.empty()) return path;
+    result.clear();
+    if (path.empty()) return true;
 #ifdef _WIN32
-    if (is_fully_qualified_disk_path(path)) return path;
+    // An explicit long-path prefix is a transport spelling, not part of the
+    // name: translate it once, here, so every caller of lexical_absolute
+    // (search roots, the output root, comparisons) sees the plain form.
+    std::string spelling = path;
+    std::string translated;
+    if (translate_long_path_prefix(path, translated)) {
+        spelling.swap(translated);
+    }
+    if (is_fully_qualified_disk_path(spelling)) {
+        result = spelling;
+        return true;
+    }
     // A relative spelling is joined textually, the way the reference layer
     // builds its absolute paths. The platform resolver is deliberately not
     // asked here: it trims trailing dots and spaces off the last component,
@@ -185,36 +262,39 @@ std::string resolve_absolute(const std::string& path)
     // long-path prefix is applied, and one name would silently be answered
     // by a different file. Its own normalization of '.' and '..' is not
     // needed either, because lexical_absolute performs it on every branch.
-    if (path[0] != '/' && path[0] != '\\' &&
-        !(path.size() >= 2 && is_alpha(path[0]) && path[1] == ':')) {
-        return join_disk_path(current_working_directory(), path);
+    if (spelling[0] != '/' && spelling[0] != '\\' &&
+        !(spelling.size() >= 2 && is_alpha(spelling[0]) &&
+          spelling[1] == ':')) {
+        return resolve_with_working_directory(spelling, result);
     }
     // Drive-relative and rooted spellings need the current drive and its
     // per-drive directory, which only the platform resolver knows.
     std::vector<wchar_t> wide;
-    if (!to_wide_text(path, wide) || wide.empty()) {
-        return join_disk_path(current_working_directory(), path);
+    if (!to_wide_text(spelling, wide) || wide.empty()) {
+        return resolve_with_working_directory(spelling, result);
     }
     nul_terminate(wide);
     // Query the required length first so long paths do not truncate.
     const DWORD needed = GetFullPathNameW(&wide[0], 0, 0, 0);
     if (needed == 0) {
-        return join_disk_path(current_working_directory(), path);
+        return resolve_with_working_directory(spelling, result);
     }
     std::vector<wchar_t> buffer(needed);
     const DWORD length =
         GetFullPathNameW(&wide[0], needed, &buffer[0], 0);
     if (length == 0 || length >= needed) {
-        return join_disk_path(current_working_directory(), path);
+        return resolve_with_working_directory(spelling, result);
     }
-    std::string result;
     if (!wide_to_utf8(&buffer[0], static_cast<int>(length), result)) {
-        return join_disk_path(current_working_directory(), path);
+        return resolve_with_working_directory(spelling, result);
     }
-    return result;
+    return true;
 #else
-    if (path[0] == '/') return path;
-    return join_disk_path(current_working_directory(), path);
+    if (path[0] == '/') {
+        result = path;
+        return true;
+    }
+    return resolve_with_working_directory(path, result);
 #endif
 }
 
@@ -233,7 +313,9 @@ std::string join_disk_path(const std::string& directory,
     // needs help. On POSIX "C:" is an ordinary relative name.)
     if (directory.size() == 2 && is_alpha(directory[0]) &&
         directory[1] == ':') {
-        return lexical_absolute(directory) + "/" + logical_name;
+        const std::string resolved = lexical_absolute(directory);
+        if (resolved.empty()) return std::string();
+        return resolved + "/" + logical_name;
     }
 #endif
     const std::string base = trim_trailing_separators(directory);
@@ -376,7 +458,9 @@ bool read_disk_file(const std::string& path, std::string& contents,
 
 std::string lexical_absolute(const std::string& path)
 {
-    std::string absolute = resolve_absolute(path);
+    if (path.empty()) return std::string();
+    std::string absolute;
+    if (!resolve_absolute(path, absolute)) return std::string();
 #ifdef _WIN32
     absolute = normalize_separators(absolute);
 #endif
@@ -432,7 +516,11 @@ std::string lexical_absolute(const std::string& path)
     if (result.empty()) {
 #ifdef _WIN32
         if (!prefix.empty()) return prefix + "/";
-        return current_working_directory();
+        // The only way here with an empty prefix is a non-absolute absolute
+        // form; ask once more rather than inventing a root. A failed query is
+        // the same refusal as above.
+        std::string cwd;
+        return current_working_directory(cwd) ? cwd : std::string();
 #else
         return std::string("/");
 #endif
@@ -454,19 +542,27 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide)
 {
     wide.clear();
     if (path.empty()) return true;
-    // A spelling that already carries the prefix is exactly what the object
-    // manager expects; adding a second one would address an entry literally
-    // named "\\?\...".
-    if (has_long_path_prefix(path)) return to_wide_text(path, wide);
+
+    // An explicit long-path prefix is translated to its plain spelling before
+    // this layer re-applies the canonical prefix below. A recognized device
+    // path keeps the old verbatim passthrough: the translator accepts only
+    // the two bodies this module can name (a drive path and a UNC share).
+    std::string spelling = path;
+    std::string translated;
+    if (translate_long_path_prefix(path, translated)) {
+        spelling.swap(translated);
+    } else if (has_long_path_prefix(path)) {
+        return to_wide_text(path, wide);
+    }
 
     // The prefix bypasses Win32 path parsing, so nothing may be left for
     // that parsing to do: a relative, drive-relative or rooted spelling is
     // resolved to a fully qualified one first, and '.' and '..' are removed
-    // lexically because the API no longer interprets them.
-    const std::string absolute = lexical_absolute(path);
-    if (absolute.empty() || has_long_path_prefix(absolute)) {
-        return to_wide_text(absolute.empty() ? path : absolute, wide);
-    }
+    // lexically because the API no longer interprets them. A relative
+    // spelling whose working directory is unknown cannot be made absolute:
+    // that is a refusal, not a fallback to the original spelling.
+    const std::string absolute = lexical_absolute(spelling);
+    if (absolute.empty()) return false;
 
     const bool unc =
         absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/';
@@ -474,10 +570,9 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide)
         absolute.size() >= 3 && is_alpha(absolute[0]) &&
         absolute[1] == ':' && absolute[2] == '/';
     if (!unc && !drive_absolute) {
-        // Neither form is prefixable (a bare drive, or a working directory
-        // that could not be queried): keep the plain conversion rather
-        // than hand Win32 a prefix it would reject.
-        return to_wide_text(path, wide);
+        // Neither form is prefixable (a bare drive): keep the plain
+        // conversion rather than hand Win32 a prefix it would reject.
+        return to_wide_text(spelling, wide);
     }
 
     // The prefix is applied to every path, not only to long ones: it is
@@ -795,9 +890,15 @@ bool make_directories(const std::string& directory, std::string& error)
         error = "cannot create an empty directory path";
         return false;
     }
+    if (has_embedded_nul(directory)) {
+        error = directory + ": path contains NUL character";
+        return false;
+    }
     const std::string absolute = lexical_absolute(directory);
     if (absolute.empty()) {
-        error = directory + ": cannot resolve directory";
+        error = directory +
+                ": cannot resolve directory (the current working directory "
+                "is unknown)";
         return false;
     }
     return make_directories_recursive(absolute, error);
@@ -813,6 +914,13 @@ bool write_disk_file(const std::string& target, const std::string& contents,
                      std::string& error)
 {
     error.clear();
+    if (has_embedded_nul(target)) {
+        // The same rule the read path applies: a NUL never survives a native
+        // call, and truncating it would write at a different spelling than
+        // the caller named. Refuse before either platform branch.
+        error = target + ": path contains NUL character";
+        return false;
+    }
 #ifdef _WIN32
     std::vector<wchar_t> wide;
     if (!wide_win32_path(target, wide) || wide.empty()) {
@@ -820,7 +928,12 @@ bool write_disk_file(const std::string& target, const std::string& contents,
         return false;
     }
     nul_terminate(wide);
-    HANDLE handle = CreateFileW(&wide[0], GENERIC_WRITE, 0, 0,
+    // Share read and write, exactly as the reference's _wopen does (the CRT
+    // default is _SH_DENYNO): a concurrent reader that permits a writer, or
+    // another holder with write access, must not block the replacement.
+    // Delete is not shared, matching the reference.
+    HANDLE handle = CreateFileW(&wide[0], GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
     if (handle == INVALID_HANDLE_VALUE) {
         error = write_error_text(target, GetLastError());
@@ -847,21 +960,40 @@ bool write_disk_file(const std::string& target, const std::string& contents,
     }
     return true;
 #else
-    const int descriptor =
-        ::open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    // Retry an interrupted open, as the reference's WriteAllToDisk does.
+    int descriptor = -1;
+    do {
+        descriptor =
+            ::open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    } while (descriptor < 0 && errno == EINTR);
     if (descriptor < 0) {
         const int code = errno;
         error = target + ": cannot write file (" + std::strerror(code) + ")";
         return false;
     }
+    // One bounded request at a time: the cap changes no output byte, only
+    // the size of one syscall. EINTR is not a failure, and a zero return is
+    // not progress (the old loop repeated forever on it).
+    const std::size_t chunk_limit = 64u * 1024u;
     std::size_t done = 0;
     while (done < contents.size()) {
-        const ssize_t written =
-            ::write(descriptor, contents.data() + done, contents.size() - done);
+        const std::size_t remaining = contents.size() - done;
+        const std::size_t chunk =
+            remaining < chunk_limit ? remaining : chunk_limit;
+        ssize_t written = -1;
+        do {
+            written = ::write(descriptor, contents.data() + done, chunk);
+        } while (written < 0 && errno == EINTR);
         if (written < 0) {
             const int code = errno;
             ::close(descriptor);
             error = target + ": cannot write file (" + std::strerror(code) + ")";
+            return false;
+        }
+        if (written == 0) {
+            ::close(descriptor);
+            error = target +
+                    ": cannot write file (the write made no progress)";
             return false;
         }
         done += static_cast<std::size_t>(written);

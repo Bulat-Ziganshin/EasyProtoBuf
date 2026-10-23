@@ -227,3 +227,86 @@ if(FULL_BUILD)
     require_contains(argument_err "must not have more than 100 components"
         "The deep-argument refusal")
 endif()
+
+# --- W-46: the long-path prefix is a transport spelling -----------------------
+#
+# The same input and the same out-dir, written once plainly and once with an
+# explicit prefix. The prefix must not become a UNC host ("//?/C:") and must
+# not leak into the concatenation: the three runs produce the same header,
+# byte for byte. The Windows-only section runs here; the input half needs the
+# source frontend.
+if(WIN32)
+    set(prefix_dir "${WORK_DIR}/w46")
+    file(MAKE_DIRECTORY "${prefix_dir}")
+
+    run_ok(plain_out plain_err
+        ${CODEGEN} --descriptor-set --out-dir "${prefix_dir}/plain"
+        "${DATA_DIR}/${accepted}.pbs")
+    require_empty(plain_out "The plain out-dir stdout")
+    require_empty(plain_err "The plain out-dir stderr")
+
+    run_ok(backslash_out backslash_err
+        ${CODEGEN} --descriptor-set --out-dir "\\\\?\\${prefix_dir}/prefixed"
+        "${DATA_DIR}/${accepted}.pbs")
+    require_empty(backslash_out "The prefixed out-dir stdout")
+    require_empty(backslash_err "The prefixed out-dir stderr")
+
+    run_ok(forward_out forward_err
+        ${CODEGEN} --descriptor-set --out-dir "//?/${prefix_dir}/forward"
+        "${DATA_DIR}/${accepted}.pbs")
+    require_empty(forward_out "The forward-slash out-dir stdout")
+    require_empty(forward_err "The forward-slash out-dir stderr")
+
+    file(READ "${prefix_dir}/plain/${accepted}.pb.hpp" plain_header)
+    file(READ "${prefix_dir}/prefixed/${accepted}.pb.hpp" prefixed_header)
+    file(READ "${prefix_dir}/forward/${accepted}.pb.hpp" forward_header)
+    if(NOT plain_header STREQUAL prefixed_header)
+        message(FATAL_ERROR "W-46: the \\\\?\\ out-dir changed the header")
+    endif()
+    if(NOT plain_header STREQUAL forward_header)
+        message(FATAL_ERROR "W-46: the //?/ out-dir changed the header")
+    endif()
+
+    if(FULL_BUILD)
+        # The input half: -I, the .proto argument and the .pbs argument all
+        # carry the prefix. Each run must produce the plain descriptor header.
+        run_ok(source_plain_out source_plain_err
+            ${CODEGEN} --out-dir "${prefix_dir}/source-plain"
+            -I "${DATA_DIR}" "${DATA_DIR}/${accepted}.proto")
+        require_empty(source_plain_out "The source out-dir stdout")
+        require_empty(source_plain_err "The source out-dir stderr")
+
+        run_ok(source_prefixed_out source_prefixed_err
+            ${CODEGEN} --out-dir "${prefix_dir}/source-prefixed"
+            -I "\\\\?\\${DATA_DIR}"
+            "\\\\?\\${DATA_DIR}/${accepted}.proto")
+        require_empty(source_prefixed_out "The prefixed source stdout")
+        require_empty(source_prefixed_err "The prefixed source stderr")
+
+        run_ok(pbs_prefixed_out pbs_prefixed_err
+            ${CODEGEN} --descriptor-set
+            --out-dir "${prefix_dir}/pbs-prefixed"
+            "\\\\?\\${DATA_DIR}/${accepted}.pbs")
+        require_empty(pbs_prefixed_out "The prefixed descriptor stdout")
+        require_empty(pbs_prefixed_err "The prefixed descriptor stderr")
+
+        file(READ "${prefix_dir}/source-plain/${accepted}.pb.hpp"
+            source_plain_header)
+        file(READ "${prefix_dir}/source-prefixed/${accepted}.pb.hpp"
+            source_prefixed_header)
+        file(READ "${prefix_dir}/pbs-prefixed/${accepted}.pb.hpp"
+            pbs_prefixed_header)
+        if(NOT source_plain_header STREQUAL plain_header)
+            message(FATAL_ERROR
+                "W-46: the source path disagrees with the descriptor path")
+        endif()
+        if(NOT source_prefixed_header STREQUAL plain_header)
+            message(FATAL_ERROR
+                "W-46: the prefixed source path changed the header")
+        endif()
+        if(NOT pbs_prefixed_header STREQUAL plain_header)
+            message(FATAL_ERROR
+                "W-46: the prefixed .pbs argument changed the header")
+        endif()
+    endif()
+endif()

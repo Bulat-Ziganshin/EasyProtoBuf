@@ -929,6 +929,40 @@ if(BUILD_TESTING)
     set_tests_properties(codegen.imports.output PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
+    # W-31's natural working-directory failure cannot be staged through Win32,
+    # so this test includes the unmodified file_paths.cpp with
+    # GetCurrentDirectoryW stubbed. It is standalone: linking
+    # easypb_header_output would define the module's symbols twice. It needs
+    # easypb_schema for max_logical_path_components only.
+    if(WIN32)
+        add_executable(codegen_imports_output_cwd_test
+            codegen/imports/test_cwd_failure.cpp)
+        target_include_directories(codegen_imports_output_cwd_test PRIVATE
+            ${PROJECT_SOURCE_DIR}/codegen)
+        target_link_libraries(codegen_imports_output_cwd_test
+            PRIVATE easypb_schema)
+        add_test(NAME codegen.imports.output.cwd
+            COMMAND codegen_imports_output_cwd_test)
+        set_tests_properties(codegen.imports.output.cwd PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endif()
+
+    # W-33's counter-example is POSIX-only. The test includes file_paths.cpp
+    # with a wrapped write to inject EINTR and a zero return; the schema
+    # library is linked for max_logical_path_components only.
+    if(NOT WIN32)
+        add_executable(codegen_imports_output_posix_writer_test
+            codegen/imports/test_posix_writer.cpp)
+        target_include_directories(codegen_imports_output_posix_writer_test
+            PRIVATE ${PROJECT_SOURCE_DIR}/codegen)
+        target_link_libraries(codegen_imports_output_posix_writer_test
+            PRIVATE easypb_schema)
+        add_test(NAME codegen.imports.output.posix-writer
+            COMMAND codegen_imports_output_posix_writer_test)
+        set_tests_properties(codegen.imports.output.posix-writer PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endif()
+
     # Plan 5's in-memory lane: the owned adapter and the linked generator
     # through easypb_codegen_core alone (T4: no descriptor-file wrapper, no
     # native helper, no publisher). The driver prepares the strict `.pbs`

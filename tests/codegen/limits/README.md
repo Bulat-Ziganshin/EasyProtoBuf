@@ -8,6 +8,12 @@ output tree is created without a bound, one directory per path component).
 Every row is a counter-example against `protoc` 30.1, and the lane proves the
 fix in the three ways the session's brief names.
 
+Since `S7b` the lane also covers `W-46`: an explicit `\\?\` (or `//?/`) prefix
+in `--out-dir` or in an input spelling is a transport spelling, not part of the
+name. The Windows-only section at the end writes the same fixture through the
+plain and the prefixed spellings and requires one header byte for byte; the
+input half runs under `FULL_BUILD`.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -75,6 +81,19 @@ Nothing in the lane creates a deep directory tree: the deep name is refused
 at the mapping layer, before the publisher creates anything, and the driver
 asserts that the output root is still empty.
 
+## The long-path prefix (`W-46`)
+
+The prefix turns off Win32 path parsing, so it is a transport spelling: the
+path layer translates `\\?\C:\…` to `C:/…` and `\\?\UNC\server\share\…` to
+`//server/share/…`, and re-applies the canonical prefix only at the W-API
+boundary. The lane drives the same `nesting-31` fixture three times — plain,
+`\\?\` and `//?/` — and compares the written headers byte for byte. Under
+`FULL_BUILD` the source path is exercised with `-I` and the `.proto` argument
+prefixed, and the descriptor path with the `.pbs` argument prefixed; all three
+headers must equal the plain descriptor header. A mixed spelling such as
+`\\?\C:/…` is accepted because the translator normalizes its separators; this
+is exactly the shape `--out-dir` receives on Windows.
+
 ## Rebuilding the fixtures
 
 ```sh
@@ -92,10 +111,14 @@ Running the lane never needs `protoc`: the fixtures are committed.
 | Test | Where |
 | --- | --- |
 | `codegen.limits` | this lane: generate, compile, run, refuse |
-| `codegen.imports.output` | the publisher's name check and the bounded directory creation |
+| `codegen.imports.output` | the publisher's name check, the bounded directory creation, the writer's share mode, the NUL refusal and the prefix translation |
+| `codegen.imports.output.cwd` | the Windows fault-injected working-directory refusal (`S7b`, Windows only) |
+| `codegen.imports.output.posix-writer` | the POSIX writer loop: `EINTR`, zero return, 64 KiB cap (`S7b`, POSIX only) |
 
 The lane runs in every build profile: the full C++17 tree, the full C++11
-tree, the lite (parser-off) tree, and the legacy toolchains.
+tree, the lite (parser-off) tree, and the legacy toolchains. The `W-46`
+section itself runs only on Windows and, for its input half, only where the
+proto parser is available.
 
 The MSVC profile runs the same lane with the two steps it cannot do left out
 — the compile of the accepted header and the runtime check that reads it (see

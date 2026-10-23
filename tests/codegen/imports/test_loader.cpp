@@ -1744,8 +1744,9 @@ void test_wide_conversion_applies_the_long_path_prefix()
     // touching the filesystem: a drive spelling gets the prefix, a network
     // spelling gets the UNC variant (the form the reference layer loses
     // while normalizing), and a spelling that already carries the prefix is
-    // passed through instead of being prefixed twice. No loader run can
-    // cover the network form, because a share is not available to tests.
+    // translated to the plain form and re-prefixed canonically instead of
+    // keeping its mixed separators. No loader run can cover the network form,
+    // because a share is not available to tests.
     std::vector<wchar_t> wide;
     CHECK(easypb_file::wide_win32_path("C:/deep/dir/leaf.proto", wide));
     CHECK(std::wstring(&wide[0], wide.size()) ==
@@ -1755,7 +1756,13 @@ void test_wide_conversion_applies_the_long_path_prefix()
           L"\\\\?\\UNC\\host\\share\\leaf.proto");
     CHECK(easypb_file::wide_win32_path("\\\\?\\C:/mixed\\path.proto", wide));
     CHECK(std::wstring(&wide[0], wide.size()) ==
-          L"\\\\?\\C:/mixed\\path.proto");
+          L"\\\\?\\C:\\mixed\\path.proto");
+    CHECK(easypb_file::wide_win32_path("//?/C:/mixed/path.proto", wide));
+    CHECK(std::wstring(&wide[0], wide.size()) ==
+          L"\\\\?\\C:\\mixed\\path.proto");
+    CHECK(easypb_file::wide_win32_path("\\\\?\\UNC\\host\\share\\x", wide));
+    CHECK(std::wstring(&wide[0], wide.size()) ==
+          L"\\\\?\\UNC\\host\\share\\x");
     // Backslashes come in and come out normalized.
     CHECK(easypb_file::wide_win32_path("C:\\deep\\leaf.proto", wide));
     CHECK(std::wstring(&wide[0], wide.size()) ==

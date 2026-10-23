@@ -79,8 +79,11 @@ bool read_disk_file(const std::string& path, std::string& contents,
 // become '/' on Windows only), duplicate separators collapsed and
 // '.'/'..' resolved lexically without touching the filesystem. Used to
 // test whether a disk file lies under a search root before the file is
-// read. This is textual normalization only and never proof of physical
-// identity; equivalent spellings of one file do compare equal here.
+// read. Returns an empty string when the input is empty or a relative
+// spelling cannot be resolved because the working directory is unknown;
+// callers treat that as a refusal, never as the filesystem root. This is
+// textual normalization only and never proof of physical identity;
+// equivalent spellings of one file do compare equal here.
 std::string lexical_absolute(const std::string& path);
 
 // Splits a lexical-absolute file path into the remainder under a
@@ -106,21 +109,24 @@ bool strip_search_root_prefix(const std::string& file_absolute,
 bool utf8_from_wide(const wchar_t* text, std::string& utf8);
 
 // Converts one UTF-8 disk path to the wide spelling to hand to a Win32 W
-// API. The spelling is made absolute through lexical_absolute, its
-// separators become '\', and the long-path prefix is prepended - "\\?\"
+// API. An explicit "\\?\" or "//?/" prefix on a drive-absolute or
+// "UNC\server\share" spelling is translated to the plain form first; the
+// spelling is then made absolute through lexical_absolute, its separators
+// become '\', and the canonical long-path prefix is prepended - "\\?\"
 // for a drive path, "\\?\UNC\" for a network share - exactly like the
 // io_win32 layer of the reference compiler. The prefix is what makes a
 // path beyond MAX_PATH reachable without a manifest or a registry
 // setting, and it also stops the API from post-processing the spelling:
 // trailing dots and spaces stay literal, as they are in the stored
-// spelling, and '.'/'..' were already resolved lexically. A spelling that
-// already carries the prefix is passed through verbatim, and a path that
-// cannot be made absolute falls back to the plain conversion this module
-// used before long paths were supported; both paths are non-empty
-// buffers without a terminator, so callers still append one. Returns
-// false only when the spelling is not valid UTF-8 or contains a NUL.
-// Exposed for the tests and for later output-side helpers; every call in
-// this module that reaches the disk goes through it.
+// spelling, and '.'/'..' were already resolved lexically. A device
+// spelling ("\\?\GLOBALROOT\...") is not translated and keeps its
+// verbatim passthrough. A relative spelling whose working directory is
+// unknown is refused instead of falling back to the relative form; every
+// path that is made absolute produces a non-empty buffer without a
+// terminator, so callers still append one. Returns false when the
+// spelling is not valid UTF-8, contains a NUL, or cannot be made
+// absolute. Exposed for the tests and for later output-side helpers;
+// every call in this module that reaches the disk goes through it.
 bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 #endif
 
@@ -148,16 +154,26 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 // and replacement belong to the only component that writes an output tree, so
 // they sit beside the input ones instead of inside the common library, which
 // performs no filesystem call at all.
+//
+// Both entries refuse a spelling that contains an embedded NUL on every
+// platform, the same rule the read path applies: every native call would
+// truncate the spelling at the NUL and address an entry the caller did not
+// name. The Windows writer shares the target with concurrent readers and with
+// holders that have write access (FILE_SHARE_READ | FILE_SHARE_WRITE, the share
+// set the reference's _wopen carries); it does not share delete.
 // ---------------------------------------------------------------------------
 
 // Create every missing directory on the way to `directory`; existing
-// directories are accepted. Returns false with a reason on failure.
+// directories are accepted. Returns false with a reason on failure, including
+// a directory spelling that cannot be made absolute because the working
+// directory is unknown.
 bool make_directories(const std::string& directory, std::string& error);
 
 // Write `contents` to `target`, creating or truncating it. The target keeps
 // either its previous content or the complete new content unless the process
 // dies mid-write; a failure removes nothing and reports the reason. This is
-// the reference compiler's write model - no temporary file, no rename.
+// the reference compiler's write model - no temporary file, no rename. A
+// target containing an embedded NUL is refused on every platform.
 bool write_disk_file(const std::string& target,
                      const std::string& contents,
                      std::string& error);

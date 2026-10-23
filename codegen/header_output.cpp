@@ -160,8 +160,11 @@ bool publish_headers(const std::string& out_dir,
             easypb_file::lexical_absolute(
                 easypb_file::join_disk_path(out_dir, file.name));
         if (target.empty()) {
-            error = make_error(file.name,
-                               file.name + ": cannot resolve the output path");
+            error = make_error(
+                file.name,
+                file.name +
+                    ": cannot resolve the output path (the current working "
+                    "directory is unknown)");
             return false;
         }
         const std::string parent = parent_of_absolute(target);
