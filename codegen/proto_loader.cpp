@@ -258,20 +258,17 @@ bool read_and_parse_source(const std::string& logical,
     // the physical disk path for diagnostics.
     slot.physical_name = disk_path;
     if (!ok) {
+        // W-61: the outer Diagnostic already carries the file and the position,
+        // and the renderer prints `file:line:column: ` in front of the message,
+        // so this wrapper names only the logical file, the import chain and the
+        // parser's own text. Re-embedding parse_error.file/location here made
+        // the reader see the position twice.
         std::ostringstream message;
         message << "while loading \"" << logical << "\"";
         if (!chain.empty()) {
             message << " (chain " << chain_text(chain, logical) << ")";
         }
-        message << ": ";
-        if (!parse_error.file.empty()) message << parse_error.file;
-        if (parse_error.location.line != 0) {
-            message << ":" << parse_error.location.line << ":"
-                    << parse_error.location.column;
-        }
-        if (!parse_error.message.empty()) {
-            message << ": " << parse_error.message;
-        }
+        message << ": " << parse_error.message;
         return fail(error, parse_error.file.empty()
                                        ? logical
                                        : parse_error.file,

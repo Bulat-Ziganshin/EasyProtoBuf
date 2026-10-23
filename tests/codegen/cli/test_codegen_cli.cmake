@@ -113,6 +113,10 @@ run_ok(help_out help_err ${CODEGEN} --help)
 require_contains(help_out "--target" "Help lists the target option")
 require_contains(help_out "--proto_path" "Help lists the proto_path option")
 require_contains(help_out "--out-dir" "Help lists the out-dir option")
+# W-54: the documented defaults carry the leading `::` the binary prints.
+require_contains(help_out "=::std::string" "Help prints the string-type default")
+require_contains(help_out "=::std::vector" "Help prints the repeated-type default")
+require_contains(help_out "=::std::map" "Help prints the map-type default")
 
 # --- the mode table ---------------------------------------------------------
 
@@ -302,6 +306,43 @@ else()
         ${CODEGEN} "${DATA_DIR}/integration-proto2.proto")
     require_contains(lite_source_err "no .proto parser"
         "Lite build source rejection")
+endif()
+
+# --- S7e: the source diagnostics, end to end --------------------------------
+#
+# W-61: the loader names the logical file and its position once. W-65: the
+# missing `;` is reported before the value is classified, and the unsupported
+# value points at the value token. W-60: the source refusal carries the same
+# code the descriptor twin does (asserted by the unit lanes).
+
+if(FULL_BUILD)
+    run_fail(w61_out w61_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" editions.proto)
+    require_empty(w61_out "W-61 stdout")
+    require_contains(w61_err "editions syntax is not supported"
+        "W-61 editions refusal")
+    string(REGEX MATCHALL "editions.proto:1:1:" w61_hits "${w61_err}")
+    list(LENGTH w61_hits w61_count)
+    if(NOT w61_count EQUAL 1)
+        message(FATAL_ERROR
+            "W-61: expected one 'editions.proto:1:1:' occurrence, got ${w61_count}: ${w61_err}")
+    endif()
+
+    run_fail(w65_nosemi_out w65_nosemi_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" syntax-no-semi.proto)
+    require_empty(w65_nosemi_out "W-65 no-semicolon stdout")
+    require_contains(w65_nosemi_err "expected ';'"
+        "W-65 reports the missing semicolon")
+    require_not_contains(w65_nosemi_err "syntax must be"
+        "W-65 does not classify before the grammar")
+
+    run_fail(w65_unsupported_out w65_unsupported_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" syntax-unsupported.proto)
+    require_empty(w65_unsupported_out "W-65 unsupported-value stdout")
+    require_contains(w65_unsupported_err "syntax must be"
+        "W-65 reports the unsupported value")
+    require_not_contains(w65_unsupported_err "expected ';'"
+        "W-65 does not report a semicolon that is present")
 endif()
 
 # --- S4: the command-line contract -----------------------------------------

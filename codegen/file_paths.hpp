@@ -9,8 +9,8 @@ namespace easypb_file {
 // Native physical-path helpers for standalone source input. This module
 // owns every filesystem call and every platform path rule; the common
 // logical-path module and the import graph binder never touch the disk.
-// Output support (containment, collisions, directory creation) is added
-// in a later step; this header covers input only.
+// The input and output-side helpers share this module: the output block
+// below declares directory creation and the in-place write.
 //
 // Physical-path encoding is platform-specific. POSIX physical paths are
 // opaque native bytes and pass to OS calls unchanged. Windows physical
@@ -127,7 +127,7 @@ bool utf8_from_wide(const wchar_t* text, std::string& utf8);
 // path that is made absolute produces a non-empty buffer without a
 // terminator, so callers still append one. Returns false when the
 // spelling is not valid UTF-8, contains a NUL, or cannot be made
-// absolute. Exposed for the tests and for later output-side helpers;
+// absolute. Exposed for the tests and for the output-side helpers;
 // every call in this module that reaches the disk goes through it.
 bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 #endif
@@ -135,11 +135,13 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 // ---------------------------------------------------------------------------
 // Output-side additions (plan 5, step 4: the standalone publisher).
 //
-// Trimmed to the reference compiler's model on 2026-10-07: the publisher writes
-// files at paths the generator already mapped and validated, creating the
-// directory tree and writing each file, exactly as protoc's
-// WriteAllToDisk does (VerifyDirectoryExists, TryCreateParentDirectory, then
-// open/write/close - command_line_interface.cc:541-610).
+// Trimmed to the reference compiler's model by the plan-5 trim (`fbdcc0e`,
+// 2026-10-11). The publisher writes files at paths the generator already
+// mapped and validated: it creates the parent directories and writes each
+// file in place, as protoc's WriteAllToDisk does (TryCreateParentDirectory,
+// then open/write/close - command_line_interface.cc:541-610). The output root
+// is the one deliberate divergence: protoc verifies that it exists
+// (VerifyDirectoryExists), this publisher creates it.
 //
 // The guards this module used to carry - containment below the output root,
 // case-folding collision probing, native file identity, hardlink detection and
@@ -152,10 +154,11 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 // directory by protoc; and two output names that are one entry on a
 // case-folding filesystem silently overwrite here, as they do in protoc.
 //
-// The loader never needed these and must not have them: identity, case folding
-// and replacement belong to the only component that writes an output tree, so
-// they sit beside the input ones instead of inside the common library, which
-// performs no filesystem call at all.
+// The loader never needed these and must not have them: what remains of the
+// output side - directory creation and the in-place write - belongs to the only
+// component that writes an output tree, so it sits beside the input helpers
+// instead of inside the common library, which performs no filesystem call at
+// all.
 //
 // Both entries refuse a spelling that contains an embedded NUL on every
 // platform, the same rule the read path applies: every native call would

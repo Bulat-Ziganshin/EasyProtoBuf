@@ -1,0 +1,6 @@
+syntax = "proto4";
+// W-65/W-60: the same value with its semicolon reports the unsupported
+// syntax, at the value token, and carries the descriptor twin's code
+// (DIAGNOSTIC_UNSUPPORTED_SYNTAX).
+package cli_unsupported_syntax;
+message M { int32 x = 1; }

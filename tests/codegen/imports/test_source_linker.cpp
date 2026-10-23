@@ -401,15 +401,14 @@ void run_differential_case(const std::string& corpus,
 // it by decision, so the relation is an inverse and not a comparison.
 //
 // What is asserted is the refusal itself. MEASURED at the 2026-09-28
-// registration, and re-measured 2026-10-04 after plan 5's parser branch
-// (ledger D-44): the SOURCE frontend refuses the statement by name -
-// `editions syntax is not supported: only "proto2" and "proto3" are accepted`
-// at the `edition` line - so the pack's 8.1 phrase "with a message naming
-// editions" holds on this origin. Before that branch the answer was the generic
-// `expected a top-level .proto statement`, because the parser had no `edition`
-// statement while A25's own code path (DIAGNOSTIC_UNSUPPORTED_SYNTAX) is the
-// DESCRIPTOR-origin rule. The refusal stays a load-stage one, so its code is
-// still DIAGNOSTIC_GENERIC; the message is what names editions.
+// registration, re-measured 2026-10-04 after plan 5's parser branch (ledger
+// D-44), and re-measured by S7e (W-60): the SOURCE frontend refuses the
+// statement by name - `editions syntax is not supported: only "proto2" and
+// "proto3" are accepted` at the `edition` line - and, since S7e, the refusal
+// carries DIAGNOSTIC_UNSUPPORTED_SYNTAX, the code the descriptor origin
+// assigns. The loader names the logical file and its position once: the
+// outer Diagnostic carries both, and the message no longer re-embeds them
+// (W-61).
 void test_editions_fixture_is_refused(const std::string& corpus)
 {
     easypb_proto::SourceLoaderOptions options;
@@ -419,6 +418,16 @@ void test_editions_fixture_is_refused(const std::string& corpus)
     easypb_schema::Diagnostic error;
     CHECK(!easypb_proto::load_source_files(options, roots, set, error));
     CHECK(!error.message.empty());
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+    CHECK(error.file == "editions.proto");
+    // The fixture's statement follows its fourteen comment lines, so the
+    // refusal points at line 15, column 1 (the brief's "line 1" was the
+    // G6b probe's own file; this corpus fixture has a header).
+    CHECK(error.location.line == 15 && error.location.column == 1);
+    const std::string prefix = "while loading \"editions.proto\"";
+    CHECK(error.message.compare(0, prefix.size(), prefix) == 0);
+    CHECK(error.message.find("editions.proto:1:1:") == std::string::npos);
+    CHECK(error.message.find("editions.proto:15:1:") == std::string::npos);
     std::cout << "INVERSE: unsupported_syntax/editions.proto refused - "
               << error.message.substr(0, 120) << '\n';
 }

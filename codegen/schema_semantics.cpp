@@ -814,6 +814,13 @@ bool enclosing_scope(const std::string& scope, std::string& outer)
 // owner is just the first file indexed - and the question is asked about the
 // VISIBLE set only, so an unimported declarer still covers nothing.
 //
+// `package_head` is a dotted absolute spelling (`.a.b`): every caller reaches
+// this function through `candidate_is_visible`, whose `candidate` argument is
+// the index's own spelling - `raw` under the `raw[0] == '.'` guard,
+// `scope_candidate`'s head, or `winning_head + "." + rest` - so the leading
+// dot and the non-empty head are preconditions, not cases (W-53, re-measured
+// after S7b).
+//
 // The equality form this function carried before fix round r5 came from
 // `descriptor.cc`'s `FindSymbol`, whose package special case answers which
 // file OWNS the merged node; the rule a lookup needs is `IsInPackage`, and
@@ -836,7 +843,6 @@ bool enclosing_scope(const std::string& scope, std::string& outer)
 bool package_is_visible(const std::set<const SchemaFile*>& visible_files,
                         const std::string& package_head)
 {
-    if (package_head.empty() || package_head[0] != '.') return false;
     const str_view head_pkg = str_view(package_head).substr(1);
     for (std::set<const SchemaFile*>::const_iterator it = visible_files.begin();
          it != visible_files.end(); ++it) {
@@ -2306,6 +2312,19 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                       Diagnostic& error)
 {
     if (!field.has_default_value) return true;
+    // W-64: the position is computed on the first refusal and at most
+    // once. The error-free path must not pay for it (the deliberate
+    // laziness of 3b2e59e), and the exclusive branches below would
+    // otherwise spell the same call nineteen times.
+    SourceLocation where;
+    bool have_where = false;
+    const auto default_location = [&]() -> const SourceLocation& {
+        if (!have_where) {
+            where = field_default_location(file, field_path);
+            have_where = true;
+        }
+        return where;
+    };
     // The declared kind is known even when the definition is not, so the
     // kind-decided half of the rule is checked BEFORE the unknown-kind
     // deferral: compatibility mode leaves both flags true for an external
@@ -2320,19 +2339,19 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         if (field.type == FieldDescriptorProto::TYPE_MESSAGE ||
             field.type == FieldDescriptorProto::TYPE_GROUP) {
             return fail_at(file, "message fields cannot have defaults",
-                           field_default_location(file, field_path),
+                           default_location(),
                            field_path, error);
         }
         if (field.type == FieldDescriptorProto::TYPE_ENUM) {
             if (value.empty()) {
                 return fail_at(file, "enum default must name an enum value",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             if (!is_identifier(value)) {
                 return fail_at(file,
                                "Default value for an enum field must be an identifier.",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
@@ -2347,7 +2366,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         warn_once(file,
                   kDeferredDefaultPrefix + view_text(field.type_name),
                   DIAGNOSTIC_GENERIC,
-                  field_default_location(file, field_path), field_path);
+                  default_location(), field_path);
         return true;
     }
     if (field.type == FieldDescriptorProto::TYPE_STRING) {
@@ -2377,7 +2396,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         field.type == FieldDescriptorProto::TYPE_SFIXED64;
     if (numeric_default_type && !value.empty() && value[0] == '+') {
         return fail_at(file, "numeric default value may not start with '+'",
-                       field_default_location(file, field_path), field_path,
+                       default_location(), field_path,
                        error);
     }
     std::int32_t signed32 = 0;
@@ -2393,14 +2412,14 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_BYTES:
             if (!valid_bytes_default_escape(value)) {
                 return fail_at(file, "invalid escaping in bytes default value",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_BOOL:
             if (value != "true" && value != "false") {
                 return fail_at(file, "bool default must be true or false",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
@@ -2416,7 +2435,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
             if (!value.empty() && is_ascii_whitespace(value[0])) {
                 return fail_at(file,
                                "floating-point default value may not have leading whitespace",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             // W-04: the strict predicate still refuses an ERANGE text that
@@ -2426,14 +2445,14 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
             if (!is_float_text(value) &&
                 !is_subnormal_float_text(value)) {
                 return fail_at(file, "invalid floating-point default",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_ENUM:
             if (value.empty()) {
                 return fail_at(file, "enum default must name an enum value",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             // The identifier rule comes FIRST, exactly as the reference
@@ -2444,7 +2463,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
             if (!is_identifier(value)) {
                 return fail_at(file,
                                "Default value for an enum field must be an identifier.",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             {
@@ -2460,7 +2479,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                 if (enumeration == 0) {
                     return fail_at(file,
                                    "cannot validate default for unknown enum type " + enum_name,
-                                   field_default_location(file, field_path),
+                                   default_location(),
                                    field_path, error);
                 }
                 for (std::size_t i = 0; i < enumeration->value.size(); ++i) {
@@ -2468,20 +2487,20 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                 }
                 return fail_at(file,
                                "enum type " + enum_name + " has no value named " + value,
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
         case FieldDescriptorProto::TYPE_MESSAGE:
         case FieldDescriptorProto::TYPE_GROUP:
             return fail_at(file, "message fields cannot have defaults",
-                           field_default_location(file, field_path),
+                           default_location(),
                            field_path, error);
         case FieldDescriptorProto::TYPE_INT32:
         case FieldDescriptorProto::TYPE_SINT32:
         case FieldDescriptorProto::TYPE_SFIXED32:
             if (!parse_signed_32(value, signed32)) {
                 return fail_at(file, "default does not fit signed 32-bit field",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
@@ -2489,7 +2508,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_FIXED32:
             if (!parse_unsigned_with_optional_plus(value, 4294967295ull)) {
                 return fail_at(file, "default does not fit unsigned 32-bit field",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
@@ -2498,7 +2517,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_SFIXED64:
             if (!parse_signed_64(value, signed64)) {
                 return fail_at(file, "default does not fit signed 64-bit field",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
@@ -2506,13 +2525,13 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_FIXED64:
             if (!parse_unsigned_with_optional_plus(value, 18446744073709551615ull)) {
                 return fail_at(file, "default does not fit unsigned 64-bit field",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
         default:
             return fail_at(file, "unsupported field type in default validation",
-                           field_default_location(file, field_path),
+                           default_location(),
                            field_path, error);
     }
 }
@@ -2579,7 +2598,7 @@ bool validate_field_declared_shape(SchemaFile& file, FieldDescriptorProto& field
     // protoc refuses while it builds a descriptor ("Repeated fields can't
     // have default values.", descriptor.cc:6652-6655) and our parser
     // refuses as source text ("default value is not allowed on repeated or
-    // oneof fields", proto_parser.cpp:1128). Reference-free and asked in
+    // oneof fields", proto_parser.cpp:1196). Reference-free and asked in
     // BOTH modes: no resolution can turn a repeated field into a singular
     // one. It is asked BEFORE the proto3 block below, because protoc
     // reports this shape first - the repeated-default check lives in the
@@ -2603,11 +2622,12 @@ bool validate_field_declared_shape(SchemaFile& file, FieldDescriptorProto& field
     // (`ValidateProto3Field`, descriptor.cc:7912-7930, reached from
     // `ValidateProto3Message`), and our parser refuses both as source text
     // ("required fields are not allowed in proto3",
-    // codegen/parser/proto_parser.cpp:1233, and "explicit default values
-    // are not allowed in proto3", :1124), so this is the descriptor-origin
-    // half of that frontend parity rule. The gate is the field's OWN file:
-    // proto2 gives both shapes a meaning, so reading the wrong file here
-    // would refuse legal input (the proto2 controls in
+    // codegen/parser/proto_parser.cpp:1329, and "explicit default values
+    // are not allowed in proto3", :1192). Since S7e both source refusals
+    // carry the same codes as the checks below (W-60), so the two origins
+    // agree on the code as well as on the verdict. The gate is the field's
+    // OWN file: proto2 gives both shapes a meaning, so reading the wrong
+    // file here would refuse legal input (the proto2 controls in
     // test_descriptor_origin_proto3_field_rules_are_refused).
     //
     // The open-enum first-value rule is the same family and NOT here: the

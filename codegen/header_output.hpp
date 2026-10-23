@@ -25,12 +25,14 @@ namespace easypb_codegen {
 //     escapes the output root is refused here as well as one layer up
 //     (owner decision of 2026-10-21; the reference compiler writes such a
 //     name one directory ABOVE the output root);
-//   - the output directory must exist, and a file at that spelling is refused;
+//   - the output directory is created when missing, and a file at that spelling
+//     is refused;
 //   - the parent directories of each output are created, so a header nested
 //     below the output root needs no directory made by hand;
 //   - each file is created or truncated and written in place.
 //
-// Deliberately NOT provided, by owner decision of 2026-10-07, because the
+// Deliberately NOT provided, by the owner's plan-5 trim decision (`fbdcc0e`,
+// 2026-10-11), because the
 // reference compiler does not provide it and the guards are measurably weaker
 // than they look:
 //

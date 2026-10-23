@@ -119,9 +119,16 @@ class ParseFailure : public std::runtime_error
 {
 public:
     SourceLocation location;
+    // Plan 5 follow-up S7e (W-60): the code the throw site already knows.
+    // Every grammar refusal that has a descriptor twin names that twin's
+    // code; the rest stay DIAGNOSTIC_GENERIC, which is the Diagnostic
+    // default, so an unadorned throw keeps its old meaning.
+    easypb_schema::DiagnosticCode code;
 
-    ParseFailure(const SourceLocation& where, const std::string& message)
-        : std::runtime_error(message), location(where) {}
+    ParseFailure(const SourceLocation& where, const std::string& message,
+                 easypb_schema::DiagnosticCode failure_code =
+                     easypb_schema::DIAGNOSTIC_GENERIC)
+        : std::runtime_error(message), location(where), code(failure_code) {}
 };
 
 bool ascii_alpha(char c)
@@ -689,6 +696,14 @@ private:
         throw ParseFailure(current_.location, message);
     }
 
+    // The code-aware spelling for a refusal whose descriptor twin already has
+    // a DiagnosticCode (W-60).
+    void fail(const std::string& message,
+              easypb_schema::DiagnosticCode code) const
+    {
+        throw ParseFailure(current_.location, message, code);
+    }
+
     // Identifier.  The lexer already validated its spelling.
     std::string identifier()
     {
@@ -739,7 +754,8 @@ private:
         throw ParseFailure(
             current_.location,
             "editions syntax is not supported: only \"proto2\" and "
-            "\"proto3\" are accepted");
+            "\"proto3\" are accepted",
+            easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
     }
 
     // SyntaxStatement <- "syntax" "=" StringSequence ";"
@@ -753,7 +769,17 @@ private:
         // than at the trailing semicolon, as protoc's does.
         const SourceLocation value_location = current_.location;
         const std::string value = string_sequence();
+        // W-65: the grammar comes first, exactly as protoc asks it.
+        // ParseSyntaxIdentifier consumes the string, calls
+        // ConsumeEndOfDeclaration(";"), and only then classifies and reports
+        // the identifier (parser.cc:664-667, :684-690): a missing `;` is the
+        // error even when the value would also be refused.
+        expect_symbol(';');
         if (value.empty()) {
+            // W-15: an explicit empty value is not the absent descriptor
+            // syntax (which is proto2), and the descriptor path accepts that
+            // absence, so this source-only rule has no twin to match and stays
+            // DIAGNOSTIC_GENERIC (W-60's recorded bound).
             throw ParseFailure(value_location,
                                "syntax must be \"proto2\" or \"proto3\"");
         }
@@ -765,9 +791,13 @@ private:
         const easypb_schema::FileSyntax syntax =
             easypb_schema::classify_file_syntax(out_.file);
         if (syntax == easypb_schema::FILE_SYNTAX_UNSUPPORTED) {
-            fail("syntax must be \"proto2\" or \"proto3\"");
+            // The value token is where protoc points this refusal
+            // (parser.cc:664, :686), and W-15's empty-value branch above
+            // points there for the same reason (W-65).
+            throw ParseFailure(value_location,
+                               "syntax must be \"proto2\" or \"proto3\"",
+                               easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
         }
-        expect_symbol(';');
         syntax_ = syntax;
         // protoc represents proto2 by leaving FileDescriptorProto.syntax
         // absent; only proto3 is materialized in field 12.
@@ -1158,7 +1188,9 @@ private:
     void apply_default(FieldDescriptorProto& field, const Constant& value)
     {
         if (syntax_ == easypb_schema::FILE_SYNTAX_PROTO3) {
-            throw ParseFailure(value.location, "explicit default values are not allowed in proto3");
+            throw ParseFailure(value.location,
+                               "explicit default values are not allowed in proto3",
+                               easypb_schema::DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT);
         }
         if (field.label == FieldDescriptorProto::LABEL_REPEATED || field.has_oneof_index) {
             throw ParseFailure(value.location, "default value is not allowed on repeated or oneof fields");
@@ -1294,7 +1326,8 @@ private:
         }
         if (syntax_ == easypb_schema::FILE_SYNTAX_PROTO3 &&
             field.label == FieldDescriptorProto::LABEL_REQUIRED) {
-            fail("required fields are not allowed in proto3");
+            fail("required fields are not allowed in proto3",
+                 easypb_schema::DIAGNOSTIC_PROTO3_REQUIRED_FIELD);
         }
 
         // TypeName Identifier "=" FieldNumber FieldOptions? ";"
@@ -1703,7 +1736,8 @@ private:
 
         if (result.value.empty()) {
             throw ParseFailure(current_.location,
-                               "enum must contain at least one value");
+                               "enum must contain at least one value",
+                               easypb_schema::DIAGNOSTIC_EMPTY_ENUM);
         }
 
         if (!reserved_names.empty() || !reserved_ranges.empty()) {
@@ -1730,8 +1764,10 @@ private:
             std::set<std::int32_t> unique;
             for (std::size_t i = 0; i < numbers.size(); ++i) {
                 if (!unique.insert(numbers[i]).second) {
-                    throw ParseFailure(current_.location,
-                        "duplicate enum number requires option allow_alias = true");
+                    throw ParseFailure(
+                        current_.location,
+                        "duplicate enum number requires option allow_alias = true",
+                        easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
                 }
             }
         }
@@ -1893,11 +1929,14 @@ private:
         easypb_schema::SymbolIndex symbols;
         easypb_schema::Diagnostic semantic_error;
         if (!easypb_schema::index_file(out_, symbols, semantic_error)) {
-            throw ParseFailure(semantic_error.location, semantic_error.message);
+            throw ParseFailure(semantic_error.location, semantic_error.message,
+                               semantic_error.code);
         }
         if (defer_type_resolution_) {
             if (!easypb_schema::validate_deferred_file(out_, semantic_error)) {
-                throw ParseFailure(semantic_error.location, semantic_error.message);
+                throw ParseFailure(semantic_error.location,
+                                   semantic_error.message,
+                                   semantic_error.code);
             }
             return;
         }
@@ -1905,7 +1944,8 @@ private:
         visible.insert(&out_);
         if (!easypb_schema::resolve_file(out_, symbols, visible, true,
                                          semantic_error)) {
-            throw ParseFailure(semantic_error.location, semantic_error.message);
+            throw ParseFailure(semantic_error.location, semantic_error.message,
+                               semantic_error.code);
         }
     }
 };
@@ -1934,6 +1974,7 @@ bool parse_proto(const std::string& file_name,
     } catch (const ParseFailure& failure) {
         error.location = failure.location;
         error.message = failure.what();
+        error.code = failure.code;
         error.warning = false;
         return false;
     } catch (const std::exception& failure) {

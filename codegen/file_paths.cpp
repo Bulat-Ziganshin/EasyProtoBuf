@@ -726,10 +726,11 @@ std::string normalize_separators(const std::string& path)
 // at all. Nothing here is used by the loader; the publisher is their only
 // caller besides the tests.
 //
-// Trimmed to the reference compiler's model on 2026-10-07. What is left is the
-// directory tree and the write itself, which is what protoc's WriteAllToDisk
-// does (command_line_interface.cc:541-610): verify the output directory exists,
-// create the missing parents, then open/write/close. The containment, case
+// Trimmed to the reference compiler's model by the plan-5 trim (`fbdcc0e`,
+// 2026-10-11). What is left is the directory tree and the write itself, which
+// is what protoc's WriteAllToDisk does (command_line_interface.cc:541-610):
+// create the parent directories, then open/write/close. The output root is
+// created when missing here where protoc verifies it. The containment, case
 // folding, native identity, hardlink and atomic temp+rename guards that used to
 // live here are gone, with their measured effect recorded in file_paths.hpp.
 // ---------------------------------------------------------------------------

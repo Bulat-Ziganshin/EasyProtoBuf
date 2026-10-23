@@ -341,7 +341,7 @@ std::string cpp_type_legacy_safe(std::string type)
 {
     // The parameter is an owned buffer this call is free to rewrite, and the
     // caller's temporary was moved into it, so the replacement is done in
-    // place: string_replace_all built a SECOND string and filled it with the
+    // place: an earlier helper built a SECOND string and filled it with the
     // same bytes one character longer.
     const std::string find = "<::";
     std::size_t pos = type.find(find);
@@ -866,14 +866,25 @@ const MapType* find_map_type(const FieldDescriptorProto& field,
         return nullptr;
     }
 
-    auto field_type_name = std::string(field.type_name);
-    auto map_it = maptype_by_name.find(field_type_name);
-    if (map_it == maptype_by_name.end()) {
+    // The index is keyed by the entry's absolute type name, and a C++11
+    // std::map cannot look a str_view up without first building the owned key
+    // (heterogeneous comparison and the templated `find` are C++14). The index
+    // holds one entry per map field of ONE message, so a linear comparison is
+    // the bounded scan that avoids the per-field copy the lookup used to make
+    // (W-62). Insertion order, keys and the duplicate check are unchanged.
+    const MapType* map_type = 0;
+    for (MapTypeByName::const_iterator it = maptype_by_name.begin();
+         it != maptype_by_name.end(); ++it) {
+        if (it->first == field.type_name) {
+            map_type = &it->second;
+            break;
+        }
+    }
+    if (map_type == 0) {
         return nullptr;
     }
 
     // These pointers refer to metadata owned by the map index and descriptor.
-    const MapType* map_type = &map_it->second;
     const FieldDescriptorProto* value_field = map_type->value_field;
     auto value_type = value_field->type;
 

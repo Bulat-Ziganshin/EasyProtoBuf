@@ -47,7 +47,7 @@ descriptor.pb.hpp decoder|
 - [`generation.hpp`](generation.hpp) — the public generation entry points `generate_header` (one target) and `generate_files` (explicit targets in request order) plus the owning `GeneratedFile{name, content}` result.
 - [`generation_options.hpp`](generation_options.hpp) / [`generation_options.cpp`](generation_options.cpp) — `GenerationOptions` defaults and the shared validation/derived behavior every frontend applies.
 - [`header_paths.hpp`](header_paths.hpp) / [`header_paths.cpp`](header_paths.cpp) — the pure logical-name → generated-header mapping (`.proto` → `.pb.hpp`, otherwise append `.pb.hpp`). No filesystem call and no case logic.
-- [`header_output.hpp`](header_output.hpp) / [`header_output.cpp`](header_output.cpp) — the standalone output publisher, modelled on the reference compiler's `WriteAllToDisk`: duplicate output-name refusal, output-name validation, output-directory creation, per-output parent-directory creation, and an in-place write per file. Not part of the generation core. The containment, case-fold-collision, native-identity and atomic-replacement guards it used to carry were withdrawn on 2026-10-07 as protoc-absent; the header records the measurements and where each name check now lives. One check was added back on 2026-10-21: the publisher validates every output name as a logical path itself, so a hand-built `GeneratedFile` cannot write outside the output root (the reference compiler writes such a name one directory above the root, and this project refuses it).
+- [`header_output.hpp`](header_output.hpp) / [`header_output.cpp`](header_output.cpp) — the standalone output publisher, modelled on the reference compiler's `WriteAllToDisk`: duplicate output-name refusal, output-name validation, output-directory creation, per-output parent-directory creation, and an in-place write per file. Not part of the generation core. The containment, case-fold-collision, native-identity and atomic-replacement guards it used to carry were withdrawn by the plan-5 trim (`fbdcc0e`, 2026-10-11) as protoc-absent; the header records the measurements and where each name check now lives. One check was added back on 2026-10-21: the publisher validates every output name as a logical path itself, so a hand-built `GeneratedFile` cannot write outside the output root (the reference compiler writes such a name one directory above the root, and this project refuses it).
 - [`logical_paths.hpp`](logical_paths.hpp) / [`logical_paths.cpp`](logical_paths.cpp) — pure logical import-name validation shared by every frontend. No filesystem calls or platform headers, so descriptor-set and future plugin input reuse the same spelling rules.
 - [`file_paths.hpp`](file_paths.hpp) / [`file_paths.cpp`](file_paths.cpp) — native physical-path operations: joining, byte-wise root-prefix mapping, lexical absolute normalization, file status and reads for source input, plus the output-side directory creation and the plain in-place write. Owns every filesystem call and Windows path rule; never linked into the common schema core.
 - [`proto_loader.hpp`](proto_loader.hpp) / [`proto_loader.cpp`](proto_loader.cpp) — source-only discovery, caching, deferred parsing, and root selection in `easypb_proto`. Built as `easypb_proto_loader` in full builds only; descriptor-only and future plugin targets never link it.
@@ -91,9 +91,11 @@ parity lane's `inverse` class, `tests/codegen/imports/data/parity/`):
   `DIAGNOSTIC_UNSUPPORTED_SYNTAX`, and a `.proto` source statement is refused by
   the parser's `edition` branch with `editions syntax is not supported: only
   "proto2" and "proto3" are accepted` at the `edition` line (plan 5's parser
-  branch, ledger D-44). The parity lane pins the descriptor origin as
-  `d-unsupported-syntax-editions-inverse`; the source probes stay rowless
-  because a load-stage refusal carries `DIAGNOSTIC_GENERIC`.
+  branch, ledger D-44). Since S7e (`W-60`) the source refusal carries the same
+  `DIAGNOSTIC_UNSUPPORTED_SYNTAX` the descriptor origin does, so the two
+  origins agree on the code as well as on the verdict; the parity lane pins
+  both: `d-unsupported-syntax-editions-inverse` at the descriptor origin and
+  `s-unsupported-syntax-editions-inverse` at the source origin.
 - **The map-entry shape sweep is reference-free.** A26's check runs on the
   descriptor alone, so an entry **no field references** is checked as well.
   protoc validates a map entry only through the referencing field's `is_map()`,

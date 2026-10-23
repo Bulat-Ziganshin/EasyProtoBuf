@@ -77,7 +77,10 @@ enum DiagnosticCode
     // Plan 4 Step 5.1 (A25): a file's syntax value is neither proto2 nor
     // proto3 (protoc 30.1 writes "editions" for an editions file), so the
     // project cannot model its semantics. Refused loudly instead of being
-    // silently downgraded to proto2.
+    // silently downgraded to proto2. Both origins answer this code since
+    // S7e (W-60): the descriptor path classifies in `link_schema`, and the
+    // source parser throws it for an `edition` statement and for a `syntax`
+    // value the classifier rejects.
     DIAGNOSTIC_UNSUPPORTED_SYNTAX,
     // Plan 4 Step 5.1 (contract clause 12, D-23): a descriptor-origin field
     // number outside 1..536870911 or inside the reserved 19000..19999 range.
@@ -95,10 +98,10 @@ enum DiagnosticCode
     // a number and the enum does not declare `option allow_alias = true`.
     // protoc refuses the shape when it builds a descriptor ("... uses the same
     // enum value as ...") and our parser refuses it as source text
-    // (codegen/parser/proto_parser.cpp:1619-1624), which is why the option
+    // (codegen/parser/proto_parser.cpp:1769), which is why the option
     // travels in the model (`EnumOptions`) - without it the linker could not
-    // tell an intentional alias from this defect. Descriptor-origin only: the
-    // parser cannot produce the shape.
+    // tell an intentional alias from this defect. Both origins answer this
+    // code since S7e (W-60).
     DIAGNOSTIC_DUPLICATE_ENUM_NUMBER,
     // Plan 4 Step 5.1 (contract clause 12, D-28): a message declares a oneof no
     // field points at, so the declaration is unreachable rather than a choice
@@ -111,31 +114,29 @@ enum DiagnosticCode
     // all, so the type has no member and no number to resolve. protoc refuses
     // the shape when it builds a descriptor (`Enums must contain at least one
     // value.`) and our parser refuses the source twin as text ("enum must
-    // contain at least one value"), so this is the descriptor-origin half of
-    // that frontend parity rule. The check runs BEFORE the `allow_alias`
-    // early return: an empty enum that writes the option is still refused by
-    // protoc, so the option cannot licence an empty list. Descriptor-origin
-    // only - the parser cannot produce the shape.
+    // contain at least one value", proto_parser.cpp:1739), so both origins
+    // answer this code since S7e (W-60). The check runs BEFORE the
+    // `allow_alias` early return: an empty enum that writes the option is
+    // still refused by protoc, so the option cannot licence an empty list.
     DIAGNOSTIC_EMPTY_ENUM,
     // Plan 4 Step 5.1 (contract clause 12, the 0927-mimo review's F2): a
     // descriptor-origin file that declares `syntax = "proto3"` carries a field
     // with the `required` label, which proto3 does not have. protoc refuses the
     // shape when it builds the file from the same bytes (`ValidateProto3Field`,
     // descriptor.cc:7917, "Required fields are not allowed in proto3.") and our
-    // parser refuses its source twin (codegen/parser/proto_parser.cpp:1233), so
-    // this is the descriptor-origin half of that frontend parity rule. The gate
-    // is the field's OWN file: proto2 gives the label a meaning, so reading the
-    // wrong file here would refuse legal input. Descriptor-origin only - the
-    // parser cannot produce the shape.
+    // parser refuses its source twin (codegen/parser/proto_parser.cpp:1329),
+    // so both origins answer this code since S7e (W-60). The gate is the
+    // field's OWN file: proto2 gives the label a meaning, so reading the
+    // wrong file here would refuse legal input.
     DIAGNOSTIC_PROTO3_REQUIRED_FIELD,
     // Plan 4 Step 5.1 (contract clause 12, the 0927-mimo review's F2): the same
     // gate for a proto3 field that carries an explicit `default_value`, which
     // proto3 does not allow. protoc refuses it at the same site
     // (descriptor.cc:7922, "Explicit default values are not allowed in
     // proto3.") and the parser refuses the source twin
-    // (codegen/parser/proto_parser.cpp:1124), so the two codes are one rule
+    // (codegen/parser/proto_parser.cpp:1192), so the two codes are one rule
     // asked of two shapes: the shape, not the file class, is what the message
-    // names. Descriptor-origin only.
+    // names. Both origins answer the code since S7e (W-60).
     DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT,
     // Plan 4 clause 13 (ledger `D-39`, the 0927-mimo review's F9): a declaration
     // name the descriptor carries is not a legal protobuf symbol name - empty,

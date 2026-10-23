@@ -1,10 +1,11 @@
 // The standalone publisher: the one component that turns the generator's
 // in-memory result into files on disk.
 //
-// Trimmed to the reference compiler's model on 2026-10-07. What is left is what
-// protoc's WriteAllToDisk does (compiler/command_line_interface.cc:541-610):
-// refuse two targets that map to one output name, verify the output directory,
-// create the missing parent directories, and write each file. The name a
+// Trimmed to the reference compiler's model by the plan-5 trim (`fbdcc0e`,
+// 2026-10-11). What is left is what protoc's WriteAllToDisk does
+// (compiler/command_line_interface.cc:541-610): refuse two targets that map to
+// one output name, create the output directory, create the missing parent
+// directories, and write each file in place. The name a
 // GeneratedFile carries was already mapped and validated by
 // easypb_codegen::generated_header_path (codegen/header_paths.cpp), which is
 // where a descriptor set naming "../escape.proto" is refused - measured, that
@@ -124,8 +125,9 @@ bool publish_headers(const std::string& out_dir,
         }
     }
 
-    // The output directory itself must exist, and a file at that spelling is
-    // the classic denied output root rather than a usable directory.
+    // The output directory itself is created when missing, and a file at that
+    // spelling is the classic denied output root rather than a usable
+    // directory.
     std::string directory_error;
     if (!easypb_file::make_directories(out_dir, directory_error)) {
         error = make_error(out_dir, directory_error);

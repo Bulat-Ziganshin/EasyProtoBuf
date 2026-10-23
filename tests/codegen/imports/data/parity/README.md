@@ -267,23 +267,22 @@ Nothing is asserted about message text.
   2026-10-02: *Unknown enumeration value of `1002`* - so no `.txtpb` can carry
   it; its record stays in `build/plan4/fix-r26/own/results-after.txt` and the
   ledger row.
-* **Three fixtures carry no row: `source/probe-source-{proto3,proto4,
-  editions}.proto`.** Measured: the source frontend refuses `syntax = "proto4"`
-  (`syntax must be "proto2" or "proto3"`) and `edition = "2023"`
-  (`editions syntax is not supported: only "proto2" and "proto3" are
-  accepted`, since plan 5's parser branch landed 2026-10-04; before it the
-  answer was `expected a top-level .proto statement`) itself, as a **parse
-  error carrying `DIAGNOSTIC_GENERIC`**, so `DIAGNOSTIC_UNSUPPORTED_SYNTAX` is
-  unreachable from `.proto` text and the code's rows live at the descriptor
-  origin, where `schema_linker.cpp` owns it. A row may not name `GENERIC` (the
-  bucket is not a verdict), so the shapes are kept as evidence rather than as
-  rows — but they are **not the same relation**, measured 2026-09-28:
-  `syntax = "proto4"` is parity (`protoc` refuses it as source text too, and
-  both answers are the bucket because a file the parser refused is never
-  classified), while `edition = "2023";` is an **inverse** on this origin as
-  well as on the descriptor one — `libprotoc 30.1` ACCEPTS it and models the
-  file as `syntax: "editions"`, our parser refuses it by name, and that refusal
-  is A25's recorded capability boundary, not a parity verdict.
+* **The unsupported-syntax family is a source row since `S7e` (`W-60`).** The
+  source frontend used to answer `syntax = "proto4"` and `edition = "2023"` as
+  parse errors carrying `DIAGNOSTIC_GENERIC`, so the three probe fixtures
+  carried no row - a row may not name the bucket. The parser's throw now
+  carries the descriptor twin's code, so the family is three rows:
+  `s-unsupported-syntax-accept` (proto3, the accept control),
+  `s-unsupported-syntax-reject` (`syntax = "proto4"`, a **pair**: `protoc`
+  refuses it as source text too) and `s-unsupported-syntax-editions-inverse`
+  (`edition = "2023"`, the **inverse**: `libprotoc 30.1` ACCEPTS it and models
+  the file as `syntax: "editions"`, our parser refuses it by name, and that
+  refusal is A25's recorded capability boundary). The same change gave the
+  four other source refusals their descriptor codes as rows:
+  `s-proto3-required-field-*`, `s-proto3-explicit-default-*`,
+  `s-duplicate-enum-number-*` (the accept twin writes
+  `option allow_alias = true`) and `s-empty-enum-*`; the reject fixtures use
+  proto2 where a proto3 rule would fire first.
 
 ## Provenance of every cell
 

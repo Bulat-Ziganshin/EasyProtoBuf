@@ -927,15 +927,17 @@ void test_invalid_syntax_preserves_chain()
     CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.message.find("broken.proto") != std::string::npos);
     CHECK(error.message.find("root.proto") != std::string::npos);
-    // The original file/line/column must survive: the stray ";" is on
-    // line 2 of broken.proto and must appear verbatim.
+    // W-61: the original file/line/column survive in the outer Diagnostic,
+    // and the message names the logical file only once. The renderer supplies
+    // the `file:line:column:` prefix; the wrapper must not embed it again.
     CHECK(error.location.line == 2);
     CHECK(error.location.column != 0);
+    CHECK(error.file == "broken.proto");
     {
-        std::ostringstream expected;
-        expected << "broken.proto:" << error.location.line << ":"
-                 << error.location.column;
-        CHECK(error.message.find(expected.str()) != std::string::npos);
+        std::ostringstream duplicated;
+        duplicated << "broken.proto:" << error.location.line << ":"
+                   << error.location.column;
+        CHECK(error.message.find(duplicated.str()) == std::string::npos);
     }
     CHECK(files.files().empty());
 }

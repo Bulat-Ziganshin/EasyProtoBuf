@@ -2,13 +2,6 @@
 
 namespace easypb_codegen {
 
-// Return true if `value` starts with `prefix`.
-bool starts_with(str_view value, str_view prefix)
-{
-    return value.size() >= prefix.size() &&
-           value.compare(0, prefix.size(), prefix) == 0;
-}
-
 // Return true if `value` ends with `suffix`.
 bool ends_with(str_view value, str_view suffix)
 {
@@ -41,25 +34,3 @@ std::string number_to_string(int32_t value)
 }
 
 } // namespace easypb_codegen
-
-// Still global on purpose: dead, and S7e's W-53 deletes it (W-55).
-// Returns a version of 'str' where every occurrence of
-// 'find' is substituted by 'replace'.
-// - http://stackoverflow.com/questions/20406744/
-std::string string_replace_all(
-    str_view str ,   // where to work
-    str_view find ,  // substitute 'find'
-    str_view replace //      by 'replace'
-) {
-    using namespace std;
-    string result;
-    size_t find_len = find.size();
-    size_t pos, from = 0;
-    while( string::npos != ( pos=str.find(find,from) ) ) {
-        result.append( str, from, pos-from );
-        result.append( replace );
-        from = pos + find_len;
-    }
-    result.append( str, from , string::npos );
-    return result;
-}

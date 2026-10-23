@@ -412,7 +412,8 @@ void test_write_reports_a_directory_target(const std::string& work)
 
 // --- P6: containment --------------------------------------------------------
 //
-// Removed with the 2026-10-07 trim: protoc writes wherever the mapped name
+// Removed with the plan-5 trim (`fbdcc0e`, 2026-10-11): protoc writes wherever
+// the mapped name
 // points, including one directory above the output root when a descriptor set
 // asks it to (measured). The name itself is still validated, upstream, by
 // easypb_codegen::generated_header_path - test_generated_header_path_maps_and_

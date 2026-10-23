@@ -279,6 +279,25 @@ void test_w11(const std::string& data_dir)
     CHECK(easypb_codegen::ends_with("a.pbs", ".pbs"));
     CHECK(!easypb_codegen::ends_with("a.proto", ".pbs"));
     CHECK(easypb_codegen::myformat("[{0}]", "x") == "[x]");
+
+    // W-63: a multi-digit placeholder names the argument it spells. The
+    // unused-argument tolerance is unchanged (the call sites pass one argument
+    // to a user template that need not name it), and a missing argument still
+    // throws, exactly as `{2}` with one argument does.
+    CHECK(easypb_codegen::myformat(
+              "{10}", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10")
+          == "10");
+    CHECK(easypb_codegen::myformat(
+              "{0}-{10}", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+              "10")
+          == "0-10");
+    bool short_args_threw = false;
+    try {
+        easypb_codegen::myformat("{10}", "only");
+    } catch (const std::runtime_error&) {
+        short_args_threw = true;
+    }
+    CHECK(short_args_threw);
 }
 
 // --- W-48: the presence bits are normalized at ingest -----------------------

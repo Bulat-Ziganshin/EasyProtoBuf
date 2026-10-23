@@ -295,12 +295,17 @@ void test_edition_statement_is_refused_by_name()
           error.message.find("proto3") != std::string::npos);
     CHECK(error.message.find("expected a top-level") == std::string::npos);
     CHECK(error.location.line == 1 && error.location.column == 1);
+    // S7e (W-60): the source statement carries the descriptor twin's code.
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
 
     // The unknown-syntax path is unchanged (A19): the literal is what fails,
-    // not the statement shape, and the message is its own.
+    // not the statement shape, and the message is its own. The position is the
+    // value token, as protoc records it (W-65), and the code is the twin's.
     CHECK(!easypb_proto::parse_proto("proto4.proto",
         "syntax = \"proto4\";\npackage s;\n", parsed, error));
     CHECK(error.message == "syntax must be \"proto2\" or \"proto3\"");
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
+    CHECK(error.location.line == 1 && error.location.column == 10);
 
     // Both supported statements still parse.
     CHECK(easypb_proto::parse_proto("p2.proto",
@@ -412,6 +417,67 @@ void test_rejects_empty_enums()
         "syntax=\"proto2\"; enum E { option allow_alias = true; }",
         option_only, option_error));
     CHECK(option_error.message.find("at least one value") != std::string::npos);
+}
+
+void test_source_refusals_carry_their_descriptor_codes()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    // W-60: each grammar refusal that has a descriptor twin names that twin's
+    // code, so the two input paths agree on the code as well as on the
+    // verdict. The accept halves are the proto2 controls of the same
+    // declarations (and the parity corpus's `s-*-accept` rows).
+    CHECK(!easypb_proto::parse_proto("proto3-required.proto",
+        "syntax = \"proto3\"; message M { required int32 a = 1; }",
+        parsed, error));
+    CHECK(error.message.find("required") != std::string::npos);
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_PROTO3_REQUIRED_FIELD);
+
+    CHECK(!easypb_proto::parse_proto("proto3-default.proto",
+        "syntax = \"proto3\"; message M { int32 a = 1 [default = 5]; }",
+        parsed, error));
+    CHECK(error.message.find("explicit default") != std::string::npos);
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT);
+
+    CHECK(!easypb_proto::parse_proto("duplicate-enum.proto",
+        "syntax = \"proto2\"; enum E { A = 1; B = 1; }", parsed, error));
+    CHECK(error.message.find("allow_alias") != std::string::npos);
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
+
+    CHECK(!easypb_proto::parse_proto("empty-enum.proto",
+        "syntax = \"proto2\"; enum E {}", parsed, error));
+    CHECK(error.message.find("at least one value") != std::string::npos);
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_EMPTY_ENUM);
+
+    // The shared semantic layer already assigns the collision code, and the
+    // throw now passes it through instead of dropping it (W-60): the source
+    // twin of the descriptor path's duplicate-symbol refusal.
+    CHECK(!easypb_proto::parse_proto("duplicate-symbol.proto",
+        "syntax = \"proto2\"; message M { optional int32 a = 1; } "
+        "message M { optional int32 b = 2; }", parsed, error));
+    CHECK(!error.message.empty());
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+
+    // W-65: the grammar is asked before the value, exactly as protoc does.
+    // The missing `;` is the error even though the value would also be
+    // refused, and the empty value follows the same order.
+    CHECK(!easypb_proto::parse_proto("proto4-no-semi.proto",
+        "syntax = \"proto4\"\npackage s;\n", parsed, error));
+    CHECK(error.message.find("expected ';'") != std::string::npos);
+    CHECK(error.message.find("syntax must be") == std::string::npos);
+    CHECK(error.location.line == 2 && error.location.column == 1);
+
+    CHECK(!easypb_proto::parse_proto("empty-no-semi.proto",
+        "syntax = \"\"\nmessage M { optional int32 a = 1; }\n",
+        parsed, error));
+    CHECK(error.message.find("expected ';'") != std::string::npos);
+    CHECK(error.message.find("syntax must be") == std::string::npos);
+
+    // The with-`;` controls keep their own refusals.
+    CHECK(!easypb_proto::parse_proto("proto4-with-semi.proto",
+        "syntax = \"proto4\";\npackage s;\n", parsed, error));
+    CHECK(error.message.find("syntax must be") != std::string::npos);
 }
 
 void test_rejects_duplicate_oneof_names()
@@ -1197,6 +1263,10 @@ void test_empty_syntax_statement_is_refused()
     CHECK(error.message.find("syntax must be") != std::string::npos);
     CHECK(error.location.line == 1);
     CHECK(error.location.column == 10);
+    // S7e (W-60): the empty value is a source-only rule - the descriptor path
+    // reads an empty/absent syntax as proto2 - so there is no twin to match
+    // and the refusal keeps DIAGNOSTIC_GENERIC.
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
 
     CHECK(easypb_proto::parse_proto("proto2.proto",
         "syntax = \"proto2\"; message M { optional int32 x = 1; }", parsed, error));
@@ -1359,6 +1429,7 @@ int main()
     test_complex_proto3();
     test_proto2_defaults_and_literals();
     test_empty_syntax_statement_is_refused();
+    test_source_refusals_carry_their_descriptor_codes();
     test_bom_is_consumed_by_the_lexer();
     test_float_defaults_are_canonicalized();
     test_bytes_upper_hex_escape_is_decoded();

@@ -1,0 +1,8 @@
+edition = "2023";
+// W-61: the source editions refusal, end to end. The statement is line 1 so
+// the CLI case can assert the `editions.proto:1:1:` prefix appears exactly
+// once. `edition = "2023";` is protoc 30.1's spelling for a file this project
+// classifies as FILE_SYNTAX_UNSUPPORTED (A25), so the loader refuses it before
+// generation; the position travels in the outer Diagnostic only.
+package cli_editions;
+message M { int32 x = 1; }

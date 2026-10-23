@@ -1,7 +1,8 @@
 # CLI-lane fixtures (S4, S7c)
 
 The files here are the fixtures of the plan-5 follow-up sessions S4 (the
-command-line contract) and S7c (the command line's own surface). They are read
+command-line contract), S7c (the command line's own surface) and S7e (the
+source diagnostics). They are read
 by [`../test_codegen_cli.cmake`](../test_codegen_cli.cmake); the lane passes
 this directory as `FIXTURE_DIR`.
 
@@ -21,6 +22,9 @@ this directory as `FIXTURE_DIR`.
 | `mixed-anon.pbs` | one named and one unnamed file | `W-19` |
 | `defaults-empty.proto` | proto2 message with `optional bytes b = 1 [default = ""]` | `W-35` |
 | `defaults-empty.pbs` | `protoc`'s descriptor set of `defaults-empty.proto`, so both input paths carry the empty default | `W-35` |
+| `editions.proto` | `edition = "2023";` at line 1 plus a message; the source editions refusal | `W-60`, `W-61` |
+| `syntax-no-semi.proto` | `syntax = "proto4"` with no semicolon; the grammar is reported first | `W-65` |
+| `syntax-unsupported.proto` | `syntax = "proto4";`; the value is reported at its own token | `W-60`, `W-65` |
 
 `bad-anon.pbs`, `anon-two.pbs`, `mixed-anon.pbs` and the three original `.pbs`
 files are crafted, because `protoc` cannot produce an unnamed
