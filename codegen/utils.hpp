@@ -11,6 +11,12 @@
 
 #include "descriptor.pb.hpp"
 
+// The generator's own text helpers. W-55: they used to live in the global
+// namespace, and codegen/ is a PUBLIC include path of easypb_codegen_core, so
+// every consumer that linked the core inherited names as generic as
+// starts_with. The include graph is unchanged; only the names owners are.
+namespace easypb_codegen {
+
 // Return true if `value` starts with `prefix`.
 bool starts_with(str_view value, str_view prefix);
 
@@ -21,6 +27,11 @@ bool ends_with(str_view value, str_view suffix);
 // missing from some legacy MinGW libstdc++ implementations.
 std::string number_to_string(int32_t value);
 
+} // namespace easypb_codegen
+
+// Deliberately still global: this helper is dead and S7e's W-53 deletes it, so
+// W-55 does not move what is about to disappear.
+//
 // Returns a version of 'str' where every occurrence of
 // 'find' is substituted by 'replace'.
 // - http://stackoverflow.com/questions/20406744/
@@ -29,6 +40,8 @@ std::string string_replace_all(
     str_view find,  // substitute 'find'
     str_view replace //      by 'replace'
 );
+
+namespace easypb_codegen {
 
 // Use format_str to format remaining arguments similar to std::format.
 // All arguments should be convertible to str_view, and the only
@@ -66,7 +79,11 @@ std::string myformat(str_view format_str, const Args&... args)
             if (i > start) {
                 result.append(fmt + start, i - start);
             }
-            result.append(arg[arg_num].data(), arg[arg_num].size());
+            // W-35: an empty argument may be a null view, and append(nullptr, 0)
+            // is formally undefined; the empty argument contributes nothing.
+            if (!arg[arg_num].empty()) {
+                result.append(arg[arg_num].data(), arg[arg_num].size());
+            }
         };
 
         // "{}" in the format string is replaced by the next input argument
@@ -92,5 +109,7 @@ std::string myformat(str_view format_str, const Args&... args)
 
     return result;
 }
+
+} // namespace easypb_codegen
 
 #endif

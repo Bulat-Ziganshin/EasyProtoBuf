@@ -28,13 +28,10 @@ std::string joined_name(const std::string& parent, const str_view& leaf)
     result.reserve(parent.size() + 1 + leaf.size());
     result.append(parent);
     result.push_back('.');
-    result.append(leaf.data(), leaf.size());
+    // W-35: an empty view may carry a null pointer, and append(nullptr, 0)
+    // is formally undefined, so the empty leaf contributes only the dot.
+    if (!leaf.empty()) result.append(leaf.data(), leaf.size());
     return result;
-}
-
-std::string view_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
 }
 
 std::string format_path(const DescriptorPath& path)
@@ -884,30 +881,12 @@ bool nested_in_field_message(const ResolveContext& context,
            field_path[field_path.size() - 2] == 2;
 }
 
-// protoc's ownership rule for a synthetic map entry (A22, measured): the
-// reference belongs to the owning map field exactly when the entry is nested
-// directly in the field's own message, the field is repeated, and the field's
-// own NAME derives the entry's simple name through the shared map_entry_name
-// (A24). The ownership test never looks at the raw reference text, which
-// differs by origin (relative for source, absolute for descriptors).
+// protoc's ownership rule for a synthetic map entry (A22, measured) is
+// `internal::owns_map_entry`, declared in schema_semantics_internal.hpp and
+// defined beside the other seam rules below: the rule is a precondition that
+// includes the entry's own marker, so a direct test can prove a real nested
+// message is not claimed as an entry (W-49).
 //
-// The entry's own map_entry marker proves the message kind, and that is the
-// only kind test that survives deferred resolution: a source map field carries
-// no assigned kind until linking, so requiring TYPE_MESSAGE here would reject
-// every legal source map field the loader deferred.
-bool owns_map_entry(const ResolveContext& context, const SymbolEntry& entry,
-                    const DescriptorProto& entry_message)
-{
-    if (context.field == 0 || context.owner == 0 || context.field_path == 0) {
-        return false;
-    }
-    if (entry.owner != context.owner) return false;
-    if (context.field->label != FieldDescriptorProto::LABEL_REPEATED) return false;
-    if (!nested_in_field_message(context, entry.path)) return false;
-    return map_entry_name(view_text(context.field->name)) ==
-           entry_message.name;
-}
-
 // True when the resolved symbol is a synthetic map entry owned by some other
 // field, so naming it is a user attempt to use an entry as a field type.
 bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entry)
@@ -918,7 +897,14 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
     if (!entry_message->options.has_map_entry || !entry_message->options.map_entry) {
         return false;
     }
-    return !owns_map_entry(context, entry, *entry_message);
+    // A method endpoint resolves with no field context; nothing can own the
+    // entry there, so it stays foreign. The rule itself takes references and
+    // therefore cannot express the absence.
+    if (context.field == 0 || context.owner == 0 || context.field_path == 0) {
+        return true;
+    }
+    return !internal::owns_map_entry(*context.owner, *context.field_path,
+                                      *context.field, entry, *entry_message);
 }
 
 // Implements protoc's lexical name lookup over the compilation-wide index.
@@ -2269,12 +2255,44 @@ bool decode_bytes_escape(const std::string& text, std::string& result)
     return true;
 }
 
-// validate_default joins the `internal` seam (P1 unit tests). The other large
-// validators - validate_symbol_names, validate_enum_value_numbers and
-// validate_map_entry_shapes - are already public, so it is the only anonymous
-// helper the unit suite needs declared here; its definition stays in this
-// translation unit, beside the rules that call it.
+// The rules this seam declares, defined here in `namespace internal` rather
+// than in the anonymous block above: owns_map_entry and validate_default. The
+// three message-level validators stay anonymous and are reached through the
+// forwarders at the end of this file, after the anonymous block closes. The
+// definitions stay in this translation unit, so declaration and definition
+// cannot drift.
 namespace internal {
+
+// Ownership rule for a synthetic map entry, asked after the caller has proved
+// the resolved symbol is a message and the message carries the map_entry
+// marker. The marker is checked again here because it is this rule's
+// PRECONDITION, not a courtesy of the one caller (W-49): a real nested message
+// whose name, nesting and label happen to match must never be claimed as some
+// field's entry.
+//
+// The remaining clauses are protoc's own (A22, measured): the entry is nested
+// directly in the field's own message, the field is repeated, and the field's
+// NAME derives the entry's simple name through the shared map_entry_name
+// (A24). The raw reference text is deliberately not consulted; it differs by
+// origin (relative for source, absolute for descriptors).
+bool owns_map_entry(const SchemaFile& owner, const DescriptorPath& field_path,
+                    const FieldDescriptorProto& field,
+                    const SymbolEntry& entry,
+                    const DescriptorProto& entry_message)
+{
+    if (!entry_message.options.has_map_entry ||
+        !entry_message.options.map_entry) {
+        return false;
+    }
+    if (entry.owner != &owner) return false;
+    if (field.label != FieldDescriptorProto::LABEL_REPEATED) return false;
+    ResolveContext context;
+    context.owner = &owner;
+    context.field_path = &field_path;
+    context.field = &field;
+    if (!nested_in_field_message(context, entry.path)) return false;
+    return map_entry_name(view_text(field.name)) == entry_message.name;
+}
 
 // Type-dependent semantic validation for the textual default_value stored
 // during parsing. Unknown kinds are the caller's responsibility: the caller
@@ -2836,7 +2854,7 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                         ? reference_failure_message(file, symbols, raw, outcome,
                                                     resolved_name)
                         : missing_reference_message(raw, scope, resolved_name);
-                if (unresolved_policy.external_warned_types != 0 &&
+                if (unresolved_policy.mode() == UnresolvedPolicy::EXTERNAL &&
                     !invisible_reference) {
                     // Step 7.2: compatibility mode tolerates a MISSING
                     // target only when the descriptor classifies the
@@ -2877,17 +2895,18 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                     // absolute name invented, no first enumerator or
                     // integer zero for its default.
                     *external_reference = true;
-                    if (unresolved_policy.missing_external != 0) {
-                        *unresolved_policy.missing_external = true;
+                    if (unresolved_policy.missing_external() != 0) {
+                        *unresolved_policy.missing_external() = true;
                     }
                     const std::string type_name = view_text(field.type_name);
-                    if (unresolved_policy.external_warned_types
+                    if (unresolved_policy.warned_types()
                             ->insert(type_name).second) {
                         warn_once(file, external_reference_message(type_name),
                                   DIAGNOSTIC_GENERIC, unknown_location(),
                                   field_path);
                     }
-                } else if (unresolved_policy.deferred) {
+                } else if (unresolved_policy.mode() ==
+                           UnresolvedPolicy::DEFERRED) {
                     warn_once(file,
                               reason +
                               "; it is kept as TYPE_MESSAGE until imports are linked",
@@ -3116,7 +3135,7 @@ bool resolve_method_type(SchemaFile& file, const SymbolIndex& symbols,
     const std::string reason =
         subject + ": " + missing_reference_message(raw, method_scope,
                                                    resolved_name);
-    if (unresolved_policy.external_warned_types != 0) {
+    if (unresolved_policy.mode() == UnresolvedPolicy::EXTERNAL) {
         // The compatibility half. Unlike a field, a method endpoint carries no
         // declared kind to classify, so the absolute spelling is the whole
         // test - a relative name is source-style metadata and is refused, as
@@ -3131,16 +3150,16 @@ bool resolve_method_type(SchemaFile& file, const SymbolIndex& symbols,
                 declaration_location(file, type_path), type_path,
                 DIAGNOSTIC_UNRESOLVED_TYPE, error);
         }
-        if (unresolved_policy.missing_external != 0) {
-            *unresolved_policy.missing_external = true;
+        if (unresolved_policy.missing_external() != 0) {
+            *unresolved_policy.missing_external() = true;
         }
-        if (unresolved_policy.external_warned_types->insert(raw).second) {
+        if (unresolved_policy.warned_types()->insert(raw).second) {
             warn_once(file, external_reference_message(raw), DIAGNOSTIC_GENERIC,
                       unknown_location(), type_path);
         }
         return true;
     }
-    if (unresolved_policy.deferred) {
+    if (unresolved_policy.mode() == UnresolvedPolicy::DEFERRED) {
         warn_once(file,
                   reason + "; the endpoint is kept unresolved until imports "
                            "are linked",
@@ -3731,8 +3750,10 @@ bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
                   const std::set<const SchemaFile*>& visible_files,
                   bool allow_unresolved, Diagnostic& error)
 {
-    UnresolvedPolicy unresolved_policy;
-    unresolved_policy.deferred = allow_unresolved;
+    // The exclusive-mode policy: FATAL for a complete link, DEFERRED when the
+    // caller is the parser's standalone pass (W-59).
+    const UnresolvedPolicy unresolved_policy =
+        allow_unresolved ? UnresolvedPolicy::deferred() : UnresolvedPolicy();
     const std::string prefix = package_prefix(file);
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
         if (!resolve_message(file, symbols, visible_files, unresolved_policy,
@@ -3758,9 +3779,8 @@ bool resolve_file_compat(SchemaFile& file, const SymbolIndex& symbols,
     // missing-information report are the caller's, because both describe the
     // whole link (A5, A4), not one message; the walk is the same declaration
     // order resolve_file uses, so the first failure is deterministic.
-    UnresolvedPolicy unresolved_policy;
-    unresolved_policy.external_warned_types = &warned_types;
-    unresolved_policy.missing_external = &missing_external;
+    const UnresolvedPolicy unresolved_policy =
+        UnresolvedPolicy::external(warned_types, missing_external);
     const std::string prefix = package_prefix(file);
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
         if (!resolve_message(file, symbols, visible_files, unresolved_policy,
@@ -3809,8 +3829,7 @@ bool validate_deferred_file(SchemaFile& file, Diagnostic& error)
     // checks run here.
     const SymbolIndex no_symbols;
     const std::set<const SchemaFile*> no_visible_files;
-    UnresolvedPolicy unresolved_policy;
-    unresolved_policy.deferred = true;
+    const UnresolvedPolicy unresolved_policy = UnresolvedPolicy::deferred();
     const std::string prefix = package_prefix(file);
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
         if (!resolve_message(file, no_symbols, no_visible_files,

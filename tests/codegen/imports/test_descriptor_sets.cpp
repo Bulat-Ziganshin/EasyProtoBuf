@@ -512,14 +512,38 @@ void test_loader_rejects_an_unnamed_file_in_a_multi_file_container()
     std::remove(scratch.c_str());
 }
 
+// W-57: the tracked anonymous fixture through the public loader. The container
+// path is physical metadata only: the descriptor has no name and no name bit,
+// and the identity is not in the set's index. The identity is also never
+// interned into the file's pool - a fact the public API cannot observe, but
+// the code path (add_unnamed_file, not add_file) is the proof.
+void test_loader_anonymous_fixture_keeps_no_identity(
+    const std::string& fixture_dir)
+{
+    const std::string path = fixture_dir + "/codegen/cli/data/anon.pbs";
+    std::vector<std::string> inputs(1, path);
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::load_descriptor_sets(inputs, set, error));
+    CHECK(set.files().size() == 1);
+    CHECK(set.targets().empty());
+    if (set.files().size() != 1) return;
+    const easypb_schema::SchemaFile& slot = *set.files()[0];
+    CHECK(slot.from_descriptor_set);
+    CHECK(!slot.file.has_name);
+    CHECK(slot.file.name.empty());
+    CHECK(slot.physical_name == path);
+    CHECK(set.find_file(path) == 0);
+    CHECK(set.find_file("") == 0);
+}
+
 // D5: a container holding exactly one unnamed file keeps the legacy stdout
 // compatibility path. The container path is an internal identity that labels
 // diagnostics and is never written into the copied descriptor; it is not a
 // logical name, so after the ingest it is not addressable through the set
 // (S4/W-18: `--target <container>` must not select the unnamed file).
 void test_loader_single_anonymous_file_is_not_addressable()
-{
-    const std::string scratch = "imports-descriptor-anonymous.pbs";
+{    const std::string scratch = "imports-descriptor-anonymous.pbs";
     CHECK(write_binary_file(scratch, anonymous_file_set()));
     std::vector<std::string> inputs(1, scratch);
     easypb_schema::SchemaSet set;
@@ -745,6 +769,7 @@ int main(int argc, char** argv)
     test_loader_loads_a_complete_container(fixture_dir);
     test_loader_rejects_an_empty_container(fixture_dir);
     test_loader_rejects_an_unnamed_file_in_a_multi_file_container();
+    test_loader_anonymous_fixture_keeps_no_identity(fixture_dir);
     test_loader_single_anonymous_file_is_not_addressable();
     test_loader_rejects_duplicate_names_within_one_container();
     test_loader_merges_duplicate_names_across_containers(fixture_dir);

@@ -30,6 +30,7 @@ std::string text(const str_view& value)
 }
 
 void test_string_pool_save_and_clear()
+
 {
     easypb_schema::StringPool pool;
     const str_view first = pool.save("alpha");
@@ -49,6 +50,22 @@ void test_string_pool_save_and_clear()
     pool.clear();
     const str_view after = pool.save("gamma");
     CHECK(text(after) == "gamma");
+}
+
+// W-35: the one conversion door is callable with the shape the decoder and
+// the descriptor adapter produce - an empty view, whose data() is null in the
+// C++17 profiles - and returns an empty string instead of constructing one
+// from (nullptr, 0).
+void test_view_text_accepts_a_null_data_view()
+{
+    const str_view empty;
+    CHECK(empty.empty());
+    CHECK(easypb_schema::view_text(empty).empty());
+    CHECK(easypb_schema::view_text(empty).size() == 0);
+
+    // Control: a non-empty view keeps every byte.
+    const str_view text_view("abc");
+    CHECK(easypb_schema::view_text(text_view) == "abc");
 }
 
 void test_schema_file_defaults_to_source_origin()
@@ -277,6 +294,7 @@ void test_descriptor_path_lookups()
 int main()
 {
     test_string_pool_save_and_clear();
+    test_view_text_accepts_a_null_data_view();
     test_schema_file_defaults_to_source_origin();
     test_schema_set_ownership_and_targets();
     test_decode_dependency_lists_unpacked();

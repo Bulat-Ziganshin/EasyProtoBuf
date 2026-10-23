@@ -13,11 +13,6 @@ namespace easypb_schema {
 
 namespace {
 
-std::string view_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
-}
-
 // Source coordinates come from imports only. When the descriptor list
 // and the location-bearing list agree positionally the index is used
 // directly; otherwise the first matching path supplies the position so
@@ -158,17 +153,24 @@ SchemaFile& SchemaSet::add_file(const std::string& logical_name)
     return file;
 }
 
+SchemaFile& SchemaSet::add_unnamed_file(const std::string& identity)
+{
+    files_.push_back(std::unique_ptr<SchemaFile>(new SchemaFile()));
+    SchemaFile& file = *files_.back();
+    // No logical name and no index entry: the identity is a container path,
+    // not something a caller may address the file by (W-57, W-18).
+    file.file.name = str_view();
+    file.file.has_name = false;
+    file.physical_name = identity;
+    return file;
+}
+
 SchemaFile* SchemaSet::find_file(const std::string& logical_name) const
 {
     const std::map<std::string, SchemaFile*>::const_iterator found =
         index_.find(logical_name);
     if (found == index_.end()) return 0;
     return found->second;
-}
-
-void SchemaSet::remove_file_name(const std::string& logical_name)
-{
-    index_.erase(logical_name);
 }
 
 const std::vector<std::unique_ptr<SchemaFile> >& SchemaSet::files() const

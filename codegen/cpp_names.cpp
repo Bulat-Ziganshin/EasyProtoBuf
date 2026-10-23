@@ -5,7 +5,12 @@
 #include <stdexcept>
 #include <vector>
 
+#include "schema.hpp"
+
 namespace easypb_codegen {
+
+// W-35: one guarded conversion door, declared in schema.hpp.
+using easypb_schema::view_text;
 namespace {
 
 bool is_identifier_start(char c)
@@ -138,8 +143,7 @@ std::string cpp_absolute_name(const str_view& absolute_proto_name)
     // name (helpers.cc:451-469). This project refuses a keyword package
     // component instead (validate_cpp_package), so in practice only the type
     // components are ever affected.
-    const std::string path(absolute_proto_name.data(),
-                           absolute_proto_name.size());
+    const std::string path = view_text(absolute_proto_name);
     const std::vector<std::string> components = split_components(
         path.substr(1), '.', "Protobuf type name");
 

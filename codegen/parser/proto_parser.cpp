@@ -83,15 +83,14 @@
 
 namespace easypb_proto {
 
+// W-35: the guarded conversion lives in schema.hpp, beside the storage it
+// converts; one door for every frontend.
+using easypb_schema::view_text;
+
 typedef easypb_schema::DescriptorPath DescriptorPath;
 typedef easypb_schema::FieldSource FieldSource;
 
 namespace {
-
-std::string view_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
-}
 
 } // namespace
 

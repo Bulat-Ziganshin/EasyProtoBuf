@@ -1,5 +1,7 @@
 #include "utils.hpp"
 
+namespace easypb_codegen {
+
 // Return true if `value` starts with `prefix`.
 bool starts_with(str_view value, str_view prefix)
 {
@@ -38,6 +40,9 @@ std::string number_to_string(int32_t value)
     return std::string(begin, end);
 }
 
+} // namespace easypb_codegen
+
+// Still global on purpose: dead, and S7e's W-53 deletes it (W-55).
 // Returns a version of 'str' where every occurrence of
 // 'find' is substituted by 'replace'.
 // - http://stackoverflow.com/questions/20406744/

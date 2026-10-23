@@ -53,8 +53,9 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         if (field.has_default_value && field.has_type &&
             (field.type == FieldDescriptorProto::TYPE_FLOAT ||
              field.type == FieldDescriptorProto::TYPE_DOUBLE)) {
-            const std::string raw(field.default_value.data(),
-                                  field.default_value.size());
+            // W-35: the default may be the empty null view; the one guarded
+            // conversion owns the empty case.
+            const std::string raw = view_text(field.default_value);
             const bool normalizable =
                 !raw.empty() &&
                 (raw[0] == '-' || raw[0] == '.' ||
@@ -115,7 +116,14 @@ void intern_file_descriptor(StringPool& strings, FileDescriptorProto& file)
 // retained string is re-pointed into the owning pool. A shallow assignment
 // would leave the copy pointing into the caller's buffer, which is exactly
 // the defect this helper exists to prevent (D1/D2).
-void copy_descriptor(const FileDescriptorProto& source, SchemaFile& slot)
+//
+// `has_name` is the ingestion path's name rule. The named path is normalized
+// here so the bit always agrees with the required non-empty text (W-48); the
+// anonymous single-file path passes false and owns no logical name at all
+// (W-57) - a decoded descriptor may carry a present-but-empty name field, so
+// clearing the bit after the assignment is the only correct spelling.
+void copy_descriptor(const FileDescriptorProto& source, SchemaFile& slot,
+                     bool has_name = true)
 {
     slot.file = source;
     intern_file_descriptor(slot.strings, slot.file);
@@ -125,17 +133,9 @@ void copy_descriptor(const FileDescriptorProto& source, SchemaFile& slot)
     // (W-48). Normalizing here, at the one deep copy every descriptor path
     // shares, makes the linker and the generator read one shape. A caller's
     // hand-built descriptor may leave the bit false while carrying the text;
-    // the wire decoder sets it, so this is a no-op for `.pbs` bytes. The
-    // anonymous single-file path clears the name and its bit again after
-    // this call, because its name was only a container identity.
-    slot.file.has_name = true;
+    // the wire decoder sets it, so this is a no-op for `.pbs` bytes.
+    slot.file.has_name = has_name;
     if (!slot.file.package.empty()) slot.file.has_package = true;
-}
-
-std::string own_text(str_view value)
-{
-    if (value.empty()) return std::string();
-    return std::string(value.data(), value.size());
 }
 
 // True when the byte is a C0 control character. A logical Protobuf file name
@@ -391,7 +391,7 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                             "descriptor",
                         DIAGNOSTIC_GENERIC, result, error);
         }
-        const std::string logical = own_text(raw_name);
+        const std::string logical = view_text(raw_name);
         if (!names.insert(raw_name).second || result.find_file(logical) != 0) {
             return fail(diagnostic_label,
                         "duplicate logical file name \"" + logical +
@@ -433,7 +433,7 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
     }
 
     for (std::size_t i = 0; i < files.size(); ++i) {
-        const std::string logical = own_text(files[i].name);
+        const std::string logical = view_text(files[i].name);
         SchemaFile& slot = result.add_file(logical);
         copy_descriptor(files[i], slot);
         // Descriptor origin is a property of how the bytes were obtained,
@@ -442,6 +442,25 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
         slot.physical_name.clear();
         slot.from_descriptor_set = true;
     }
+    return true;
+}
+
+bool append_unnamed_descriptor(const FileDescriptorProto& file,
+                               const std::string& identity, SchemaSet& result,
+                               Diagnostic& error)
+{
+    // The anonymous single-file `.pbs` shape: the container path is metadata,
+    // never a logical name. The identity therefore never reaches
+    // StringPool::save and never enters the name index (W-57, W-18); the copy
+    // is the same deep copy the named path uses, with the name rule switched
+    // off.
+    if (!validate_message_nesting_depth(file, identity, error)) {
+        result.clear();
+        return false;
+    }
+    SchemaFile& slot = result.add_unnamed_file(identity);
+    copy_descriptor(file, slot, false);
+    slot.from_descriptor_set = true;
     return true;
 }
 

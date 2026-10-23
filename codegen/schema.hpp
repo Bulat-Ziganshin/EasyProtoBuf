@@ -11,6 +11,20 @@
 
 namespace easypb_schema {
 
+// The text of a descriptor view, as an owned string.
+//
+// An empty view may carry a null pointer - a default-constructed
+// std::string_view does, and the descriptor adapter's intern_text returns
+// exactly that for an empty descriptor string - and std::string(nullptr, 0)
+// is formally undefined (the ledger's W-35). The empty case is spelled out
+// here, in the one conversion door every schema frontend, the linker and the
+// generator use; a local copy of this helper is the defect the door removes.
+inline std::string view_text(const str_view& value)
+{
+    if (value.empty()) return std::string();
+    return std::string(value.data(), value.size());
+}
+
 // A SourceLocation with line == 0 and column == 0 is an unknown location.
 // It is used for descriptor-only data and for source metadata that has no
 // meaningful token (for example a missing option). Real lexer locations
@@ -356,14 +370,13 @@ public:
     ~SchemaSet();
 
     SchemaFile& add_file(const std::string& logical_name);
+    // Adds a file with no logical name: the anonymous single-file `.pbs`
+    // shape. `identity` is the container path the file came from; it becomes
+    // physical_name only and is deliberately NOT inserted into the name index
+    // (`--target <container>` must not select a file the descriptor does not
+    // name, W-18). The descriptor keeps an empty, absent name view.
+    SchemaFile& add_unnamed_file(const std::string& identity);
     SchemaFile* find_file(const std::string& logical_name) const;
-    // Drops the logical-name index entry, leaving the file itself in the set.
-    // The single-file `.pbs` compatibility path keys its borrowed file by the
-    // container path while it ingests it, then clears the descriptor's name;
-    // that internal identity must not stay addressable as a logical name
-    // (`--target anon.pbs` must not select a file the descriptor itself does
-    // not name).
-    void remove_file_name(const std::string& logical_name);
     const std::vector<std::unique_ptr<SchemaFile> >& files() const;
     void add_target(SchemaFile& file);
     const std::vector<SchemaFile*>& targets() const;

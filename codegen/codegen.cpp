@@ -16,6 +16,14 @@
 #include "schema_semantics.hpp"
 #include "utils.hpp"
 
+// W-35: one guarded view-to-text conversion for the whole project, declared
+// in schema.hpp beside the storage it converts.
+using easypb_schema::view_text;
+// W-55: the generator's own helpers live in easypb_codegen, not the global
+// namespace of a PUBLIC include directory.
+using easypb_codegen::myformat;
+using easypb_codegen::number_to_string;
+
 
 // Protobuf and C++ naming/formatting constants used by the generator
 const std::string PB_TYPE_DELIMITER = ".";
@@ -37,9 +45,9 @@ enum class GraphColor
 // requests in one process from observing each other's state.
 struct GenerationContext
 {
-    GenerationContext(const easypb_codegen::GenerationOptions& options,
+    GenerationContext(const easypb_codegen::GenerationOptions& settings,
                       const FileDescriptorProto& file)
-        : options(options),
+        : options(settings),
           package(file.package > "" ? std::string(file.package) : std::string()),
           package_name_prefix(
               ! package.empty()
@@ -151,18 +159,6 @@ bool hasfield_enabled(const FieldDescriptorProto& field,
 }
 
 
-// The text of a descriptor view, as an owned string.
-//
-// An empty view may carry a null pointer - a default-constructed
-// std::string_view does - and std::string(nullptr, 0) is formally undefined
-// (the ledger's W-35), so the empty case is spelled out.
-std::string descriptor_text(const str_view& value)
-{
-    if (value.empty()) return std::string();
-    return std::string(value.data(), value.size());
-}
-
-
 // The C++ member name of a field.
 //
 // A Protobuf field name is a valid C++ identifier in every case but one: a
@@ -173,7 +169,7 @@ std::string descriptor_text(const str_view& value)
 // one name.
 std::string field_member_name(const FieldDescriptorProto& field)
 {
-    return easypb_codegen::cpp_identifier(descriptor_text(field.name));
+    return easypb_codegen::cpp_identifier(view_text(field.name));
 }
 
 
@@ -468,16 +464,16 @@ void check_enum_value_names(const EnumDescriptorProto& enum_type)
     for (const auto& value: enum_type.value) {
         ScopeMember member;
         member.cpp_name = easypb_codegen::cpp_identifier(
-            descriptor_text(value.name));
+            view_text(value.name));
         member.description = member_description("enum value",
-                                                descriptor_text(value.name));
+                                                view_text(value.name));
         member.presence_flag = false;
         members.push_back(member);
     }
     if (members.empty()) return;
     refuse_duplicate_cpp_names(members,
                                myformat("the enum '{0}'",
-                                        descriptor_text(enum_type.name)));
+                                        view_text(enum_type.name)));
 }
 
 
@@ -492,7 +488,7 @@ std::string generate_enum(const EnumDescriptorProto& enum_type,
                           const std::string& indent)
 {
     const std::string enum_name =
-        easypb_codegen::cpp_identifier(descriptor_text(enum_type.name));
+        easypb_codegen::cpp_identifier(view_text(enum_type.name));
     std::string result = myformat("{0}enum {1} : {2}\n{0}{\n",
                                   indent, enum_name, CPP_ENUM_BASE_TYPE);
 
@@ -501,7 +497,7 @@ std::string generate_enum(const EnumDescriptorProto& enum_type,
         result += myformat("{0}    {1} = {2}{3}\n",
                            indent,
                            easypb_codegen::cpp_identifier(
-                               descriptor_text(value.name)),
+                               view_text(value.name)),
                            number_to_string(value.number),
                            i + 1 < enum_type.value.size() ? "," : "");
     }
@@ -560,8 +556,7 @@ std::string generate_field_decoder(const FieldDescriptorProto& field, const MapT
 std::string default_bytes(const FieldDescriptorProto& field)
 {
     if (field.default_value.empty()) return std::string();
-    const std::string stored(field.default_value.data(),
-                             field.default_value.size());
+    const std::string stored = view_text(field.default_value);
     if (field.type != FieldDescriptorProto::TYPE_BYTES) {
         return stored;
     }
@@ -640,8 +635,7 @@ std::string effective_string_type(const FieldDescriptorProto& field,
 {
     if (field.has_options && field.options.has_cpp &&
         field.options.cpp.has_type && ! field.options.cpp.type.empty()) {
-        return std::string(field.options.cpp.type.data(),
-                           field.options.cpp.type.size());
+        return view_text(field.options.cpp.type);
     }
     return context.options.cpp_string_type;
 }
@@ -707,8 +701,7 @@ std::string string_default_str(const FieldDescriptorProto& field,
 std::string float_default_str(const FieldDescriptorProto& field)
 {
     if (field.default_value.empty()) return "";
-    const std::string text(field.default_value.data(),
-                           field.default_value.size());
+    const std::string text = view_text(field.default_value);
 
     const std::string limits =
         field.type == FieldDescriptorProto::TYPE_FLOAT ? "float" : "double";
@@ -740,7 +733,7 @@ std::string default_value_str(const FieldDescriptorProto& field,
     }
 
     if (field.type == FieldDescriptorProto::TYPE_ENUM) {
-        const std::string proto_name(field.type_name.data(), field.type_name.size());
+        const std::string proto_name = view_text(field.type_name);
         const auto found = enums.find(proto_name);
 
         // Descriptor sets may reference imported enums that are not present in
@@ -752,7 +745,7 @@ std::string default_value_str(const FieldDescriptorProto& field,
                            cpp_qualified_type_str(field.type_name),
                            CPP_TYPE_DELIMITER,
                            easypb_codegen::cpp_identifier(
-                               descriptor_text(field.default_value)))
+                               view_text(field.default_value)))
                 : "";
         }
 
@@ -772,7 +765,7 @@ std::string default_value_str(const FieldDescriptorProto& field,
         return myformat(" = {0}{1}{2}",
                         cpp_qualified_type_str(field.type_name),
                         CPP_TYPE_DELIMITER,
-                        easypb_codegen::cpp_identifier(descriptor_text(value)));
+                        easypb_codegen::cpp_identifier(view_text(value)));
     }
 
     if (field.has_default_value  &&  ! context.options.no_default_values) {
@@ -1303,7 +1296,7 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
         ScopeMember member;
         member.cpp_name = field_member_name(field);
         member.description = member_description("field",
-                                                descriptor_text(field.name));
+                                                view_text(field.name));
         member.presence_flag = false;
         members.push_back(member);
     }
@@ -1313,16 +1306,16 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
         member.cpp_name = field_flag_name(field);
         member.description =
             myformat("presence flag of the field '{0}'",
-                     descriptor_text(field.name));
+                     view_text(field.name));
         member.presence_flag = true;
         members.push_back(member);
     }
     for (const auto& enum_type: info.descriptor->enum_type) {
         ScopeMember member;
         member.cpp_name = easypb_codegen::cpp_identifier(
-            descriptor_text(enum_type.name));
+            view_text(enum_type.name));
         member.description = member_description("nested enum",
-                                                descriptor_text(enum_type.name));
+                                                view_text(enum_type.name));
         member.presence_flag = false;
         members.push_back(member);
     }
@@ -1349,9 +1342,9 @@ void check_file_scope_names(const FileDescriptorProto& file,
     for (const auto& enum_type: file.enum_type) {
         ScopeMember member;
         member.cpp_name = easypb_codegen::cpp_identifier(
-            descriptor_text(enum_type.name));
+            view_text(enum_type.name));
         member.description = member_description("enum",
-                                                descriptor_text(enum_type.name));
+                                                view_text(enum_type.name));
         member.presence_flag = false;
         members.push_back(member);
     }
@@ -1428,7 +1421,7 @@ std::string generate_message(MessageInfo& info,
             check_required_fields += myformat(
                 CHECK_REQUIRED_FIELD_TEMPLATE, info.cpp_absolute_name,
                 field_flag_name(field),
-                descriptor_text(field.name));
+                view_text(field.name));
         }
     }
 
@@ -1492,12 +1485,6 @@ std::string close_package_namespaces(const std::string& package)
 
 // --- plan 5, batch 3: the linked generation entry points -------------------
 
-std::string owned_descriptor_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
-}
-
-
 // The two imports the generator itself knows are usually option metadata only
 // (`(easypb.cpp).type` templates and descriptor options). The include planner
 // reconsiders these two names and nothing else (plan 5 I2's closed list).
@@ -1526,7 +1513,7 @@ bool message_names_owner(const DescriptorProto& message,
         if (field.type_name.empty()) continue;
         const std::map<std::string,
                        easypb_schema::SymbolEntry>::const_iterator found =
-            schema.symbols.symbols.find(owned_descriptor_text(field.type_name));
+            schema.symbols.symbols.find(view_text(field.type_name));
         if (found != schema.symbols.symbols.end() &&
             found->second.owner == &dependency) {
             return true;
@@ -1566,7 +1553,7 @@ std::string dependency_includes(const easypb_schema::SchemaFile& target,
     const FileDescriptorProto& file = target.file;
     std::string includes;
     for (std::size_t i = 0; i < file.dependency.size(); ++i) {
-        const std::string logical = owned_descriptor_text(file.dependency[i]);
+        const std::string logical = view_text(file.dependency[i]);
         bool needed = true;
         if (is_compiler_support_import(logical)) {
             needed = false;
@@ -1610,7 +1597,7 @@ void index_message_enums_of(const DescriptorProto& message,
 {
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
         index.insert(std::make_pair(
-            proto_name + "." + owned_descriptor_text(message.enum_type[i].name),
+            proto_name + "." + view_text(message.enum_type[i].name),
             &message.enum_type[i]));
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
@@ -1620,7 +1607,7 @@ void index_message_enums_of(const DescriptorProto& message,
         }
         index_message_enums_of(
             nested,
-            proto_name + "." + owned_descriptor_text(nested.name),
+            proto_name + "." + view_text(nested.name),
             index);
     }
 }
@@ -1635,10 +1622,10 @@ void index_file_enums(const FileDescriptorProto& file, EnumByProtoName& index)
     const std::string prefix =
         file.package.empty()
             ? std::string(".")
-            : "." + owned_descriptor_text(file.package) + ".";
+            : "." + view_text(file.package) + ".";
     for (std::size_t i = 0; i < file.enum_type.size(); ++i) {
         index.insert(std::make_pair(
-            prefix + owned_descriptor_text(file.enum_type[i].name),
+            prefix + view_text(file.enum_type[i].name),
             &file.enum_type[i]));
     }
     for (std::size_t i = 0; i < file.message_type.size(); ++i) {
@@ -1648,7 +1635,7 @@ void index_file_enums(const FileDescriptorProto& file, EnumByProtoName& index)
         }
         index_message_enums_of(
             message,
-            prefix + owned_descriptor_text(message.name), index);
+            prefix + view_text(message.name), index);
     }
 }
 
@@ -1759,7 +1746,7 @@ std::string easypb_codegen::generate_header(
     // path, which has no logical name, falls back to its container spelling.
     const std::string provenance = file.name.empty()
         ? target.physical_name
-        : owned_descriptor_text(file.name);
+        : view_text(file.name);
     std::string header = myformat(FILE_TEMPLATE, provenance);
     // Dependency includes belong outside package namespaces, exactly like the
     // fixed runtime includes above them. They are emitted in BOTH linking
@@ -1821,7 +1808,7 @@ bool easypb_codegen::generate_files(
     std::set<std::string> mapped_names;
     for (std::size_t i = 0; i < targets.size(); ++i) {
         const easypb_schema::SchemaFile& target = *targets[i];
-        const std::string logical = owned_descriptor_text(target.file.name);
+        const std::string logical = view_text(target.file.name);
         if (logical.empty()) {
             error.file = target.physical_name;
             error.location = easypb_schema::unknown_location();

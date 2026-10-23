@@ -9,12 +9,12 @@
 #include <vector>
 
 namespace easypb_proto {
-namespace {
 
-std::string view_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
-}
+// W-35: the guarded conversion lives in schema.hpp, beside the storage it
+// converts; one door for every frontend.
+using easypb_schema::view_text;
+
+namespace {
 
 // Joins already-quoted list items (search roots) and import chains
 // alike: every element is wrapped in double quotes.

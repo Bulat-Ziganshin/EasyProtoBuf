@@ -1,0 +1,7 @@
+syntax = "proto2";
+
+// W-35: an empty bytes default is the shape whose str_view may be the null
+// default view; protoc keeps the empty default in the descriptor.
+message EmptyDefault {
+    optional bytes b = 1 [default = ""];
+}

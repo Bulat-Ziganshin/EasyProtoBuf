@@ -1562,6 +1562,126 @@ void test_rule_symbol_names_directly()
     }
 }
 
+// W-49: the map-entry ownership rule carries its own marker precondition.
+// The direct call is the row's proof: a real nested message whose name,
+// nesting and label happen to match the entry naming rule is not owned by the
+// field, and only a message that actually carries the marker is.
+void test_rule_map_entry_ownership_requires_the_marker()
+{
+    easypb_schema::SchemaFile file;
+    DescriptorProto message;
+    message.name = file.strings.save("M");
+    message.has_name = true;
+
+    FieldDescriptorProto field =
+        make_scalar_field(file, "foo", 1, FieldDescriptorProto::TYPE_MESSAGE);
+    field.label = FieldDescriptorProto::LABEL_REPEATED;
+    field.type_name = file.strings.save(".M.FooEntry");
+    field.has_type_name = true;
+    message.field.push_back(field);
+
+    // A REAL nested message: the name matches map_entry_name("foo"), but no
+    // marker says protoc synthesized it for the field.
+    DescriptorProto nested;
+    nested.name = file.strings.save("FooEntry");
+    nested.has_name = true;
+    message.nested_type.push_back(nested);
+    file.file.message_type.push_back(message);
+
+    const easypb_schema::DescriptorPath message_path =
+        easypb_schema::file_message_path(0);
+    const easypb_schema::DescriptorPath field_path =
+        easypb_schema::message_field_path(message_path, 0);
+
+    easypb_schema::SymbolEntry entry;
+    entry.kind = FieldDescriptorProto::TYPE_MESSAGE;
+    entry.owner = &file;
+    entry.path = easypb_schema::message_nested_path(message_path, 0);
+
+    // The current-tree counter-example: everything but the marker matches.
+    CHECK(!easypb_schema::internal::owns_map_entry(
+        file, field_path, file.file.message_type[0].field[0], entry,
+        file.file.message_type[0].nested_type[0]));
+
+    // Control: with the marker the same shape is `foo`'s entry.
+    file.file.message_type[0].nested_type[0].options.has_map_entry = true;
+    file.file.message_type[0].nested_type[0].options.map_entry = true;
+    file.file.message_type[0].nested_type[0].has_options = true;
+    CHECK(easypb_schema::internal::owns_map_entry(
+        file, field_path, file.file.message_type[0].field[0], entry,
+        file.file.message_type[0].nested_type[0]));
+
+    // Control: a marked entry of a DIFFERENT field is not owned by this one.
+    file.file.message_type[0].nested_type[0].name =
+        file.strings.save("BarEntry");
+    CHECK(!easypb_schema::internal::owns_map_entry(
+        file, field_path, file.file.message_type[0].field[0], entry,
+        file.file.message_type[0].nested_type[0]));
+}
+
+// W-59: the two resolve_field_type out-parameters are caller-initialized and
+// the call sets the one that describes its outcome. One case per `true` path.
+void test_rule_resolve_field_type_out_parameters()
+{
+    const std::set<const easypb_schema::SchemaFile*> visible;
+    easypb_schema::SymbolIndex no_symbols;
+    const easypb_schema::DescriptorPath field_path =
+        easypb_schema::message_field_path(easypb_schema::file_message_path(0), 0);
+    easypb_schema::Diagnostic error;
+
+    // DEFERRED: a named type that is not resolved sets `unknown` only.
+    {
+        easypb_schema::SchemaFile file;
+        FieldDescriptorProto field = make_named_field(file, "x", 1, "Nope", false);
+        bool unknown = false;
+        bool external_reference = false;
+        CHECK(easypb_schema::internal::resolve_field_type(
+            file, no_symbols, visible,
+            easypb_schema::internal::UnresolvedPolicy::deferred(), "M", false,
+            field, field_path, &unknown, &external_reference, error));
+        CHECK(unknown);
+        CHECK(!external_reference);
+    }
+
+    // EXTERNAL: an absolute name the set does not carry sets
+    // `external_reference` as well as `unknown` (the pairing W-47 relies on:
+    // the declared kind is known while the definition is not) and reports the
+    // missing information.
+    {
+        easypb_schema::SchemaFile file;
+        FieldDescriptorProto field =
+            make_named_field(file, "y", 1, ".pkg.Ext", false);
+        std::set<std::string> warned_types;
+        bool missing_external = false;
+        bool unknown = false;
+        bool external_reference = false;
+        CHECK(easypb_schema::internal::resolve_field_type(
+            file, no_symbols, visible,
+            easypb_schema::internal::UnresolvedPolicy::external(
+                warned_types, missing_external),
+            "M", true, field, field_path, &unknown, &external_reference, error));
+        CHECK(unknown);
+        CHECK(external_reference);
+        CHECK(missing_external);
+        CHECK(warned_types.size() == 1);
+    }
+
+    // FATAL (the default policy): the same reference is refused, and
+    // `external_reference` stays false because nothing was tolerated.
+    {
+        easypb_schema::SchemaFile file;
+        FieldDescriptorProto field =
+            make_named_field(file, "z", 1, ".pkg.Ext", false);
+        bool unknown = false;
+        bool external_reference = false;
+        CHECK(!easypb_schema::internal::resolve_field_type(
+            file, no_symbols, visible,
+            easypb_schema::internal::UnresolvedPolicy(), "M", true, field,
+            field_path, &unknown, &external_reference, error));
+        CHECK(!external_reference);
+    }
+}
+
 void test_rule_message_map_entries_directly()
 {
     // A map-entry message with no key/value fields is refused.
@@ -1737,6 +1857,8 @@ int main()
     test_rule_default_validator_directly();
     test_rule_enum_value_numbers_directly();
     test_rule_symbol_names_directly();
+    test_rule_map_entry_ownership_requires_the_marker();
+    test_rule_resolve_field_type_out_parameters();
     test_rule_message_map_entries_directly();
     test_rule_message_symbol_names_directly();
     test_rule_message_enum_value_numbers_directly();

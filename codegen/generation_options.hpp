@@ -29,6 +29,10 @@ struct GenerationOptions
 // success `options` is normalized (for example a repeated-type template
 // without a placeholder gains "<{}>").
 //
+// On failure the object is untouched: the contradiction is checked before any
+// normalization, so a caller that ignores the false return cannot keep using a
+// half-normalized set.
+//
 // The generation entry points call this themselves on a copy (W-11): a
 // caller that never touches the CLI may pass a default-constructed set, and
 // finalization is part of the call, not a precondition of it. A caller that

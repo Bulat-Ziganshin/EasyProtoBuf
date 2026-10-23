@@ -111,42 +111,16 @@ std::string count_text(std::size_t value)
     return easypb::detail::number_to_string(static_cast<uint64_t>(value));
 }
 
-std::string own_text(str_view value)
-{
-    if (value.empty()) return std::string();
-    return std::string(value.data(), value.size());
-}
-
 // One file with no logical name: the legacy single-file `.pbs` workflow. The
-// container path is an internal identity - it keys the set and labels
-// diagnostics - and it is never written into the descriptor. The borrowed
-// copy below only has to stay alive for the adapter call.
+// container path is an internal identity - it labels diagnostics and is
+// retained as physical_name - and it is never written into the descriptor or
+// interned into its pool (W-57). append_unnamed_descriptor owns the whole
+// ingestion shape, so no fabricated name has to be cleared afterwards.
 bool append_anonymous_descriptor(const FileDescriptorProto& file,
                                  const std::string& container_path,
                                  SchemaSet& result, Diagnostic& error)
 {
-    std::vector<FileDescriptorProto> borrowed(1, file);
-    borrowed[0].name = container_path;
-    if (!append_descriptor_files(borrowed, container_path, result, error)) {
-        return false;
-    }
-    SchemaFile* slot = result.find_file(container_path);
-    if (slot == 0) {
-        // Unreachable while the adapter keys by the name it was given; kept
-        // so a future change cannot silently leave the identity in the
-        // descriptor.
-        return fail(container_path,
-                    "internal identity lost during descriptor ingestion",
-                    result, error);
-    }
-    slot->file.name = str_view();
-    slot->file.has_name = false;
-    // The container path was an internal identity only. With the name gone,
-    // the file has no logical name to find it by, so the identity must not
-    // stay in the index: `--target anon.pbs` used to match it and silently
-    // switch the file from the compatibility path to strict linking (S4/W-18).
-    result.remove_file_name(container_path);
-    return true;
+    return append_unnamed_descriptor(file, container_path, result, error);
 }
 
 } // namespace
@@ -233,7 +207,7 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
             std::set<std::string> carried_names;
             for (std::size_t j = 0; j < decoded.file.size(); ++j) {
                 const FileDescriptorProto& file = decoded.file[j];
-                const std::string logical = own_text(file.name);
+                const std::string logical = view_text(file.name);
                 if (!carried_names.insert(logical).second) {
                     return fail(
                         path,

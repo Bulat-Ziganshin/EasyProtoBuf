@@ -725,8 +725,6 @@ std::string normalize_separators(const std::string& path)
 // because the common schema library must keep performing no filesystem call
 // at all. Nothing here is used by the loader; the publisher is their only
 // caller besides the tests.
-// ---------------------------------------------------------------------------
-// Output-side helpers (plan 5 batch 3: the standalone publisher).
 //
 // Trimmed to the reference compiler's model on 2026-10-07. What is left is the
 // directory tree and the write itself, which is what protoc's WriteAllToDisk
@@ -799,8 +797,10 @@ std::size_t root_prefix_length(const std::string& absolute)
     return 0;
 }
 
-} // namespace
-
+// W-52: file-local by use. create_directory_plain's only caller is
+// make_directories_recursive, and that function's only caller is the public
+// make_directories, so both keep internal linkage instead of publishing two
+// declarations no header needs.
 bool create_directory_plain(const std::string& path, std::string& error)
 {
 #ifdef _WIN32
@@ -890,6 +890,9 @@ bool make_directories_recursive(const std::string& absolute, std::string& error)
     }
     return true;
 }
+
+} // namespace
+
 bool make_directories(const std::string& directory, std::string& error)
 {
     error.clear();

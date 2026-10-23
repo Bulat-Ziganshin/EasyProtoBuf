@@ -19,6 +19,8 @@ this directory as `FIXTURE_DIR`.
 | `bad-anon.pbs` | one unnamed file whose message declares field number 1 twice | `W-19` |
 | `anon-two.pbs` | two unnamed files | `W-19` |
 | `mixed-anon.pbs` | one named and one unnamed file | `W-19` |
+| `defaults-empty.proto` | proto2 message with `optional bytes b = 1 [default = ""]` | `W-35` |
+| `defaults-empty.pbs` | `protoc`'s descriptor set of `defaults-empty.proto`, so both input paths carry the empty default | `W-35` |
 
 `bad-anon.pbs`, `anon-two.pbs`, `mixed-anon.pbs` and the three original `.pbs`
 files are crafted, because `protoc` cannot produce an unnamed
@@ -37,6 +39,7 @@ files are ordinary source fixtures and are edited by hand.
 cd tests/codegen/cli/data
 protoc -I . --descriptor_set_out=legacy.protodevel.pbs legacy.protodevel
 protoc -I . --descriptor_set_out=cycle.pbs cycle.proto
+protoc -I . --descriptor_set_out=defaults-empty.pbs defaults-empty.proto
 ```
 
 The non-ASCII fixtures of `W-24` are not committed: the lane writes

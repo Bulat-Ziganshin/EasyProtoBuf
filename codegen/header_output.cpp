@@ -50,10 +50,10 @@ easypb_schema::Diagnostic make_error(const std::string& file,
     return diagnostic;
 }
 
-} // namespace
-
 // The parent of an already-normalized absolute spelling. Never returns the
 // path itself, so make_directories cannot be pointed at the output file.
+// File-local by use (W-52): the publisher is its only caller, so it keeps
+// internal linkage instead of publishing a declaration no header needs.
 std::string parent_of_absolute(const std::string& absolute)
 {
     const std::size_t slash = absolute.rfind('/');
@@ -69,6 +69,8 @@ std::string parent_of_absolute(const std::string& absolute)
 #endif
     return parent;
 }
+
+} // namespace
 
 bool publish_headers(const std::string& out_dir,
                      const std::vector<GeneratedFile>& files,

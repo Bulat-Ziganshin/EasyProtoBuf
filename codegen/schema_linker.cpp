@@ -20,13 +20,6 @@ namespace easypb_schema {
 
 namespace {
 
-// Each translation unit keeps its own copy, following schema.cpp and
-// schema_semantics.cpp: there is no shared declaration for this helper.
-std::string view_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
-}
-
 // Cycle-free by construction: bind_import_edges rejects cycles before the
 // linker runs, so a plain memoized DFS needs no in-progress marker, and the
 // entry inserted below is always complete by the time it is read back. Do not

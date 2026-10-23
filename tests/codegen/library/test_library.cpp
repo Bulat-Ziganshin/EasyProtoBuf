@@ -40,6 +40,7 @@
 #include "generation_options.hpp"
 #include "schema.hpp"
 #include "schema_linker.hpp"
+#include "utils.hpp"
 
 namespace {
 
@@ -243,6 +244,41 @@ void test_w11(const std::string& data_dir)
     CHECK(contradictory.cpp_map_type == "::std::map");
     CHECK(options.cpp_repeated_type == "::std::vector");
     CHECK(options.cpp_map_type == "::std::map");
+
+    // W-50: finalize_generation_options refuses the contradiction BEFORE it
+    // normalizes anything, so a caller that ignores the false return reads the
+    // object it passed, not a half-normalized mix.
+    {
+        easypb_codegen::GenerationOptions unnormalized;
+        unnormalized.packed = true;
+        unnormalized.no_packed = true;
+        unnormalized.no_has_fields = true;
+        std::string option_error;
+        CHECK(!easypb_codegen::finalize_generation_options(unnormalized,
+                                                           option_error));
+        CHECK(option_error ==
+              "Options --packed and --no-packed can't be used together");
+        CHECK(!unnormalized.no_required);
+        CHECK(unnormalized.cpp_repeated_type == "::std::vector");
+        CHECK(unnormalized.cpp_map_type == "::std::map");
+
+        // Control: the success path still normalizes in place.
+        easypb_codegen::GenerationOptions normalized;
+        CHECK(easypb_codegen::finalize_generation_options(normalized,
+                                                          option_error));
+        CHECK(normalized.cpp_repeated_type == "::std::vector<{}>");
+        CHECK(normalized.cpp_map_type == "::std::map<{0},{1}>");
+    }
+
+    // W-35: an empty view may carry a null data(), and myformat must not call
+    // append(nullptr, 0).
+    CHECK(easypb_codegen::myformat("[{0}]", str_view()) == "[]");
+
+    // W-55: the helpers are owned by easypb_codegen, not by the global
+    // namespace the public include directory used to publish.
+    CHECK(easypb_codegen::ends_with("a.pbs", ".pbs"));
+    CHECK(!easypb_codegen::ends_with("a.proto", ".pbs"));
+    CHECK(easypb_codegen::myformat("[{0}]", "x") == "[x]");
 }
 
 // --- W-48: the presence bits are normalized at ingest -----------------------

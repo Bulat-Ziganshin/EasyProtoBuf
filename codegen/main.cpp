@@ -21,6 +21,10 @@
 #include "schema_linker.hpp"
 #include "utils.hpp"
 
+// W-55: the helper lives in easypb_codegen; this file is in the global
+// namespace, so it names the owner once.
+using easypb_codegen::ends_with;
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
