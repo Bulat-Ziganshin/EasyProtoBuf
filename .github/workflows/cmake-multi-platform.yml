@@ -419,7 +419,9 @@ jobs:
     runs-on: [ubuntu-latest]
     timeout-minutes: 120
     container:
-      image: ${{ startsWith(matrix.image, 'rockylinux:') && format('rockylinux/{0}', matrix.image) || format('public.ecr.aws/docker/library/{0}', matrix.image) }}
+      # Docker Hub's Google mirror, not public.ecr.aws: the ECR anonymous
+      # quota is shared by the runners' IP pool and answers "toomanyrequests".
+      image: ${{ startsWith(matrix.image, 'rockylinux:') && format('mirror.gcr.io/rockylinux/{0}', matrix.image) || format('mirror.gcr.io/library/{0}', matrix.image) }}
     strategy:
       matrix:
         cpp_compiler: [g++]
