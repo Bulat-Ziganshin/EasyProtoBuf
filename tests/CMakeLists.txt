@@ -432,16 +432,42 @@ if(BUILD_TESTING)
     # build failure ends the job before ctest runs, so no Windows lane
     # executed a single test.
     #
+    # Clang 22.1.0 through 23.1.0 has the other reason to skip. A declaration
+    # whose type is spelled as a long nested-name-specifier costs exponential
+    # time there - roughly twice the work for every level past ~20 - so one
+    # `M0::M1::...::M30 v;` alone dwarfs the whole tree. Neither warnings, nor
+    # -fsyntax-only instead of -c, nor removing <easypb.hpp> moves it; the
+    # struct definitions alone compile in milliseconds, it is the mention of
+    # the deep type that explodes. The generated header carries 62 such
+    # declarations, so every clang 22/23 lane of 2026-10-22 paid ~8 minutes
+    # for the runtime checker's TU and ~6 more for the driver's -fsyntax-only
+    # per build type, and seven lanes were canceled at their job timeout.
+    # GCC and Clang 20/21 stay flat at depth 28 (tens of milliseconds;
+    # Clang 21.1.0 measured clean on the Compiler Explorer machines), and
+    # LLVM main already resolves the same source in ~5 ms, so this gate
+    # lifts with Clang 24.
+    #
     # The limit itself does not move. It stays the reference compiler's own
     # (31 accepted, the 32nd refused - the driver's own verdict below), and
-    # the generator keeps printing the nesting the way it does. What the MSVC
-    # profile gives up is the compile of that one header and the runtime
+    # the generator keeps printing the nesting the way it does. What these
+    # profiles give up is the compile of that one header and the runtime
     # check that reads it; the lane's other three things need no compiler
     # and stay - both input paths agree byte for byte, the 32nd level is
     # refused, the deep name is refused. Nested types themselves remain
     # covered on MSVC by the nested lane, which is shallower.
+    set(codegen_limits_skip_reason "the compiler limit of this profile")
     if(MSVC)
         set(codegen_limits_compiles_accepted 0)
+        set(codegen_limits_skip_reason
+            "MSVC refuses a chain of 31 nested struct definitions (C1046)")
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+            AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 22
+            AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 24)
+        # AppleClang is deliberately outside this branch: it has its own
+        # numbering and its macOS lanes ran this test in under 2 s.
+        set(codegen_limits_compiles_accepted 0)
+        set(codegen_limits_skip_reason
+            "Clang 22-23 grow a 31-level nested name exponentially (fixed in LLVM 24)")
     else()
         set(codegen_limits_compiles_accepted 1)
     endif()
@@ -483,8 +509,9 @@ if(BUILD_TESTING)
         "${CMAKE_CXX_FLAGS}")
 
     # The driver compiles the accepted header and runs the checker that reads
-    # it - the two steps MSVC cannot do. It is told which profile it runs in,
-    # and the compiler arguments and the runtime checker are passed only
+    # it - the two steps the skip profiles (MSVC, Clang 22-23) cannot do. It
+    # is told which profile it runs in and why the steps are skipped, and the
+    # compiler arguments and the runtime checker are passed only
     # where they exist.
     #
     # The two calls below are spelled out instead of sharing one argument
@@ -513,6 +540,7 @@ if(BUILD_TESTING)
                 -DDATA_DIR=${codegen_limits_data_dir}
                 -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-limits
                 -DINCLUDE_DIR=${easypb_test_include_dir}
+                "-DSKIP_REASON=${codegen_limits_skip_reason}"
                 -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
                 -DCOMPILE_ACCEPTED=0
                 -P ${codegen_limits_dir}/test_limits.cmake)

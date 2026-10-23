@@ -27,25 +27,39 @@ input half runs under `FULL_BUILD`.
    (`-std=c++17` in the full profile, `-std=c++11` in the C++11 profile), and
    the build compiles the same header into the runtime checker.
 
-   This one step has an exception, and only this one: **MSVC cannot compile
-   the accepted header.** The accepted nesting is printed as a chain of
-   nested struct definitions (`struct M0 { struct M1 { … }; };`), and MSVC's
-   compiler limit is 16 levels of them — C1046, *compiler limit: struct
-   nested too deeply* — so it refuses at the 17th. Every MSVC lane of
+   This one step has exceptions, and nothing else does. **MSVC cannot
+   compile the accepted header.** The accepted nesting is printed as a
+   chain of nested struct definitions (`struct M0 { struct M1 { … }; };`),
+   and MSVC's compiler limit is 16 levels of them — C1046, *compiler limit:
+   struct nested too deeply* — so it refuses at the 17th. Every MSVC lane of
    2026-10-22 died in the build of the runtime checker, and with it the
    whole Windows half of the CI: the build failure ends the job before
    ctest runs.
 
+   **Clang 22–23 have a different wall — speed.** A declaration whose type
+   is spelled as a long nested-name-specifier costs exponential time there
+   (roughly doubling for every level past ~20; measured 2026-10-23 through
+   the Compiler Explorer machines: 0.8 s and 4.7 s at depths 24/26 against
+   35–68 ms for Clang 20/21, and LLVM main resolves the same source in
+   ~5 ms). The struct definitions alone compile in milliseconds — it is the
+   mention of the deep type, in any form (`M0::M1::…::M30 v;`, a pointer, a
+   function parameter), that explodes. The generated header carries 62 such
+   declarations, so the Clang 22/23 lanes paid ~8 minutes for the runtime
+   checker's TU and ~6 more for the driver's `-fsyntax-only` — per build
+   type — and seven lanes were canceled at their job timeout. The skip is
+   version-gated (LLVM 22.1.0 through 23.1.0) and lifts with Clang 24.
+
    The **limit itself does not move**: it stays the reference compiler's own
    (31 accepted, the 32nd refused), and the generator keeps printing the
-   nesting the way it does. What the MSVC profile gives up is the compile of
-   that one header and the runtime check that reads it. The other two things
-   need no compiler and still run there: both input paths agree byte for
-   byte, the 32nd level is refused, the deep name is refused. Nested types
-   themselves stay covered on MSVC by the nested lane, which is shallower.
+   nesting the way it does. What the skipping profiles give up is the
+   compile of that one header and the runtime check that reads it. The
+   other two things need no compiler and still run there: both input paths
+   agree byte for byte, the 32nd level is refused, the deep name is
+   refused. Nested types themselves stay covered on MSVC by the nested
+   lane, which is shallower.
 
-   The driver is told which profile it runs in (`COMPILE_ACCEPTED`), and
-   says in its output which steps it skipped.
+   The driver is told which profile it runs in (`COMPILE_ACCEPTED`) and why
+   (`SKIP_REASON`), and says in its output which steps it skipped.
 3. **The refusal is a diagnostic.** A non-zero exit, an empty stdout and a
    stderr that names the offending thing. A crash is a failure, not a
    refusal: the whole point of the rows is that a deep input used to end the
@@ -120,7 +134,8 @@ tree, the lite (parser-off) tree, and the legacy toolchains. The `W-46`
 section itself runs only on Windows and, for its input half, only where the
 proto parser is available.
 
-The MSVC profile runs the same lane with the two steps it cannot do left out
-— the compile of the accepted header and the runtime check that reads it (see
-"the header compiles" above). Every other step of the lane, and every other
-test of the tree, runs there as everywhere else.
+The profiles that skip the compile (MSVC, and the Clang 22–23 versions) run
+the same lane with the two steps they cannot do left out — the compile of the
+accepted header and the runtime check that reads it (see "the header
+compiles" above). Every other step of the lane, and every other test of the
+tree, runs there as everywhere else.

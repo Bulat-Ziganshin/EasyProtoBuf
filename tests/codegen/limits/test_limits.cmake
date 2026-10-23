@@ -35,7 +35,10 @@
 #               1 when the compiler of this profile can compile the accepted
 #               header, 0 when it cannot (MSVC: its compiler limit is 16
 #               levels of nested struct definitions - C1046 - and the
-#               accepted nesting is 31)
+#               accepted nesting is 31; Clang 22-23: their exponential cost
+#               for a 31-level nested name - see tests/CMakeLists.txt)
+#   SKIP_REASON the reason for COMPILE_ACCEPTED=0, quoted in the STATUS line
+#               (default: "the compiler limit of this profile")
 
 foreach(required_var CODEGEN DATA_DIR WORK_DIR)
     if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
@@ -51,6 +54,9 @@ endif()
 # The compiler arguments and the runtime checker belong to the compile of the
 # accepted header. A profile that cannot compile that header passes neither,
 # and the driver says so instead of failing on a missing argument.
+if(NOT DEFINED SKIP_REASON OR "${SKIP_REASON}" STREQUAL "")
+    set(SKIP_REASON "the compiler limit of this profile")
+endif()
 if(COMPILE_ACCEPTED)
     foreach(required_var RUNTIME CXX INCLUDE_DIR)
         if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
@@ -137,14 +143,15 @@ endif()
 # draws a "#pragma once in main file" warning that says nothing about the
 # header.
 #
-# MSVC cannot do this: the accepted header is a chain of 31 nested struct
-# definitions and MSVC's compiler limit is 16 of them (C1046). The limit
-# itself does not move - it is the reference compiler's own, and the
-# generator keeps printing the nesting the way it does - but this profile
-# cannot compile that header, so the compile and the runtime check below
-# are the two steps it gives up. Everything above and below them is
-# compiler-free and still runs: the generation, the agreement of the two
-# input paths, and the two refusals.
+# Two profiles cannot do this, each for its own reason: MSVC's compiler limit
+# is 16 levels of nested struct definitions (C1046), and Clang 22.1.0-23.1.0
+# resolves a 31-level nested name in exponential time. The limit itself does
+# not move - it is the reference compiler's own, and the generator keeps
+# printing the nesting the way it does - but these profiles cannot compile
+# that header, so the compile and the runtime check below are the two steps
+# they give up. Everything above and below them is compiler-free and still
+# runs: the generation, the agreement of the two input paths, and the two
+# refusals.
 if(COMPILE_ACCEPTED)
     if(CXX_STD_FLAG)
         set(std_flag "${CXX_STD_FLAG}")
@@ -166,10 +173,9 @@ if(COMPILE_ACCEPTED)
         "The runtime checker's verdict")
 else()
     message(STATUS
-        "The compiler of this profile cannot compile the accepted header "
-        "(MSVC refuses a chain of 31 nested struct definitions - C1046), so "
-        "this run checks the generation, the agreement of the two input paths "
-        "and the two refusals only.")
+        "The compile and the runtime check are skipped for this profile "
+        "(${SKIP_REASON}), so this run checks the generation, the agreement "
+        "of the two input paths and the two refusals only.")
 endif()
 
 # --- the refused nesting -----------------------------------------------------
