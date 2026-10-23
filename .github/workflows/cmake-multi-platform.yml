@@ -412,8 +412,15 @@ jobs:
           - { image: 'ubuntu:16.04', cpp_compiler: g++,     std: "11" }
           - { image: 'ubuntu:16.04', cpp_compiler: clang++, std: "11" }
 
-          # Ubuntu 18.04 through 26.04: add the distribution's stock Clang alongside stock GCC.
-          # Expected default Clang generations: 6, 10, 14, 18, 21 respectively.
+          # Ubuntu 18.04 through 24.04: add the distribution's stock Clang alongside stock GCC.
+          # Expected default Clang generations: 6, 10, 14, 18 respectively. These rows are
+          # the only coverage of those stock generations (the host matrix pins 14-22 on
+          # ubuntu-24.04 only; the CE matrix covers 3.1-13 on ubuntu-24.04).
+          #
+          # ubuntu:26.04 deliberately has no clang++ row: its stock compiler is the
+          # universe clang 21.1.x package, which the 'main' job already tests as the
+          # pinned clang++-21 on ubuntu-26.04. The always-moving ubuntu:rolling /
+          # ubuntu:devel GCC rows below cover what comes after the 26.04 release.
           - { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "11" }
           - { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "17" }
           - { image: 'ubuntu:20.04', cpp_compiler: clang++, std: "11" }
@@ -422,8 +429,6 @@ jobs:
           - { image: 'ubuntu:22.04', cpp_compiler: clang++, std: "17" }
           - { image: 'ubuntu:24.04', cpp_compiler: clang++, std: "11" }
           - { image: 'ubuntu:24.04', cpp_compiler: clang++, std: "17" }
-          - { image: 'ubuntu:26.04', cpp_compiler: clang++, std: "11" }
-          - { image: 'ubuntu:26.04', cpp_compiler: clang++, std: "17" }
 
           # Debian: keep GCC on every release, and add stock Clang at the old/current stable endpoints.
           - { image: 'debian:10', cpp_compiler: clang++, std: "11" }
