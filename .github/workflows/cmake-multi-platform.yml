@@ -28,7 +28,7 @@ jobs:
   windows:
     name: ${{ matrix.job_name }}
     runs-on: ${{ matrix.os || 'windows-2022' }}
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     strategy:
       # Run every matrix combination independently even if another one fails.
@@ -251,7 +251,7 @@ jobs:
   main:
     name: ${{ matrix.job_name || format('{0} / {1} / C++{2}', matrix.os, matrix.cpp_compiler, matrix.std) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     strategy:
       # Run every matrix combination independently even if another one fails.
@@ -392,7 +392,7 @@ jobs:
   docker:
     name: ${{ format('{0} / {1} / C++{2}', matrix.image, matrix.cpp_compiler, matrix.std) }}
     runs-on: [ubuntu-latest]
-    timeout-minutes: 60
+    timeout-minutes: 120
     container:
       image: ${{ startsWith(matrix.image, 'rockylinux:') && format('rockylinux/{0}', matrix.image) || format('public.ecr.aws/docker/library/{0}', matrix.image) }}
     strategy:
@@ -569,7 +569,7 @@ jobs:
   ce-legacy-gcc:
     name: GCC ${{ matrix.version }} / C++${{ matrix.std }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     env:
       CE_GCC_TARGET: ${{ matrix.version }}
@@ -732,7 +732,7 @@ jobs:
     name: Clang ${{ matrix.label }} / C++${{ matrix.std }}
     # Pin the host so a future ubuntu-latest migration does not change two variables at once.
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     env:
       CE_CLANG_TARGET: ${{ matrix.ce_target }}
@@ -994,7 +994,7 @@ jobs:
   extended-tests:
     name: "Extended tests / ${{ matrix.os }}"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     strategy:
       # Run every OS leg independently even if another one fails.

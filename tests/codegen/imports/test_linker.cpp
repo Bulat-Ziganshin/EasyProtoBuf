@@ -422,7 +422,7 @@ Chain make_chain_fixture(easypb_schema::SchemaSet& set, bool public_bc, bool wea
 {
     const std::vector<std::string> no_deps;
     const std::vector<std::int32_t> no_indexes;
-    const std::vector<std::int32_t> index_zero(1, 0);
+    const std::vector<std::int32_t> index_zero = repeated_indexes(1, 0);
 
     easypb_schema::SchemaFile& a = make_file(
         set, "a.proto", std::vector<std::string>(1, "b.proto"),
@@ -457,7 +457,7 @@ struct Diamond
 Diamond make_diamond_fixture(easypb_schema::SchemaSet& set)
 {
     const std::vector<std::int32_t> no_indexes;
-    const std::vector<std::int32_t> index_zero(1, 0);
+    const std::vector<std::int32_t> index_zero = repeated_indexes(1, 0);
     std::vector<std::string> a_deps;
     a_deps.push_back("b.proto");
     a_deps.push_back("c.proto");
@@ -722,7 +722,7 @@ void test_visibility_diamond_public_exports_are_complete()
 void test_visibility_public_chain_re_exports_recursively()
 {
     const std::vector<std::int32_t> no_indexes;
-    const std::vector<std::int32_t> index_zero(1, 0);
+    const std::vector<std::int32_t> index_zero = repeated_indexes(1, 0);
 
     easypb_schema::SchemaSet set;
     easypb_schema::SchemaFile& a = make_file(
@@ -3399,7 +3399,7 @@ void test_relative_package_head_reference_resolves()
             no_indexes);
         set_package(dep, "a.b");
         add_message(dep, "Type");
-        const std::vector<std::int32_t> public_index(1, 0);
+        const std::vector<std::int32_t> public_index = repeated_indexes(1, 0);
         easypb_schema::SchemaFile& pub = make_file(
             set, "dep_pub.proto", std::vector<std::string>(1, "dep_ab.proto"),
             public_index, no_indexes);
@@ -6469,7 +6469,7 @@ void make_repeat_fixture(easypb_schema::SchemaSet& set, bool reverse)
 {
     const std::vector<std::string> no_deps;
     const std::vector<std::int32_t> no_indexes;
-    const std::vector<std::int32_t> index_zero(1, 0);
+    const std::vector<std::int32_t> index_zero = repeated_indexes(1, 0);
 
     for (int pass = 0; pass < 3; ++pass) {
         const int which = reverse ? 2 - pass : pass;

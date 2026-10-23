@@ -197,10 +197,8 @@ bool same_descriptor(const CppFieldOptions& left, const CppFieldOptions& right)
 
 bool same_descriptor(const FieldOptions& left, const FieldOptions& right)
 {
-    return left.packed == right.packed &&
-           left.has_packed == right.has_packed && left.cpp.type == right.cpp.type &&
-           left.cpp.has_type == right.cpp.has_type &&
-           left.has_cpp == right.has_cpp;
+    return left.packed == right.packed && left.has_packed == right.has_packed &&
+           same_descriptor(left.cpp, right.cpp) && left.has_cpp == right.has_cpp;
 }
 
 bool same_descriptor(const FieldDescriptorProto& left,
