@@ -12,13 +12,16 @@ The grammar uses the intended lexical and syntactic forms directly:
   with letters, digits, or underscores;
 - integer and floating tokens are unsigned, while one optional sign is applied
   by productions that permit signed values;
+- a token that starts with zero is hex (`0x`) or octal, so `08` and `09` are
+  lexical errors and an octal token has no fraction or exponent;
 - an exponent has its own optional sign followed by decimal digits;
-- `\u` contains four hexadecimal digits and `\U` contains eight;
+- `\u` contains four hexadecimal digits and `\U` contains eight, bounded to
+  `00[01]xxxxxx` as `protoc`'s tokenizer bounds it;
 - adjacent quoted strings form one string literal;
-- single- and double-quoted strings exclude their own closing quote, newlines,
-  NUL, and an unescaped backslash;
-- line comments, block comments, and all whitespace handled by `protoc` are
-  represented explicitly;
+- single- and double-quoted strings exclude their own closing quote, a raw LF,
+  NUL, and an unescaped backslash; a raw CR is content;
+- line comments and block comments are represented explicitly, and a block
+  comment may not contain a nested `/*`;
 - proto2 ordinary fields have a label, while oneof fields do not;
 - proto3 ordinary fields are unlabeled, `optional`, or `repeated`;
 - keyword rules have identifier boundaries;
@@ -63,8 +66,10 @@ The grammar uses the intended lexical and syntactic forms directly:
   enum defaults must name a value declared by the resolved enum;
 - float and double defaults are stored in the canonical textual form used by
   `protoc`, while string and bytes defaults follow descriptor.proto rules;
-- Unicode escapes must decode to Unicode scalar values;
-- octal byte escapes may not exceed 255;
+- Unicode escapes follow `protoc`: a UTF-16 head+trail pair assembles into one
+  code point, a lone surrogate is encoded as its three bytes, and a value above
+  0x10FFFF is written back as the `\UXXXXXXXX` escape text;
+- an octal byte escape stores its low byte, so `\777` is 0xFF and `\400` is NUL;
 - local type names are resolved after parsing and classified as messages or
   enums; unresolved imported names remain `TYPE_MESSAGE` with a warning.
 

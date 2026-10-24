@@ -37,6 +37,9 @@
 #include "json-name-proto2-warning.pb.hpp"
 #include "json-names-distinct.pb.hpp"
 #include "leading-space-control.pb.hpp"
+#include "literals-descriptor-octal.pb.hpp"
+#include "literals-escapes.pb.hpp"
+#include "literals-lexemes.pb.hpp"
 #include "packages-deep-101.pb.hpp"
 #include "plus-controls.pb.hpp"
 #include "plus-descriptor-controls.pb.hpp"
@@ -180,6 +183,69 @@ int main()
         UpperHexBytes value;
         const char expected[] = { 'A' };
         report("upper hex", is_bytes(value.data, expected, sizeof expected));
+    }
+    // R2 / B4: the escape table, on both literal kinds. Each row is the byte
+    // sequence protoc 30.1 stores for the same source: an octal escape above
+    // 0xFF is its low byte (CR-12), a surrogate pair is one code point and a
+    // lone surrogate is its three bytes (CR-13), and a raw CR is content
+    // (CR-29). A bytes default decodes to the same bytes as the string one.
+    {
+        lit::Escapes value;
+        report("esc hex", is_bytes(value.s_hex, "A", 1) &&
+                              is_bytes(value.s_hex_upper, "A", 1) &&
+                              is_bytes(value.s_hex_one, "\t", 1));
+        report("esc octal", is_bytes(value.s_octal, "A", 1));
+        const char max_byte[] = { '\xff' };
+        report("esc 777", is_bytes(value.s_octal_max, max_byte, 1));
+        const char nul_middle[] = { 'a', '\0', 'b' };
+        report("esc 400", is_bytes(value.s_octal_nul, nul_middle, 3));
+        const char nul_only[] = { '\0' };
+        report("esc 0", is_bytes(value.s_octal_one, nul_only, 1));
+        const char u2[] = { '\xc3', '\xa9' };
+        const char u3[] = { '\xe2', '\x82', '\xac' };
+        const char astral[] = { '\xf0', '\x9f', '\x98', '\x80' };
+        report("esc u", is_bytes(value.s_u1, "A", 1) &&
+                            is_bytes(value.s_u2, u2, 2) &&
+                            is_bytes(value.s_u3, u3, 3) &&
+                            is_bytes(value.s_u4, astral, 4));
+        const char lone_head[] = { '\xed', '\xa0', '\x80' };
+        const char lone_tail[] = { '\xed', '\xb0', '\x80' };
+        report("esc pair", is_bytes(value.s_pair, astral, 4));
+        report("esc lone", is_bytes(value.s_lone_head, lone_head, 3) &&
+                               is_bytes(value.s_lone_tail, lone_tail, 3));
+        const char head_ascii[] = { '\xed', '\xa0', '\x80', 'A' };
+        report("esc head ascii", is_bytes(value.s_head_ascii, head_ascii, 4));
+        const char over_max[] = { '\\', 'U', '0', '0', '1', '1', '0', '0', '0', '0' };
+        report("esc overmax", is_bytes(value.s_over_max, over_max, 10));
+        const char raw_cr[] = { 'x', '\r', 'y' };
+        report("esc raw cr", is_bytes(value.s_raw_cr, raw_cr, 3));
+        report("esc bytes", is_bytes(value.b_octal_max, max_byte, 1) &&
+                                is_bytes(value.b_octal_nul, nul_only, 1) &&
+                                is_bytes(value.b_pair, astral, 4) &&
+                                is_bytes(value.b_lone_head, lone_head, 3) &&
+                                is_bytes(value.b_over_max, over_max, 10) &&
+                                is_bytes(value.b_raw_cr, raw_cr, 3));
+    }
+    // R2 / B4: the lexeme table. `0x` is hex, a leading zero is octal, and a
+    // zero followed by a fraction or exponent is decimal; the descriptor set
+    // carries the float/double spellings protoc's descriptor validator accepts.
+    {
+        lit::Lexemes value;
+        report("lex octal", value.i_hex == 16 && value.i_octal == 8 &&
+                                value.i_octal_63 == 63 &&
+                                value.i_octal_zero == 0 && value.i_zero == 0);
+        report("lex float", value.f_octal == 8.0f && value.d_hex == 16.0 &&
+                                value.d_fraction == 0.5 && value.d_exp == 0.0);
+        report("lex uint64", value.u_hex_max ==
+                                 std::numeric_limits<std::uint64_t>::max());
+        // The non-default consumers: the octal enum value and reserved-range
+        // endpoint are accepted, and the enum value decodes to 8.
+        report("lex enum", static_cast<int>(lit::LEXEME_OCTAL) == 8);
+    }
+    {
+        lit::DescriptorOctal value;
+        report("desc octal", value.f08 == 8.0f && value.f09 == 9.0f &&
+                                 value.d010 == 10.5 && value.i010 == 8);
     }
     // W-40: the accepted controls beside the refused plus spellings.
     {

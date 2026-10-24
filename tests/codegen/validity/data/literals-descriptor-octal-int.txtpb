@@ -1,0 +1,15 @@
+file {
+  name: "literals-descriptor-octal-int.proto"
+  syntax: "proto2"
+  package: "lit"
+  message_type {
+    name: "DescriptorOctalInt"
+    field {
+      name: "i08"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      default_value: "08"
+    }
+  }
+}

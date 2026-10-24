@@ -1,0 +1,36 @@
+file {
+  name: "literals-descriptor-octal.proto"
+  syntax: "proto2"
+  package: "lit"
+  message_type {
+    name: "DescriptorOctal"
+    field {
+      name: "f08"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_FLOAT
+      default_value: "08"
+    }
+    field {
+      name: "f09"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_FLOAT
+      default_value: "09"
+    }
+    field {
+      name: "d010"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "010.5"
+    }
+    field {
+      name: "i010"
+      number: 4
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      default_value: "010"
+    }
+  }
+}

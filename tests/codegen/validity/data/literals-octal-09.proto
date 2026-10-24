@@ -1,0 +1,10 @@
+syntax = "proto2";
+package lit;
+
+// CR-18 on the non-default path: an ordinary option value. The option
+// itself is not modelled, so the only thing that can refuse this file is
+// the tokenizer rule (protoc refuses it at the same literal).
+message Octal09 {
+  optional int32 a = 1;
+}
+option (my.opt) = 09;

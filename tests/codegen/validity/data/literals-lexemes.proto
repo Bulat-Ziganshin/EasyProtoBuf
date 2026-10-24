@@ -1,0 +1,29 @@
+syntax = "proto2";
+package lit;
+
+// R2 / B4 lexeme family: the leading-zero boundary of protoc's
+// `ConsumeNumber`. `0x` is hex, a leading zero makes the token octal, and
+// an octal token has neither a fraction nor an exponent (CR-18). The
+// refused `08`/`09` shapes are source-only fixtures of their own.
+//
+// The enum value and the reserved-range endpoint are the non-default
+// consumers: the same token rule must still accept an octal literal there,
+// so the family is not a set of refusals only.
+enum LexemeEnum {
+  LEXEME_ZERO = 0;
+  LEXEME_OCTAL = 010;
+}
+
+message Lexemes {
+  optional int32  i_hex        = 1  [default = 0x10];
+  optional int32  i_octal      = 2  [default = 010];
+  optional int32  i_octal_63   = 3  [default = 077];
+  optional int32  i_octal_zero = 4  [default = 00];
+  optional int32  i_zero       = 5  [default = 0];
+  optional float  f_octal      = 6  [default = 010];
+  optional double d_hex        = 7  [default = 0x10];
+  optional double d_fraction   = 8  [default = 0.5];
+  optional double d_exp        = 9  [default = 0e5];
+  optional uint64 u_hex_max    = 10 [default = 0xFFFFFFFFFFFFFFFF];
+  reserved 050 to 060;
+}

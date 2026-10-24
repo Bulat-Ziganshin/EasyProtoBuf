@@ -1,0 +1,33 @@
+syntax = "proto2";
+package lit;
+
+// R2 / B4 escape family: the escape table on both literal kinds. The
+// accepted shapes are here (CR-12, CR-13, CR-29); protoc 30.1 writes the
+// `.pbs` beside this file, and the lane requires byte-identical headers
+// from the two input paths. The refusals live in the `literals-octal-*`,
+// `literals-nested-comment` and `literals-aggregate-nul` fixtures.
+message Escapes {
+  optional string s_hex        = 1  [default = "\x41"];
+  optional string s_hex_upper  = 2  [default = "\X41"];
+  optional string s_hex_one    = 3  [default = "\x9"];
+  optional string s_octal      = 4  [default = "\101"];
+  optional string s_octal_max  = 5  [default = "\777"];
+  optional string s_octal_nul  = 6  [default = "a\400b"];
+  optional string s_octal_one  = 7  [default = "\0"];
+  optional string s_u1         = 8  [default = "\u0041"];
+  optional string s_u2         = 9  [default = "\u00e9"];
+  optional string s_u3         = 10 [default = "\u20ac"];
+  optional string s_u4         = 11 [default = "\U0001F600"];
+  optional string s_pair       = 12 [default = "\ud83d\ude00"];
+  optional string s_lone_head  = 13 [default = "\ud800"];
+  optional string s_lone_tail  = 14 [default = "\U0000DC00"];
+  optional string s_over_max   = 15 [default = "\U00110000"];
+  optional string s_head_ascii = 16 [default = "\ud800\u0041"];
+  optional string s_raw_cr     = 17 [default = "xy"];
+  optional bytes  b_octal_max  = 18 [default = "\777"];
+  optional bytes  b_octal_nul  = 19 [default = "\400"];
+  optional bytes  b_pair       = 20 [default = "\ud83d\ude00"];
+  optional bytes  b_lone_head  = 21 [default = "\ud800"];
+  optional bytes  b_over_max   = 22 [default = "\U00110000"];
+  optional bytes  b_raw_cr     = 23 [default = "xy"];
+}

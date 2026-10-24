@@ -79,18 +79,20 @@ TypeName              <- "."? FullIdentifier
 FullIdentifier        <- Identifier ("." Identifier)*
 Identifier            <- < [A-Za-z_] [A-Za-z0-9_]* >
 
-# TOKEN_INTEGER spellings emitted by Lexer::number(). A leading zero is
-# interpreted as octal only when a numeric value is requested. Thus 09 is a
-# token but is rejected as a field number, range endpoint, enum value, or
-# typed integral default.
-IntegerToken          <- HexInteger / DigitInteger
-HexInteger            <- < "0" [xX] [0-9A-Fa-f]+ ![A-Za-z0-9_] >
-DigitInteger          <- < [0-9]+ ![A-Za-z_] >
+# TOKEN_INTEGER spellings emitted by Lexer::number(). A token whose first digit
+# is zero is hex ("0x") or octal, and an octal token has no 8/9 digit, no
+# fraction and no exponent (protoc's ConsumeNumber). "08" and "09" are lexical
+# errors, not tokens, so no consumer can read them as decimal.
+IntegerToken          <- HexInteger / OctalInteger / DecimalInteger
+HexInteger            <- < "0" [xX] [0-9A-Fa-f]+ > ![A-Za-z0-9_.]
+OctalInteger          <- < "0" [0-7]+ > ![A-Za-z0-9_.]
+DecimalInteger        <- < "0" / [1-9] [0-9]* > ![A-Za-z0-9_.]
 
-# TOKEN_FLOAT spellings emitted by Lexer::number().
-FloatToken            <- < (([0-9]+ "." [0-9]*) / ("." [0-9]+)) Exponent?
-                           ![A-Za-z_] /
-                           [0-9]+ Exponent ![A-Za-z_] >
+# TOKEN_FLOAT spellings emitted by Lexer::number(). The integral part is a
+# decimal digit run, so an octal token cannot carry a fraction or an exponent.
+FloatToken            <- < DecimalDigits ("." [0-9]* Exponent? / Exponent) /
+                           "." [0-9]+ Exponent? > ![A-Za-z_]
+DecimalDigits         <- "0" / [1-9] [0-9]*
 Exponent              <- [eE] [+-]? [0-9]+
 Sign                  <- [+-]
 FieldNumber           <- IntegerToken
@@ -100,8 +102,10 @@ StringSequence        <- StringAtom+
 StringAtom            <- SingleQuoted / DoubleQuoted
 SingleQuoted          <- < "'" SingleChar* "'" >
 DoubleQuoted          <- < '"' DoubleChar* '"' >
-SingleChar            <- Escape / [^'\\\r\n\x00]
-DoubleChar            <- Escape / [^"\\\r\n\x00]
+# A raw CR is content; a raw LF and NUL end the literal with an error, as
+# protoc's ConsumeString decides.
+SingleChar            <- Escape / [^'\\\n\x00]
+DoubleChar            <- Escape / [^"\\\n\x00]
 Escape                <- CharEscape / HexEscape / OctalEscape /
                          UnicodeEscape / UnicodeLongEscape
 CharEscape            <- "\\" [abfnrtv\\'"?]
@@ -109,8 +113,7 @@ HexEscape             <- "\\x" [0-9A-Fa-f] [0-9A-Fa-f]?
 OctalEscape           <- "\\" [0-7] [0-7]? [0-7]?
 UnicodeEscape         <- "\\u" [0-9A-Fa-f] [0-9A-Fa-f]
                                [0-9A-Fa-f] [0-9A-Fa-f]
-UnicodeLongEscape     <- "\\U" [0-9A-Fa-f] [0-9A-Fa-f]
-                               [0-9A-Fa-f] [0-9A-Fa-f]
+UnicodeLongEscape     <- "\\U" "00" [01] [0-9A-Fa-f] [0-9A-Fa-f]
                                [0-9A-Fa-f] [0-9A-Fa-f]
                                [0-9A-Fa-f] [0-9A-Fa-f]
 
@@ -161,4 +164,5 @@ K_STRING              <- < "string" ![A-Za-z0-9_] >
 %whitespace           <- (Space / LineComment / BlockComment)*
 Space                 <- [ \t\r\n\x0b\x0c]
 LineComment           <- "//" [^\r\n]*
-BlockComment          <- "/*" (!"*/" .)* "*/"
+# Block comments do not nest: a second "/*" inside one is an error.
+BlockComment          <- "/*" (!("*/" / "/*") .)* "*/"

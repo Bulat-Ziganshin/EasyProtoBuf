@@ -290,7 +290,10 @@ if(BUILD_TESTING)
         empty-syntax-descriptor
         plus-controls
         plus-descriptor-controls
-        leading-space-control)
+        leading-space-control
+        literals-escapes
+        literals-lexemes
+        literals-descriptor-octal)
 
     foreach(name ${codegen_validity_fixtures})
         add_custom_command(
@@ -328,7 +331,10 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/empty-syntax-descriptor.pb.hpp
             ${codegen_validity_descriptor_dir}/plus-controls.pb.hpp
             ${codegen_validity_descriptor_dir}/plus-descriptor-controls.pb.hpp
-            ${codegen_validity_descriptor_dir}/leading-space-control.pb.hpp)
+            ${codegen_validity_descriptor_dir}/leading-space-control.pb.hpp
+            ${codegen_validity_descriptor_dir}/literals-escapes.pb.hpp
+            ${codegen_validity_descriptor_dir}/literals-lexemes.pb.hpp
+            ${codegen_validity_descriptor_dir}/literals-descriptor-octal.pb.hpp)
 
     add_executable(codegen_validity_runtime_test
         ${codegen_validity_dir}/validity_runtime.cpp)

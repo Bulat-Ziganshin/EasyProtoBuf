@@ -1,0 +1,9 @@
+syntax = "proto2";
+package lit;
+
+// CR-18 on the enum-value path: `08` is an invalid octal literal, not a
+// decimal 8 that happens to fit an int32.
+enum OctalEnum {
+  A = 0;
+  B = 08;
+}

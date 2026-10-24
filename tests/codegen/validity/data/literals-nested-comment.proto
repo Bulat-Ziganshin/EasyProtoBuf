@@ -1,0 +1,5 @@
+/* outer /* inner */
+syntax = "proto3";
+message NestedComment {
+  int32 a = 1;
+}

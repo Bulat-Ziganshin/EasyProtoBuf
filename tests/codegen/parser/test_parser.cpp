@@ -314,22 +314,24 @@ void test_numeric_default_spellings_are_canonical()
         }
     }
 
-    // CR-18's overlap: the integer token `08` is not octal and protoc refuses
-    // it on the float path too (its ConsumeNumber reads an INTEGER token with
-    // the octal parser first). The parser's refusal happens before any
-    // canonicalization, so the value never silently becomes 8.
+    // CR-18's overlap: the integer token `08` is not octal, and the lexer
+    // owns that rule now (B4). The refusal happens while tokenizing, so no
+    // consumer can turn the typo into a value: the float path never sees a
+    // decimal 8 either.
     CHECK(!easypb_proto::parse_proto("bad-octal-float.proto",
         "message M { optional float x = 1 [default = 08]; }", parsed, error));
-    CHECK(error.message.find("Integer out of range") != std::string::npos);
+    CHECK(error.message.find("leading zero must be octal") != std::string::npos);
 }
 
 void test_lexer_diagnostics()
 {
     easypb_proto::ParsedProto parsed;
     easypb_proto::Diagnostic error;
+    // B4: the tokenizer refuses `08` before the integral-default range check
+    // can see it, so the diagnostic names the octal rule on every consumer.
     CHECK(!easypb_proto::parse_proto("bad-octal.proto",
         "message M { optional int32 x = 1 [default = 08]; }", parsed, error));
-    CHECK(error.message.find("signed 32-bit") != std::string::npos);
+    CHECK(error.message.find("leading zero must be octal") != std::string::npos);
 
     CHECK(!easypb_proto::parse_proto("bad-exponent.proto",
         "message M { optional double x = 1 [default = 1e]; }", parsed, error));
@@ -342,6 +344,216 @@ void test_lexer_diagnostics()
     CHECK(!easypb_proto::parse_proto("bad-comment.proto", "/* unterminated", parsed, error));
     CHECK(error.message.find("unterminated block comment") != std::string::npos);
     CHECK(error.location.line == 1 && error.location.column == 1);
+}
+
+// R2 / B4: the escape table, one row per protoc rule
+// (`Tokenizer::ParseStringAppend`, `FetchUnicodePoint`, `AppendUTF8`;
+// `io/tokenizer.cc:1049-1235`). A string default stores the decoded bytes; a
+// bytes default stores the C-escaped text, exactly as the descriptor path
+// does, so both columns are asserted. CR-12 is the low-byte octal, CR-13 the
+// surrogate pair and the lone surrogate, CR-29 the raw CR.
+void test_lexer_escape_table()
+{
+    const std::string source =
+        "syntax = \"proto2\";\n"
+        "message M {\n"
+        " optional string s_hex = 1 [default = \"\\x41\"];\n"
+        " optional string s_hex_upper = 2 [default = \"\\X41\"];\n"
+        " optional string s_hex_one = 3 [default = \"\\x9\"];\n"
+        " optional string s_octal = 4 [default = \"\\101\"];\n"
+        " optional string s_max = 5 [default = \"\\777\"];\n"
+        " optional string s_nul = 6 [default = \"a\\400b\"];\n"
+        " optional string s_one = 7 [default = \"\\0\"];\n"
+        " optional string s_u2 = 8 [default = \"\\u00e9\"];\n"
+        " optional string s_u3 = 9 [default = \"\\u20ac\"];\n"
+        " optional string s_u4 = 10 [default = \"\\U0001F600\"];\n"
+        " optional string s_pair = 11 [default = \"\\ud83d\\ude00\"];\n"
+        " optional string s_head = 12 [default = \"\\ud800\"];\n"
+        " optional string s_tail = 13 [default = \"\\U0000DC00\"];\n"
+        " optional string s_over = 14 [default = \"\\U00110000\"];\n"
+        " optional string s_head_ascii = 15 [default = \"\\ud800\\u0041\"];\n"
+        " optional string s_cr = 16 [default = \"x\ry\"];\n"
+        " optional bytes  b_max = 17 [default = \"\\777\"];\n"
+        " optional bytes  b_pair = 18 [default = \"\\ud83d\\ude00\"];\n"
+        " optional bytes  b_over = 19 [default = \"\\U00110000\"];\n"
+        "}\n";
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("escapes.proto", source, parsed, error));
+    const DescriptorProto& message = parsed.file.message_type[0];
+    struct Row {
+        const char* name;
+        const char* expected;
+        std::size_t size;
+    };
+    const std::string astral("\xf0\x9f\x98\x80", 4);
+    const std::string lone_head("\xed\xa0\x80", 3);
+    const std::string lone_tail("\xed\xb0\x80", 3);
+    const std::string head_ascii = lone_head + "A";
+    const std::string nul_middle("a\0b", 3);
+    const std::string nul_only("\0", 1);
+    const Row rows[] = {
+        {"s_hex", "A", 1},
+        {"s_hex_upper", "A", 1},
+        {"s_hex_one", "\t", 1},
+        {"s_octal", "A", 1},
+        {"s_max", "\xff", 1},
+        {"s_nul", nul_middle.data(), nul_middle.size()},
+        {"s_one", nul_only.data(), nul_only.size()},
+        {"s_u2", "\xc3\xa9", 2},
+        {"s_u3", "\xe2\x82\xac", 3},
+        {"s_u4", astral.data(), astral.size()},
+        {"s_pair", astral.data(), astral.size()},
+        {"s_head", lone_head.data(), lone_head.size()},
+        {"s_tail", lone_tail.data(), lone_tail.size()},
+        // Above 0x10FFFF protoc appends the escape text itself.
+        {"s_over", "\\U00110000", 10},
+        {"s_head_ascii", head_ascii.data(), head_ascii.size()},
+        {"s_cr", "x\ry", 3},
+        // A bytes default is stored C-escaped, like the descriptor path.
+        {"b_max", "\\377", 4},
+        {"b_pair", "\\360\\237\\230\\200", 16},
+        {"b_over", "\\\\U00110000", 11},
+    };
+    for (std::size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+        const FieldDescriptorProto* field = find_field(message, rows[i].name);
+        CHECK(field != 0);
+        if (field != 0) {
+            CHECK(field->has_default_value);
+            CHECK(text(field->default_value) ==
+                  std::string(rows[i].expected, rows[i].size));
+        }
+    }
+
+    // The refusals. `\U` is bounded to `00[01]xxxxxx` by `ConsumeString`
+    // (`io/tokenizer.cc:404-421`), a raw LF ends the literal, and a raw NUL
+    // is end-of-string, not content.
+    struct Reject {
+        const char* name;
+        const char* body;
+        const char* message;
+    };
+    const Reject rejects[] = {
+        {"over-shape.proto", "message M { optional string s = 1 [default = \"\\U00FFFFFF\"]; }",
+         "Unicode escape"},
+        {"raw-lf.proto", "message M { optional string s = 1 [default = \"x\ny\"]; }",
+         "newline in string literal"},
+        {"raw-crlf.proto", "message M { optional string s = 1 [default = \"x\r\ny\"]; }",
+         "newline in string literal"},
+        {"short-u.proto", "message M { optional string s = 1 [default = \"\\u12\"]; }",
+         "Unicode escape"},
+        {"bad-escape.proto", "message M { optional string s = 1 [default = \"\\e\"]; }",
+         "escape"},
+    };
+    for (std::size_t i = 0; i < sizeof(rejects) / sizeof(rejects[0]); ++i) {
+        CHECK(!easypb_proto::parse_proto(rejects[i].name, rejects[i].body,
+                                         parsed, error));
+        CHECK(error.message.find(rejects[i].message) != std::string::npos);
+    }
+}
+
+// R2 / B4: the lexeme table of `Tokenizer::ConsumeNumber`
+// (`io/tokenizer.cc:440-495`). A leading zero makes the token octal (or hex
+// with `0x`); an octal token has no 8/9 digit, no fraction and no exponent.
+// The rule lives in the tokenizer, so every consumer refuses the typo.
+void test_lexer_lexeme_table()
+{
+    const std::string accepted =
+        "syntax = \"proto2\";\n"
+        "message M {\n"
+        " optional int32  i_hex = 1 [default = 0x10];\n"
+        " optional int32  i_octal = 2 [default = 010];\n"
+        " optional int32  i_max = 3 [default = 077];\n"
+        " optional int32  i_double_zero = 4 [default = 00];\n"
+        " optional int32  i_zero = 5 [default = 0];\n"
+        " optional float  f_octal = 6 [default = 010];\n"
+        " optional double d_fraction = 7 [default = 0.5];\n"
+        " optional double d_exp = 8 [default = 0e5];\n"
+        "}\n";
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("lexemes.proto", accepted, parsed, error));
+    const DescriptorProto& message = parsed.file.message_type[0];
+    const char* names[] = {"i_hex", "i_octal", "i_max", "i_double_zero",
+                           "i_zero", "f_octal", "d_fraction", "d_exp"};
+    const char* values[] = {"16", "8", "63", "0", "0", "8", "0.5", "0"};
+    for (std::size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        const FieldDescriptorProto* field = find_field(message, names[i]);
+        CHECK(field != 0);
+        if (field != 0) {
+            CHECK(field->has_default_value);
+            CHECK(text(field->default_value) == values[i]);
+        }
+    }
+
+    struct Reject {
+        const char* name;
+        const char* body;
+        const char* message;
+    };
+    const Reject rejects[] = {
+        {"int-08.proto", "message M { optional int32 a = 1 [default = 08]; }",
+         "leading zero must be octal"},
+        {"int-09.proto", "message M { optional int32 a = 1 [default = 09]; }",
+         "leading zero must be octal"},
+        {"float-08.proto", "message M { optional float a = 1 [default = 08]; }",
+         "leading zero must be octal"},
+        {"option-08.proto", "option (my.opt) = 08;", "leading zero must be octal"},
+        {"option-09.proto", "option (my.opt) = 09;", "leading zero must be octal"},
+        {"enum-08.proto", "enum E { A = 0; B = 08; }", "leading zero must be octal"},
+        {"octal-fraction.proto", "message M { optional double a = 1 [default = 010.5]; }",
+         "hex and octal numbers must be integers"},
+        {"hex-fraction.proto", "message M { optional double a = 1 [default = 0x10.5]; }",
+         "hex and octal numbers must be integers"},
+        {"octal-exponent.proto", "message M { optional double a = 1 [default = 010e5]; }",
+         "invalid suffix"},
+    };
+    for (std::size_t i = 0; i < sizeof(rejects) / sizeof(rejects[0]); ++i) {
+        CHECK(!easypb_proto::parse_proto(rejects[i].name, rejects[i].body,
+                                         parsed, error));
+        CHECK(error.message.find(rejects[i].message) != std::string::npos);
+    }
+}
+
+// R2 / B4: CR-30 (block comments do not nest) and CR-19 (a raw NUL is a
+// lexical error, never a swallowed token). A `/*` inside a line comment and an
+// empty block comment stay legal; protoc only refuses the nested opener in a
+// block comment (`io/tokenizer.cc:516-550`).
+void test_lexer_comment_and_control_rules()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    CHECK(!easypb_proto::parse_proto("nested.proto",
+        "/* outer /* inner */\nsyntax = \"proto3\";\nmessage M { int32 a = 1; }\n",
+        parsed, error));
+    CHECK(error.message.find("cannot be nested") != std::string::npos);
+
+    CHECK(easypb_proto::parse_proto("line-star.proto",
+        "// a /* b\nsyntax = \"proto3\";\nmessage M { int32 a = 1; }\n",
+        parsed, error));
+    CHECK(easypb_proto::parse_proto("empty-comment.proto",
+        "/**/\nsyntax = \"proto3\";\nmessage M { int32 a = 1; }\n",
+        parsed, error));
+
+    // The aggregate scanner is the consumer CR-19 measured: the NUL used to
+    // match `strchr(punctuation, '\0')` and disappear as a symbol token.
+    std::string aggregate =
+        "syntax = \"proto2\";\nmessage M { optional int32 a = 1; }\n"
+        "option (my.opt) = { a: 1";
+    aggregate.push_back('\0');
+    aggregate += " };\n";
+    CHECK(!easypb_proto::parse_proto("aggregate-nul.proto", aggregate, parsed, error));
+    CHECK(error.message.find("control character") != std::string::npos);
+    // The byte is escaped in the sentence, so no control byte reaches a
+    // diagnostic (P9).
+    CHECK(error.message.find("0x00") != std::string::npos);
+
+    // The same rule outside an aggregate: a top-level NUL is not whitespace.
+    std::string top_level = "syntax = \"proto3\";\n";
+    top_level.push_back('\0');
+    CHECK(!easypb_proto::parse_proto("top-nul.proto", top_level, parsed, error));
+    CHECK(error.message.find("control character") != std::string::npos);
 }
 
 // A25's source half (plan 5, ledger D-44): `edition = "2023";` names an input
@@ -1511,6 +1723,9 @@ int main()
     test_numeric_literal_forms();
     test_numeric_default_spellings_are_canonical();
     test_lexer_diagnostics();
+    test_lexer_escape_table();
+    test_lexer_lexeme_table();
+    test_lexer_comment_and_control_rules();
     test_edition_statement_is_refused_by_name();
     test_rejects_reserved_conflicts();
     test_rejects_extension_range_conflicts();

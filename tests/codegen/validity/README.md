@@ -74,6 +74,12 @@ and the lane proves the fix in the three ways the session briefs name.
 | descriptor `-7` and `-1.0` controls | crafted `.pbs` only | `W-40` |
 | a descriptor float default `" inf"` (refused) | crafted `.pbs` | `W-03` |
 | source `[default =  inf]` and a string `" x"` (accepted) | `.proto` + `.pbs` | `W-03` |
+| the escape table on `string` and `bytes` | `.proto` + `.pbs` | `CR-12`/`13`/`29` |
+| the leading-zero lexeme table | `.proto` + `.pbs` | `CR-18` |
+| descriptor-carried `08`, `09`, `010.5`, `010` | crafted `.pbs` | `CR-18` |
+| `08` in a float default, `09` in an option, `08` in an enum | `.proto` only | `CR-18` |
+| a nested block comment | `.proto` only | `CR-30` |
+| a raw NUL in an aggregate option | `.proto` only | `CR-19` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted
@@ -120,6 +126,52 @@ is case-sensitive: a source `[default = INF]` is refused as an identifier,
 while a descriptor carrying `INF` is accepted. The fixture carries the four
 spellings the reference compiler normalizes plus the negative form.
 
+## The lexer and literal family (B4)
+
+`literals-escapes` and `literals-lexemes` are the family test for the tokenizer
+and the string decoder (`R2`: `CR-12`, `CR-13`, `CR-18`, `CR-19`, `CR-29`,
+`CR-30`). The driver runs the matrix **escape rule × literal kind × input path**
+plus the **lexeme table** and asserts four things per cell:
+
+1. the source and descriptor headers are byte-identical;
+2. the emitted C++ literal is the decoded value (`"\377"` for `\777`,
+   `"\360\237\230\200"` for `\ud83d\ude00`, `"\355\240\200"` for a lone
+   `\ud800`, `"x\ry"` for a raw CR, `"\\U00110000"` for a code point above
+   `0x10FFFF`);
+3. the runtime checker reads the bytes as values, which is the comparison
+   against `protoc`'s `--descriptor_set_out` (the `.pbs` is protoc's own
+   encoding of the same source);
+4. every refusal is driven through the CLI: non-zero exit, empty stdout, and a
+   diagnostic that names the rule.
+
+The escape table is one row per `protoc` rule (`io/tokenizer.cc`:
+`ConsumeString`, `ParseStringAppend`, `FetchUnicodePoint`, `AppendUTF8`):
+`\x`/`\X` with one or two digits, octal with one to three digits truncating to
+the low byte, `\u` with four digits, `\U` bounded to `00[01]xxxxxx`, a UTF-16
+head+trail pair, a lone surrogate (three bytes), a head without a trail, a code
+point above `0x10FFFF` (the escape text comes back verbatim), and a raw CR.
+Each row exists for `string` and, where the value is a byte sequence, for
+`bytes`; the `.pbs` half proves the descriptor path stores the same bytes.
+
+The lexeme table is the leading-zero branch of `ConsumeNumber`: `0x` is hex, a
+leading zero makes the token octal, and an octal token has no 8/9 digit, no
+fraction and no exponent. `literals-octal-08`, `literals-octal-09` and
+`literals-octal-enum` cover the float default, the ordinary option value and
+the enum value; `literals-descriptor-octal` is a crafted set because `protoc`
+refuses to write a descriptor from the source it refuses, and it pins the
+descriptor path's own rule (a float/double spelling `08`, `09` or `010.5` is
+accepted, an integral `08` is refused - both match `protoc
+--descriptor_set_in`). `literals-nested-comment` and `literals-aggregate-nul`
+are the two structural refusals; both are source-only because neither shape can
+travel in a descriptor.
+
+The family is not a set of refusals only: `literals-lexemes` also carries
+`LEXEME_OCTAL = 010` and `reserved 050 to 060`, the non-default consumers of
+the same token rule, and the runtime checker reads the enumerator as 8.
+
+The lite profile skips the source halves of every row above; the descriptor
+halves still run.
+
 ## Rebuilding the fixtures
 
 ```sh
@@ -135,8 +187,10 @@ The crafted fixtures come from `.txtpb` with
 `--encode=google.protobuf.FileDescriptorSet`. A `.txtpb` wins over the
 `.proto` of the same stem, because the raw spelling is the point. The
 source-only fixtures (`bom`, `bom-control`, `empty-syntax`,
-`json-name-map-collision`, `plus-int-default`, `plus-enum-value`,
-`plus-float-default`, `plus-inf-nan`) are skipped: protoc refuses most of them,
+`json-name-map-collision`, `literals-aggregate-nul`, `literals-nested-comment`,
+`literals-octal-08`, `literals-octal-09`, `literals-octal-enum`,
+`plus-int-default`, `plus-enum-value`, `plus-float-default`, `plus-inf-nan`)
+are skipped: protoc refuses most of them,
 and a generated `.pbs` would add an unintended twin.
 
 **One byte is not protoc's text format.** `field-type-unknown` declares

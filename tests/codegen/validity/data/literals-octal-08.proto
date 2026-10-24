@@ -1,0 +1,9 @@
+syntax = "proto2";
+package lit;
+
+// CR-18: a float default written `08`. protoc reports `Numbers starting
+// with leading zero must be in octal.`; the tokenizer must refuse the
+// literal before any canonicalizer can turn it into 8.
+message Octal08 {
+  optional float f = 1 [default = 08];
+}

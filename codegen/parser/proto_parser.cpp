@@ -153,11 +153,21 @@ int hex_value(char c)
     return c - 'A' + 10;
 }
 
-void append_utf8(std::string& output, unsigned long codepoint,
-                 const SourceLocation& location)
+void append_utf8(std::string& output, unsigned long codepoint)
 {
-    if (codepoint > 0x10fffful || (codepoint >= 0xd800ul && codepoint <= 0xdffful)) {
-        throw ParseFailure(location, "invalid Unicode escape value");
+    // CR-13: mirrors AppendUTF8 (`io/tokenizer.cc:1049-1075`). A lone
+    // surrogate is not an error: protoc encodes it as the three bytes its
+    // numeric value spells (the string is bogus, but the author wrote it and
+    // the descriptor carries the same bytes). Above 0x10FFFF protoc appends
+    // the escape text back verbatim, because `ConsumeString` bounds `\U` to
+    // 0x01FFFFFF and `AppendUTF8` has no fourth alternative.
+    if (codepoint > 0x10fffful) {
+        static const char hex_digits[] = "0123456789abcdef";
+        output += "\\U";
+        for (int shift = 28; shift >= 0; shift -= 4) {
+            output.push_back(hex_digits[(codepoint >> shift) & 0xful]);
+        }
+        return;
     }
     if (codepoint <= 0x7ful) {
         output.push_back(static_cast<char>(codepoint));
@@ -226,6 +236,22 @@ public:
         if (ascii_digit(c) || (c == '.' && ascii_digit(peek(1)))) return number();
         if (c == '\'' || c == '"') return string_literal();
 
+        // CR-19: `std::strchr` finds its own terminator when `c` is NUL, so a
+        // raw NUL byte used to look like punctuation and the aggregate-option
+        // scanner swallowed it. Protoc reports every control byte here
+        // ("Invalid control characters encountered in text.",
+        // `io/tokenizer.cc:636-648`); the message hex-escapes it so no control
+        // byte reaches a diagnostic (P9). The unsigned cast keeps a high-bit
+        // byte (0x80..0xFF) on the "unexpected character" path below.
+        if (static_cast<unsigned char>(c) < 0x20u) {
+            std::ostringstream message;
+            message << "invalid control character 0x" << std::hex << std::setw(2)
+                    << std::setfill('0')
+                    << static_cast<unsigned>(static_cast<unsigned char>(c))
+                    << " in text";
+            throw ParseFailure(token.location, message.str());
+        }
+
         static const char* punctuation = "{}[]()<>=;,.+-:";
         if (std::strchr(punctuation, c) != 0) {
             token.kind = TOKEN_SYMBOL;
@@ -278,6 +304,24 @@ private:
         }
     }
 
+    // Consumes exactly one source byte. `advance()` folds a CRLF pair into
+    // one newline for the whitespace scanner; a string literal is the one
+    // place where protoc sees the bytes separately (`ConsumeString`), and it
+    // must refuse the LF of a CRLF pair (CR-29), so the pair cannot collapse
+    // there. A bare CR is content, not a line break, exactly as protoc counts
+    // it (`Tokenizer::NextChar` increments the line on '\n' only).
+    void advance_byte()
+    {
+        if (offset_ >= source_size_) return;
+        const char c = source_[offset_++];
+        if (c == '\n') {
+            ++line_;
+            column_ = 1;
+        } else {
+            ++column_;
+        }
+    }
+
     // %whitespace <- (Space / LineComment / BlockComment)*
     void skip_space_and_comments()
     {
@@ -296,8 +340,20 @@ private:
                 const SourceLocation start = location();
                 advance();
                 advance();
-                while (!(peek() == '*' && peek(1) == '/')) {
-                    if (peek() == '\0') throw ParseFailure(start, "unterminated block comment");
+                for (;;) {
+                    if (peek() == '\0') {
+                        throw ParseFailure(start, "unterminated block comment");
+                    }
+                    // CR-30: protoc refuses a nested opener rather than
+                    // scanning past it (`ConsumeBlockComment`,
+                    // `io/tokenizer.cc:540-550`); the first `*/` closes the
+                    // comment, so `/* /* */ */` leaves a stray `*/`.
+                    if (peek() == '/' && peek(1) == '*') {
+                        throw ParseFailure(location(),
+                                           "\"/*\" inside a block comment: "
+                                           "block comments cannot be nested");
+                    }
+                    if (peek() == '*' && peek(1) == '/') break;
                     advance();
                 }
                 advance();
@@ -323,6 +379,9 @@ private:
 
     // IntegerToken / FloatToken.  A leading sign is a parser token,
     // not part of the lexical token, so Constant and SignedInteger consume it.
+    // The three branches mirror `Tokenizer::ConsumeNumber`
+    // (`io/tokenizer.cc:440-495`): a leading zero makes the token octal (or
+    // hex), and an octal token has neither a fraction nor an exponent.
     Token number()
     {
         Token token;
@@ -336,8 +395,32 @@ private:
             const std::size_t digits = offset_;
             while (ascii_hex(peek())) advance();
             if (offset_ == digits) throw ParseFailure(token.location, "hex literal has no digits");
+            if (peek() == '.') {
+                throw ParseFailure(token.location, "hex and octal numbers must be integers");
+            }
             if (ascii_alpha(peek()) || ascii_digit(peek()) || peek() == '_') {
                 throw ParseFailure(token.location, "invalid suffix on hexadecimal integer literal");
+            }
+            token.kind = TOKEN_INTEGER;
+            token.text.assign(source_ + start, offset_ - start);
+            return token;
+        }
+
+        // CR-18: after a leading zero, protoc reads octal digits and refuses
+        // every digit it could not read, so `08` and `09` never become a
+        // decimal 8 or 9. `0x` is the hex branch above and stays valid.
+        if (peek() == '0' && ascii_digit(peek(1))) {
+            advance();
+            while (peek() >= '0' && peek() <= '7') advance();
+            if (ascii_digit(peek())) {
+                throw ParseFailure(token.location,
+                                   "numbers starting with a leading zero must be octal");
+            }
+            if (peek() == '.') {
+                throw ParseFailure(token.location, "hex and octal numbers must be integers");
+            }
+            if (ascii_alpha(peek()) || peek() == '_') {
+                throw ParseFailure(token.location, "invalid suffix on numeric literal");
             }
             token.kind = TOKEN_INTEGER;
             token.text.assign(source_ + start, offset_ - start);
@@ -376,30 +459,33 @@ private:
 
     // StringAtom plus Escape, HexEscape, OctalEscape, UnicodeEscape
     // and UnicodeLongEscape.  token.text contains decoded bytes, without quotes.
+    // The scan mirrors `Tokenizer::ConsumeString` + `ParseStringAppend`
+    // (`io/tokenizer.cc:378-430`, `1156-1235`): a raw CR is content (CR-29)
+    // and only a raw LF or NUL ends the literal with an error.
     Token string_literal()
     {
         Token token;
         token.kind = TOKEN_STRING;
         token.location = location();
         const char quote = peek();
-        advance();
+        advance_byte();
 
         while (peek() != quote) {
             if (peek() == '\0') throw ParseFailure(token.location, "unterminated string literal");
-            if (peek() == '\r' || peek() == '\n') {
+            if (peek() == '\n') {
                 throw ParseFailure(location(), "newline in string literal");
             }
             if (peek() != '\\') {
                 token.text.push_back(peek());
-                advance();
+                advance_byte();
                 continue;
             }
 
             const SourceLocation escape_location = location();
-            advance();
+            advance_byte();
             const char escaped = peek();
             if (escaped == '\0') throw ParseFailure(escape_location, "unterminated escape sequence");
-            advance();
+            advance_byte();
             switch (escaped) {
                 case 'a': token.text.push_back('\a'); break;
                 case 'b': token.text.push_back('\b'); break;
@@ -421,7 +507,7 @@ private:
                     unsigned count = 0;
                     while (count != 2 && ascii_hex(peek())) {
                         value = value * 16u + static_cast<unsigned>(hex_value(peek()));
-                        advance();
+                        advance_byte();
                         ++count;
                     }
                     token.text.push_back(static_cast<char>(value));
@@ -430,35 +516,69 @@ private:
                 case 'u':
                 case 'U': {
                     const unsigned digits = escaped == 'u' ? 4u : 8u;
+                    // `ConsumeString` bounds `\U` to `00[01]xxxxxx`, i.e. at
+                    // most 0x01FFFFFF; AppendUTF8 owns everything above
+                    // 0x10FFFF (see append_utf8).
+                    if (digits == 8u &&
+                        (peek() != '0' || peek(1) != '0' ||
+                         (peek(2) != '0' && peek(2) != '1'))) {
+                        throw ParseFailure(
+                            escape_location,
+                            "Unicode escape must be eight hex digits up to 10ffff");
+                    }
                     unsigned long value = 0;
                     for (unsigned i = 0; i < digits; ++i) {
                         if (!ascii_hex(peek())) {
                             throw ParseFailure(escape_location, "incomplete Unicode escape");
                         }
                         value = value * 16ul + static_cast<unsigned long>(hex_value(peek()));
-                        advance();
+                        advance_byte();
                     }
-                    append_utf8(token.text, value, escape_location);
+                    // CR-13: FetchUnicodePoint assembles a head + trail
+                    // UTF-16 pair; a trail that is not a valid second unit
+                    // leaves the head as a lone code point.
+                    if (value >= 0xd800ul && value < 0xdc00ul &&
+                        peek() == '\\' && peek(1) == 'u') {
+                        unsigned long trail = 0;
+                        bool complete = true;
+                        for (unsigned i = 0; i < 4; ++i) {
+                            if (!ascii_hex(peek(2 + i))) {
+                                complete = false;
+                                break;
+                            }
+                            trail = trail * 16ul +
+                                    static_cast<unsigned long>(hex_value(peek(2 + i)));
+                        }
+                        if (complete && trail >= 0xdc00ul && trail < 0xe000ul) {
+                            value = 0x10000ul +
+                                    ((value - 0xd800ul) << 10) +
+                                    (trail - 0xdc00ul);
+                            for (unsigned i = 0; i < 6; ++i) advance_byte();
+                        }
+                    }
+                    append_utf8(token.text, value);
                     break;
                 }
                 default:
                     if (escaped >= '0' && escaped <= '7') {
+                        // CR-12: protoc stores the low byte with no range
+                        // error (`ParseStringAppend`), so `\777` is 0xFF and
+                        // `\400` is 0x00.
                         unsigned value = static_cast<unsigned>(escaped - '0');
                         unsigned count = 1;
                         while (count != 3 && peek() >= '0' && peek() <= '7') {
                             value = value * 8u + static_cast<unsigned>(peek() - '0');
-                            advance();
+                            advance_byte();
                             ++count;
                         }
-                        if (value > 255u) throw ParseFailure(escape_location, "octal escape exceeds one byte");
-                        token.text.push_back(static_cast<char>(value));
+                        token.text.push_back(static_cast<char>(value & 0xffu));
                     } else {
                         throw ParseFailure(escape_location, "unknown escape sequence");
                     }
                     break;
             }
         }
-        advance();
+        advance_byte();
         return token;
     }
 };

@@ -114,11 +114,12 @@ GroupName             <- < [A-Z] [A-Za-z0-9_]* >
 FieldNumber           <- IntegerLiteral
 
 IntegerLiteral        <- HexInteger / OctalInteger / DecimalInteger
-DecimalInteger        <- < "0" ![0-9xX] / [1-9] [0-9]* >
-OctalInteger          <- < "0" [0-7]+ >
-HexInteger            <- < "0" [xX] HexDigit+ >
-FloatLiteral          <- < (([0-9]+ "." [0-9]*) / ("." [0-9]+)) Exponent? /
-                           [0-9]+ Exponent >
+DecimalInteger        <- < "0" / [1-9] [0-9]* > ![0-9A-Za-z_.]
+OctalInteger          <- < "0" [0-7]+ > ![0-9A-Za-z_.]
+HexInteger            <- < "0" [xX] HexDigit+ > ![A-Za-z0-9_.]
+FloatLiteral          <- < DecimalDigits ("." [0-9]* Exponent? / Exponent) /
+                           "." [0-9]+ Exponent? >
+DecimalDigits         <- "0" / [1-9] [0-9]*
 Exponent              <- [eE] Sign? [0-9]+
 Sign                  <- [+-]
 HexDigit              <- [0-9A-Fa-f]
@@ -127,16 +128,16 @@ StringLiteral         <- StringAtom+
 StringAtom            <- SingleQuoted / DoubleQuoted
 SingleQuoted          <- < "'" SingleChar* "'" >
 DoubleQuoted          <- < '"' DoubleChar* '"' >
-SingleChar            <- Escape / [^'\\\r\n\x00]
-DoubleChar            <- Escape / [^"\\\r\n\x00]
+SingleChar            <- Escape / [^'\\\n\x00]
+DoubleChar            <- Escape / [^"\\\n\x00]
 Escape                <- CharEscape / HexEscape / OctalEscape /
                          UnicodeEscape / UnicodeLongEscape
 CharEscape            <- "\\" [abfnrtv\\'"?]
 HexEscape             <- "\\" [xX] HexDigit HexDigit?
 OctalEscape           <- "\\" [0-7] [0-7]? [0-7]?
 UnicodeEscape         <- "\\u" HexDigit HexDigit HexDigit HexDigit
-UnicodeLongEscape     <- "\\U" HexDigit HexDigit HexDigit HexDigit
-                               HexDigit HexDigit HexDigit HexDigit
+UnicodeLongEscape     <- "\\U" "00" [01] HexDigit HexDigit
+                               HexDigit HexDigit HexDigit
 
 EmptyStatement        <- ";"
 
@@ -186,4 +187,4 @@ K_BYTES               <- < "bytes" ![A-Za-z0-9_] >
 %whitespace           <- (Space / LineComment / BlockComment)*
 Space                 <- [ \t\r\n\x0b\x0c]
 LineComment           <- "//" [^\r\n]*
-BlockComment          <- "/*" (!"*/" .)* "*/"
+BlockComment          <- "/*" (!("*/" / "/*") .)* "*/"

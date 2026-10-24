@@ -136,7 +136,9 @@ set(paired_fixtures
     enum-alias-same-number
     json-names-distinct
     plus-controls
-    leading-space-control)
+    leading-space-control
+    literals-escapes
+    literals-lexemes)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -273,6 +275,153 @@ foreach(options "" "--no-has-fields")
     require_absent(keyword_desc_out "= nan("
         "CR-02 raw nan(payload) (${option_label})")
 endforeach()
+
+# --- CR-12/13/18/19/29/30: the lexer and literal family ----------------------
+#
+# Matrix: escape rule (hex, octal, \u, \U, surrogate pair, lone surrogate,
+# above 0x10FFFF, raw CR) x literal kind (string, bytes) x input path (source,
+# .pbs), plus the lexeme table (0x10, 010, 077, 08, 09) and the two structural
+# refusals (nested block comment, NUL in an aggregate option).
+#
+# `literals-escapes` and `literals-lexemes` are paired fixtures: the `.pbs` is
+# protoc 30.1's own `--descriptor_set_out` of the source beside it, and the
+# paired loop above compares the two headers byte for byte. The assertions
+# below name the decoded value, so a header that compiles but carries the wrong
+# bytes fails here as well.
+foreach(source literals-escapes literals-lexemes)
+    run_ok(lit_desc_out lit_desc_err
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${source}.pbs")
+    require_empty(lit_desc_err "The ${source} descriptor stderr")
+    if(FULL_BUILD)
+        run_ok(lit_src_out lit_src_err
+            ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${source}.proto")
+        require_empty(lit_src_err "The ${source} source stderr")
+        require_identical_headers(lit_desc_out lit_src_out
+            "The source and descriptor paths disagree for ${source}")
+    endif()
+endforeach()
+
+# The escape table: one row per rule, on a string field and (where the value is
+# a byte sequence) on a bytes field. Bracket arguments keep the backslashes
+# literal; each expected fragment is the exact C++ the emitter writes.
+run_ok(escape_out escape_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/literals-escapes.pbs")
+require_empty(escape_err "The literals-escapes stderr")
+require_contains(escape_out [[::std::string s_hex = "A";]]
+    "CR-12 hex escape")
+require_contains(escape_out [[::std::string s_hex_upper = "A";]]
+    "CR-12 uppercase hex escape")
+require_contains(escape_out [[::std::string s_hex_one = "\t";]]
+    "CR-12 one-digit hex escape")
+require_contains(escape_out [[::std::string s_octal = "A";]]
+    "CR-12 octal escape")
+require_contains(escape_out [[::std::string s_octal_max = "\377";]]
+    "CR-12 octal escape above 0xFF truncates to 0xFF")
+require_contains(escape_out [[::std::string s_octal_nul{"a\000b", 3};]]
+    "CR-12 octal escape above 0xFF truncates to a NUL byte")
+require_contains(escape_out [[::std::string s_octal_one{"\000", 1};]]
+    "CR-12 one-digit octal escape")
+require_contains(escape_out [[::std::string s_u1 = "A";]]
+    "CR-13 two-digit Unicode escape")
+require_contains(escape_out [[::std::string s_u2 = "\303\251";]]
+    "CR-13 two-byte Unicode escape")
+require_contains(escape_out [[::std::string s_u3 = "\342\202\254";]]
+    "CR-13 three-byte Unicode escape")
+require_contains(escape_out [[::std::string s_u4 = "\360\237\230\200";]]
+    "CR-13 long Unicode escape")
+require_contains(escape_out [[::std::string s_pair = "\360\237\230\200";]]
+    "CR-13 UTF-16 surrogate pair assembles into one code point")
+require_contains(escape_out [[::std::string s_lone_head = "\355\240\200";]]
+    "CR-13 lone head surrogate is three bytes")
+require_contains(escape_out [[::std::string s_lone_tail = "\355\260\200";]]
+    "CR-13 lone trail surrogate is three bytes")
+require_contains(escape_out [[::std::string s_over_max = "\\U00110000";]]
+    "CR-13 a code point above 0x10FFFF is written back as escape text")
+require_contains(escape_out [[::std::string s_head_ascii = "\355\240\200A";]]
+    "CR-13 a head surrogate without a trail stays a lone code point")
+require_contains(escape_out [[::std::string s_raw_cr = "x\ry";]]
+    "CR-29 a raw CR is string content")
+require_contains(escape_out [[::std::string b_octal_max = "\377";]]
+    "CR-12 the bytes kind keeps the same low byte")
+require_contains(escape_out [[::std::string b_octal_nul{"\000", 1};]]
+    "CR-12 the bytes kind keeps the NUL")
+require_contains(escape_out [[::std::string b_pair = "\360\237\230\200";]]
+    "CR-13 the bytes kind keeps the assembled pair")
+require_contains(escape_out [[::std::string b_lone_head = "\355\240\200";]]
+    "CR-13 the bytes kind keeps the lone surrogate")
+require_contains(escape_out [[::std::string b_over_max = "\\U00110000";]]
+    "CR-13 the bytes kind stores the C-escaped escape text")
+require_contains(escape_out [[::std::string b_raw_cr = "x\ry";]]
+    "CR-29 the bytes kind keeps the raw CR")
+
+# The lexeme table: `0x` is hex, a leading zero is octal, a zero followed by a
+# fraction or exponent is decimal.
+run_ok(lexeme_out lexeme_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/literals-lexemes.pbs")
+require_empty(lexeme_err "The literals-lexemes stderr")
+require_contains(lexeme_out "::int32_t i_hex = 16;" "CR-18 hex lexeme 0x10")
+require_contains(lexeme_out "::int32_t i_octal = 8;" "CR-18 octal lexeme 010")
+require_contains(lexeme_out "::int32_t i_octal_63 = 63;" "CR-18 octal lexeme 077")
+require_contains(lexeme_out "::int32_t i_octal_zero = 0;" "CR-18 octal lexeme 00")
+require_contains(lexeme_out "::int32_t i_zero = 0;" "CR-18 decimal lexeme 0")
+require_contains(lexeme_out "float f_octal = 8;" "CR-18 octal lexeme on float")
+require_contains(lexeme_out "double d_hex = 16;" "CR-18 hex lexeme on double")
+require_contains(lexeme_out "double d_fraction = 0.5;" "CR-18 decimal fraction")
+require_contains(lexeme_out "double d_exp = 0;" "CR-18 decimal exponent")
+require_contains(lexeme_out "::uint64_t u_hex_max = 18446744073709551615ULL;"
+    "CR-18 hex uint64 maximum")
+# The non-default consumers of the same token rule: an octal enum value and an
+# octal reserved-range endpoint stay valid, so the lexer rule is not a blanket
+# refusal.
+require_contains(lexeme_out "LEXEME_OCTAL = 8"
+    "CR-18 octal enum value")
+
+# The descriptor path has no tokenizer: what protoc's own descriptor validator
+# accepts there stays accepted (a float or double spelling `08`, `09` or
+# `010.5`), and an integral spelling it refuses stays refused. The crafted sets
+# are `.txtpb` encoded by `make_descriptors.py` because protoc cannot write a
+# descriptor from a source it refuses.
+run_ok(desc_octal_out desc_octal_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/literals-descriptor-octal.pbs")
+require_empty(desc_octal_err "The descriptor-octal stderr")
+require_contains(desc_octal_out "float f08 = 8;" "CR-18 descriptor float 08")
+require_contains(desc_octal_out "float f09 = 9;" "CR-18 descriptor float 09")
+require_contains(desc_octal_out "double d010 = 10.5;"
+    "CR-18 descriptor double 010.5")
+require_contains(desc_octal_out "::int32_t i010 = 8;"
+    "CR-18 descriptor int32 010 is octal")
+run_fail(desc_octal_int_out desc_octal_int_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/literals-descriptor-octal-int.pbs")
+require_empty(desc_octal_int_out "The descriptor-octal-int stdout")
+require_contains(desc_octal_int_err "does not fit"
+    "CR-18 descriptor int32 08 is refused")
+
+if(FULL_BUILD)
+    # CR-18 on the source path: the tokenizer refuses the literal for every
+    # consumer, so the float default, the ordinary option value and the enum
+    # value all fail at the token, not at a later range check.
+    foreach(name literals-octal-08 literals-octal-09 literals-octal-enum)
+        run_fail(octal_out octal_err
+            ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
+        require_empty(octal_out "The ${name} stdout")
+        require_contains(octal_err "leading zero must be octal"
+            "The ${name} refusal")
+    endforeach()
+
+    # CR-30: block comments do not nest.
+    run_fail(nested_out nested_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/literals-nested-comment.proto")
+    require_empty(nested_out "The nested-comment stdout")
+    require_contains(nested_err "cannot be nested" "The nested-comment refusal")
+
+    # CR-19: a raw NUL is a lexical error, and the diagnostic escapes it.
+    run_fail(aggregate_out aggregate_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/literals-aggregate-nul.proto")
+    require_empty(aggregate_out "The aggregate-NUL stdout")
+    require_contains(aggregate_err "control character"
+        "The aggregate-NUL refusal")
+    require_contains(aggregate_err "0x00" "The escaped NUL in the diagnostic")
+endif()
 
 # Descriptor-only accepted shapes: the absent/empty syntax of a descriptor is
 # proto2 (W-15), and a negative descriptor default keeps the accepted control
