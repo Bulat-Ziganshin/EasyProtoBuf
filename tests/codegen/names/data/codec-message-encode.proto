@@ -1,0 +1,17 @@
+//
+// CR-04: a top-level message named after the generated encoder.
+//
+// The header declares the struct and a free `void encode(::easypb::Encoder&,
+// const ::encode&)` in the same namespace. The decoder's signature comes
+// later and spells the type without an elaborated-type-specifier, at which
+// point the function name hides the class and the header does not compile.
+// Only `--no-encoder` removes the function.
+
+syntax = "proto3";
+
+package codecmessageencode;
+
+message encode
+{
+    int32 a = 1;
+}

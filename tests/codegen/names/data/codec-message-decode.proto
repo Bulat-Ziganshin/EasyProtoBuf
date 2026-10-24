@@ -1,0 +1,18 @@
+//
+// CR-04: a top-level message named after the generated decoder.
+//
+// This header happens to compile today, because the decoder's own parameter
+// is parsed before the function name is in scope and the encoder names the
+// type unqualified only before the hiding declaration appears. The type is
+// still unusable from the including translation unit - the function name
+// hides the class name - so the file-scope rule reserves `decode` for the
+// same reason it reserves `encode`. `--no-decoder` is the escape hatch.
+
+syntax = "proto3";
+
+package codecmessagedecode;
+
+message decode
+{
+    int32 a = 1;
+}

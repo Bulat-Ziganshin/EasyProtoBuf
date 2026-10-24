@@ -1,0 +1,11 @@
+# CR-10: a message whose descriptor name is not a C++ identifier.
+#
+# The struct name goes through the same escape door as every other
+# declaration name, so a message named `0M` is refused rather than emitted as
+# `struct 0M`.
+file {
+  name: "digit-message.proto"
+  syntax: "proto2"
+  package: "digitmessage"
+  message_type { name: "0M" }
+}

@@ -1,0 +1,21 @@
+//
+// CR-09 control: the same two names inside a package are legal.
+//
+// A package puts the declarations in `namespace namespacepackaged`, and every
+// runtime reference in the header is absolute (`::easypb::Encoder`,
+// `::std::string`), so neither name shadows anything. This header must be
+// accepted and must compile, whatever the generation options are.
+
+syntax = "proto3";
+
+package namespacepackaged;
+
+message easypb
+{
+    int32 a = 1;
+}
+
+message std
+{
+    int32 b = 1;
+}

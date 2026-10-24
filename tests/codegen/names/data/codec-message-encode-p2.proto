@@ -1,0 +1,12 @@
+//
+// CR-04 in proto2: the message named after the encoder. The syntax changes
+// the member list (a presence flag is added), not the file-scope rule.
+
+syntax = "proto2";
+
+package codecmessageencodep2;
+
+message encode
+{
+    optional int32 a = 1;
+}

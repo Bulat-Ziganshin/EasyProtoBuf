@@ -1,0 +1,18 @@
+//
+// CR-03 in proto2: the field-versus-enumerator collision. The presence flag
+// `has_class_` is a third distinct name, so it is not the colliding pair
+// here; the two `class_` declarations are.
+
+syntax = "proto2";
+
+package enumfieldp2;
+
+message M
+{
+    enum E
+    {
+        class = 0;
+    }
+
+    optional int32 class_ = 1;
+}

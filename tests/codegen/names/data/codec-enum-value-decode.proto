@@ -1,0 +1,18 @@
+//
+// CR-04: a top-level enumerator named after the generated decoder. The
+// symmetric half of `codec-enum-value-encode`; `--no-decoder` removes the
+// function and the header compiles.
+
+syntax = "proto3";
+
+package codecenumvaluedecode;
+
+enum E
+{
+    decode = 0;
+}
+
+message M
+{
+    int32 a = 1;
+}

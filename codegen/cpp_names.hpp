@@ -14,12 +14,16 @@ std::string cpp_absolute_name(const str_view& absolute_proto_name);
 
 // The C++ name a Protobuf declaration name maps to. A name that is a C++
 // keyword - or one of the two macro names the reference compiler escapes as
-// well - gets an underscore appended; every other name is returned unchanged.
+// well - gets an underscore appended; a name that is not a C++ identifier at
+// all is refused, because no suffix can repair it (a field named "0Zc" cannot
+// become a C++ member); every other name is returned unchanged.
 std::string cpp_identifier(const std::string& name);
 
 // Convert an absolute Protobuf name to the spelling used inside the current
 // package namespace. Only an exact package-component prefix is stripped;
-// names from other packages remain absolute C++ references.
+// names from other packages remain absolute C++ references. Every component
+// goes through cpp_identifier, so the same-package spelling and the absolute
+// spelling of one declaration agree (CR-43).
 std::string cpp_local_name(const std::string& absolute_proto_name,
                            const std::string& package);
 

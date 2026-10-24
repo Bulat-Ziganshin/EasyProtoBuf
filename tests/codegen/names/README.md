@@ -2,12 +2,16 @@
 
 One lane for the two rows of the plan-5 follow-up's session S2: `W-08` (a
 C++ keyword in a declaration name) and `W-09` (a presence flag that collides
-with a member of the same message), and for the post-closure review of
-2026-10-22 that found both rules incomplete: a nested type collides with a
-presence flag as well (`PC-01`), and the escape rule is not injective, so two
-Protobuf names can be one C++ name (`PC-02`). Every row is a counter-example
-against `protoc` 30.1, and the lane proves the fix in the three ways the
-session's brief names.
+with a member of the same message), for the post-closure review of
+2026-10-22 that found both rules incomplete (`PC-01`: a nested type collides
+with a presence flag as well; `PC-02`: the escape rule is not injective), and
+for step B6 of the verification stage, which turned the rule into an
+**occupant enumeration** (`CR-03` enumerators, `CR-04` codec names, `CR-09`
+runtime namespaces, `CR-10` non-identifier names, `CR-43` the local-name
+helper; `CR-44` stays accepted).
+
+Every row is a counter-example against `protoc` 30.1, and the lane proves the
+fix in the three ways the session's brief names.
 
 ## The three things every row needs
 
@@ -32,7 +36,36 @@ session's brief names.
    wrong data.
 
 The lane also drives the **refusal** through the CLI: a non-zero exit, an
-empty stdout, and a diagnostic that names the collision.
+empty stdout, and one diagnostic that names both occupants of the colliding
+C++ name.
+
+## The scope-occupant family
+
+`family_cases.cmake` is the family as data, shared by the build and the
+driver. It crosses the occupant kinds of a C++ scope — field, presence flag,
+nested type, enumerator, generated codec, runtime namespace — with the
+collision pairs that can exist between them, both syntaxes and the three
+options that remove an occupant (`--no-has-fields`, `--no-encoder`,
+`--no-decoder`).
+
+- An **accepted** case must exit 0, leave stderr empty, emit a header, and
+  produce the same bytes from the `.proto` and the `.pbs`. The build
+  generates that exact header with the case's options and compiles it into
+  `names_runtime.cpp`, so every accepted header in the family is compiled.
+- A **refused** case must exit non-zero, leave stdout empty, and carry both
+  occupants in its one diagnostic, on both input paths where source text
+  exists.
+
+The option matrix is the gating proof: an occupant an option removes must
+stop occupying the name (for example `M::E::has_foo` without the flag of
+`foo` under `--no-has-fields`), and an occupant no option removes must refuse
+under every option set. The keyword-package refusal (`E5`) is deliberately
+not in the family: it is an escape-rule divergence, not a scope collision.
+
+`codegen.names.insertion_stem_collision` is the accepted `CR-44` xfail. It
+asserts that `A_B` and `A::B` still share the four `EASYPB_A_B_*` macros, so
+it fails when the insertion format becomes injective; the failure message
+says which decision to re-evaluate.
 
 ## The fixtures
 
@@ -50,15 +83,30 @@ empty stdout, and a diagnostic that names the collision.
 | the messages `class` and `class_` | `data/escape-message.proto` / `.pbs` | `PC-02` |
 | the enum values `class` and `class_` | `data/escape-enum-value.proto` / `.pbs` | `PC-02` |
 | the enum `class` next to the message `class_` | `data/escape-enum-message.proto` / `.pbs` | `PC-02` |
+| an enumerator against a presence flag (proto3, proto2) | `data/enum-flag-p3.proto`, `enum-flag-p2.proto` / `.pbs` | `CR-03` |
+| an enumerator against a field (proto3, proto2) | `data/enum-field-p3.proto`, `enum-field-p2.proto` / `.pbs` | `CR-03` |
+| two enumerators of two nested enums (proto3, proto2) | `data/enum-enum-p3.proto`, `enum-enum-p2.proto` / `.pbs` | `CR-03` |
+| an enumerator against a nested type | `data/nested-enum-p3.proto` / `.pbs` | `CR-03` |
+| a top-level message named `encode` (proto3, proto2) | `data/codec-message-encode.proto`, `codec-message-encode-p2.proto` / `.pbs` | `CR-04` |
+| a top-level message named `decode` | `data/codec-message-decode.proto` / `.pbs` | `CR-04` |
+| a top-level enumerator named `encode` / `decode` | `data/codec-enum-value-encode.proto`, `codec-enum-value-decode.proto` / `.pbs` | `CR-04` |
+| top-level types named `easypb` / `std`, and an enum named `easypb` | `data/namespace-easypb.proto`, `namespace-std.proto`, `namespace-enum-easypb.proto` / `.pbs` | `CR-09` |
+| the same two names inside a package (accepted control) | `data/namespace-packaged.proto` / `.pbs` | `CR-09` |
+| a descriptor-origin field / enumerator / message / enum name that starts with a digit | `data/digit-{field,value,message,enum}.txtpb` / `.pbs` | `CR-10` |
+| `A_B` next to `A::B` (accepted) | `data/insertion-stem-collision.proto` / `.pbs` | `CR-44` |
 
 Every fixture exists twice: as `.proto` source text and as the `.pbs`
-descriptor of the same schema. ONE descriptor is crafted rather than
-compiled: `escape-enum-value` declares the two enumerators `class` and
-`class_`, and the reference compiler refuses that schema outright ("Enum
-name class_ has the same name as class if you ignore case and strip out the
-enum name prefix"), so protoc cannot produce it — its `.pbs` is encoded from
-`data/escape-enum-value.txtpb` with `protoc --encode`. Every other `.pbs` is
-protoc's own encoding of the `.proto` beside it.
+descriptor of the same schema. FIVE descriptors are crafted, because no
+`.proto` text can produce them. The four `digit-*` fixtures declare a
+descriptor-origin name that is not a C++ identifier; the source lexer cannot
+spell a digit-first name, so protoc cannot compile a `.proto` into that
+descriptor, although it accepts such a set. `escape-enum-value` declares the
+two enumerators `class` and `class_`, and the reference compiler refuses that
+schema outright ("Enum name class_ has the same name as class if you ignore
+case and strip out the enum name prefix"), so protoc cannot produce it either.
+Those five `.pbs` files are encoded from the `.txtpb` beside each one with
+`protoc --encode`. Every other `.pbs` is protoc's own encoding of the
+`.proto` beside it.
 
 ## Rebuilding the fixtures
 
@@ -67,15 +115,16 @@ python tests/codegen/names/data/make_descriptors.py [--protoc PATH]
 ```
 
 The script needs `protoc` (30.1 is the oracle this project measures against)
-and writes the `.pbs` files with `--descriptor_set_out`.
-
-Running the lane never needs `protoc`: the `.pbs` files are committed.
+and writes the `.pbs` files with `--descriptor_set_out`, or with `--encode`
+for the five crafted ones. Running the lane never needs `protoc`: the `.pbs`
+files are committed.
 
 ## The lanes it joins
 
 | Test | Where |
 | --- | --- |
 | `codegen.names` | this lane: generate, run, refuse; the build compiles the headers |
+| `codegen.names.insertion_stem_collision` | the accepted `CR-44` xfail |
 | `codegen.packages.naming` | the unit rows of the name rules themselves |
 | `codegen.imports.runtime` | the source path's header against the descriptor path's |
 

@@ -96,6 +96,23 @@ std::string join_cpp(const std::vector<std::string>& components)
     return result;
 }
 
+// Every component of a dotted Protobuf name, in the one C++ spelling the
+// emitter declares and references. Shared by both halves of cpp_local_name,
+// so a name from the current package is escaped exactly like an absolute one
+// (CR-43: the same-package branch used to return raw components and could
+// hand back `class` where the emitter declares `class_`).
+std::vector<std::string> cpp_name_components(const std::string& path)
+{
+    const std::vector<std::string> components =
+        split_components(path, '.', "Protobuf type name");
+    std::vector<std::string> result;
+    result.reserve(components.size());
+    for (std::size_t i = 0; i < components.size(); ++i) {
+        result.push_back(cpp_identifier(components[i]));
+    }
+    return result;
+}
+
 bool has_reserved_identifier_form(const std::string& component,
                                   bool global_component)
 {
@@ -122,8 +139,28 @@ bool has_reserved_identifier_form(const std::string& component,
 // names that would collide with a known method. Every other name is
 // returned unchanged, so a header that carries no reserved name keeps the
 // bytes it had.
+//
+// The suffix is the whole escape vocabulary, and it cannot repair a name
+// that is not an identifier at all: `0Zc` stays a digit-first token
+// whatever is appended. The reference compiler's ValidateSymbolName
+// (descriptor.cc:5419-5438) has no first-character rule, so a descriptor set
+// may carry such a name and protoc accepts it - and emits C++ that does not
+// compile (`::int32_t 0zc_;`, measured against 30.1). This door refuses the
+// name instead (CR-10): a generated header never carries a token C++ cannot
+// read. The rule lives here, in the one function every declaration name goes
+// through, so no caller can forget it.
 std::string cpp_identifier(const std::string& name)
 {
+    if (name.empty() || !is_identifier_start(name[0])) {
+        throw std::runtime_error(
+            "Protobuf name '" + name + "' is not a valid C++ identifier");
+    }
+    for (std::size_t i = 1; i < name.size(); ++i) {
+        if (!is_identifier_continue(name[i])) {
+            throw std::runtime_error(
+                "Protobuf name '" + name + "' is not a valid C++ identifier");
+        }
+    }
     if (cpp_reserved_names().count(name) == 0) return name;
     return name + "_";
 }
@@ -144,14 +181,14 @@ std::string cpp_absolute_name(const str_view& absolute_proto_name)
     // component instead (validate_cpp_package), so in practice only the type
     // components are ever affected.
     const std::string path = view_text(absolute_proto_name);
-    const std::vector<std::string> components = split_components(
-        path.substr(1), '.', "Protobuf type name");
+    const std::vector<std::string> components =
+        cpp_name_components(path.substr(1));
 
     std::string result;
     result.reserve(path.size() + 8);
     for (std::size_t i = 0; i < components.size(); ++i) {
         result += "::";
-        result += cpp_identifier(components[i]);
+        result += components[i];
     }
     return result;
 }
@@ -165,14 +202,13 @@ std::string cpp_local_name(const std::string& absolute_proto_name,
     }
 
     if (package.empty()) {
-        return join_cpp(split_components(
-            absolute_proto_name.substr(1), '.', "Protobuf type name"));
+        return join_cpp(cpp_name_components(absolute_proto_name.substr(1)));
     }
 
     const std::string prefix = "." + package + ".";
     if (absolute_proto_name.compare(0, prefix.size(), prefix) == 0) {
-        return join_cpp(split_components(
-            absolute_proto_name.substr(prefix.size()), '.', "Protobuf type name"));
+        return join_cpp(
+            cpp_name_components(absolute_proto_name.substr(prefix.size())));
     }
 
     return cpp_absolute_name(absolute_proto_name);

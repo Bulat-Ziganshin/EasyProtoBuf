@@ -1,0 +1,17 @@
+# CR-10: an enumerator whose descriptor name is not a C++ identifier.
+#
+# The value `0Xb` is accepted by protoc and emitted verbatim into its own
+# header (`0Xb = 0`, measured against 30.1); this generator refuses it before
+# writing anything.
+file {
+  name: "digit-value.proto"
+  syntax: "proto2"
+  package: "digitvalue"
+  message_type {
+    name: "M"
+    enum_type {
+      name: "E"
+      value { name: "0Xb" number: 0 }
+    }
+  }
+}

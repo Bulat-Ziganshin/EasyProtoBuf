@@ -1,0 +1,24 @@
+//
+// CR-03: two enumerators of two different nested enums of one message.
+//
+// Both enums are unscoped, so all their enumerators are members of `M`; the
+// escape rule turns the value `class` of `A` and the value `class_` of `B`
+// into one C++ name. The Protobuf names differ, so the reference compiler
+// accepts the schema.
+
+syntax = "proto3";
+
+package enumenump3;
+
+message M
+{
+    enum A
+    {
+        class = 0;
+    }
+
+    enum B
+    {
+        class_ = 0;
+    }
+}

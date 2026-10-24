@@ -1,0 +1,16 @@
+# CR-10: a field whose descriptor name is not a C++ identifier.
+#
+# `0Zc` is a legal Protobuf symbol name - protoc's ValidateSymbolName has no
+# first-character rule - but it is not a C++ identifier, and the escape rule
+# (append one underscore) cannot repair a leading digit. The source lexer
+# cannot spell the name, so only a descriptor set can carry it and the fixture
+# is crafted from this text instead of compiled from a .proto.
+file {
+  name: "digit-field.proto"
+  syntax: "proto2"
+  package: "digitfield"
+  message_type {
+    name: "M"
+    field { name: "0Zc" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}

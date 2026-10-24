@@ -4,6 +4,12 @@
 #   CODEGEN the standalone codegen executable
 #   INPUT  the .pbs descriptor set
 #   OUTPUT the header to write
+#
+# Optional:
+#   OPTIONS the generation options as one space-separated string (for example
+#           `--no-has-fields`). The build draws them from family_cases.cmake,
+#           so a compiled variant header is the same header the names driver
+#           generates for that accepted case.
 
 foreach(required_var CODEGEN INPUT OUTPUT)
     if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
@@ -11,11 +17,16 @@ foreach(required_var CODEGEN INPUT OUTPUT)
     endif()
 endforeach()
 
+set(extra_options)
+if(DEFINED OPTIONS AND NOT "${OPTIONS}" STREQUAL "")
+    separate_arguments(extra_options UNIX_COMMAND "${OPTIONS}")
+endif()
+
 get_filename_component(output_dir "${OUTPUT}" DIRECTORY)
 file(MAKE_DIRECTORY "${output_dir}")
 
 execute_process(
-    COMMAND "${CODEGEN}" --descriptor-set "${INPUT}"
+    COMMAND "${CODEGEN}" --descriptor-set ${extra_options} "${INPUT}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE generated
     ERROR_VARIABLE error)

@@ -1,0 +1,15 @@
+//
+// CR-09: a top-level message named after the C++ standard library namespace.
+//
+// The generated header includes <cstdint>, <limits>, <string>, <vector> and
+// <map>, so a global `struct std` breaks the header whatever the generation
+// options are. The reference compiler breaks on this schema too (its header
+// declares a global `class std`); this project refuses it with a diagnostic
+// instead of writing a header that cannot compile.
+
+syntax = "proto3";
+
+message std
+{
+    int32 a = 1;
+}

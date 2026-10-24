@@ -410,17 +410,22 @@ if(BUILD_TESTING)
     add_dependencies(codegen_validity_runtime_test
         codegen_validity_pedantic_check)
 
-    # Plan 5 follow-up S2 (W-08, W-09): the emitter's name layer. The lane
-    # generates every fixture through BOTH input paths, checks that every
-    # escaped name still carries the data the schema names, and drives the
-    # presence-flag collision through the CLI. The descriptor path builds the
-    # headers the runtime checker reads, because it is the one every build
-    # profile has; the driver compares the source path's header with the
-    # descriptor path's byte for byte. Compiling the descriptor-path header
-    # is the build's job (cl.exe started from a test script outside the
-    # Visual Studio environment cannot find its own standard library
-    # headers), and the equality check extends that compile to the source
-    # path.
+    # Plan 5 follow-up S2 (W-08, W-09) and verification step B6 (CR-03, CR-04,
+    # CR-09, CR-10, CR-43, CR-44): the emitter's name layer. The lane generates
+    # every fixture through BOTH input paths, checks that every escaped name
+    # still carries the data the schema names, and drives the scope-occupant
+    # family through the CLI. The descriptor path builds the headers the
+    # runtime checker reads, because it is the one every build profile has; the
+    # driver compares the source path's header with the descriptor path's byte
+    # for byte. Compiling the descriptor-path header is the build's job (cl.exe
+    # started from a test script outside the Visual Studio environment cannot
+    # find its own standard library headers), and the equality check extends
+    # that compile to the source path.
+    #
+    # The family is data in codegen/names/family_cases.cmake, shared with the
+    # driver: every accepted case below is generated here with the same fixture
+    # and options the driver runs, so the compile matrix and the test matrix
+    # cannot drift apart.
     set(codegen_names_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/names)
     set(codegen_names_data_dir ${codegen_names_dir}/data)
@@ -434,6 +439,8 @@ if(BUILD_TESTING)
         keyword-enum
         keyword-enum-value
         keyword-nested)
+
+    include(${codegen_names_dir}/family_cases.cmake)
 
     foreach(name ${codegen_names_fixtures})
         add_custom_command(
@@ -449,13 +456,44 @@ if(BUILD_TESTING)
                 ${codegen_names_dir}/generate_header.cmake
             VERBATIM)
     endforeach()
+
+    # One header per accepted family case, generated with the case's options.
+    # A fixture with several accepted variants would produce several headers;
+    # the list is one variant per fixture today, and each variant lives in its
+    # own package so the runtime checker can include all of them in one TU.
+    set(codegen_names_variant_headers)
+    foreach(entry ${codegen_names_accept_variants})
+        string(REPLACE "|" ";" parts "${entry}")
+        list(GET parts 0 family_fixture)
+        list(GET parts 1 family_tag)
+        list(GET parts 2 family_options)
+        set(family_header
+            ${codegen_names_descriptor_dir}/${family_fixture}.${family_tag}.pb.hpp)
+        add_custom_command(
+            OUTPUT ${family_header}
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_names_data_dir}/${family_fixture}.pbs
+                -DOUTPUT=${family_header}
+                "-DOPTIONS=${family_options}"
+                -P ${codegen_names_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_names_data_dir}/${family_fixture}.pbs
+                ${codegen_names_dir}/generate_header.cmake
+                ${codegen_names_dir}/family_cases.cmake
+            VERBATIM)
+        list(APPEND codegen_names_variant_headers ${family_header})
+    endforeach()
+
     add_custom_target(codegen_names_generated
         DEPENDS
             ${codegen_names_descriptor_dir}/keyword-field.pb.hpp
             ${codegen_names_descriptor_dir}/keyword-message.pb.hpp
             ${codegen_names_descriptor_dir}/keyword-enum.pb.hpp
             ${codegen_names_descriptor_dir}/keyword-enum-value.pb.hpp
-            ${codegen_names_descriptor_dir}/keyword-nested.pb.hpp)
+            ${codegen_names_descriptor_dir}/keyword-nested.pb.hpp
+            ${codegen_names_variant_headers})
 
     add_executable(codegen_names_runtime_test
         ${codegen_names_dir}/names_runtime.cpp)
@@ -469,8 +507,22 @@ if(BUILD_TESTING)
             -DDATA_DIR=${codegen_names_data_dir}
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-names
             -DRUNTIME=$<TARGET_FILE:codegen_names_runtime_test>
+            -DGENERATED_DIR=${codegen_names_descriptor_dir}
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_names_dir}/test_names.cmake)
+
+    # CR-44 is accepted, not fixed: `A_B` and `A::B` share the insertion-macro
+    # stem. This test asserts the current compatibility artifact, so it must
+    # FAIL when the stems become injective; the failure message names the
+    # decision that has to be re-evaluated. A separate ctest name because the
+    # accepted register cites it by name; `codegen.names` above stays the
+    # property gate.
+    add_test(NAME codegen.names.insertion_stem_collision
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_names_data_dir}
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_names_dir}/test_insertion_stem_collision.cmake)
 
     # Plan 5 follow-up S3 (W-01, W-30, W-32): the boundaries of untrusted
     # input. The lane drives the nesting limit through BOTH input paths (the

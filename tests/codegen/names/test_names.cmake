@@ -2,11 +2,13 @@
 #
 # One lane for the two rows of the plan-5 follow-up's session S2: W-08 (a
 # C++ keyword in a declaration name) and W-09 (a presence flag that collides
-# with a member of the same message), and for the post-closure review of
-# 2026-10-22 that found both rules incomplete: a nested type collides with a
-# presence flag as well (PC-01), and the escape rule is not injective, so two
-# Protobuf names can be one C++ name (PC-02). The three things every row
-# needs:
+# with a member of the same message), for the post-closure review of
+# 2026-10-22 that found both rules incomplete (PC-01: a nested type collides
+# with a presence flag as well; PC-02: the escape rule is not injective), and
+# for step B6 of the verification stage, which turned the scope rule into an
+# occupant enumeration (CR-03 enumerators, CR-04 codec names, CR-09 runtime
+# namespaces, CR-10 non-identifier names, CR-43 the local-name helper). The
+# three things every row needs:
 #
 #   1. BOTH input paths. The source path (.proto) and the descriptor path
 #      (.pbs) must produce the SAME header for the same schema. The two
@@ -26,13 +28,14 @@
 #      escaped member and reads the bytes back.
 #
 # Required arguments:
-#   CODEGEN     the standalone codegen executable
-#   DATA_DIR    the fixture directory
-#   WORK_DIR    the scratch directory
-#   RUNTIME     the built runtime checker
-#   FULL_BUILD  1 when the proto parser is available
+#   CODEGEN       the standalone codegen executable
+#   DATA_DIR      the fixture directory
+#   WORK_DIR      the scratch directory
+#   RUNTIME       the built runtime checker
+#   GENERATED_DIR the descriptor-path headers the build generated and compiled
+#   FULL_BUILD    1 when the proto parser is available
 
-foreach(required_var CODEGEN DATA_DIR WORK_DIR RUNTIME)
+foreach(required_var CODEGEN DATA_DIR WORK_DIR RUNTIME GENERATED_DIR)
     if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
         message(FATAL_ERROR "${required_var} is required")
     endif()
@@ -132,41 +135,105 @@ require_empty(runtime_err "The runtime checker's stderr")
 require_contains(runtime_out "every escaped name carries the data the schema names"
     "The runtime checker's verdict")
 
-# --- the refusals ------------------------------------------------------------
+# --- the scope-occupant family ----------------------------------------------
 #
-# A name collision in one C++ scope. A scope cannot hold two declarations
-# with one name, and the escape rule is not injective: `class` and `class_`
-# are two Protobuf names and one C++ name. The shapes are refused with a
-# diagnostic, in proto2 and in proto3, on both input paths.
+# CR-03, CR-04 and CR-09 are one rule: the C++ scope check has to enumerate the
+# occupants a generated scope will hold, not the instances the Protobuf names
+# happen to spell. The family (occupant kinds x collision pairs x syntax x
+# options) is data in family_cases.cmake, shared with the build so that every
+# accepted case is also compiled.
 #
-# Each entry is the fixture and the words its diagnostic must carry.
+# The driver proves three things per accepted case: the tool exits 0, the two
+# input paths emit the same bytes, and the header the build compiled exists.
+# Per refused case: the tool exits non-zero, stdout stays empty, and the one
+# diagnostic names both occupants.
+#
+# The keyword-package refusal (E5) is not part of this family: it is a
+# deliberate escape-rule divergence, not a scope collision.
 
-set(refusal_fixtures
-    "has-collision|collides with the presence flag"
-    "has-collision-p3|collides with the presence flag"
-    "nested-flag|collides with the presence flag"
-    "escape-field|would both be named"
-    "escape-message|would both be named"
-    "escape-enum-value|same name as"
-    "escape-enum-message|would both be named")
+include("${CMAKE_CURRENT_LIST_DIR}/family_cases.cmake")
 
-foreach(entry ${refusal_fixtures})
+foreach(entry ${codegen_names_accept_variants})
     string(REPLACE "|" ";" parts "${entry}")
+    list(LENGTH parts parts_len)
+    if(NOT parts_len EQUAL 3)
+        message(FATAL_ERROR "Malformed accepted family case: ${entry}")
+    endif()
     list(GET parts 0 name)
-    list(GET parts 1 expected)
+    list(GET parts 1 tag)
+    list(GET parts 2 options)
 
-    run_fail(collision_out collision_err
-        ${CODEGEN} --descriptor-set "${DATA_DIR}/${name}.pbs")
-    require_empty(collision_out "The collision refusal stdout for ${name}")
-    require_contains(collision_err "${expected}"
-        "The collision refusal for ${name}")
+    set(extra_options)
+    if(NOT "${options}" STREQUAL "-")
+        separate_arguments(extra_options UNIX_COMMAND "${options}")
+    endif()
 
-    if(FULL_BUILD)
-        run_fail(source_out source_err
-            ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
-        require_empty(source_out
-            "The collision refusal stdout for ${name} on the source path")
-        require_contains(source_err "${expected}"
-            "The collision refusal for ${name} on the source path")
+    # The build generates and compiles this header from the same fixture and
+    # options. A missing one means the two consumers of family_cases.cmake
+    # disagree.
+    set(compiled_header "${GENERATED_DIR}/${name}.${tag}.pb.hpp")
+    if(NOT EXISTS "${compiled_header}")
+        message(FATAL_ERROR
+            "The build did not generate the compiled family header ${compiled_header}")
+    endif()
+
+    run_ok(desc_out desc_err
+        ${CODEGEN} --descriptor-set ${extra_options} "${DATA_DIR}/${name}.pbs")
+    require_empty(desc_err
+        "The accepted scope case stderr for ${name} (${tag})")
+    if("${desc_out}" STREQUAL "")
+        message(FATAL_ERROR
+            "The accepted scope case ${name} (${tag}) emitted no header")
+    endif()
+
+    if(FULL_BUILD AND EXISTS "${DATA_DIR}/${name}.proto")
+        run_ok(src_out src_err
+            ${CODEGEN} -I "${DATA_DIR}" ${extra_options}
+            "${DATA_DIR}/${name}.proto")
+        require_empty(src_err
+            "The accepted scope case source stderr for ${name} (${tag})")
+        if(NOT "${src_out}" STREQUAL "${desc_out}")
+            message(FATAL_ERROR
+                "The two input paths disagree for the accepted scope case "
+                "${name} (${tag})")
+        endif()
+    endif()
+endforeach()
+
+foreach(entry ${codegen_names_refusal_cases})
+    string(REPLACE "|" ";" parts "${entry}")
+    list(LENGTH parts parts_len)
+    if(NOT parts_len EQUAL 3)
+        message(FATAL_ERROR "Malformed refused family case: ${entry}")
+    endif()
+    list(GET parts 0 name)
+    list(GET parts 1 options)
+    list(GET parts 2 needles)
+
+    set(extra_options)
+    if(NOT "${options}" STREQUAL "-")
+        separate_arguments(extra_options UNIX_COMMAND "${options}")
+    endif()
+
+    run_fail(desc_out desc_err
+        ${CODEGEN} --descriptor-set ${extra_options} "${DATA_DIR}/${name}.pbs")
+    require_empty(desc_out
+        "The scope refusal stdout for ${name} (${options})")
+    string(REPLACE ">" ";" needle_list "${needles}")
+    foreach(needle ${needle_list})
+        require_contains(desc_err "${needle}"
+            "The scope refusal for ${name} (${options})")
+    endforeach()
+
+    if(FULL_BUILD AND EXISTS "${DATA_DIR}/${name}.proto")
+        run_fail(src_out src_err
+            ${CODEGEN} -I "${DATA_DIR}" ${extra_options}
+            "${DATA_DIR}/${name}.proto")
+        require_empty(src_out
+            "The scope refusal stdout for ${name} (${options}) on the source path")
+        foreach(needle ${needle_list})
+            require_contains(src_err "${needle}"
+                "The scope refusal for ${name} (${options}) on the source path")
+        endforeach()
     endif()
 endforeach()

@@ -1332,18 +1332,23 @@ std::vector<MessageInfo*> dependency_safe_order(std::vector<MessageInfo>& messag
 
 // The members of one message's struct.
 //
-// The struct holds four kinds of declaration, and all four live in the same
-// C++ scope: the fields, the presence flags, the nested enums and the nested
-// messages. Two of them can ask for the same name even when the Protobuf
-// names are all different:
+// The struct holds five kinds of declaration, and all five live in the same
+// C++ scope: the fields, the presence flags, the nested enums, the
+// enumerators of those enums and the nested messages. (The free codec
+// functions spell the same names, but they live at file scope.) Two of them
+// can ask for the same name even when the Protobuf names are all different:
 //
 //   - the presence flag of a field is named after the field, so the field
 //     `foo` wants the flag `has_foo` and the field `has_foo` wants the
 //     member `has_foo`;
 //   - a nested type is a member of its parent, so the nested message
 //     `has_foo` wants the member `has_foo` as well;
+//   - an unscoped enum's enumerators are members of the enclosing struct,
+//     not of the enum: the value `has_foo` of a nested enum is a sibling of
+//     the field `foo` and of its presence flag (CR-03);
 //   - the escape rule is not injective, so the fields `class` and `class_`
-//     both want the member `class_`.
+//     both want the member `class_`, and so do the values `class` and
+//     `class_` of two different nested enums.
 //
 // The reference compiler accepts the first two shapes. In proto3 a scalar
 // field has no presence accessor, so nothing collides there; in proto2 it
@@ -1354,7 +1359,9 @@ std::vector<MessageInfo*> dependency_safe_order(std::vector<MessageInfo>& messag
 //
 // The check is gated on the generation options and not on the schema: the
 // flag exists only while the flags are enabled, so a run with
-// --no-has-fields accepts the shape.
+// --no-has-fields accepts the shape. The other kinds are always declared,
+// and the codecs spell them even under --no-class, so they are always
+// listed.
 std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
                                                 const GenerationContext& context)
 {
@@ -1385,6 +1392,18 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
                                                 view_text(enum_type.name));
         member.presence_flag = false;
         members.push_back(member);
+        // An unscoped enum's enumerators belong to the scope that declares
+        // the enum, not to the enum: `M::E::has_foo` and `M::has_foo` are
+        // the same declaration (CR-03).
+        for (const auto& value: enum_type.value) {
+            ScopeMember enumerator;
+            enumerator.cpp_name = easypb_codegen::cpp_identifier(
+                view_text(value.name));
+            enumerator.description = member_description(
+                "enum value", view_text(value.name));
+            enumerator.presence_flag = false;
+            members.push_back(enumerator);
+        }
     }
     for (std::size_t i = 0; i < info.children.size(); ++i) {
         ScopeMember member;
@@ -1400,10 +1419,18 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
 
 // The declarations of one file's scope.
 //
-// A file's scope holds the top-level messages and the top-level enums; a
-// nested declaration belongs to the scope of its own parent.
+// A file's scope holds the top-level messages, the top-level enums, the
+// enumerators of those enums, the two free codec overloads and - in an
+// un-packaged schema - the two runtime namespaces every header references.
+// A nested declaration belongs to the scope of its own parent.
+//
+// The codec functions are emitted only when their option is on (CR-04), and
+// the runtime namespaces are global names only when the package is empty
+// (CR-09). The check is run with the same options that drive the emitter, so
+// a name is refused exactly when the declaration that owns it is emitted.
 void check_file_scope_names(const FileDescriptorProto& file,
-                            const std::vector<MessageInfo>& roots)
+                            const std::vector<MessageInfo>& roots,
+                            const GenerationContext& context)
 {
     std::vector<ScopeMember> members;
     for (const auto& enum_type: file.enum_type) {
@@ -1414,6 +1441,15 @@ void check_file_scope_names(const FileDescriptorProto& file,
                                                 view_text(enum_type.name));
         member.presence_flag = false;
         members.push_back(member);
+        for (const auto& value: enum_type.value) {
+            ScopeMember enumerator;
+            enumerator.cpp_name = easypb_codegen::cpp_identifier(
+                view_text(value.name));
+            enumerator.description = member_description(
+                "enum value", view_text(value.name));
+            enumerator.presence_flag = false;
+            members.push_back(enumerator);
+        }
     }
     for (std::size_t i = 0; i < roots.size(); ++i) {
         ScopeMember member;
@@ -1422,6 +1458,36 @@ void check_file_scope_names(const FileDescriptorProto& file,
                                                 roots[i].simple_name);
         member.presence_flag = false;
         members.push_back(member);
+    }
+    if (! context.options.no_encoder) {
+        ScopeMember member;
+        member.cpp_name = "encode";
+        member.description = member_description("generated encoder function",
+                                                "encode");
+        member.presence_flag = false;
+        members.push_back(member);
+    }
+    if (! context.options.no_decoder) {
+        ScopeMember member;
+        member.cpp_name = "decode";
+        member.description = member_description("generated decoder function",
+                                                "decode");
+        member.presence_flag = false;
+        members.push_back(member);
+    }
+    if (context.package.empty()) {
+        ScopeMember easypb;
+        easypb.cpp_name = "easypb";
+        easypb.description =
+            member_description("runtime namespace", "easypb");
+        easypb.presence_flag = false;
+        members.push_back(easypb);
+        ScopeMember std_namespace;
+        std_namespace.cpp_name = "std";
+        std_namespace.description =
+            member_description("standard library namespace", "std");
+        std_namespace.presence_flag = false;
+        members.push_back(std_namespace);
     }
     if (members.empty()) return;
     refuse_duplicate_cpp_names(members, "the file scope");
@@ -1460,8 +1526,9 @@ std::string generate_message(MessageInfo& info,
 
     std::string field_defs, has_field_defs, encoder, decoder, check_required_fields;
 
-    // The C++ scope of this struct: its fields, its presence flags and its
-    // nested types. Two declarations of it cannot carry the same C++ name.
+    // The C++ scope of this struct: its fields, its presence flags, its
+    // nested types and the enumerators of its nested enums. Two declarations
+    // of it cannot carry the same C++ name.
     refuse_duplicate_cpp_names(message_scope_members(info, context),
                                myformat("message '{0}'", info.proto_name));
 
@@ -1739,9 +1806,11 @@ std::string easypb_codegen::generate_header(
         roots.push_back(make_message_info(message_type, "", context));
     }
 
-    // The C++ scope of the file: the top-level messages and the top-level
-    // enums. Two of them cannot carry the same C++ name.
-    check_file_scope_names(file, roots);
+    // The C++ scope of the file: the top-level messages and enums, the
+    // enumerators of those enums, the codec functions the options emit and
+    // the runtime namespaces an un-packaged header references. Two of them
+    // cannot carry the same C++ name.
+    check_file_scope_names(file, roots, context);
 
     // Resolve field type names to MessageInfo pointers only after the tree is
     // complete, then reject every dependency pattern impossible by C++ value.

@@ -24,6 +24,28 @@ bool rejects_package(const std::string& package)
     }
 }
 
+// CR-10: a name that is not a C++ identifier is refused, not escaped. The
+// escape rule appends one underscore and cannot repair a leading digit.
+bool rejects_identifier(const std::string& name)
+{
+    try {
+        easypb_codegen::cpp_identifier(name);
+        return false;
+    } catch (const std::runtime_error&) {
+        return true;
+    }
+}
+
+bool rejects_absolute_name(const std::string& name)
+{
+    try {
+        easypb_codegen::cpp_absolute_name(name);
+        return false;
+    } catch (const std::runtime_error&) {
+        return true;
+    }
+}
+
 } // namespace
 
 int main()
@@ -44,6 +66,16 @@ int main()
           "::other::Thing");
     CHECK(cpp_local_name(".Outer.Inner", "") == "Outer::Inner");
 
+    // CR-43: the same-package spelling escapes every component, so it names
+    // exactly the declaration the absolute spelling names. The helper used
+    // to strip the package and join raw components, which gave `class` for a
+    // type the emitter declares as `class_`.
+    CHECK(cpp_local_name(".pkg.class", "pkg") == "class_");
+    CHECK(cpp_local_name(".pkg.Outer.class", "pkg") == "Outer::class_");
+    CHECK(cpp_local_name(".pkg.class.Inner", "pkg") == "class_::Inner");
+    CHECK(cpp_local_name(".Outer.class", "") == "Outer::class_");
+    CHECK(cpp_absolute_name(".pkg.class") == "::pkg::class_");
+
     // A name that cannot be spelled verbatim in C++ is escaped; every other
     // name is returned unchanged, so a header without a reserved name keeps
     // its bytes.
@@ -53,7 +85,17 @@ int main()
     CHECK(cpp_identifier("NULL") == "NULL_");
     CHECK(cpp_identifier("assert") == "assert_");
     CHECK(cpp_identifier("value") == "value");
-    CHECK(cpp_identifier("") == "");
+    CHECK(cpp_identifier("_value") == "_value");
+    CHECK(cpp_identifier("value2") == "value2");
+    // CR-10: no suffix can repair a name that is not an identifier at all,
+    // so it is refused instead of emitted verbatim.
+    CHECK(rejects_identifier(""));
+    CHECK(rejects_identifier("0Zc"));
+    CHECK(rejects_identifier("a-b"));
+    CHECK(rejects_identifier("a b"));
+    CHECK(rejects_identifier("a.b"));
+    CHECK(rejects_absolute_name(".p.0X"));
+    CHECK(rejects_absolute_name(".0p.M"));
     // The escaped name is the qualified name's component too.
     CHECK(cpp_absolute_name(".foo.class.Inner") ==
           "::foo::class_::Inner");

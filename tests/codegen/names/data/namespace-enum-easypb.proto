@@ -1,0 +1,11 @@
+//
+// CR-09: a top-level enum named after the runtime namespace. "Top-level type"
+// covers both declarations the file scope holds; an enumerator is not enough
+// to trigger the collision with the namespace, the type name is.
+
+syntax = "proto3";
+
+enum easypb
+{
+    Z = 0;
+}

@@ -1,0 +1,21 @@
+//
+// CR-03: an enumerator and a field of the same message.
+//
+// The value `class` is escaped to `class_`, which is the C++ name of the
+// field `class_`; the Protobuf names differ, so the reference compiler
+// accepts the schema (and emits a header that does not compile). No
+// generation option removes either occupant.
+
+syntax = "proto3";
+
+package enumfieldp3;
+
+message M
+{
+    enum E
+    {
+        class = 0;
+    }
+
+    int32 class_ = 1;
+}

@@ -1,0 +1,19 @@
+//
+// CR-03 in proto2: the same enumerator-versus-presence-flag collision. The
+// flag exists in both syntaxes (the generator models presence for every
+// singular field), so the option gate (`--no-has-fields`) is the only one
+// that changes the verdict.
+
+syntax = "proto2";
+
+package enumflagp2;
+
+message M
+{
+    enum E
+    {
+        has_foo = 0;
+    }
+
+    optional int32 foo = 1;
+}

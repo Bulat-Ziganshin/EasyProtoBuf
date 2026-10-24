@@ -1,0 +1,21 @@
+//
+// CR-03 in proto2: the enumerator-versus-enumerator pair. `allow_alias` is
+// irrelevant here - the two values live in different enums, and it is the
+// escape rule that folds their C++ names together.
+
+syntax = "proto2";
+
+package enumenump2;
+
+message M
+{
+    enum A
+    {
+        class = 0;
+    }
+
+    enum B
+    {
+        class_ = 0;
+    }
+}

@@ -1,0 +1,14 @@
+//
+// CR-09: a top-level message named after the runtime namespace.
+//
+// The header includes <easypb.hpp> and writes `::easypb::...` unconditionally,
+// so a global `struct easypb` is a redeclaration of a different kind of
+// entity. The reference compiler's runtime lives in google::protobuf and
+// accepts the schema. No generation option removes the namespace.
+
+syntax = "proto3";
+
+message easypb
+{
+    int32 a = 1;
+}

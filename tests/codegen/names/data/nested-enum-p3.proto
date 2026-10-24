@@ -1,0 +1,24 @@
+//
+// CR-03: an enumerator and a nested message of the same message.
+//
+// The nested message `class_` and the value `class` of the nested enum want
+// one C++ member name: the nested type's name is spelled verbatim and the
+// value is escaped. The Protobuf names differ, so the reference compiler
+// accepts the schema and its own header declares the same `class_` twice.
+
+syntax = "proto3";
+
+package nestedenump3;
+
+message M
+{
+    message class_
+    {
+        int32 value = 1;
+    }
+
+    enum E
+    {
+        class = 0;
+    }
+}

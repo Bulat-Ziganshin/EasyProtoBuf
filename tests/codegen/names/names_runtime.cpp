@@ -16,11 +16,23 @@
 #include <cstring>
 #include <string>
 
+#include "codec-enum-value-decode.no-decoder.pb.hpp"
+#include "codec-enum-value-encode.no-encoder.pb.hpp"
+#include "codec-message-decode.no-decoder.pb.hpp"
+#include "codec-message-encode-p2.no-encoder.pb.hpp"
+#include "codec-message-encode.no-encoder.pb.hpp"
+#include "enum-flag-p2.no-has-fields.pb.hpp"
+#include "enum-flag-p3.no-has-fields.pb.hpp"
+#include "has-collision-p3.no-has-fields.pb.hpp"
+#include "has-collision.no-has-fields.pb.hpp"
+#include "insertion-stem-collision.default.pb.hpp"
 #include "keyword-enum-value.pb.hpp"
 #include "keyword-enum.pb.hpp"
 #include "keyword-field.pb.hpp"
 #include "keyword-message.pb.hpp"
 #include "keyword-nested.pb.hpp"
+#include "namespace-packaged.default.pb.hpp"
+#include "nested-flag.no-has-fields.pb.hpp"
 
 namespace {
 
@@ -131,6 +143,119 @@ int main()
         report("nested keyword round trip",
                copy.payload.value == 11 &&
                copy.kind == kwnested::Outer::template_::first);
+    }
+
+    // --- step B6: the scope-occupant family ---------------------------------
+    //
+    // The accepted half of every collision pair, plus the two controls the
+    // family needs (the packaged runtime names and the CR-44 artifact). Each
+    // collision header was generated with the one option that removes the
+    // second occupant, so the declaration that remains must be the one the
+    // schema names - and it must carry data under the field number the schema
+    // gives it.
+
+    // CR-03 with --no-has-fields: the enumerator is the only `has_foo`, and
+    // an unscoped enum's value is reachable through the message as well as
+    // through the enum (both spellings are members of M).
+    {
+        report("enum/flag enumerator",
+               enumflagp3::M::has_foo == 0 &&
+               enumflagp3::M::E::has_foo == 0);
+        enumflagp3::M message;
+        message.foo = 7;
+        const std::string wire = easypb::encode(message);
+        const char expected[] = { 0x08, 0x07 };
+        report("enum/flag wire", is_bytes(wire, expected, sizeof expected));
+        const enumflagp3::M copy = easypb::decode<enumflagp3::M>(wire);
+        report("enum/flag round trip", copy.foo == 7);
+    }
+    {
+        report("enum/flag p2 enumerator", enumflagp2::M::has_foo == 0);
+        enumflagp2::M message;
+        message.foo = 8;
+        const enumflagp2::M copy =
+            easypb::decode<enumflagp2::M>(easypb::encode(message));
+        report("enum/flag p2 round trip", copy.foo == 8);
+    }
+
+    // W-09 and PC-01 with --no-has-fields: the two fields and the nested type
+    // keep their own names once the flag is gone.
+    {
+        hascollision::M message;
+        message.foo = 1;
+        message.has_foo = 2;
+        const hascollision::M copy =
+            easypb::decode<hascollision::M>(easypb::encode(message));
+        report("flag/field names", copy.foo == 1 && copy.has_foo == 2);
+    }
+    {
+        hascollisionp3::M message;
+        message.foo = 3;
+        message.has_foo = 4;
+        const hascollisionp3::M copy =
+            easypb::decode<hascollisionp3::M>(easypb::encode(message));
+        report("flag/field p3 names", copy.foo == 3 && copy.has_foo == 4);
+    }
+    {
+        nestedflag::M message;
+        message.foo = 5;
+        nestedflag::M::has_foo payload;
+        payload.value = 6;
+        const nestedflag::M copy =
+            easypb::decode<nestedflag::M>(easypb::encode(message));
+        report("flag/nested names", copy.foo == 5 && payload.value == 6);
+    }
+
+    // CR-04: the type survives once the codec that owned the name is off.
+    {
+        codecmessageencode::encode message;
+        message.a = 9;
+        report("codec/message encode", message.a == 9);
+        codecmessageencodep2::encode message_p2;
+        message_p2.a = 10;
+        report("codec/message encode p2", message_p2.a == 10);
+    }
+    {
+        codecmessagedecode::decode message;
+        message.a = 11;
+        const std::string wire = easypb::encode(message);
+        const char expected[] = { 0x08, 0x0b };
+        report("codec/message decode", is_bytes(wire, expected, sizeof expected));
+    }
+    {
+        report("codec/enum value encode",
+               codecenumvalueencode::encode == 0 &&
+               codecenumvalueencode::E::encode == 0);
+        report("codec/enum value decode",
+               codecenumvaluedecode::decode == 0 &&
+               codecenumvaluedecode::E::decode == 0);
+    }
+
+    // CR-09 control: inside a package both runtime names are ordinary types.
+    {
+        namespacepackaged::easypb message;
+        message.a = 12;
+        namespacepackaged::std other;
+        other.b = 13;
+        report("packaged runtime names",
+               easypb::decode<namespacepackaged::easypb>(
+                   easypb::encode(message)).a == 12 &&
+               easypb::decode<namespacepackaged::std>(
+                   easypb::encode(other)).b == 13);
+    }
+
+    // CR-44 accepted: both messages exist and carry their own field; the
+    // shared insertion stem is asserted by the dedicated xfail test.
+    {
+        insertionstem::A_B flat;
+        flat.x = 14;
+        insertionstem::A::B nested;
+        nested.y = 15;
+        report("insertion stem messages",
+               easypb::decode<insertionstem::A_B>(
+                   easypb::encode(flat)).x == 14 &&
+               easypb::decode<insertionstem::A::B>(
+                   easypb::encode(nested)).y == 15);
     }
 
     if (failures != 0) {

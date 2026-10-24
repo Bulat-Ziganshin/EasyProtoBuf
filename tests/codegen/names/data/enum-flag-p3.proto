@@ -1,0 +1,22 @@
+//
+// CR-03: an enumerator of a nested enum and the presence flag of a field.
+//
+// An unscoped enum's enumerators are members of the enclosing struct in C++,
+// so `M::E::has_foo` and the flag of the field `foo` are one declaration.
+// The Protobuf names (`has_foo` the value, `foo` the field) are distinct, so
+// the reference compiler accepts the schema. proto3 variant; the proto2 twin
+// is `enum-flag-p2.proto`.
+
+syntax = "proto3";
+
+package enumflagp3;
+
+message M
+{
+    enum E
+    {
+        has_foo = 0;
+    }
+
+    int32 foo = 1;
+}

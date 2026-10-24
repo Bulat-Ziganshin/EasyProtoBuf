@@ -1,0 +1,27 @@
+//
+// CR-44 (accepted): the insertion-macro stem is not injective.
+//
+// `A_B` is a top-level message; `A::B` is a nested one. The documented
+// flattening (GENERATED_CODE.md, "Insertion points") drops packages and joins
+// lexical components with underscores, so both messages guard their insertion
+// points with EASYPB_A_B_*. The compatibility artifact is asserted by
+// `codegen.names.insertion_stem_collision`: the test passes while the stems
+// are equal and must be re-decided when the insertion format is versioned.
+// Both messages are accepted and generated; nothing here is refused.
+
+syntax = "proto3";
+
+package insertionstem;
+
+message A_B
+{
+    int32 x = 1;
+}
+
+message A
+{
+    message B
+    {
+        int32 y = 1;
+    }
+}

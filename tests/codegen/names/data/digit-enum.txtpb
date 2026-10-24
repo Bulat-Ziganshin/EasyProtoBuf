@@ -1,0 +1,14 @@
+# CR-10: a top-level enum whose descriptor name is not a C++ identifier.
+#
+# The file-scope check escapes the type name through cpp_identifier, which
+# refuses `0E`; the enumerator of the enum is an ordinary name and never
+# reaches a header because the type is refused first.
+file {
+  name: "digit-enum.proto"
+  syntax: "proto2"
+  package: "digitenum"
+  enum_type {
+    name: "0E"
+    value { name: "Z" number: 0 }
+  }
+}

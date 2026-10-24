@@ -9,12 +9,16 @@ away from the shape it claims to have.
 Most fixtures come from protoc: the `.pbs` is protoc's own encoding of the
 `.proto` beside it, produced with `--descriptor_set_out`.
 
-ONE fixture is crafted. `escape-enum-value` declares the two enumerators
-`class` and `class_`, and the reference compiler refuses that schema
-outright ("Enum name class_ has the same name as class if you ignore case
-and strip out the enum name prefix"), so protoc cannot produce the
-descriptor. Its half is encoded from a `.txtpb` text file with
-`--encode=google.protobuf.FileDescriptorSet` instead.
+FIVE fixtures are crafted, because no `.proto` text can produce them. Four
+declare a descriptor-origin name that is not a C++ identifier (`0Zc`,
+`0Xb`, `0M`, `0E`): the source lexer cannot spell a digit-first name, so protoc
+cannot compile a `.proto` into that descriptor, although protoc accepts such a
+descriptor set. The fifth, `escape-enum-value`, declares the two enumerators
+`class` and `class_`, and the reference compiler refuses that schema outright
+("Enum name class_ has the same name as class if you ignore case and strip out
+the enum name prefix"), so its descriptor cannot come from `--descriptor_set_out`
+either. The descriptor of each crafted fixture is encoded from the `.txtpb`
+beside it with `--encode=google.protobuf.FileDescriptorSet`.
 
 Usage:
 

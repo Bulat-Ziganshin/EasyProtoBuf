@@ -1,0 +1,20 @@
+//
+// CR-04: a top-level enumerator named after the generated encoder.
+//
+// The enumerator is a file-scope declaration of the same namespace as the
+// free codec, so `void encode(...)` is a redeclaration of a different kind
+// of entity. Only `--no-encoder` removes the function.
+
+syntax = "proto3";
+
+package codecenumvalueencode;
+
+enum E
+{
+    encode = 0;
+}
+
+message M
+{
+    int32 a = 1;
+}
