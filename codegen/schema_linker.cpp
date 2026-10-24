@@ -261,6 +261,11 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
     if (!validate_enum_value_numbers(file, error)) return false;
     if (!validate_json_names(file, error)) return false;
     if (!validate_extension_ranges(file, error)) return false;
+    // Step B5 (CR-06, CR-23): the reserved declarations and the MessageSet
+    // field rule are reference-free facts about the descriptor, asked on the
+    // same stage for the same reason.
+    if (!validate_reserved_declarations(file, error)) return false;
+    if (!validate_message_set_wire_format(file, error)) return false;
 
     // Everything is built into a local and assigned once, at the end (A1).
     LinkedSchema linked;
@@ -380,6 +385,10 @@ bool link_schema(SchemaSet& files, LinkMode mode,
         if (!validate_enum_value_numbers(*ordered[i], error)) return false;
         if (!validate_json_names(*ordered[i], error)) return false;
         if (!validate_extension_ranges(*ordered[i], error)) return false;
+        // Step B5 (CR-06, CR-23): the reserved declarations and the MessageSet
+        // field rule ride the same reference-free stage.
+        if (!validate_reserved_declarations(*ordered[i], error)) return false;
+        if (!validate_message_set_wire_format(*ordered[i], error)) return false;
     }
 
     // Everything is built into a local and assigned once, at the end (A1).

@@ -1,0 +1,11 @@
+// CR-25 (accepted, E6): an `extend` declaration for a type that does not exist.
+// The parser consumes the declaration, warns that it is not stored, and exits
+// 0; protoc 30.1 refuses it. The xfail test
+// `codegen.parity.extensions_not_validated` asserts the current direction, so a
+// future validation change fails that test and re-opens the decision.
+syntax = "proto2";
+package parity;
+
+extend NoSuchMessage {
+  optional int32 e = 1;
+}

@@ -1,0 +1,17 @@
+# CR-06, message shape 4: reserved range [3, 5) is declared twice.
+file {
+  name: "res-dup-range.proto"
+  package: "parity"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    reserved_range {
+      start: 3
+      end: 5
+    }
+    reserved_range {
+      start: 3
+      end: 5
+    }
+  }
+}

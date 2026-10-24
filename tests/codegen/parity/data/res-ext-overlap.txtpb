@@ -1,0 +1,17 @@
+# CR-06, message shape 3: extension range [5, 10) overlaps reserved [7, 8).
+file {
+  name: "res-ext-overlap.proto"
+  package: "parity"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    extension_range {
+      start: 5
+      end: 10
+    }
+    reserved_range {
+      start: 7
+      end: 8
+    }
+  }
+}

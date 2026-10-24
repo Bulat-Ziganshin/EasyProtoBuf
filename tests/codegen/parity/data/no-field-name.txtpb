@@ -1,0 +1,18 @@
+# CR-46: a field with no name. descriptor.proto declares
+# FieldDescriptorProto.name optional, so the decoder must not abort the set as
+# if a required field were missing; the semantic name sweep refuses it as
+# "field in .parity.M has no name". protoc 30.1 refuses the same bytes through
+# ValidateSymbolName ("Missing name.").
+file {
+  name: "no-field-name.proto"
+  package: "parity"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    field {
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+}

@@ -1,0 +1,11 @@
+// CR-07: an extension range whose exclusive end exceeds 536870912. The source
+// path refuses the endpoint as text; the descriptor half is ext-high.pbs,
+// encoded from ext-high.txtpb. protoc 30.1 refuses the same shape ("Extension
+// numbers cannot be greater than 536870911."). ext-max.proto/.pbs is the
+// accepted boundary control.
+syntax = "proto2";
+package parity;
+
+message M {
+  extensions 1 to 599999999;
+}

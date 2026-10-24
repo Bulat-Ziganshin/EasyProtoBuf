@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 
+#include "descriptor_adapter.hpp"
 #include "schema_semantics.hpp"
 #include "schema_semantics_internal.hpp"
 
@@ -1980,6 +1981,424 @@ void test_rule_message_enum_value_numbers_directly()
     }
 }
 
+// CR-06: the seven reserved shapes the review measured, plus the range-shape
+// and nesting controls. validate_reserved_declarations is public and
+// reference-free, so every case is a hand-built descriptor and the test links
+// only the semantic module.
+void test_rule_reserved_declarations_directly()
+{
+    // Message shape 1: a field number inside a reserved range.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto_ReservedRange range;
+        range.start = 3;
+        range.has_start = true;
+        range.end = 8;  // `reserved 3 to 7;` - the end is exclusive.
+        range.has_end = true;
+        message.reserved_range.push_back(range);
+        message.field.push_back(make_scalar_field(
+            file, "a", 5, FieldDescriptorProto::TYPE_INT32));
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_RESERVED_RANGE);
+        CHECK(error.message.find("uses a number reserved") != std::string::npos);
+    }
+    // Message shape 2: a declared field uses a reserved name.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.reserved_name.push_back(file.strings.save("a"));
+        message.field.push_back(make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32));
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_RESERVED_RANGE);
+        CHECK(error.message.find("is reserved") != std::string::npos);
+    }
+    // Message shape 3: an extension range overlaps a reserved range.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto_ExtensionRange extension;
+        extension.start = 5;
+        extension.has_start = true;
+        extension.end = 10;
+        extension.has_end = true;
+        message.extension_range.push_back(extension);
+        DescriptorProto_ReservedRange range;
+        range.start = 7;
+        range.has_start = true;
+        range.end = 8;
+        range.has_end = true;
+        message.reserved_range.push_back(range);
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_RESERVED_RANGE);
+        CHECK(error.message.find("overlaps reserved range") != std::string::npos);
+    }
+    // Message shape 4: the same reserved range twice.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto_ReservedRange range;
+        range.start = 3;
+        range.has_start = true;
+        range.end = 5;
+        range.has_end = true;
+        message.reserved_range.push_back(range);
+        message.reserved_range.push_back(range);
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_RESERVED_RANGE);
+        CHECK(error.message.find("overlaps range") != std::string::npos);
+    }
+    // Message shape 5: the same reserved name twice.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.reserved_name.push_back(file.strings.save("a"));
+        message.reserved_name.push_back(file.strings.save("a"));
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_RESERVED_RANGE);
+        CHECK(error.message.find("reserved multiple times") != std::string::npos);
+    }
+    // Enum shape 1: an enum value uses a reserved number. The enum range is
+    // INCLUSIVE at both ends, so [0, 0] reserves only 0.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "Z", 0);
+        add_enum_value(enumeration, file, "A", 1);
+        EnumDescriptorProto_EnumReservedRange range;
+        range.start = 0;
+        range.has_start = true;
+        range.end = 0;
+        range.has_end = true;
+        enumeration.reserved_range.push_back(range);
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_RESERVED_RANGE);
+        CHECK(error.message.find("uses a number reserved") != std::string::npos);
+    }
+    // Enum shape 2: an enum value uses a reserved name.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "Z", 0);
+        add_enum_value(enumeration, file, "A", 1);
+        enumeration.reserved_name.push_back(file.strings.save("A"));
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_RESERVED_RANGE);
+        CHECK(error.message.find("enum value name") != std::string::npos);
+    }
+    // A message range whose start is not positive is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto_ReservedRange range;
+        range.start = 0;
+        range.has_start = true;
+        range.end = 2;
+        range.has_end = true;
+        message.reserved_range.push_back(range);
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.message.find("not positive") != std::string::npos);
+    }
+    // A message range whose end does not exceed its start is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto_ReservedRange range;
+        range.start = 5;
+        range.has_start = true;
+        range.end = 5;
+        range.has_end = true;
+        message.reserved_range.push_back(range);
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.message.find("not greater than its start") !=
+              std::string::npos);
+    }
+    // An enum range whose inclusive end precedes its start is refused.
+    {
+        easypb_schema::SchemaFile file;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "Z", 0);
+        EnumDescriptorProto_EnumReservedRange range;
+        range.start = 5;
+        range.has_start = true;
+        range.end = 3;
+        range.has_end = true;
+        enumeration.reserved_range.push_back(range);
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.message.find("less than its start") != std::string::npos);
+    }
+    // Recursion: a nested message carries the violation, the parent is clean.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto parent;
+        parent.name = file.strings.save("Outer");
+        parent.has_name = true;
+        DescriptorProto nested;
+        nested.name = file.strings.save("Inner");
+        nested.has_name = true;
+        nested.reserved_name.push_back(file.strings.save("x"));
+        nested.field.push_back(make_scalar_field(
+            file, "x", 1, FieldDescriptorProto::TYPE_INT32));
+        parent.nested_type.push_back(nested);
+        file.file.message_type.push_back(parent);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.message.find(".Outer.Inner") != std::string::npos);
+    }
+    // Control: a reserved range and name no declaration uses, in a message
+    // that also declares an extension range outside the reserved numbers.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto_ReservedRange range;
+        range.start = 3;
+        range.has_start = true;
+        range.end = 8;
+        range.has_end = true;
+        message.reserved_range.push_back(range);
+        message.reserved_name.push_back(file.strings.save("b"));
+        message.field.push_back(make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32));
+        DescriptorProto_ExtensionRange extension;
+        extension.start = 9;
+        extension.has_start = true;
+        extension.end = 12;
+        extension.has_end = true;
+        message.extension_range.push_back(extension);
+        file.file.message_type.push_back(message);
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "Z", 0);
+        EnumDescriptorProto_EnumReservedRange enum_range;
+        enum_range.start = 10;
+        enum_range.has_start = true;
+        enum_range.end = 20;
+        enum_range.has_end = true;
+        enumeration.reserved_range.push_back(enum_range);
+        file.file.enum_type.push_back(enumeration);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_reserved_declarations(file, error));
+    }
+}
+
+// CR-07: the extension-range upper bound. The exclusive end 536870912 is the
+// accepted boundary; one past it is refused; a MessageSet is exempt because
+// protoc bounds its extension numbers by int32, not by the field maximum.
+void test_rule_extension_bound_directly()
+{
+    // The boundary: `extensions 2 to 536870911;` stores end = 536870912.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto_ExtensionRange range;
+        range.start = 2;
+        range.has_start = true;
+        range.end = 536870912;
+        range.has_end = true;
+        message.extension_range.push_back(range);
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_extension_ranges(file, error));
+    }
+    // One past the boundary is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto_ExtensionRange range;
+        range.start = 1;
+        range.has_start = true;
+        range.end = 536870913;
+        range.has_end = true;
+        message.extension_range.push_back(range);
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_extension_ranges(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_EXTENSION_RANGE);
+        CHECK(error.message.find("exceeds 536870912") != std::string::npos);
+    }
+    // A MessageSet is exempt: its extension numbers are plain int32s
+    // (descriptor.cc:8385-8406), so the same range is accepted.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.options.message_set_wire_format = true;
+        message.options.has_message_set_wire_format = true;
+        message.has_options = true;
+        DescriptorProto_ExtensionRange range;
+        range.start = 1;
+        range.has_start = true;
+        range.end = 600000000;
+        range.has_end = true;
+        message.extension_range.push_back(range);
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_extension_ranges(file, error));
+    }
+}
+
+// CR-23: a MessageSet may not declare ordinary fields. The field-less shape and
+// the non-MessageSet shape stay accepted, and the violation is found in a
+// nested message too.
+void test_rule_message_set_wire_format_directly()
+{
+    // A MessageSet with a field is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.options.message_set_wire_format = true;
+        message.options.has_message_set_wire_format = true;
+        message.has_options = true;
+        message.field.push_back(make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32));
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_message_set_wire_format(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MESSAGE_SET_WITH_FIELDS);
+        CHECK(error.message.find("a MessageSet cannot have fields") !=
+              std::string::npos);
+    }
+    // A field-less MessageSet is accepted: protoc accepts it, and the tool
+    // emits an ordinary (empty) message.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.options.message_set_wire_format = true;
+        message.options.has_message_set_wire_format = true;
+        message.has_options = true;
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_message_set_wire_format(file, error));
+    }
+    // An ordinary message with fields is not affected by the rule.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.field.push_back(make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32));
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_message_set_wire_format(file, error));
+    }
+    // Recursion: a nested MessageSet with a field is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto parent;
+        parent.name = file.strings.save("Outer");
+        parent.has_name = true;
+        DescriptorProto nested;
+        nested.name = file.strings.save("Inner");
+        nested.has_name = true;
+        nested.options.message_set_wire_format = true;
+        nested.options.has_message_set_wire_format = true;
+        nested.has_options = true;
+        nested.field.push_back(make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32));
+        parent.nested_type.push_back(nested);
+        file.file.message_type.push_back(parent);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_message_set_wire_format(file, error));
+        CHECK(error.message.find(".Outer.Inner") != std::string::npos);
+    }
+}
+
+// CR-45: copy_descriptor assigns the package presence bit instead of only
+// setting it, so a present-but-empty package normalizes to "no package" and a
+// non-empty package stays present whatever bit the caller carried.
+void test_adapter_normalizes_the_package_presence_bit()
+{
+    // Present-but-empty package: the bit is cleared.
+    {
+        FileDescriptorProto source;
+        source.name = "pkg.proto";
+        source.has_name = true;
+        source.has_package = true;  // the wire carried `package: ""`
+        std::vector<FileDescriptorProto> files(1, source);
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(files, "pkg.pbs", set,
+                                                     error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            CHECK(!set.files()[0]->file.has_package);
+            CHECK(set.files()[0]->file.package.empty());
+        }
+    }
+    // Non-empty package with the bit clear: the text is authoritative.
+    {
+        FileDescriptorProto source;
+        source.name = "named.proto";
+        source.has_name = true;
+        source.package = "p";
+        source.has_package = false;
+        std::vector<FileDescriptorProto> files(1, source);
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(files, "named.pbs", set,
+                                                     error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            CHECK(set.files()[0]->file.has_package);
+            CHECK(text(set.files()[0]->file.package) == "p");
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -2017,6 +2436,10 @@ int main()
     test_rule_message_map_entries_directly();
     test_rule_message_symbol_names_directly();
     test_rule_message_enum_value_numbers_directly();
+    test_rule_reserved_declarations_directly();
+    test_rule_extension_bound_directly();
+    test_rule_message_set_wire_format_directly();
+    test_adapter_normalizes_the_package_presence_bit();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

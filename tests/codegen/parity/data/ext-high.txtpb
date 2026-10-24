@@ -1,0 +1,14 @@
+# CR-07: extension range [1, 600000000) ends past the protocol maximum. protoc
+# 30.1 refuses `end > 536870912`; ext-max.pbs is the accepted boundary control.
+file {
+  name: "ext-high.proto"
+  package: "parity"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    extension_range {
+      start: 1
+      end: 600000000
+    }
+  }
+}

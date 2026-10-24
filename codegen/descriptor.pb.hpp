@@ -49,12 +49,36 @@ struct EnumOptions
 };
 
 
+// One `reserved START to END;` declaration of an enum (wire fields 1 and 2 of
+// `EnumDescriptorProto.EnumReservedRange`, field 4 of `EnumDescriptorProto`).
+// Both ends are INCLUSIVE here, unlike the message twin: descriptor.proto says
+// so explicitly, because the inclusive form can represent the whole int32
+// domain (descriptor.proto:356-365). The source parser validates a reserved
+// range as text and does not retain it, so the descriptor model keeps the
+// range for the reference-free sweep that asks whether a value uses a reserved
+// number and whether two ranges overlap (CR-06).
+struct EnumDescriptorProto_EnumReservedRange
+{
+    int32_t start = 0;  // field 1, inclusive
+    int32_t end = 0;    // field 2, inclusive
+
+    bool has_start = false;
+    bool has_end = false;
+};
+
+
 // Enum
 struct EnumDescriptorProto
 {
     str_view name;
     std::vector<EnumValueDescriptorProto> value;
     EnumOptions options;
+    // Wire fields 4 and 5: the enum's `reserved` ranges and names. The
+    // reference-free reserved sweep answers protoc's two questions about them
+    // (`BuildEnum`, descriptor.cc:7060-7125) whether or not the enum is
+    // referenced (CR-06).
+    std::vector<EnumDescriptorProto_EnumReservedRange> reserved_range;
+    std::vector<str_view> reserved_name;
 
     bool has_name = false;
     bool has_options = false;
@@ -138,9 +162,35 @@ struct FieldDescriptorProto
 
 struct MessageOptions
 {
+    // Wire field 1: the message uses the MessageSet wire format. protoc
+    // refuses a MessageSet that declares ordinary fields ("MessageSets cannot
+    // have fields, only extensions.", descriptor.cc:6372-6380, :7994-8001)
+    // and the reference-free sweep asks the same question (CR-23); the option
+    // also lifts the extension-range upper bound, because extension numbers of
+    // a MessageSet are plain int32s (`ValidateExtensionRangeOptions`,
+    // descriptor.cc:8385-8406). Wire field 7 is the synthetic map-entry flag.
+    bool message_set_wire_format = false;
     bool map_entry = false;
 
+    bool has_message_set_wire_format = false;
     bool has_map_entry = false;
+};
+
+
+// One `reserved START to END;` declaration of a message (wire fields 1 and 2
+// of `DescriptorProto.ReservedRange`, field 9 of `DescriptorProto`). `start`
+// is INCLUSIVE and `end` EXCLUSIVE, exactly as descriptor.proto defines the
+// pair (descriptor.proto:168-174). The ranges are retained so the
+// reference-free reserved sweep can ask whether a declared field number falls
+// inside one, whether two ranges overlap and whether an extension range
+// overlaps one (CR-06).
+struct DescriptorProto_ReservedRange
+{
+    int32_t start = 0;  // field 1, inclusive
+    int32_t end = 0;    // field 2, exclusive
+
+    bool has_start = false;
+    bool has_end = false;
 };
 
 
@@ -179,6 +229,12 @@ struct DescriptorProto
     // `descriptor.cc:8448-8452`, ledger `D-62`). A count cannot throw on a
     // required member of a shape nothing else reads.
     int32_t extension_count = 0;        // field 6, occurrence count
+    // Wire fields 9 and 10: the message's `reserved` ranges and names. The
+    // reference-free reserved sweep answers protoc's five message questions
+    // about them (`BuildMessage`, descriptor.cc:6396-6478) whether or not the
+    // message is referenced (CR-06).
+    std::vector<DescriptorProto_ReservedRange> reserved_range;
+    std::vector<str_view> reserved_name;
 
     bool has_name = false;
     bool has_options = false;
@@ -289,6 +345,20 @@ inline void decode(easypb::Decoder pb, EnumOptions &x)
 }
 
 
+inline void decode(easypb::Decoder pb, EnumDescriptorProto_EnumReservedRange &x)
+{
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 1: pb.get_int32(&x.start, &x.has_start); break;
+            case 2: pb.get_int32(&x.end, &x.has_end); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
 inline void decode(easypb::Decoder pb, EnumDescriptorProto &x)
 {
     while(pb.get_next_field())
@@ -298,6 +368,8 @@ inline void decode(easypb::Decoder pb, EnumDescriptorProto &x)
             case 1: pb.get_string(&x.name, &x.has_name); break;
             case 2: pb.get_repeated_message(&x.value); break;
             case 3: pb.get_message(&x.options, &x.has_options); break;
+            case 4: pb.get_repeated_message(&x.reserved_range); break;
+            case 5: pb.get_repeated_string(&x.reserved_name); break;
             default: pb.skip_field();
         }
     }
@@ -351,9 +423,9 @@ inline void decode(easypb::Decoder pb, FieldDescriptorProto &x)
         }
     }
 
-    if(! x.has_name) {
-        throw easypb::missing_required_field("Decoded protobuf has no required field FieldDescriptorProto.name");
-    }
+    // CR-46: `name` is optional in descriptor.proto. An absent field name is a
+    // semantic defect the lexical name sweep reports ("field in ... has no
+    // name"), not a decode failure that aborts the whole set.
 }
 
 
@@ -363,7 +435,23 @@ inline void decode(easypb::Decoder pb, MessageOptions &x)
     {
         switch(pb.field_num)
         {
+            case 1: pb.get_bool(&x.message_set_wire_format,
+                                &x.has_message_set_wire_format); break;
             case 7: pb.get_bool(&x.map_entry, &x.has_map_entry); break;
+            default: pb.skip_field();
+        }
+    }
+}
+
+
+inline void decode(easypb::Decoder pb, DescriptorProto_ReservedRange &x)
+{
+    while(pb.get_next_field())
+    {
+        switch(pb.field_num)
+        {
+            case 1: pb.get_int32(&x.start, &x.has_start); break;
+            case 2: pb.get_int32(&x.end, &x.has_end); break;
             default: pb.skip_field();
         }
     }
@@ -401,13 +489,18 @@ inline void decode(easypb::Decoder pb, DescriptorProto &x)
             case 6: ++x.extension_count; pb.skip_field(); break;
             case 8: pb.get_repeated_message(&x.oneof_decl); break;
             case 7: pb.get_message(&x.options, &x.has_options); break;
+            case 9: pb.get_repeated_message(&x.reserved_range); break;
+            case 10: pb.get_repeated_string(&x.reserved_name); break;
             default: pb.skip_field();
         }
     }
 
-    if(! x.has_name) {
-        throw easypb::missing_required_field("Decoded protobuf has no required field DescriptorProto.name");
-    }
+    // descriptor.proto marks `name` optional, so the decoder must not invent a
+    // "required field" refusal here (CR-46): an absent name is a semantic
+    // defect, and `validate_symbol_names` reports it per declaration with the
+    // declaration's own descriptor path ("message in ... has no name"). The
+    // three throws this replaces aborted the whole set before any sweep could
+    // name the offending declaration.
 }
 
 
@@ -438,9 +531,8 @@ inline void decode(easypb::Decoder pb, ServiceDescriptorProto &x)
         }
     }
 
-    if(! x.has_name) {
-        throw easypb::missing_required_field("Decoded protobuf has no required field ServiceDescriptorProto.name");
-    }
+    // CR-46: `ServiceDescriptorProto.name` is optional in descriptor.proto;
+    // `validate_symbol_names` owns the refusal and names the declaration.
 }
 
 

@@ -1,0 +1,12 @@
+// CR-06, enum shape 1: an enum value uses a reserved number. The source path
+// refuses it while parsing; the descriptor half is enum-reserved.pbs, encoded
+// from enum-reserved.txtpb. protoc 30.1 refuses the same shape
+// ("Enum value \"Z\" uses reserved number 0.").
+syntax = "proto2";
+package parity;
+
+enum E {
+  reserved 0;
+  Z = 0;
+  A = 1;
+}

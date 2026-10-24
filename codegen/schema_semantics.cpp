@@ -852,6 +852,13 @@ const std::int32_t kMaxFieldNumber = 536870911;
 const std::int32_t kReservedFieldNumberFirst = 19000;
 const std::int32_t kReservedFieldNumberLast = 19999;
 
+// The largest EXCLUSIVE end an extension range may carry: one past the last
+// extension number, `FieldDescriptor::kMaxNumber + 1`. protoc refuses a range
+// whose end exceeds it (`ValidateExtensionRangeOptions`,
+// descriptor.cc:8395-8404) except for a MessageSet, whose extension numbers are
+// plain int32s (step B5, CR-07).
+const std::int32_t kMaxExtensionEnd = kMaxFieldNumber + 1;
+
 std::string number_text(std::int32_t number)
 {
     std::ostringstream output;
@@ -2035,6 +2042,29 @@ bool validate_message_extension_ranges(const SchemaFile& file,
                 declaration_location(file, range_path), range_path,
                 DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
         }
+        // CR-07: the exclusive end may not exceed the protocol maximum plus
+        // one. protoc states the same bound in `ValidateExtensionRangeOptions`
+        // (`descriptor.cc:8395-8404`, "Extension numbers cannot be greater than
+        // 536870911.") and applies it to every message that does NOT declare
+        // MessageSet wire format: a MessageSet's extension numbers are plain
+        // int32s, so its ranges may exceed `FieldDescriptor::kMaxNumber`
+        // (`max_extension_range`, `:8385-8389`). The bound is checked here,
+        // beside the other range-shape rules, because a `.pbs` range is the
+        // only door through which an out-of-protocol extension contract can
+        // reach the linker - the source parser bounds a range endpoint at
+        // 536870911 as text.
+        if (!message.options.message_set_wire_format &&
+            range.end > kMaxExtensionEnd) {
+            return fail_at_code(
+                file,
+                "message \"" + qualified_name + "\" declares extension range " +
+                    bounds + " whose exclusive end exceeds " +
+                    number_text(kMaxExtensionEnd) +
+                    "; extension numbers cannot be greater than " +
+                    number_text(kMaxExtensionEnd - 1),
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+        }
         for (std::size_t j = 0; j < message.field.size(); ++j) {
             const FieldDescriptorProto& field = message.field[j];
             if (field.number < range.start || field.number >= range.end) {
@@ -2071,6 +2101,263 @@ bool validate_message_extension_ranges(const SchemaFile& file,
                 joined_name(qualified_name, message.nested_type[i].name),
                 message_nested_path(message_path, static_cast<int>(i)),
                 is_proto3, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
+// CR-06, the enum half: the reserved declarations of one enum, in the order
+// protoc's `BuildEnum` asks its questions (descriptor.cc:7060-7125). An enum
+// reserved range is INCLUSIVE at both ends, so the overlap test is inclusive
+// too (`:7076-7092`) - unlike the message twin, where the end is exclusive.
+bool validate_enum_reserved(const SchemaFile& file,
+                            const EnumDescriptorProto& enumeration,
+                            const std::string& qualified_name,
+                            const DescriptorPath& enum_path,
+                            Diagnostic& error)
+{
+    for (std::size_t i = 0; i < enumeration.reserved_range.size(); ++i) {
+        const EnumDescriptorProto_EnumReservedRange& range =
+            enumeration.reserved_range[i];
+        const DescriptorPath range_path =
+            enum_reserved_range_path(enum_path, static_cast<int>(i));
+        const std::string bounds = "[" + number_text(range.start) + ", " +
+                                   number_text(range.end) + "]";
+        if (range.start > range.end) {
+            return fail_at_code(
+                file,
+                "enum \"" + qualified_name + "\" declares reserved range " +
+                    bounds + " whose end is less than its start",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            const EnumDescriptorProto_EnumReservedRange& earlier =
+                enumeration.reserved_range[j];
+            if (range.start > earlier.end || earlier.start > range.end) {
+                continue;
+            }
+            return fail_at_code(
+                file,
+                "reserved range " + bounds + " in enum \"" + qualified_name +
+                    "\" overlaps range [" + number_text(earlier.start) + ", " +
+                    number_text(earlier.end) + "]",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+    }
+
+    std::set<str_view> reserved_names;
+    for (std::size_t i = 0; i < enumeration.reserved_name.size(); ++i) {
+        if (reserved_names.insert(enumeration.reserved_name[i]).second) {
+            continue;
+        }
+        const DescriptorPath name_path =
+            enum_reserved_name_path(enum_path, static_cast<int>(i));
+        return fail_at_code(
+            file,
+            "enum value name \"" + view_text(enumeration.reserved_name[i]) +
+                "\" is reserved multiple times in enum \"" + qualified_name +
+                "\"",
+            declaration_location(file, name_path), name_path,
+            DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+    }
+
+    for (std::size_t i = 0; i < enumeration.value.size(); ++i) {
+        const EnumValueDescriptorProto& value = enumeration.value[i];
+        const DescriptorPath value_path =
+            enum_value_path(enum_path, static_cast<int>(i));
+        for (std::size_t j = 0; j < enumeration.reserved_range.size(); ++j) {
+            const EnumDescriptorProto_EnumReservedRange& range =
+                enumeration.reserved_range[j];
+            if (value.number < range.start || value.number > range.end) continue;
+            const DescriptorPath range_path =
+                enum_reserved_range_path(enum_path, static_cast<int>(j));
+            return fail_at_code(
+                file,
+                "enum value \"" + view_text(value.name) + "\" (" +
+                    number_text(value.number) +
+                    ") uses a number reserved by [" +
+                    number_text(range.start) + ", " + number_text(range.end) +
+                    "] in enum \"" + qualified_name + "\"",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+        if (reserved_names.find(value.name) != reserved_names.end()) {
+            return fail_at_code(
+                file,
+                "enum value name \"" + view_text(value.name) +
+                    "\" is reserved in enum \"" + qualified_name + "\"",
+                declaration_location(file, value_path), value_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+    }
+    return true;
+}
+
+
+// CR-06, the message half: the reserved declarations of one message and of
+// every message nested in it. The five message questions are protoc's own
+// (descriptor.cc:6396-6480): range validity, range overlap, a repeated
+// reserved name, a field using a reserved number or name, and an extension
+// range overlapping a reserved range. A reserved range here is [start, end):
+// `start` inclusive, `end` exclusive (descriptor.proto:168-174).
+bool validate_message_reserved(const SchemaFile& file,
+                               const DescriptorProto& message,
+                               const std::string& qualified_name,
+                               const DescriptorPath& message_path,
+                               Diagnostic& error)
+{
+    for (std::size_t i = 0; i < message.reserved_range.size(); ++i) {
+        const DescriptorProto_ReservedRange& range = message.reserved_range[i];
+        const DescriptorPath range_path =
+            message_reserved_range_path(message_path, static_cast<int>(i));
+        const std::string bounds = "[" + number_text(range.start) + ", " +
+                                   number_text(range.end) + ")";
+        if (range.start <= 0) {
+            return fail_at_code(
+                file,
+                "message \"" + qualified_name + "\" declares reserved range " +
+                    bounds +
+                    " whose start is not positive; reserved numbers must be "
+                    "positive integers",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+        if (range.start >= range.end) {
+            return fail_at_code(
+                file,
+                "message \"" + qualified_name + "\" declares reserved range " +
+                    bounds + " whose end is not greater than its start",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            const DescriptorProto_ReservedRange& earlier =
+                message.reserved_range[j];
+            if (range.end <= earlier.start || earlier.end <= range.start) {
+                continue;
+            }
+            return fail_at_code(
+                file,
+                "reserved range " + bounds + " in message \"" +
+                    qualified_name + "\" overlaps range [" +
+                    number_text(earlier.start) + ", " +
+                    number_text(earlier.end) + ")",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+    }
+
+    std::set<str_view> reserved_names;
+    for (std::size_t i = 0; i < message.reserved_name.size(); ++i) {
+        if (reserved_names.insert(message.reserved_name[i]).second) continue;
+        const DescriptorPath name_path =
+            message_reserved_name_path(message_path, static_cast<int>(i));
+        return fail_at_code(
+            file,
+            "field name \"" + view_text(message.reserved_name[i]) +
+                "\" is reserved multiple times in message \"" + qualified_name +
+                "\"",
+            declaration_location(file, name_path), name_path,
+            DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+    }
+
+    for (std::size_t i = 0; i < message.field.size(); ++i) {
+        const FieldDescriptorProto& field = message.field[i];
+        for (std::size_t j = 0; j < message.reserved_range.size(); ++j) {
+            const DescriptorProto_ReservedRange& range = message.reserved_range[j];
+            if (field.number < range.start || field.number >= range.end) continue;
+            const DescriptorPath range_path =
+                message_reserved_range_path(message_path, static_cast<int>(j));
+            return fail_at_code(
+                file,
+                "field \"" + view_text(field.name) + "\" (" +
+                    number_text(field.number) +
+                    ") uses a number reserved by [" + number_text(range.start) +
+                    ", " + number_text(range.end) + ") in message \"" +
+                    qualified_name + "\"",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+        if (reserved_names.find(field.name) != reserved_names.end()) {
+            const DescriptorPath field_path =
+                message_field_path(message_path, static_cast<int>(i));
+            return fail_at_code(
+                file,
+                "field name \"" + view_text(field.name) +
+                    "\" is reserved in message \"" + qualified_name + "\"",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+    }
+
+    for (std::size_t i = 0; i < message.extension_range.size(); ++i) {
+        const DescriptorProto_ExtensionRange& extension =
+            message.extension_range[i];
+        const DescriptorPath extension_path =
+            message_extension_range_path(message_path, static_cast<int>(i));
+        for (std::size_t j = 0; j < message.reserved_range.size(); ++j) {
+            const DescriptorProto_ReservedRange& range = message.reserved_range[j];
+            if (extension.start >= range.end || range.start >= extension.end) {
+                continue;
+            }
+            return fail_at_code(
+                file,
+                "extension range [" + number_text(extension.start) + ", " +
+                    number_text(extension.end) + ") in message \"" +
+                    qualified_name + "\" overlaps reserved range [" +
+                    number_text(range.start) + ", " + number_text(range.end) +
+                    ")",
+                declaration_location(file, extension_path), extension_path,
+                DIAGNOSTIC_INVALID_RESERVED_RANGE, error);
+        }
+    }
+
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_reserved(
+                file, message.nested_type[i],
+                joined_name(qualified_name, message.nested_type[i].name),
+                message_nested_path(message_path, static_cast<int>(i)),
+                error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
+// CR-23: a message that declares MessageSet wire format must not declare
+// ordinary fields. The rule is protoc's (`BuildField`, descriptor.cc:6372-6380;
+// the same check at `:7994-8001`), and it is about the message's wire encoding,
+// not about a reference, so it rides the reference-free stage. A MessageSet
+// whose only members are extensions - or that declares no members at all -
+// stays accepted, exactly as protoc accepts it.
+bool validate_message_set_in_message(const SchemaFile& file,
+                                     const DescriptorProto& message,
+                                     const std::string& qualified_name,
+                                     const DescriptorPath& message_path,
+                                     Diagnostic& error)
+{
+    if (message.options.message_set_wire_format && !message.field.empty()) {
+        const DescriptorPath options_path = message_options_path(message_path);
+        return fail_at_code(
+            file,
+            "message \"" + qualified_name +
+                "\" declares message_set_wire_format and " +
+                number_text(static_cast<std::int32_t>(message.field.size())) +
+                " field(s); a MessageSet cannot have fields, only extensions",
+            declaration_location(file, options_path), options_path,
+            DIAGNOSTIC_MESSAGE_SET_WITH_FIELDS, error);
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_set_in_message(
+                file, message.nested_type[i],
+                joined_name(qualified_name, message.nested_type[i].name),
+                message_nested_path(message_path, static_cast<int>(i)),
+                error)) {
             return false;
         }
     }
@@ -3636,6 +3923,51 @@ bool validate_extension_ranges(SchemaFile& file, Diagnostic& error)
                 file, file.file.message_type[i],
                 joined_name(prefix, file.file.message_type[i].name),
                 file_message_path(static_cast<int>(i)), is_proto3, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_reserved_declarations(SchemaFile& file, Diagnostic& error)
+{
+    // Reference-free, like the extension-range sweep beside it: a reserved
+    // range, a reserved name and a declared number are provable from the
+    // available descriptor alone, whether or not anything references the
+    // declaration (step B5, CR-06). The walk is top-level enums, then
+    // top-level messages in declaration order with their nested types, the
+    // shape validate_enum_value_numbers uses.
+    const std::string prefix = package_prefix(file);
+    for (std::size_t i = 0; i < file.file.enum_type.size(); ++i) {
+        if (!validate_enum_reserved(
+                file, file.file.enum_type[i],
+                joined_name(prefix, file.file.enum_type[i].name),
+                file_enum_path(static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!validate_message_reserved(
+                file, file.file.message_type[i],
+                joined_name(prefix, file.file.message_type[i].name),
+                file_message_path(static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_message_set_wire_format(SchemaFile& file, Diagnostic& error)
+{
+    // Same reference-free shape: the option and the field count are both in
+    // the descriptor, and a MessageSet that declares fields is malformed even
+    // when nothing references the message (step B5, CR-23).
+    const std::string prefix = package_prefix(file);
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!validate_message_set_in_message(
+                file, file.file.message_type[i],
+                joined_name(prefix, file.file.message_type[i].name),
+                file_message_path(static_cast<int>(i)), error)) {
             return false;
         }
     }

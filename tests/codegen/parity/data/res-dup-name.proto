@@ -1,0 +1,10 @@
+// CR-06, message shape 5: the same reserved name is declared twice. The source
+// path refuses it while parsing; the descriptor half is res-dup-name.pbs,
+// encoded from res-dup-name.txtpb. protoc 30.1 refuses the same shape
+// ("Field name \"a\" is reserved multiple times.").
+syntax = "proto2";
+package parity;
+
+message M {
+  reserved "a", "a";
+}

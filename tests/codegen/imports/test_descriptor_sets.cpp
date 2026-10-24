@@ -434,6 +434,84 @@ void test_adapter_owns_json_name(const std::string& fixture_dir)
     CHECK(b != 0 && text(b->json_name) == "beta");
 }
 
+// CR-06/D2: the newly modeled `reserved_name` strings are interned like every
+// other retained string. Each container is decoded, ingested, then its buffer
+// is poisoned and destroyed; the message and the enum halves prove both
+// interning walks (intern_message and intern_enum).
+void test_adapter_owns_reserved_names(const std::string& fixture_dir)
+{
+    // message M { reserved "a", "a"; } - the duplicate is a semantic defect,
+    // not an ingestion one, so both views must survive.
+    {
+        const std::string path =
+            fixture_dir + "/codegen/parity/data/res-dup-name.pbs";
+        std::string bytes;
+        CHECK(read_binary_file(path, bytes));
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        {
+            const FileDescriptorSet decoded =
+                easypb::decode<FileDescriptorSet>(bytes);
+            CHECK(decoded.file.size() == 1);
+            if (decoded.file.size() != 1) return;
+            CHECK(easypb_schema::append_descriptor_files(decoded.file, path,
+                                                         set, error));
+        }
+        if (!bytes.empty()) {
+            std::memset(&bytes[0], '\xA5', bytes.size());
+        }
+        bytes.clear();
+        bytes.shrink_to_fit();
+
+        CHECK(set.files().size() == 1);
+        if (set.files().size() != 1) return;
+        const easypb_schema::SchemaFile& file = *set.files()[0];
+        CHECK(file.file.message_type.size() == 1);
+        if (file.file.message_type.size() == 1) {
+            const DescriptorProto& message = file.file.message_type[0];
+            CHECK(message.reserved_name.size() == 2);
+            if (message.reserved_name.size() == 2) {
+                CHECK(text(message.reserved_name[0]) == "a");
+                CHECK(text(message.reserved_name[1]) == "a");
+            }
+        }
+    }
+    // enum E { reserved "A"; } - the enum walk keeps its own reserved names.
+    {
+        const std::string path =
+            fixture_dir + "/codegen/parity/data/enum-reserved-name.pbs";
+        std::string bytes;
+        CHECK(read_binary_file(path, bytes));
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        {
+            const FileDescriptorSet decoded =
+                easypb::decode<FileDescriptorSet>(bytes);
+            CHECK(decoded.file.size() == 1);
+            if (decoded.file.size() != 1) return;
+            CHECK(easypb_schema::append_descriptor_files(decoded.file, path,
+                                                         set, error));
+        }
+        if (!bytes.empty()) {
+            std::memset(&bytes[0], '\xA5', bytes.size());
+        }
+        bytes.clear();
+        bytes.shrink_to_fit();
+
+        CHECK(set.files().size() == 1);
+        if (set.files().size() != 1) return;
+        const easypb_schema::SchemaFile& file = *set.files()[0];
+        CHECK(file.file.enum_type.size() == 1);
+        if (file.file.enum_type.size() == 1) {
+            const EnumDescriptorProto& enumeration = file.file.enum_type[0];
+            CHECK(enumeration.reserved_name.size() == 1);
+            if (enumeration.reserved_name.size() == 1) {
+                CHECK(text(enumeration.reserved_name[0]) == "A");
+            }
+        }
+    }
+}
+
 // --- the standalone container wrapper --------------------------------------
 
 // D5/D6: a multi-file container is addressed by container path, and each file
@@ -766,6 +844,7 @@ int main(int argc, char** argv)
     test_adapter_owns_a_decoded_buffer_and_generates_after_destruction(
         fixture_dir);
     test_adapter_owns_json_name(fixture_dir);
+    test_adapter_owns_reserved_names(fixture_dir);
     test_loader_loads_a_complete_container(fixture_dir);
     test_loader_rejects_an_empty_container(fixture_dir);
     test_loader_rejects_an_unnamed_file_in_a_multi_file_container();

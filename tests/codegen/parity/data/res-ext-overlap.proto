@@ -1,0 +1,11 @@
+// CR-06, message shape 3: an extension range overlaps a reserved range. The
+// source path refuses it while parsing; the descriptor half is
+// res-ext-overlap.pbs, encoded from res-ext-overlap.txtpb. protoc 30.1 refuses
+// the same shape ("Extension range 5 to 9 overlaps with reserved range 7 to 7.").
+syntax = "proto2";
+package parity;
+
+message M {
+  extensions 5 to 9;
+  reserved 7;
+}

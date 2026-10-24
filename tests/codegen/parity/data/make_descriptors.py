@@ -58,6 +58,8 @@ PROTOC_SOURCES = (
     "map-ok",
     "enum-ok",
     "ext-ok",
+    "ext-max",
+    "message-set-empty",
     "w68-dep",
     "w68-root",
 )

@@ -116,12 +116,18 @@ file(MAKE_DIRECTORY "${WORK_DIR}/w68")
 #   map-ok       a synthesised map entry in key-then-value order (W-37);
 #   enum-ok      a proto3 enum whose first value is zero (W-44);
 #   ext-ok       a proto2 extension range that leaves room for its field
-#                (W-45).
+#                (W-45);
+#   ext-max      the accepted extension-range boundary: exclusive end 536870912,
+#                one past the last extension number (CR-07);
+#   message-set-empty  a MessageSet with no ordinary fields, which protoc
+#                accepts and whose option has no header effect (CR-23).
 set(paired_fixtures
     methods-ok
     map-ok
     enum-ok
-    ext-ok)
+    ext-ok
+    ext-max
+    message-set-empty)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -298,6 +304,101 @@ if(FULL_BUILD)
         "extension ranges overlap"
         ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/ext-overlap.proto")
 endif()
+
+# --- CR-07: the extension-range upper bound --------------------------------
+#
+# The exclusive end may not exceed 536870912 (the last extension number plus
+# one). The source parser bounds the endpoint as text; the descriptor model
+# must refuse the same numbers, because a `.pbs` is the only door through
+# which a range beyond the protocol maximum reaches the linker. `ext-max` in
+# the accepted pair above is the boundary control.
+expect_refusal("The descriptor path must refuse an extension range above the protocol maximum"
+    "exclusive end exceeds 536870912"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/ext-high.pbs")
+if(FULL_BUILD)
+    expect_refusal("The source path must refuse an extension endpoint above the protocol maximum"
+        "field number must be in range 1..536870911"
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/ext-high.proto")
+endif()
+
+# --- CR-06: reserved ranges and names ---------------------------------------
+#
+# Seven shapes the reference compiler refuses. Each has a `.proto` fixture for
+# the source parser and a `.pbs` fixture encoded from the `.txtpb` beside it,
+# because protoc refuses these shapes and therefore cannot write the
+# descriptor. The two paths must agree on the verdict, and the descriptor
+# diagnostic must name the reserved declaration it violates; the exact
+# sentences differ deliberately (the source parser answers while parsing, the
+# descriptor sweep answers over the model).
+function(expect_reserved_refusal name descriptor_text source_text)
+    expect_refusal("The descriptor path must refuse ${name}" "${descriptor_text}"
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${name}.pbs")
+    if(FULL_BUILD)
+        expect_refusal("The source path must refuse ${name}" "${source_text}"
+            ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
+    endif()
+endfunction()
+
+# message shape 1: a field number inside a reserved range.
+expect_reserved_refusal(res-field-number
+    "uses a number reserved by [3, 8)"
+    "field number is reserved")
+# message shape 2: a field name that is reserved.
+expect_reserved_refusal(res-field-name
+    "field name \"a\" is reserved in message \".parity.M\""
+    "field name is reserved: a")
+# message shape 3: an extension range overlapping a reserved range.
+expect_reserved_refusal(res-ext-overlap
+    "overlaps reserved range [7, 8)"
+    "reserved and extension ranges overlap")
+# message shape 4: the same reserved range twice.
+expect_reserved_refusal(res-dup-range
+    "overlaps range [3, 5)"
+    "reserved ranges overlap")
+# message shape 5: the same reserved name twice.
+expect_reserved_refusal(res-dup-name
+    "field name \"a\" is reserved multiple times"
+    "duplicate reserved name a")
+# enum shape 1: an enum value using a reserved number (inclusive range).
+expect_reserved_refusal(enum-reserved
+    "uses a number reserved by [0, 0]"
+    "enum value number is reserved")
+# enum shape 2: an enum value using a reserved name.
+expect_reserved_refusal(enum-reserved-name
+    "enum value name \"A\" is reserved"
+    "enum value name is reserved: A")
+
+# --- CR-23: MessageSet with fields ------------------------------------------
+#
+# The option changes the wire encoding, so an ordinary struct cannot represent
+# it. protoc refuses a MessageSet that declares fields and accepts one that
+# does not; the accepted `message-set-empty` pair above pins the second half.
+# The source half has no fixture for the field-bearing shape: the parser parses
+# a message option as an uninterpreted value and discards it (B1 gap G2), so the
+# shape cannot reach the model from source text. The descriptor door is the one
+# this row is about.
+expect_refusal("The descriptor path must refuse a MessageSet with fields"
+    "a MessageSet cannot have fields"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/message-set-fields.pbs")
+
+# --- CR-46: optional names are not required fields -------------------------
+#
+# descriptor.proto marks every declaration name optional, so a `.pbs` with an
+# absent name is a semantic defect, not a decode failure. The decoder used to
+# throw "has no required field ..." and abort the whole set; the semantic name
+# sweep now refuses the declaration with its own descriptor path. protoc also
+# refuses these bytes (ValidateSymbolName, "Missing name."), so the verdict is
+# parity in every case. The source grammar cannot spell a nameless
+# declaration, hence descriptor-only fixtures.
+expect_refusal("The descriptor path must refuse a field with no name"
+    "field in .parity.M has no name"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/no-field-name.pbs")
+expect_refusal("The descriptor path must refuse a message with no name"
+    "message in .parity has no name"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/no-message-name.pbs")
+expect_refusal("The descriptor path must refuse a service with no name"
+    "service in .parity has no name"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/no-service-name.pbs")
 
 # --- W-68: the import include -------------------------------------------------
 #

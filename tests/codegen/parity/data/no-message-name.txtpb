@@ -1,0 +1,17 @@
+# CR-46: a message with no name. descriptor.proto declares
+# DescriptorProto.name optional; the semantic name sweep refuses it as
+# "message in the global scope has no name". protoc 30.1 refuses the same bytes
+# through ValidateSymbolName ("Missing name.").
+file {
+  name: "no-message-name.proto"
+  package: "parity"
+  syntax: "proto2"
+  message_type {
+    field {
+      name: "a"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+}

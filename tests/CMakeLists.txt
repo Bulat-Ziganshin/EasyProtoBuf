@@ -640,6 +640,8 @@ if(BUILD_TESTING)
         map-ok
         enum-ok
         ext-ok
+        ext-max
+        message-set-empty
         w36-same
         w68-root
         w68-dep)
@@ -690,6 +692,19 @@ if(BUILD_TESTING)
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-parity
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_parity_dir}/test_parity.cmake)
+
+    # CR-25 is accepted, not fixed: extension declarations are neither
+    # validated nor decoded. This test asserts the current direction (both
+    # doors accept a shape protoc refuses), so it must FAIL when that changes;
+    # the failure message names the decision that has to be re-evaluated. It is
+    # a separate ctest name because the accepted register cites it by name;
+    # `codegen.parity` above stays the property gate.
+    add_test(NAME codegen.parity.extensions_not_validated
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_parity_data_dir}
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_parity_dir}/test_extensions_not_validated.cmake)
 
     # Plan 5 follow-up S6 (W-11, W-47, W-48, W-58): the library API. A caller
     # that links easypb_codegen_core must get the CLI's answer: the entry

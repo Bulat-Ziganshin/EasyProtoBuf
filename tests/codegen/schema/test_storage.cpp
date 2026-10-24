@@ -194,6 +194,98 @@ void test_decode_service_names()
     }
 }
 
+// CR-06: the reserved ranges and names of a message and an enum are decoded
+// into the model. The bytes are the shape `res-*`/`enum-*` `.pbs` fixtures
+// carry; this test proves the decode switch independently of the CLI.
+void test_decode_reserved_and_message_set()
+{
+    // message M { reserved 3 to 7; reserved "a"; option message_set_wire_format = true; }
+    const unsigned char message_bytes[] = {
+        0x0a, 0x01, 'M',
+        0x4a, 0x04, 0x08, 0x03, 0x10, 0x08,   // reserved_range {3, 8}
+        0x52, 0x01, 'a',                       // reserved_name "a"
+        0x3a, 0x02, 0x08, 0x01                // options.message_set_wire_format
+    };
+    const std::string message_buffer(
+        reinterpret_cast<const char*>(message_bytes), sizeof(message_bytes));
+    const DescriptorProto message =
+        easypb::decode<DescriptorProto>(message_buffer);
+    CHECK(message.reserved_range.size() == 1);
+    if (message.reserved_range.size() == 1) {
+        CHECK(message.reserved_range[0].has_start);
+        CHECK(message.reserved_range[0].start == 3);
+        CHECK(message.reserved_range[0].has_end);
+        CHECK(message.reserved_range[0].end == 8);
+    }
+    CHECK(message.reserved_name.size() == 1);
+    if (message.reserved_name.size() == 1) {
+        CHECK(text(message.reserved_name[0]) == "a");
+    }
+    CHECK(message.options.has_message_set_wire_format);
+    CHECK(message.options.message_set_wire_format);
+
+    // enum E { Z = 0; reserved 0 to 0; reserved "A"; }
+    const unsigned char enum_bytes[] = {
+        0x0a, 0x01, 'E',
+        0x12, 0x05, 0x0a, 0x01, 'Z', 0x10, 0x00,  // value { name "Z" number 0 }
+        0x22, 0x04, 0x08, 0x00, 0x10, 0x00,      // reserved_range {0, 0}
+        0x2a, 0x01, 'A'                          // reserved_name "A"
+    };
+    const std::string enum_buffer(
+        reinterpret_cast<const char*>(enum_bytes), sizeof(enum_bytes));
+    const EnumDescriptorProto enumeration =
+        easypb::decode<EnumDescriptorProto>(enum_buffer);
+    CHECK(enumeration.reserved_range.size() == 1);
+    if (enumeration.reserved_range.size() == 1) {
+        CHECK(enumeration.reserved_range[0].has_start);
+        CHECK(enumeration.reserved_range[0].start == 0);
+        CHECK(enumeration.reserved_range[0].has_end);
+        CHECK(enumeration.reserved_range[0].end == 0);
+    }
+    CHECK(enumeration.reserved_name.size() == 1);
+    if (enumeration.reserved_name.size() == 1) {
+        CHECK(text(enumeration.reserved_name[0]) == "A");
+    }
+}
+
+// CR-46: descriptor.proto marks the three declaration names optional, so the
+// decoder must return an unnamed declaration instead of aborting the set with
+// a "required field" throw. The semantic name sweep owns the refusal.
+void test_decode_absent_optional_names()
+{
+    // file { name: "x.proto"
+    //        message_type { field { number: 1 label: OPTIONAL type: INT32 } }
+    //        service {} }
+    const unsigned char encoded[] = {
+        0x0a, 0x07, 'x', '.', 'p', 'r', 'o', 't', 'o',
+        0x22, 0x08, 0x12, 0x06,
+        0x18, 0x01, 0x20, 0x01, 0x28, 0x05,
+        0x32, 0x00
+    };
+    const std::string buffer(reinterpret_cast<const char*>(encoded), sizeof(encoded));
+    const FileDescriptorProto file = easypb::decode<FileDescriptorProto>(buffer);
+    CHECK(file.message_type.size() == 1);
+    if (file.message_type.size() == 1) {
+        const DescriptorProto& message = file.message_type[0];
+        CHECK(!message.has_name);
+        CHECK(message.name.empty());
+        CHECK(message.field.size() == 1);
+        if (message.field.size() == 1) {
+            CHECK(!message.field[0].has_name);
+            CHECK(message.field[0].name.empty());
+            CHECK(message.field[0].has_number);
+            CHECK(message.field[0].number == 1);
+            CHECK(message.field[0].has_label);
+            CHECK(message.field[0].has_type);
+        }
+    }
+    CHECK(file.service.size() == 1);
+    if (file.service.size() == 1) {
+        CHECK(!file.service[0].has_name);
+        CHECK(file.service[0].name.empty());
+    }
+}
+
 easypb_schema::SchemaFile* make_message_fixture()
 {
     // Caller owns the file: a package with one message holding one field and
@@ -300,6 +392,8 @@ int main()
     test_decode_dependency_lists_unpacked();
     test_decode_dependency_lists_packed();
     test_decode_service_names();
+    test_decode_reserved_and_message_set();
+    test_decode_absent_optional_names();
     test_descriptor_path_lookups();
 
     if (failures != 0) {

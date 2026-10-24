@@ -1,0 +1,10 @@
+// CR-23, accepted control: a MessageSet that declares no ordinary fields.
+// protoc 30.1 accepts it, and the option has no effect on the generated
+// header, so the source and descriptor paths emit identical bytes. The
+// descriptor half is message-set-empty.pbs, written by protoc from this file.
+syntax = "proto2";
+package parity;
+
+message M {
+  option message_set_wire_format = true;
+}

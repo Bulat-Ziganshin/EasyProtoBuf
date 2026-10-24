@@ -188,7 +188,33 @@ enum DiagnosticCode
     // of the same parity rule. Descriptor-origin only: the parser refuses the
     // same shapes as text before they reach the model, and its ranges are not
     // retained in the descriptor tree at all.
-    DIAGNOSTIC_INVALID_EXTENSION_RANGE
+    DIAGNOSTIC_INVALID_EXTENSION_RANGE,
+    // Step B5 (root R3, CR-06): a message or enum `reserved` declaration a
+    // descriptor carries is not one protoc would build. Every shape shares one
+    // code because they are one category - the declaration cannot describe
+    // numbers or names a declaration is forbidden to use: a message range whose
+    // start is not positive or whose exclusive end does not exceed its start
+    // (`BuildReservedRange`, descriptor.cc:6906-6922), an enum range whose
+    // inclusive end precedes its start (`:6924-6935`), two overlapping ranges
+    // (`:6396-6410`, `:7076-7092`), a reserved name written twice, a field or
+    // enum value that uses a reserved number or name (`:6412-6480`,
+    // `:7094-7125`), and an extension range that overlaps a reserved range
+    // (`:6447-6452`). protoc refuses all of them while it builds a file; the
+    // source parser refuses the same shapes as text (`proto_parser.cpp`'s
+    // `parse_reserved`, `add_range`, `validate_message_constraints` and the
+    // enum value checks), so this is the descriptor-origin half of the same
+    // frontend parity rule. Descriptor-origin only: the parser does not retain
+    // its ranges in the descriptor tree.
+    DIAGNOSTIC_INVALID_RESERVED_RANGE,
+    // Step B5 (root R3, CR-23): a message declares
+    // `MessageOptions.message_set_wire_format = true` and also declares
+    // ordinary fields. protoc refuses the shape ("MessageSets cannot have
+    // fields, only extensions.", descriptor.cc:6372-6380, :7994-8001), because
+    // the wire encoding of a MessageSet is not an ordinary message. The source
+    // parser does not model message options at all (B1 gap G2), so this is the
+    // descriptor-origin half of the rule; the field-less MessageSet protoc
+    // accepts is accepted here too.
+    DIAGNOSTIC_MESSAGE_SET_WITH_FIELDS
 };
 
 struct Diagnostic
@@ -486,6 +512,57 @@ inline DescriptorPath message_extension_range_path(
     DescriptorPath path = message_path;
     path.push_back(5);
     path.push_back(range_index);
+    return path;
+}
+
+// `DescriptorProto.reserved_range` is field 9 and `DescriptorProto.reserved_name`
+// is field 10. Both are modeled since step B5 (CR-06), so a reserved
+// declaration can be named by a descriptor path like every other one.
+inline DescriptorPath message_reserved_range_path(
+    const DescriptorPath& message_path, int range_index)
+{
+    DescriptorPath path = message_path;
+    path.push_back(9);
+    path.push_back(range_index);
+    return path;
+}
+
+inline DescriptorPath message_reserved_name_path(
+    const DescriptorPath& message_path, int name_index)
+{
+    DescriptorPath path = message_path;
+    path.push_back(10);
+    path.push_back(name_index);
+    return path;
+}
+
+// `DescriptorProto.options` is field 7. A rule about a message option (the
+// MessageSet field rule, CR-23) points at the option record rather than at the
+// message body: the option is what the declaration contradicts.
+inline DescriptorPath message_options_path(const DescriptorPath& message_path)
+{
+    DescriptorPath path = message_path;
+    path.push_back(7);
+    return path;
+}
+
+// `EnumDescriptorProto.reserved_range` is field 4 and its `reserved_name` is
+// field 5. The enum twin of the two message helpers above (CR-06).
+inline DescriptorPath enum_reserved_range_path(
+    const DescriptorPath& enum_path, int range_index)
+{
+    DescriptorPath path = enum_path;
+    path.push_back(4);
+    path.push_back(range_index);
+    return path;
+}
+
+inline DescriptorPath enum_reserved_name_path(const DescriptorPath& enum_path,
+                                              int name_index)
+{
+    DescriptorPath path = enum_path;
+    path.push_back(5);
+    path.push_back(name_index);
     return path;
 }
 

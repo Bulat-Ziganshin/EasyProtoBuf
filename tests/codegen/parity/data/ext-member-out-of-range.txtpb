@@ -1,0 +1,26 @@
+# CR-25 (accepted, E6): an extension member whose number is outside the
+# extendee's declared extension range. The model counts the member and decodes
+# nothing, so the range is never checked; protoc 30.1 refuses the bytes
+# ("\"parity.M\" does not declare 5 as an extension number.").
+file {
+  name: "ext-member-out-of-range.proto"
+  package: "parity"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    extension_range {
+      start: 100
+      end: 200
+    }
+  }
+  message_type {
+    name: "N"
+    extension {
+      name: "e"
+      number: 5
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      extendee: ".parity.M"
+    }
+  }
+}

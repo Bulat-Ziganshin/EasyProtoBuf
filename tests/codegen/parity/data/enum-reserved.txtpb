@@ -1,0 +1,22 @@
+# CR-06, enum shape 1: value Z = 0 uses `reserved 0`. An enum reserved range is
+# inclusive at both ends, so [0, 0] reserves the single number 0.
+file {
+  name: "enum-reserved.proto"
+  package: "parity"
+  syntax: "proto2"
+  enum_type {
+    name: "E"
+    value {
+      name: "Z"
+      number: 0
+    }
+    value {
+      name: "A"
+      number: 1
+    }
+    reserved_range {
+      start: 0
+      end: 0
+    }
+  }
+}

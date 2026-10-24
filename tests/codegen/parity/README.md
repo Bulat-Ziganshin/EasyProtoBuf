@@ -11,6 +11,13 @@ includes). The shared defect behind all six is the same: a rule existed on one
 frontend, or the two frontends read one descriptor differently, so the same
 schema was accepted by one path and refused by the other.
 
+Step B5 extends the lane with the descriptor-model root `R3`: `CR-06`
+(message/enum `reserved` ranges and names), `CR-07` (the extension-range upper
+bound), `CR-23` (a MessageSet that declares fields) and `CR-46` (the three
+optional declaration names), plus the accepted `CR-25` xfail. The same rule
+applies: every shape is a verdict on both doors, and the pair of accepted
+controls (`ext-max`, `message-set-empty`) is compared byte for byte.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -49,6 +56,19 @@ schema was accepted by one path and refused by the other.
 | a proto3 extension range | `data/ext-p3.proto` / `.pbs` | `W-45` |
 | a range that includes a declared field | `data/ext-field.proto` / `.pbs` | `W-45` |
 | two overlapping ranges | `data/ext-overlap.proto` / `.pbs` | `W-45` |
+| the accepted extension-range boundary (end = 536870912) | `data/ext-max.proto` / `.pbs` | `CR-07` |
+| an extension range above the protocol maximum | `data/ext-high.proto` / `.pbs` | `CR-07` |
+| a field number inside a reserved range | `data/res-field-number.proto` / `.pbs` | `CR-06` |
+| a field name that is reserved | `data/res-field-name.proto` / `.pbs` | `CR-06` |
+| an extension range overlapping a reserved range | `data/res-ext-overlap.proto` / `.pbs` | `CR-06` |
+| the same reserved range twice | `data/res-dup-range.proto` / `.pbs` | `CR-06` |
+| the same reserved name twice | `data/res-dup-name.proto` / `.pbs` | `CR-06` |
+| an enum value using a reserved number | `data/enum-reserved.proto` / `.pbs` | `CR-06` |
+| an enum value using a reserved name | `data/enum-reserved-name.proto` / `.pbs` | `CR-06` |
+| a MessageSet with no fields (accepted) | `data/message-set-empty.proto` / `.pbs` | `CR-23` |
+| a MessageSet that declares a field | `data/message-set-fields.pbs` | `CR-23` |
+| an unnamed field / message / service | `data/no-{field,message,service}-name.pbs` | `CR-46` |
+| extension declarations are not validated (xfail) | `data/ext-member-*.pbs`, `data/ext-unvalidated.proto` | `CR-25`, E6 |
 | a thin set: the import is named but not carried | `data/w68-root.proto` / `.pbs` | `W-68` |
 | the imported file | `data/w68-dep.proto` / `.pbs` | `W-68` |
 
@@ -66,6 +86,30 @@ source path is this project's own parser, and the refusal is part of the lane.
 The descriptor halves of the shapes `protoc` refuses are encoded from the
 `.txtpb` beside them, so the readable form of every crafted descriptor is in
 the tree.
+
+The step-B5 rows (`CR-06`, `CR-07`, `CR-23`, `CR-46`) follow the same rule.
+Each reserved/extension shape has a `.proto` half the source parser answers as
+text and a `.pbs` half encoded from the `.txtpb` beside it, because `protoc`
+refuses the shape and cannot write its descriptor. `ext-max` and
+`message-set-empty` are the accepted controls: `protoc` accepts them, so their
+`.pbs` halves are protoc-written and the accepted-pair check compares the two
+headers byte for byte.
+
+Two B5 shapes are descriptor-only by construction:
+
+- **a MessageSet that declares fields** (`CR-23`) — the source parser parses a
+  message option as an uninterpreted value and discards it (B1 gap `G2`), so
+  the field-bearing shape cannot reach the model from source text. The
+  field-less control is accepted on both paths and its header is unchanged.
+- **an unnamed field/message/service** (`CR-46`) — the source grammar cannot
+  spell a nameless declaration; only a crafted descriptor can.
+
+The accepted `CR-25` decision is the lane's one xfail, and it is a separate
+test: `codegen.parity.extensions_not_validated` asserts that an extension
+member with no extendee, one outside the declared range, and a source
+`extend` of an unknown type are still accepted. It passes while the accepted
+decision stands and fails when extensions become validated, which is the
+re-evaluation trigger in `triage.md`.
 
 ## The documented divergences
 

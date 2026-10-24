@@ -1,0 +1,11 @@
+// CR-07, accepted boundary: the exclusive end 536870912 is one past the last
+// extension number, so protoc 30.1 accepts it and so does this tool. The
+// descriptor half is ext-max.pbs, written by protoc from this file. The field
+// stays outside the range so the W-45 field/range rule does not fire.
+syntax = "proto2";
+package parity;
+
+message M {
+  optional int32 a = 1;
+  extensions 2 to 536870911;
+}

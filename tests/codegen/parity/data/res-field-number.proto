@@ -1,0 +1,11 @@
+// CR-06, message shape 1: a declared field number falls inside a reserved
+// range. The source path refuses it while parsing; the descriptor half is
+// res-field-number.pbs, encoded from res-field-number.txtpb. protoc 30.1
+// refuses the same shape ("Field \"a\" uses reserved number 5.").
+syntax = "proto2";
+package parity;
+
+message M {
+  reserved 3 to 7;
+  optional int32 a = 5;
+}

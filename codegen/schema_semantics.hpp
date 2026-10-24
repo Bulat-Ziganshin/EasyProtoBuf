@@ -234,19 +234,50 @@ bool validate_json_names(SchemaFile& file, Diagnostic& error);
 
 // Validates every extension range the file's messages declare, top-level and
 // nested, over the available descriptor alone (plan 5 follow-up S5, W-45).
-// Five shapes share DIAGNOSTIC_INVALID_EXTENSION_RANGE, because they are one
+// Six shapes share DIAGNOSTIC_INVALID_EXTENSION_RANGE, because they are one
 // category - the declaration does not describe usable extension numbers: a
 // range in a proto3 file, a non-positive start, an exclusive end that does not
-// exceed its start, a range that includes a declared field number, and two
-// overlapping ranges. protoc refuses all five while it builds a file
-// (descriptor.cc:6884-6896, :7898, :6426-6430, :6454-6482) and the source path
-// refuses every one of them as text (proto_parser.cpp's extension-range
-// parser), so this is the descriptor-origin half of the same frontend parity
-// rule. An unreferenced message is still descriptor input, so the check is
-// unconditional and runs before any resolution, in both linking modes, beside
-// the entry-shape and enum-number sweeps (A26's precedent). Returns false and
-// fills error at the first offending range, in declaration order.
+// exceed its start, an exclusive end above 536870912 (the protocol maximum
+// plus one, CR-07, unless the message declares MessageSet wire format), a
+// range that includes a declared field number, and two overlapping ranges.
+// protoc refuses all six while it builds a file (descriptor.cc:6884-6896,
+// :7898, :6426-6430, :6454-6482, :8395-8404) and the source path refuses every
+// one of them as text (proto_parser.cpp's extension-range parser), so this is
+// the descriptor-origin half of the same frontend parity rule. An unreferenced
+// message is still descriptor input, so the check is unconditional and runs
+// before any resolution, in both linking modes, beside the entry-shape and
+// enum-number sweeps (A26's precedent). Returns false and fills error at the
+// first offending range, in declaration order.
 bool validate_extension_ranges(SchemaFile& file, Diagnostic& error);
+
+// Validates every message and enum `reserved` declaration the file carries,
+// top-level and nested, over the available descriptor alone (step B5, CR-06).
+// The shapes share DIAGNOSTIC_INVALID_RESERVED_RANGE, because they are one
+// category - the declaration cannot describe numbers or names a declaration is
+// forbidden to use: a message range whose start is not positive or whose
+// exclusive end does not exceed its start, an enum range whose inclusive end
+// precedes its start, two overlapping ranges, a reserved name written twice, a
+// field or enum value that uses a reserved number or name, and an extension
+// range that overlaps a reserved range. protoc refuses all of them while it
+// builds a file (descriptor.cc:6396-6482, :6906-6935, :7060-7125); the source
+// path refuses the same shapes as text (proto_parser.cpp's reserved parsing
+// and value checks), so this is the descriptor-origin half of the same frontend
+// parity rule. Reference-free and unconditional: an unreferenced message or
+// enum is still descriptor input, so it runs in both linking modes beside the
+// extension-range and enum-number sweeps. Returns false and fills error at the
+// first offending declaration, in declaration order.
+bool validate_reserved_declarations(SchemaFile& file, Diagnostic& error);
+
+// Validates that no message declaring MessageSet wire format also declares
+// ordinary fields (step B5, CR-23), top-level and nested. protoc refuses the
+// shape while it builds a field ("MessageSets cannot have fields, only
+// extensions.", descriptor.cc:6372-6380, :7994-8001) because the wire encoding
+// of the message is not the ordinary one; a field-less MessageSet, and a
+// MessageSet whose only members are extensions, are accepted exactly as protoc
+// accepts them. Reference-free and unconditional; runs in both linking modes
+// beside the reserved and extension-range sweeps. Returns false and fills error
+// at the first offending message, in declaration order.
+bool validate_message_set_wire_format(SchemaFile& file, Diagnostic& error);
 
 // Validates the message nesting of one descriptor: no message may be nested
 // deeper than easypb_schema::max_message_nesting_depth() levels, which is

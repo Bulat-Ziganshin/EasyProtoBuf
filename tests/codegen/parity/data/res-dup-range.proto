@@ -1,0 +1,11 @@
+// CR-06, message shape 4: the same reserved range is declared twice. The
+// source path refuses it while parsing; the descriptor half is
+// res-dup-range.pbs, encoded from res-dup-range.txtpb. protoc 30.1 refuses the
+// same shape ("Reserved range 3 to 4 overlaps with already-defined range
+// 3 to 4.").
+syntax = "proto2";
+package parity;
+
+message M {
+  reserved 3 to 4, 3 to 4;
+}

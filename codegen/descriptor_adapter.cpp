@@ -47,6 +47,13 @@ void intern_enum(StringPool& strings, EnumDescriptorProto& enum_type)
         enum_type.value[i].name =
             intern_text(strings, enum_type.value[i].name);
     }
+    // CR-06: every `reserved_name` is a retained string like the rest. The
+    // walk is closed over descriptor.pb.hpp, so a field added to the model
+    // without a line here keeps pointing into the caller buffer.
+    for (std::size_t i = 0; i < enum_type.reserved_name.size(); ++i) {
+        enum_type.reserved_name[i] =
+            intern_text(strings, enum_type.reserved_name[i]);
+    }
 }
 
 void intern_message(StringPool& strings, DescriptorProto& message)
@@ -126,6 +133,11 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         message.oneof_decl[i].name =
             intern_text(strings, message.oneof_decl[i].name);
     }
+    // CR-06: the message's `reserved_name` entries are retained strings too.
+    for (std::size_t i = 0; i < message.reserved_name.size(); ++i) {
+        message.reserved_name[i] =
+            intern_text(strings, message.reserved_name[i]);
+    }
 }
 
 // Every str_view the descriptor model retains, in one walk. The set is
@@ -179,9 +191,18 @@ void copy_descriptor(const FileDescriptorProto& source, SchemaFile& slot,
     // (W-48). Normalizing here, at the one deep copy every descriptor path
     // shares, makes the linker and the generator read one shape. A caller's
     // hand-built descriptor may leave the bit false while carrying the text;
-    // the wire decoder sets it, so this is a no-op for `.pbs` bytes.
+    // the wire decoder sets it, so the no-op direction is the one `.pbs` bytes
+    // take.
+    //
+    // CR-45: the bit is assigned, never only set. An empty package is no
+    // package (protoc does not call `AddPackage` for an empty name,
+    // descriptor.cc:5372-5376), so a container that spells the field present
+    // with an empty value must not keep `has_package == true` - otherwise a
+    // library caller that inspects the bit (or a future reader that trusts it
+    // alone) sees a package that does not exist. `has_name` already had this
+    // shape.
     slot.file.has_name = has_name;
-    if (!slot.file.package.empty()) slot.file.has_package = true;
+    slot.file.has_package = !slot.file.package.empty();
 }
 
 // True when the byte is a C0 control character. A logical Protobuf file name
@@ -272,11 +293,32 @@ bool same_descriptor(const FieldDescriptorProto& left,
 bool same_descriptor(const MessageOptions& left, const MessageOptions& right)
 {
     return left.map_entry == right.map_entry &&
-           left.has_map_entry == right.has_map_entry;
+           left.message_set_wire_format == right.message_set_wire_format &&
+           left.has_map_entry == right.has_map_entry &&
+           left.has_message_set_wire_format ==
+               right.has_message_set_wire_format;
 }
 
 bool same_descriptor(const DescriptorProto_ExtensionRange& left,
                      const DescriptorProto_ExtensionRange& right)
+{
+    return left.start == right.start && left.end == right.end &&
+           left.has_start == right.has_start && left.has_end == right.has_end;
+}
+
+// CR-06: a reserved range is modeled content, so two copies of one logical
+// file that disagree about it are two different definitions. The presence bits
+// are compared like every other range's: an absent endpoint is the protobuf
+// default 0, not the same statement as a written 0.
+bool same_descriptor(const DescriptorProto_ReservedRange& left,
+                     const DescriptorProto_ReservedRange& right)
+{
+    return left.start == right.start && left.end == right.end &&
+           left.has_start == right.has_start && left.has_end == right.has_end;
+}
+
+bool same_descriptor(const EnumDescriptorProto_EnumReservedRange& left,
+                     const EnumDescriptorProto_EnumReservedRange& right)
 {
     return left.start == right.start && left.end == right.end &&
            left.has_start == right.has_start && left.has_end == right.has_end;
@@ -301,11 +343,21 @@ bool same_descriptor(const EnumDescriptorProto& left,
     if (left.name != right.name || left.has_name != right.has_name ||
         left.has_options != right.has_options ||
         !same_descriptor(left.options, right.options) ||
-        left.value.size() != right.value.size()) {
+        left.value.size() != right.value.size() ||
+        left.reserved_range.size() != right.reserved_range.size() ||
+        left.reserved_name.size() != right.reserved_name.size()) {
         return false;
     }
     for (std::size_t i = 0; i < left.value.size(); ++i) {
         if (!same_descriptor(left.value[i], right.value[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.reserved_range.size(); ++i) {
+        if (!same_descriptor(left.reserved_range[i], right.reserved_range[i])) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < left.reserved_name.size(); ++i) {
+        if (left.reserved_name[i] != right.reserved_name[i]) return false;
     }
     return true;
 }
@@ -326,7 +378,9 @@ bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right)
         left.nested_type.size() != right.nested_type.size() ||
         left.enum_type.size() != right.enum_type.size() ||
         left.oneof_decl.size() != right.oneof_decl.size() ||
-        left.extension_range.size() != right.extension_range.size()) {
+        left.extension_range.size() != right.extension_range.size() ||
+        left.reserved_range.size() != right.reserved_range.size() ||
+        left.reserved_name.size() != right.reserved_name.size()) {
         return false;
     }
     for (std::size_t i = 0; i < left.field.size(); ++i) {
@@ -345,6 +399,14 @@ bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right)
         if (!same_descriptor(left.extension_range[i], right.extension_range[i])) {
             return false;
         }
+    }
+    for (std::size_t i = 0; i < left.reserved_range.size(); ++i) {
+        if (!same_descriptor(left.reserved_range[i], right.reserved_range[i])) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < left.reserved_name.size(); ++i) {
+        if (left.reserved_name[i] != right.reserved_name[i]) return false;
     }
     return true;
 }

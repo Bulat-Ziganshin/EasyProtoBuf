@@ -1,0 +1,19 @@
+# CR-46: a service with no name. descriptor.proto declares
+# ServiceDescriptorProto.name optional; the semantic name sweep refuses it as
+# "service in the global scope has no name". protoc 30.1 refuses the same bytes
+# through ValidateSymbolName ("Missing name.").
+file {
+  name: "no-service-name.proto"
+  package: "parity"
+  syntax: "proto2"
+  service {
+    method {
+      name: "Call"
+      input_type: ".parity.M"
+      output_type: ".parity.M"
+    }
+  }
+  message_type {
+    name: "M"
+  }
+}

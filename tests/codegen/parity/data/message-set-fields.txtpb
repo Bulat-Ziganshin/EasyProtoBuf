@@ -1,0 +1,22 @@
+# CR-23: message_set_wire_format = true on a message that also declares an
+# ordinary field. protoc 30.1 refuses it ("MessageSets cannot have fields, only
+# extensions."); the source path cannot carry the shape into the model because
+# the parser discards message options (B1 gap G2), so the descriptor door is
+# the one this fixture pins.
+file {
+  name: "message-set-fields.proto"
+  package: "parity"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    field {
+      name: "a"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+    options {
+      message_set_wire_format: true
+    }
+  }
+}

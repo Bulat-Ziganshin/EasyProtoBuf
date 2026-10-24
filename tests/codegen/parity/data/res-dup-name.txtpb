@@ -1,0 +1,11 @@
+# CR-06, message shape 5: reserved name "a" is written twice.
+file {
+  name: "res-dup-name.proto"
+  package: "parity"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    reserved_name: "a"
+    reserved_name: "a"
+  }
+}

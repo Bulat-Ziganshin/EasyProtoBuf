@@ -1,0 +1,18 @@
+# CR-06, enum shape 2: value A = 1 uses the reserved name "A".
+file {
+  name: "enum-reserved-name.proto"
+  package: "parity"
+  syntax: "proto2"
+  enum_type {
+    name: "E"
+    value {
+      name: "Z"
+      number: 0
+    }
+    value {
+      name: "A"
+      number: 1
+    }
+    reserved_name: "A"
+  }
+}
