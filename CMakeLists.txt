@@ -133,8 +133,8 @@ add_library(easypb_descriptor_loader STATIC codegen/descriptor_loader.cpp)
 target_include_directories(easypb_descriptor_loader PUBLIC include codegen)
 target_link_libraries(easypb_descriptor_loader PUBLIC easypb_file_io easypb_schema)
 
-# Plan 5's standalone publisher: containment, native collision checks,
-# directory creation and per-file replacement. It is NOT part of the
+# Plan 5's standalone publisher: output-name validation, duplicate output-name
+# refusal, directory creation and the in-place write. It is NOT part of the
 # generation core (P11) - a plugin or in-memory caller must not be able to
 # reach the output tree through the library it links for generation.
 add_library(easypb_header_output STATIC codegen/header_output.cpp)

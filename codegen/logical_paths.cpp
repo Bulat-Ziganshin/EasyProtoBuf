@@ -1,9 +1,21 @@
 #include "logical_paths.hpp"
 
 #include <cstddef>
+#include <sstream>
 
 namespace easypb_schema {
 namespace {
+
+// The number of components, spelled out. The runtime's own helper
+// (easypb::detail::number_to_string) is not used here: this module is
+// deliberately free of the runtime header, so that a descriptor-only build
+// reuses it unchanged.
+std::string component_limit_text()
+{
+    std::ostringstream text;
+    text << max_logical_path_components();
+    return text.str();
+}
 
 // Portable strict UTF-8 well-formedness: no overlong encodings,
 // surrogate code points, truncated sequences, or values above U+10FFFF.
@@ -107,6 +119,7 @@ bool validate_logical_path(const std::string& path, std::string& reason)
     }
 
     std::size_t start = 0;
+    std::size_t components = 0;
     while (start <= path.size()) {
         std::size_t end = path.find('/', start);
         if (end == std::string::npos) end = path.size();
@@ -121,6 +134,12 @@ bool validate_logical_path(const std::string& path, std::string& reason)
         }
         if (length == 2 && path[start] == '.' && path[start + 1] == '.') {
             reason = "import path must not contain '..' components";
+            return false;
+        }
+        ++components;
+        if (components > max_logical_path_components()) {
+            reason = "import path must not have more than " +
+                     component_limit_text() + " components";
             return false;
         }
         if (end == path.size()) break;

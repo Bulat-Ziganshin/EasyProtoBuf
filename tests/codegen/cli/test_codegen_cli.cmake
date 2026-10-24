@@ -7,6 +7,9 @@ endif()
 if(NOT DEFINED WORK_DIR)
     message(FATAL_ERROR "WORK_DIR is required")
 endif()
+if(NOT DEFINED FIXTURE_DIR)
+    message(FATAL_ERROR "FIXTURE_DIR is required")
+endif()
 if(NOT DEFINED FULL_BUILD)
     set(FULL_BUILD 1)
 endif()
@@ -39,6 +42,38 @@ function(run_fail output_var error_var)
     set(${error_var} "${error}" PARENT_SCOPE)
 endfunction()
 
+# The same two drivers with a pinned working directory: a case that has to
+# mean "." or a relative output root must not depend on the build directory.
+function(run_ok_in workdir output_var error_var)
+    execute_process(
+        COMMAND ${ARGN}
+        WORKING_DIRECTORY "${workdir}"
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR
+            "Command failed (${result}): ${ARGN}\nstdout:\n${output}\nstderr:\n${error}")
+    endif()
+    set(${output_var} "${output}" PARENT_SCOPE)
+    set(${error_var} "${error}" PARENT_SCOPE)
+endfunction()
+
+function(run_fail_in workdir output_var error_var)
+    execute_process(
+        COMMAND ${ARGN}
+        WORKING_DIRECTORY "${workdir}"
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error)
+    if(result EQUAL 0)
+        message(FATAL_ERROR
+            "Command unexpectedly succeeded: ${ARGN}\nstdout:\n${output}\nstderr:\n${error}")
+    endif()
+    set(${output_var} "${output}" PARENT_SCOPE)
+    set(${error_var} "${error}" PARENT_SCOPE)
+endfunction()
+
 function(require_contains variable_name expected description)
     string(FIND "${${variable_name}}" "${expected}" position)
     if(position EQUAL -1)
@@ -49,6 +84,13 @@ endfunction()
 function(require_empty variable_name description)
     if(NOT "${${variable_name}}" STREQUAL "")
         message(FATAL_ERROR "${description}: expected empty output, got '${${variable_name}}'")
+    endif()
+endfunction()
+
+function(require_not_contains variable_name unexpected description)
+    string(FIND "${${variable_name}}" "${unexpected}" position)
+    if(NOT position EQUAL -1)
+        message(FATAL_ERROR "${description}: unexpected '${unexpected}' in ${variable_name}")
     endif()
 endfunction()
 
@@ -71,6 +113,10 @@ run_ok(help_out help_err ${CODEGEN} --help)
 require_contains(help_out "--target" "Help lists the target option")
 require_contains(help_out "--proto_path" "Help lists the proto_path option")
 require_contains(help_out "--out-dir" "Help lists the out-dir option")
+# W-54: the documented defaults carry the leading `::` the binary prints.
+require_contains(help_out "=::std::string" "Help prints the string-type default")
+require_contains(help_out "=::std::vector" "Help prints the repeated-type default")
+require_contains(help_out "=::std::map" "Help prints the map-type default")
 
 # --- the mode table ---------------------------------------------------------
 
@@ -261,3 +307,598 @@ else()
     require_contains(lite_source_err "no .proto parser"
         "Lite build source rejection")
 endif()
+
+# --- S7e: the source diagnostics, end to end --------------------------------
+#
+# W-61: the loader names the logical file and its position once. W-65: the
+# missing `;` is reported before the value is classified, and the unsupported
+# value points at the value token. W-60: the source refusal carries the same
+# code the descriptor twin does (asserted by the unit lanes).
+
+if(FULL_BUILD)
+    run_fail(w61_out w61_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" editions.proto)
+    require_empty(w61_out "W-61 stdout")
+    require_contains(w61_err "editions syntax is not supported"
+        "W-61 editions refusal")
+    string(REGEX MATCHALL "editions.proto:1:1:" w61_hits "${w61_err}")
+    list(LENGTH w61_hits w61_count)
+    if(NOT w61_count EQUAL 1)
+        message(FATAL_ERROR
+            "W-61: expected one 'editions.proto:1:1:' occurrence, got ${w61_count}: ${w61_err}")
+    endif()
+
+    run_fail(w65_nosemi_out w65_nosemi_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" syntax-no-semi.proto)
+    require_empty(w65_nosemi_out "W-65 no-semicolon stdout")
+    require_contains(w65_nosemi_err "expected ';'"
+        "W-65 reports the missing semicolon")
+    require_not_contains(w65_nosemi_err "syntax must be"
+        "W-65 does not classify before the grammar")
+
+    run_fail(w65_unsupported_out w65_unsupported_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" syntax-unsupported.proto)
+    require_empty(w65_unsupported_out "W-65 unsupported-value stdout")
+    require_contains(w65_unsupported_err "syntax must be"
+        "W-65 reports the unsupported value")
+    require_not_contains(w65_unsupported_err "expected ';'"
+        "W-65 does not report a semicolon that is present")
+endif()
+
+# --- S4: the command-line contract -----------------------------------------
+#
+# W-14, W-18, W-20, W-21, W-22, W-24, W-26. The parse-level rows and the
+# two read paths are driven through the built executable exactly like the rows
+# above; FIXTURE_DIR carries the S4 fixtures (tests/codegen/cli/data).
+
+set(s4 "${WORK_DIR}/s4")
+file(MAKE_DIRECTORY "${s4}")
+
+# --- W-20: an unknown or misspelled option is refused -----------------------
+
+if(FULL_BUILD)
+    foreach(unknown --nope -Z --no-has-field)
+        string(MAKE_C_IDENTIFIER "${unknown}" unknown_id)
+        run_fail(w20_${unknown_id}_out w20_${unknown_id}_err
+            ${CODEGEN} "${unknown}" "${FIXTURE_DIR}/hasfield.proto")
+        require_empty(w20_${unknown_id}_out
+            "W-20 unknown option must not generate (${unknown})")
+        require_contains(w20_${unknown_id}_err "Unknown flag: ${unknown}"
+            "W-20 names the unknown option (${unknown})")
+    endforeach()
+
+    # The control: -f is the option the typo was reaching for, and it must
+    # still remove the presence flag.
+    run_ok(w20_control_out w20_control_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" -f "${FIXTURE_DIR}/hasfield.proto")
+    require_not_contains(w20_control_out "bool has_v"
+        "W-20 control -f still drops the presence flag")
+endif()
+
+# --- W-21: -- ends option parsing -------------------------------------------
+
+# The descriptor path loads once: the tail used to be appended and parsed
+# again, so a named container was ingested twice.
+run_ok(w21_descriptor_out w21_descriptor_err
+    ${CODEGEN} --descriptor-set -- "${single}")
+require_contains(w21_descriptor_out "Generated by EasyProtoBuf Codegen"
+    "W-21 the descriptor tail loads once")
+require_empty(w21_descriptor_err "W-21 descriptor stderr")
+
+if(FULL_BUILD)
+    # --help after -- is an input spelling, not the help switch: the run
+    # fails naming --help, and stdout stays empty (before the fix it printed
+    # the usage text and exited 0).
+    run_fail(w21_help_out w21_help_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" --
+                "${FIXTURE_DIR}/hasfield.proto" --help)
+    require_empty(w21_help_out "W-21 --help after -- is not honoured")
+    require_contains(w21_help_err "--help"
+        "W-21 --help after -- is treated as an input root")
+
+    # --no-class after -- is positional too: the run names it as an
+    # unresolvable root instead of applying the switch.
+    run_fail(w21_option_out w21_option_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" --
+                --no-class "${FIXTURE_DIR}/hasfield.proto")
+    require_empty(w21_option_out "W-21 an option after -- is not applied")
+    require_contains(w21_option_err "--no-class"
+        "W-21 an option after -- is treated as an input root")
+endif()
+
+# --- W-22: a required value is the next token, whatever it looks like -------
+
+if(FULL_BUILD)
+    set(w22 "${s4}/w22")
+    file(MAKE_DIRECTORY "${w22}")
+    # The owner's decision of 2026-10-22 reverses the S4 rule: the value of
+    # a required option is the next token, even when that token starts with
+    # "-". The row pins the working directory, because the run now publishes
+    # into a directory named after the value.
+    execute_process(
+        COMMAND ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir --help
+                "${FIXTURE_DIR}/hasfield.proto"
+        WORKING_DIRECTORY "${w22}"
+        RESULT_VARIABLE w22_result
+        OUTPUT_VARIABLE w22_out
+        ERROR_VARIABLE w22_err)
+    if(NOT w22_result EQUAL 0)
+        message(FATAL_ERROR
+            "W-22 --out-dir --help failed\nstdout:\n${w22_out}\nstderr:\n${w22_err}")
+    endif()
+    require_empty(w22_out "W-22 the value token prints nothing on stdout")
+    require_not_contains(w22_out "Usage:"
+        "W-22 the value token is not the help switch")
+    if(NOT EXISTS "${w22}/--help/hasfield.pb.hpp")
+        message(FATAL_ERROR
+            "W-22 the next token was not the value: no --help directory with the header")
+    endif()
+
+    # The short form takes the next token as well: "-I" swallows "--out-dir",
+    # and "DIR" becomes the positional input the run then cannot load.
+    run_fail(w22_short_out w22_short_err
+        ${CODEGEN} -I --out-dir DIR "${FIXTURE_DIR}/hasfield.proto")
+    require_empty(w22_short_out "W-22 short value stdout")
+    require_contains(w22_short_err "DIR"
+        "W-22 the short option takes the next token as its value")
+
+    # A flag with no next token at all is still refused.
+    run_fail(w22_trailing_out w22_trailing_err
+        ${CODEGEN} "${FIXTURE_DIR}/hasfield.proto" --out-dir)
+    require_contains(w22_trailing_err "Missing value for flag: --out-dir"
+        "W-22 a trailing option names the missing value")
+
+    # The separator is a value in the value position, exactly as the POSIX
+    # getopt takes the next argv element as it is: "--out-dir --" names an
+    # output directory "--", and the separator is not a separator there.
+    execute_process(
+        COMMAND ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir --
+                "${FIXTURE_DIR}/hasfield.proto"
+        WORKING_DIRECTORY "${w22}"
+        RESULT_VARIABLE w22_sep_result
+        OUTPUT_VARIABLE w22_sep_out
+        ERROR_VARIABLE w22_sep_err)
+    if(NOT w22_sep_result EQUAL 0)
+        message(FATAL_ERROR
+            "W-22 --out-dir -- failed\nstdout:\n${w22_sep_out}\nstderr:\n${w22_sep_err}")
+    endif()
+    require_empty(w22_sep_out "W-22 the separator value prints nothing on stdout")
+    if(NOT EXISTS "${w22}/--/hasfield.pb.hpp")
+        message(FATAL_ERROR
+            "W-22 the separator was not the value: no -- directory with the header")
+    endif()
+
+    # The control: the ordinary spelling still publishes.
+    set(w22_ok "${s4}/w22-ok")
+    file(MAKE_DIRECTORY "${w22_ok}")
+    run_ok(w22_control_out w22_control_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir "${w22_ok}"
+                "${FIXTURE_DIR}/hasfield.proto")
+    require_empty(w22_control_out "W-22 control stdout")
+    if(NOT EXISTS "${w22_ok}/hasfield.pb.hpp")
+        message(FATAL_ERROR "W-22 control did not publish the header")
+    endif()
+endif()
+
+# --- W-14: the generation path prints the warnings it stores ----------------
+
+# The descriptor half runs in every profile: the compatibility link records
+# the unresolved external type and the generation path must print it.
+run_ok(w14_compat_out w14_compat_err
+    ${CODEGEN} --descriptor-set "${FIXTURE_DIR}/external-anon.pbs")
+require_contains(w14_compat_out "Generated by EasyProtoBuf Codegen"
+    "W-14 the compatibility header is still generated")
+require_contains(w14_compat_err "warning:"
+    "W-14 the compatibility warning is printed")
+require_contains(w14_compat_err "external type \".ext.Y\""
+    "W-14 the warning names the external type")
+
+if(FULL_BUILD)
+    set(w14 "${s4}/w14")
+    file(MAKE_DIRECTORY "${w14}")
+    run_ok(w14_source_out w14_source_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir "${w14}"
+                "${FIXTURE_DIR}/extend.proto")
+    require_empty(w14_source_out "W-14 source stdout stays empty")
+    require_contains(w14_source_err "warning:"
+        "W-14 the dropped extension is warned about")
+    require_contains(w14_source_err "extend declaration parsed but not stored"
+        "W-14 the warning names the dropped declaration")
+    if(NOT EXISTS "${w14}/extend.pb.hpp")
+        message(FATAL_ERROR "W-14 the source header was not published")
+    endif()
+endif()
+
+# --- W-18: an anonymous file is not addressable -----------------------------
+
+# The container path used to stay in the schema index, so --target selected
+# the unnamed file and silently switched the run to strict linking.
+run_fail(w18_target_out w18_target_err
+    ${CODEGEN} --descriptor-set --target "${FIXTURE_DIR}/anon.pbs"
+            "${FIXTURE_DIR}/anon.pbs")
+require_empty(w18_target_out "W-18 target stdout")
+require_contains(w18_target_err "not among the loaded descriptor files"
+    "W-18 the anonymous file has no target name")
+
+# The compatibility path itself is unchanged.
+run_ok(w18_compat_out w18_compat_err
+    ${CODEGEN} --descriptor-set "${FIXTURE_DIR}/anon.pbs")
+require_contains(w18_compat_out "Generated by EasyProtoBuf Codegen"
+    "W-18 the single anonymous file still generates")
+require_empty(w18_compat_err "W-18 compatibility stderr")
+
+# --- W-35: an empty descriptor view never becomes a C string -----------------
+
+if(FULL_BUILD)
+    # The printer converts `field.default_value` directly, and for an empty
+    # default the adapter leaves it as the null view: the guarded conversion
+    # must print `[default=]` and exit 0.
+    run_ok(w35_print_out w35_print_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+                "${FIXTURE_DIR}/defaults-empty.pbs")
+    require_contains(w35_print_out "[default=]" "W-35 empty default prints")
+    require_empty(w35_print_err "W-35 print stderr")
+
+    # The source path of the same shape: the header keeps the empty default.
+    run_ok(w35_source_out w35_source_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" "${FIXTURE_DIR}/defaults-empty.proto")
+    require_contains(w35_source_out "::std::string b = \"\";"
+        "W-35 bytes default")
+    require_empty(w35_source_err "W-35 source stderr")
+endif()
+
+# --- W-24: the utility modes read non-ASCII paths ---------------------------
+
+set(w24 "${s4}/unicode")
+file(MAKE_DIRECTORY "${w24}/каталог")
+file(WRITE "${w24}/схема.proto"
+    "syntax = \"proto3\";\npackage cx;\nmessage C { int32 v = 1; }\n")
+file(WRITE "${w24}/каталог/plain.proto"
+    "syntax = \"proto3\";\npackage pd;\nmessage P { int32 v = 1; }\n")
+configure_file("${single}" "${w24}/схема.pbs" COPYONLY)
+
+# The generation path already read these spellings; the control keeps that
+# half honest in every profile (the utility modes below are parser-only).
+run_ok(w24_generate_out w24_generate_err
+    ${CODEGEN} --descriptor-set "${w24}/схема.pbs")
+require_contains(w24_generate_out "Generated by EasyProtoBuf Codegen"
+    "W-24 a non-ASCII container name still generates")
+require_empty(w24_generate_err "W-24 generation stderr")
+
+if(FULL_BUILD)
+    run_ok(w24_file_out w24_file_err
+        ${CODEGEN} --print-descriptor "${w24}/схема.proto")
+    require_contains(w24_file_out "message C"
+        "W-24 a non-ASCII file name is read")
+    require_empty(w24_file_err "W-24 file stderr")
+
+    run_ok(w24_dir_out w24_dir_err
+        ${CODEGEN} --print-descriptor
+                "${w24}/каталог/plain.proto")
+    require_contains(w24_dir_out "message P"
+        "W-24 a non-ASCII directory is read")
+
+    run_ok(w24_pbs_out w24_pbs_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+                "${w24}/схема.pbs")
+    require_contains(w24_pbs_out "integration-proto2.proto"
+        "W-24 a non-ASCII container name is read")
+
+    run_ok(w24_bench_out w24_bench_err
+        ${CODEGEN} --benchmark-parser "${w24}/схема.proto")
+    require_contains(w24_bench_out "Parsed"
+        "W-24 the benchmark reads a non-ASCII file name")
+endif()
+
+# --- W-26: the surviving header does not depend on --target order -----------
+
+set(w26_lower "${s4}/w26-lower")
+set(w26_upper "${s4}/w26-upper")
+file(MAKE_DIRECTORY "${w26_lower}" "${w26_upper}")
+run_ok(w26_lower_out w26_lower_err
+    ${CODEGEN} --descriptor-set --target api/x.proto --target api/X.proto
+            --out-dir "${w26_lower}" "${FIXTURE_DIR}/casepair.pbs")
+run_ok(w26_upper_out w26_upper_err
+    ${CODEGEN} --descriptor-set --target api/X.proto --target api/x.proto
+            --out-dir "${w26_upper}" "${FIXTURE_DIR}/casepair.pbs")
+
+file(GLOB w26_lower_files RELATIVE "${w26_lower}" "${w26_lower}/api/*")
+file(GLOB w26_upper_files RELATIVE "${w26_upper}" "${w26_upper}/api/*")
+list(SORT w26_lower_files)
+list(SORT w26_upper_files)
+if(NOT "${w26_lower_files}" STREQUAL "${w26_upper_files}")
+    message(FATAL_ERROR
+        "W-26 the target order changed the published tree: lower-first=${w26_lower_files} upper-first=${w26_upper_files}")
+endif()
+foreach(relative ${w26_lower_files})
+    file(SHA256 "${w26_lower}/${relative}" w26_lower_hash)
+    file(SHA256 "${w26_upper}/${relative}" w26_upper_hash)
+    if(NOT w26_lower_hash STREQUAL w26_upper_hash)
+        message(FATAL_ERROR
+            "W-26 the target order changed ${relative}: ${w26_lower_hash} != ${w26_upper_hash}")
+    endif()
+endforeach()
+list(LENGTH w26_lower_files w26_lower_count)
+if(w26_lower_count EQUAL 1)
+    # A case-folding filesystem collapses the pair to one file. The survivor
+    # is the byte-wise greater target (api/x.proto), which is what protoc's
+    # sorted output map leaves; a case-sensitive filesystem keeps both.
+    list(GET w26_lower_files 0 w26_only)
+    file(READ "${w26_lower}/${w26_only}" w26_survivor)
+    require_contains(w26_survivor "struct Lower"
+        "W-26 the byte-wise greater target survives on a case-folding filesystem")
+endif()
+
+# --- S7c: the command line's own surface -----------------------------------
+#
+# W-23 (the short-option `=` forms), W-25 (the `.protodevel` suffix), W-19
+# (the anonymous file's label and the one-path rule), W-29 (a directory at the
+# target) and W-66 (the stdout failure). All scratch lives below ${WORK_DIR}/s7c.
+
+set(s7c "${WORK_DIR}/s7c")
+file(MAKE_DIRECTORY "${s7c}")
+
+# --- W-23: one separator rule for both option forms -------------------------
+
+# `-s=V` / `-r=V` / `-m=V` carry the value V: the '=' is the separator, not
+# part of the C++ type. Before the fix the declaration began `=::x::...`.
+run_ok(w23_s_out w23_s_err
+    ${CODEGEN} --descriptor-set -s=::x::string ${single})
+require_contains(w23_s_out "::x::string" "W-23 -s=V carries the value")
+require_not_contains(w23_s_out "=::x::string"
+    "W-23 the separator is not part of the value")
+require_empty(w23_s_err "W-23 -s=V stderr")
+
+run_ok(w23_r_out w23_r_err
+    ${CODEGEN} --descriptor-set -r=::x::vector ${single})
+require_contains(w23_r_out "::x::vector<" "W-23 -r=V carries the value")
+require_not_contains(w23_r_out "=::x::vector"
+    "W-23 the separator is not part of the repeated type")
+require_empty(w23_r_err "W-23 -r=V stderr")
+
+run_ok(w23_m_out w23_m_err
+    ${CODEGEN} --descriptor-set -m=::x::map ${single})
+require_contains(w23_m_out "::x::map<" "W-23 -m=V carries the value")
+require_not_contains(w23_m_out "=::x::map"
+    "W-23 the separator is not part of the map type")
+require_empty(w23_m_err "W-23 -m=V stderr")
+
+# `-s=` is an explicitly empty value: refused by the parser's own rule, with
+# the spelling the user typed - the same sentence the long form uses.
+run_fail(w23_s_empty_out w23_s_empty_err
+    ${CODEGEN} --descriptor-set -s= ${single})
+require_empty(w23_s_empty_out "W-23 -s= prints nothing on stdout")
+require_contains(w23_s_empty_err "-s requires a non-empty value"
+    "W-23 -s= is refused with the short spelling")
+
+# The long control keeps its sentence.
+run_fail(w23_long_empty_out w23_long_empty_err
+    ${CODEGEN} --descriptor-set --string-type= ${single})
+require_contains(w23_long_empty_err "--string-type requires a non-empty value"
+    "W-23 the long empty value keeps its spelling")
+
+# A search root spelled `-I=DIR` searches DIR: the counter-example was a root
+# literally named `=DIR`, so the input was not found.
+set(w23 "${s7c}/w23")
+file(MAKE_DIRECTORY "${w23}" "${w23}/sub")
+file(WRITE "${w23}/tiny.proto"
+    "syntax = \"proto3\";\npackage tiny;\nmessage T { int32 v = 1; }\n")
+file(WRITE "${w23}/sub/tiny.proto"
+    "syntax = \"proto3\";\npackage tiny;\nmessage T { int32 v = 1; }\n")
+
+if(FULL_BUILD)
+    run_ok_in("${w23}" w23_i_dot_out w23_i_dot_err
+        ${CODEGEN} -I=. tiny.proto)
+    require_contains(w23_i_dot_out "// Source: tiny.proto"
+        "W-23 -I=. searches the current directory")
+    require_empty(w23_i_dot_err "W-23 -I=. stderr")
+
+    run_ok_in("${w23}" w23_i_dir_out w23_i_dir_err
+        ${CODEGEN} -I=sub sub/tiny.proto)
+    require_contains(w23_i_dir_out "// Source: tiny.proto"
+        "W-23 -I=DIR searches DIR")
+    require_empty(w23_i_dir_err "W-23 -I=DIR stderr")
+endif()
+
+run_fail_in("${w23}" w23_i_empty_out w23_i_empty_err
+    ${CODEGEN} -I= tiny.proto)
+require_empty(w23_i_empty_out "W-23 -I= prints nothing on stdout")
+require_contains(w23_i_empty_err "-I requires a non-empty value"
+    "W-23 -I= is refused")
+
+# The value position is not inspected: `--nope=` there is a directory name,
+# not an option (W-22). This is the regression for the deleted prescan.
+run_ok_in("${w23}" w23_value_out w23_value_err
+    ${CODEGEN} --descriptor-set --out-dir --nope= ${single})
+require_empty(w23_value_out "W-23 the value token prints nothing on stdout")
+require_empty(w23_value_err "W-23 the value token is accepted")
+if(NOT EXISTS "${w23}/--nope=/integration-proto2.pb.hpp")
+    message(FATAL_ERROR
+        "W-23 the value position was inspected: no --nope= directory with the header")
+endif()
+
+# An unknown option is still unknown, whatever it carries.
+run_fail(w23_unknown_out w23_unknown_err
+    ${CODEGEN} --nope= --help)
+require_empty(w23_unknown_out
+    "W-23 an unknown option must not print help")
+require_contains(w23_unknown_err "Unknown flag: --nope="
+    "W-23 the unknown option is named as typed")
+
+# A switch takes no value, so a short switch with '=' stays an unknown flag.
+foreach(w23_switches -X= -c=)
+    string(MAKE_C_IDENTIFIER "${w23_switches}" w23_switch_id)
+    run_fail(w23_${w23_switch_id}_out w23_${w23_switch_id}_err
+        ${CODEGEN} "${w23_switches}" "${FIXTURE_DIR}/hasfield.proto")
+    require_empty(w23_${w23_switch_id}_out
+        "W-23 a switch spelling generates nothing (${w23_switches})")
+    require_contains(w23_${w23_switch_id}_err "Unknown flag: ${w23_switches}"
+        "W-23 a short switch keeps its unknown-flag refusal (${w23_switches})")
+endforeach()
+
+# A switch ignores an empty inline value: `--help=` is help (protoc parity).
+run_ok(w23_help_eq_out w23_help_eq_err
+    ${CODEGEN} --help=)
+require_contains(w23_help_eq_out "Usage: codegen"
+    "W-23 --help= is still help")
+require_empty(w23_help_eq_err "W-23 --help= stderr")
+
+# --- W-25: the output name loses `.protodevel`, the logical name keeps it ---
+
+set(w25_src "${s7c}/w25-src")
+set(w25_pbs "${s7c}/w25-pbs")
+file(MAKE_DIRECTORY "${w25_src}" "${w25_pbs}")
+
+run_ok(w25_pbs_out w25_pbs_err
+    ${CODEGEN} --descriptor-set --out-dir "${w25_pbs}"
+            "${FIXTURE_DIR}/legacy.protodevel.pbs")
+require_empty(w25_pbs_out "W-25 descriptor stdout stays empty")
+if(NOT EXISTS "${w25_pbs}/legacy.pb.hpp")
+    message(FATAL_ERROR
+        "W-25 the descriptor path did not strip .protodevel")
+endif()
+if(EXISTS "${w25_pbs}/legacy.protodevel.pb.hpp")
+    message(FATAL_ERROR
+        "W-25 the descriptor path kept the .protodevel suffix in the output name")
+endif()
+file(READ "${w25_pbs}/legacy.pb.hpp" w25_pbs_header)
+require_contains(w25_pbs_header "// Source: legacy.protodevel"
+    "W-25 the descriptor path keeps the logical name in // Source:")
+
+if(FULL_BUILD)
+    run_ok(w25_src_out w25_src_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir "${w25_src}" legacy.protodevel)
+    require_empty(w25_src_out "W-25 source stdout stays empty")
+    if(NOT EXISTS "${w25_src}/legacy.pb.hpp")
+        message(FATAL_ERROR "W-25 the source path did not strip .protodevel")
+    endif()
+    if(EXISTS "${w25_src}/legacy.protodevel.pb.hpp")
+        message(FATAL_ERROR
+            "W-25 the source path kept the .protodevel suffix in the output name")
+    endif()
+    file(READ "${w25_src}/legacy.pb.hpp" w25_src_header)
+    require_contains(w25_src_header "// Source: legacy.protodevel"
+        "W-25 the source path keeps the logical name in // Source:")
+    # One function names both outputs and the two paths generate the same
+    # header, so the parity proof is a byte comparison.
+    file(SHA256 "${w25_src}/legacy.pb.hpp" w25_src_hash)
+    file(SHA256 "${w25_pbs}/legacy.pb.hpp" w25_pbs_hash)
+    if(NOT w25_src_hash STREQUAL w25_pbs_hash)
+        message(FATAL_ERROR
+            "W-25 the two input paths generated different headers: ${w25_src_hash} != ${w25_pbs_hash}")
+    endif()
+endif()
+
+# --- W-19: one label, one path ----------------------------------------------
+
+set(w19 "${s7c}/w19")
+file(MAKE_DIRECTORY "${w19}")
+
+# An unnamed file is labeled by its container: before the fix the semantic
+# failure printed no label at all.
+run_fail(w19_anon_out w19_anon_err
+    ${CODEGEN} --descriptor-set "${FIXTURE_DIR}/bad-anon.pbs")
+require_empty(w19_anon_out "W-19 anon stdout")
+require_contains(w19_anon_err
+    "${FIXTURE_DIR}/bad-anon.pbs: duplicate field number in message .M"
+    "W-19 the unnamed file is labeled by its container")
+require_not_contains(w19_anon_err
+    "${FIXTURE_DIR}/bad-anon.pbs: ${FIXTURE_DIR}/bad-anon.pbs: "
+    "W-19 the container path prints once")
+
+# The loader's own refusals label the file once as well.
+run_fail(w19_two_out w19_two_err
+    ${CODEGEN} --descriptor-set "${FIXTURE_DIR}/anon-two.pbs")
+require_empty(w19_two_out "W-19 two-unnamed stdout")
+require_contains(w19_two_err
+    "${FIXTURE_DIR}/anon-two.pbs: descriptor set holds 2 files and 2 of them have no logical name"
+    "W-19 the two-unnamed refusal names the container")
+require_not_contains(w19_two_err
+    "${FIXTURE_DIR}/anon-two.pbs: ${FIXTURE_DIR}/anon-two.pbs: "
+    "W-19 the two-unnamed refusal does not double the path")
+
+run_fail(w19_mixed_out w19_mixed_err
+    ${CODEGEN} --descriptor-set "${FIXTURE_DIR}/mixed-anon.pbs")
+require_empty(w19_mixed_out "W-19 mixed stdout")
+require_contains(w19_mixed_err
+    "${FIXTURE_DIR}/mixed-anon.pbs: descriptor set holds 2 files and 1 of them have no logical name"
+    "W-19 the mixed refusal names the container")
+require_not_contains(w19_mixed_err
+    "${FIXTURE_DIR}/mixed-anon.pbs: ${FIXTURE_DIR}/mixed-anon.pbs: "
+    "W-19 the mixed refusal does not double the path")
+
+set(w19_missing "${w19}/does-not-exist.pbs")
+run_fail(w19_missing_out w19_missing_err
+    ${CODEGEN} --descriptor-set "${w19_missing}")
+require_empty(w19_missing_out "W-19 read-failure stdout")
+require_contains(w19_missing_err "${w19_missing}: cannot read file"
+    "W-19 the read failure names the file")
+require_not_contains(w19_missing_err
+    "${w19_missing}: ${w19_missing}: "
+    "W-19 the read failure names the file once")
+
+# An anonymous target below --out-dir keeps the container label and drops the
+# repeated path from the message.
+run_fail(w19_out_dir_out w19_out_dir_err
+    ${CODEGEN} --descriptor-set --out-dir "${w19}/out"
+            "${FIXTURE_DIR}/anon.pbs")
+require_empty(w19_out_dir_out "W-19 anonymous target stdout")
+require_contains(w19_out_dir_err
+    "${FIXTURE_DIR}/anon.pbs: this target has no logical name"
+    "W-19 the anonymous target is labeled by its container")
+require_not_contains(w19_out_dir_err
+    "${FIXTURE_DIR}/anon.pbs: ${FIXTURE_DIR}/anon.pbs: "
+    "W-19 the anonymous target names the file once")
+
+# --- W-29: a directory at the target is its own failure ---------------------
+
+# The source path: an existing directory at the header name. Before the fix
+# the message was the generic Win32 error 5, printed after the path twice.
+if(FULL_BUILD)
+    set(w29_src "${s7c}/w29-src")
+    file(MAKE_DIRECTORY "${w29_src}/hasfield.pb.hpp")
+    run_fail(w29_src_out w29_src_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir "${w29_src}"
+                "${FIXTURE_DIR}/hasfield.proto")
+    require_empty(w29_src_out "W-29 source stdout")
+    require_contains(w29_src_err "cannot write file (the target is a directory)"
+        "W-29 the source target is named as a directory")
+    require_not_contains(w29_src_err
+        "${w29_src}/hasfield.pb.hpp: ${w29_src}/hasfield.pb.hpp: "
+        "W-29 the source target names the path once")
+endif()
+
+# The descriptor path: the same sentence and the same shape.
+set(w29_pbs "${s7c}/w29-pbs")
+file(MAKE_DIRECTORY "${w29_pbs}/integration-proto2.pb.hpp")
+run_fail(w29_pbs_out w29_pbs_err
+    ${CODEGEN} --descriptor-set --out-dir "${w29_pbs}" ${single})
+require_empty(w29_pbs_out "W-29 descriptor stdout")
+require_contains(w29_pbs_err "cannot write file (the target is a directory)"
+    "W-29 the descriptor target is named as a directory")
+require_not_contains(w29_pbs_err
+    "${w29_pbs}/integration-proto2.pb.hpp: ${w29_pbs}/integration-proto2.pb.hpp: "
+    "W-29 the descriptor target names the path once")
+
+# --- W-66: the stdout failure prints the same line as --out-dir -------------
+
+if(FULL_BUILD)
+    run_fail(w66_stdout_out w66_stdout_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" "${FIXTURE_DIR}/cycle.proto")
+    require_empty(w66_stdout_out
+        "W-66 a generation failure leaves stdout empty")
+    require_contains(w66_stdout_err
+        "cycle.proto: recursive message value dependency: ::cyc::A -> ::cyc::B -> ::cyc::A"
+        "W-66 the stdout failure names the target and the reason")
+    require_not_contains(w66_stdout_err "Exception:"
+        "W-66 the stdout failure is a diagnostic, not an exception text")
+endif()
+
+run_fail(w66_pbs_out w66_pbs_err
+    ${CODEGEN} --descriptor-set "${FIXTURE_DIR}/cycle.pbs")
+require_empty(w66_pbs_out "W-66 descriptor stdout")
+require_contains(w66_pbs_err
+    "cycle.proto: recursive message value dependency: ::cyc::A -> ::cyc::B -> ::cyc::A"
+    "W-66 the descriptor path prints the same line")
+require_not_contains(w66_pbs_err "Exception:"
+    "W-66 the descriptor failure is a diagnostic")

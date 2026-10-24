@@ -1,0 +1,7 @@
+syntax = "proto4"
+// W-65: the grammar is asked before the value. `syntax = "proto4"` with no
+// semicolon must report the missing `;`, not the unsupported value - protoc
+// consumes the end of the declaration before it classifies the identifier
+// (parser.cc:664-667, :684-690).
+package cli_no_semi;
+message M { int32 x = 1; }

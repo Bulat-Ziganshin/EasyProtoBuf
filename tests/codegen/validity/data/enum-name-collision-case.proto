@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+// W-42: after stripping the enum prefix and folding case, these two names
+// are both "Foo".
+enum E
+{
+    FOO = 0;
+    foo = 1;
+}

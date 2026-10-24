@@ -1,0 +1,12 @@
+# W-42: allow_alias licenses the same number, not two different numbers whose
+# folded names collide.
+file {
+  name: "enum-alias-diff-number.proto"
+  syntax: "proto2"
+  enum_type {
+    name: "AliasDiff"
+    options { allow_alias: true }
+    value { name: "ALIAS_DIFF_FOO" number: 0 }
+    value { name: "FOO" number: 1 }
+  }
+}

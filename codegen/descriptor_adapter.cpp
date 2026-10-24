@@ -2,7 +2,10 @@
 
 #include <cstddef>
 #include <set>
+#include <sstream>
 #include <string>
+
+#include "schema_semantics.hpp"
 
 namespace easypb_schema {
 namespace {
@@ -33,7 +36,49 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         field.name = intern_text(strings, field.name);
         field.type_name = intern_text(strings, field.type_name);
         field.default_value = intern_text(strings, field.default_value);
+        field.json_name = intern_text(strings, field.json_name);
         field.options.cpp.type = intern_text(strings, field.options.cpp.type);
+
+        // W-04: the reference compiler's descriptor builder rewrites the
+        // out-of-range spellings `strtod` reports, so a hand-written `.pbs`
+        // carrying `1e400`, `1e-400` or a finite subnormal is re-serialized
+        // as the canonical text `inf`, `0`, `-0` or the subnormal decimal.
+        // Copy that one range, and only when the raw text starts with a
+        // digit, `-` or `.`: a leading `+` (W-40) and a leading space (W-03)
+        // are refusals, not spellings, so the adapter must not normalize them
+        // - that would hide the diagnostic behind a rewritten value.
+        //
+        // The canonicalizer runs on every normalizable spelling, exactly as
+        // the source parser runs it, and the gate is the leading byte alone.
+        // An `is_float_text` gate used to decide this and it split the two
+        // paths on MSVC: the CRTs disagree about ERANGE for a finite
+        // subnormal (`strtod("1e-320")` sets ERANGE on glibc and leaves
+        // errno clear on the MSVC CRT), so the descriptor path kept the raw
+        // spelling while the source path stored the canonical one, and the
+        // two generated headers stopped matching for `defaults-float-overflow`.
+        // The canonical output is idempotent: the text a protoc-written
+        // descriptor already carries comes back unchanged, so
+        // `--print-descriptor` bytes do not move for any accepted row.
+        if (field.has_default_value && field.has_type &&
+            (field.type == FieldDescriptorProto::TYPE_FLOAT ||
+             field.type == FieldDescriptorProto::TYPE_DOUBLE)) {
+            // W-35: the default may be the empty null view; the one guarded
+            // conversion owns the empty case.
+            const std::string raw = view_text(field.default_value);
+            const bool normalizable =
+                !raw.empty() &&
+                (raw[0] == '-' || raw[0] == '.' ||
+                 (raw[0] >= '0' && raw[0] <= '9'));
+            if (normalizable) {
+                std::string normalized;
+                if (canonical_float_default(
+                        raw, field.type == FieldDescriptorProto::TYPE_FLOAT,
+                        normalized) &&
+                    normalized != raw) {
+                    field.default_value = strings.save(normalized);
+                }
+            }
+        }
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
         intern_message(strings, message.nested_type[i]);
@@ -69,8 +114,10 @@ void intern_file_descriptor(StringPool& strings, FileDescriptorProto& file)
         ServiceDescriptorProto& service = file.service[i];
         service.name = intern_text(strings, service.name);
         for (std::size_t j = 0; j < service.method.size(); ++j) {
-            service.method[j].name =
-                intern_text(strings, service.method[j].name);
+            MethodDescriptorProto& method = service.method[j];
+            method.name = intern_text(strings, method.name);
+            method.input_type = intern_text(strings, method.input_type);
+            method.output_type = intern_text(strings, method.output_type);
         }
     }
 }
@@ -79,16 +126,52 @@ void intern_file_descriptor(StringPool& strings, FileDescriptorProto& file)
 // retained string is re-pointed into the owning pool. A shallow assignment
 // would leave the copy pointing into the caller's buffer, which is exactly
 // the defect this helper exists to prevent (D1/D2).
-void copy_descriptor(const FileDescriptorProto& source, SchemaFile& slot)
+//
+// `has_name` is the ingestion path's name rule. The named path is normalized
+// here so the bit always agrees with the required non-empty text (W-48); the
+// anonymous single-file path passes false and owns no logical name at all
+// (W-57) - a decoded descriptor may carry a present-but-empty name field, so
+// clearing the bit after the assignment is the only correct spelling.
+void copy_descriptor(const FileDescriptorProto& source, SchemaFile& slot,
+                     bool has_name = true)
 {
     slot.file = source;
     intern_file_descriptor(slot.strings, slot.file);
+    // Presence of a file's name and package is not modeled information: the
+    // name is required and non-empty (validated before this copy), and a
+    // non-empty package is a package whatever bit the container carried
+    // (W-48). Normalizing here, at the one deep copy every descriptor path
+    // shares, makes the linker and the generator read one shape. A caller's
+    // hand-built descriptor may leave the bit false while carrying the text;
+    // the wire decoder sets it, so this is a no-op for `.pbs` bytes.
+    slot.file.has_name = has_name;
+    if (!slot.file.package.empty()) slot.file.has_package = true;
 }
 
-std::string own_text(str_view value)
+// True when the byte is a C0 control character. A logical Protobuf file name
+// never carries one: the name is a path the user spelled, and the generator
+// writes it into the "// Source:" line of the header, so a newline in it
+// would inject arbitrary lines into the generated file.
+bool is_control_character(char c)
 {
-    if (value.empty()) return std::string();
-    return std::string(value.data(), value.size());
+    const unsigned char byte = static_cast<unsigned char>(c);
+    return byte < 0x20u;
+}
+
+// The control character the name carries, spelled for a diagnostic.
+std::string control_character_name(char c)
+{
+    const unsigned char byte = static_cast<unsigned char>(c);
+    switch (byte) {
+        case 0x00: return "NUL";
+        case 0x09: return "TAB";
+        case 0x0A: return "LF";
+        case 0x0D: return "CR";
+        default: break;
+    }
+    std::ostringstream text;
+    text << "0x" << std::hex << static_cast<unsigned>(byte);
+    return text.str();
 }
 
 bool fail(const std::string& label, const std::string& message,
@@ -103,7 +186,193 @@ bool fail(const std::string& label, const std::string& message,
     return false;
 }
 
+// --- structural equality of two modeled descriptors -------------------------
+//
+// `W-36` makes two containers that carry the same logical file a merge instead
+// of a blanket refusal. "The same file" is decided over the modeled content:
+// every field descriptor.pb.hpp declares, with the presence flags that change
+// what the linker reads (an absent label is OPTIONAL, an absent kind is
+// resolved by protoc's default). The file's `name` and `package` are compared
+// by value; their presence bits are normalized at ingest (W-48) and are not
+// modeled identity. Strings compare by value, so the comparison is independent
+// of which pool owns them.
+//
+// The walk must grow with the model: a field added to descriptor.pb.hpp and
+// not compared here would make two different files look identical. The
+// unit suite pins that with the identity fixture of the loader lane.
+
+bool same_descriptor(const CppFieldOptions& left, const CppFieldOptions& right)
+{
+    return left.type == right.type && left.has_type == right.has_type;
+}
+
+bool same_descriptor(const FieldOptions& left, const FieldOptions& right)
+{
+    return left.packed == right.packed && left.has_packed == right.has_packed &&
+           same_descriptor(left.cpp, right.cpp) && left.has_cpp == right.has_cpp;
+}
+
+bool same_descriptor(const FieldDescriptorProto& left,
+                     const FieldDescriptorProto& right)
+{
+    return left.name == right.name && left.number == right.number &&
+           left.label == right.label && left.type == right.type &&
+           left.type_name == right.type_name &&
+           left.default_value == right.default_value &&
+           left.oneof_index == right.oneof_index &&
+           left.json_name == right.json_name &&
+           same_descriptor(left.options, right.options) &&
+           left.has_name == right.has_name &&
+           left.has_number == right.has_number &&
+           left.has_label == right.has_label &&
+           left.has_type == right.has_type &&
+           left.has_type_name == right.has_type_name &&
+           left.has_default_value == right.has_default_value &&
+           left.has_options == right.has_options &&
+           left.has_oneof_index == right.has_oneof_index &&
+           left.has_json_name == right.has_json_name;
+}
+
+bool same_descriptor(const MessageOptions& left, const MessageOptions& right)
+{
+    return left.map_entry == right.map_entry &&
+           left.has_map_entry == right.has_map_entry;
+}
+
+bool same_descriptor(const DescriptorProto_ExtensionRange& left,
+                     const DescriptorProto_ExtensionRange& right)
+{
+    return left.start == right.start && left.end == right.end &&
+           left.has_start == right.has_start && left.has_end == right.has_end;
+}
+
+bool same_descriptor(const EnumValueDescriptorProto& left,
+                     const EnumValueDescriptorProto& right)
+{
+    return left.name == right.name && left.number == right.number &&
+           left.has_name == right.has_name && left.has_number == right.has_number;
+}
+
+bool same_descriptor(const EnumOptions& left, const EnumOptions& right)
+{
+    return left.allow_alias == right.allow_alias &&
+           left.has_allow_alias == right.has_allow_alias;
+}
+
+bool same_descriptor(const EnumDescriptorProto& left,
+                     const EnumDescriptorProto& right)
+{
+    if (left.name != right.name || left.has_name != right.has_name ||
+        left.has_options != right.has_options ||
+        !same_descriptor(left.options, right.options) ||
+        left.value.size() != right.value.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.value.size(); ++i) {
+        if (!same_descriptor(left.value[i], right.value[i])) return false;
+    }
+    return true;
+}
+
+bool same_descriptor(const OneofDescriptorProto& left,
+                     const OneofDescriptorProto& right)
+{
+    return left.name == right.name && left.has_name == right.has_name;
+}
+
+bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right)
+{
+    if (left.name != right.name || left.has_name != right.has_name ||
+        left.has_options != right.has_options ||
+        left.extension_count != right.extension_count ||
+        !same_descriptor(left.options, right.options) ||
+        left.field.size() != right.field.size() ||
+        left.nested_type.size() != right.nested_type.size() ||
+        left.enum_type.size() != right.enum_type.size() ||
+        left.oneof_decl.size() != right.oneof_decl.size() ||
+        left.extension_range.size() != right.extension_range.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.field.size(); ++i) {
+        if (!same_descriptor(left.field[i], right.field[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.nested_type.size(); ++i) {
+        if (!same_descriptor(left.nested_type[i], right.nested_type[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.enum_type.size(); ++i) {
+        if (!same_descriptor(left.enum_type[i], right.enum_type[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.oneof_decl.size(); ++i) {
+        if (!same_descriptor(left.oneof_decl[i], right.oneof_decl[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.extension_range.size(); ++i) {
+        if (!same_descriptor(left.extension_range[i], right.extension_range[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool same_descriptor(const MethodDescriptorProto& left,
+                     const MethodDescriptorProto& right)
+{
+    return left.name == right.name && left.input_type == right.input_type &&
+           left.output_type == right.output_type && left.has_name == right.has_name &&
+           left.has_input_type == right.has_input_type &&
+           left.has_output_type == right.has_output_type;
+}
+
+bool same_descriptor(const ServiceDescriptorProto& left,
+                     const ServiceDescriptorProto& right)
+{
+    if (left.name != right.name || left.has_name != right.has_name ||
+        left.method.size() != right.method.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.method.size(); ++i) {
+        if (!same_descriptor(left.method[i], right.method[i])) return false;
+    }
+    return true;
+}
+
 } // namespace
+
+bool same_descriptor_file(const FileDescriptorProto& left,
+                          const FileDescriptorProto& right)
+{
+    // The presence bits of the file's name and package are not part of the
+    // modeled identity (W-48): the strings themselves are compared below, and
+    // ingest normalizes the bits, so a stored copy and an incoming copy of one
+    // file must not look different here. Every other presence bit still
+    // decides, because it changes what the linker reads.
+    if (left.name != right.name || left.package != right.package ||
+        left.syntax != right.syntax || left.edition != right.edition ||
+        left.has_syntax != right.has_syntax ||
+        left.has_edition != right.has_edition ||
+        left.dependency.size() != right.dependency.size() ||
+        left.public_dependency != right.public_dependency ||
+        left.weak_dependency != right.weak_dependency ||
+        left.message_type.size() != right.message_type.size() ||
+        left.enum_type.size() != right.enum_type.size() ||
+        left.service.size() != right.service.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.dependency.size(); ++i) {
+        if (left.dependency[i] != right.dependency[i]) return false;
+    }
+    for (std::size_t i = 0; i < left.message_type.size(); ++i) {
+        if (!same_descriptor(left.message_type[i], right.message_type[i])) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < left.enum_type.size(); ++i) {
+        if (!same_descriptor(left.enum_type[i], right.enum_type[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.service.size(); ++i) {
+        if (!same_descriptor(left.service[i], right.service[i])) return false;
+    }
+    return true;
+}
 
 bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                              const std::string& diagnostic_label,
@@ -132,7 +401,7 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                             "descriptor",
                         DIAGNOSTIC_GENERIC, result, error);
         }
-        const std::string logical = own_text(raw_name);
+        const std::string logical = view_text(raw_name);
         if (!names.insert(raw_name).second || result.find_file(logical) != 0) {
             return fail(diagnostic_label,
                         "duplicate logical file name \"" + logical +
@@ -140,10 +409,41 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                             "\" (a file with this name was already appended)",
                         DIAGNOSTIC_DUPLICATE_SYMBOL, result, error);
         }
+        // The name is a logical Protobuf name, and it reaches the "// Source:"
+        // line of the generated header. A control character in it would
+        // inject arbitrary lines into that header, so the name is refused
+        // here - at the same place the empty and the duplicate names are
+        // refused, and before anything is appended, so a failed call never
+        // leaves a partial batch behind.
+        for (std::size_t position = 0; position < logical.size(); ++position) {
+            if (!is_control_character(logical[position])) continue;
+            return fail(diagnostic_label,
+                        "logical file name \"" + logical +
+                            "\" in descriptor source \"" + diagnostic_label +
+                            "\" carries a control character (" +
+                            control_character_name(logical[position]) +
+                            " at position " +
+                            easypb::detail::number_to_string(
+                                static_cast<uint64_t>(position)) +
+                            "); a logical name cannot contain one",
+                        DIAGNOSTIC_GENERIC, result, error);
+        }
+        // The nesting of the messages the file declares is bounded here, before
+        // the file is copied: the copy interns every string of the tree and
+        // walks it recursively (intern_message below), so a descriptor that
+        // nests deeper than the limit would overflow the stack inside the
+        // copy - and the copy is what a library caller hands this project.
+        // The rule is the reference compiler's own (descriptor.h:3045) and the
+        // sentence is the one it uses.
+        if (!easypb_schema::validate_message_nesting_depth(files[i], logical,
+                                                            error)) {
+            result.clear();
+            return false;
+        }
     }
 
     for (std::size_t i = 0; i < files.size(); ++i) {
-        const std::string logical = own_text(files[i].name);
+        const std::string logical = view_text(files[i].name);
         SchemaFile& slot = result.add_file(logical);
         copy_descriptor(files[i], slot);
         // Descriptor origin is a property of how the bytes were obtained,
@@ -152,6 +452,25 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
         slot.physical_name.clear();
         slot.from_descriptor_set = true;
     }
+    return true;
+}
+
+bool append_unnamed_descriptor(const FileDescriptorProto& file,
+                               const std::string& identity, SchemaSet& result,
+                               Diagnostic& error)
+{
+    // The anonymous single-file `.pbs` shape: the container path is metadata,
+    // never a logical name. The identity therefore never reaches
+    // StringPool::save and never enters the name index (W-57, W-18); the copy
+    // is the same deep copy the named path uses, with the name rule switched
+    // off.
+    if (!validate_message_nesting_depth(file, identity, error)) {
+        result.clear();
+        return false;
+    }
+    SchemaFile& slot = result.add_unnamed_file(identity);
+    copy_descriptor(file, slot, false);
+    slot.from_descriptor_set = true;
     return true;
 }
 

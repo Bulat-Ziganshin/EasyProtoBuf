@@ -1,5 +1,7 @@
 #include "file_paths.hpp"
 
+#include "logical_paths.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -40,13 +42,13 @@ bool has_embedded_nul(const std::string& text)
 // access is denied" on every platform, the same wording the status query
 // uses and the same fact the reference compiler reports for EACCES;
 // every other failure keeps its platform error code, which is still more
-// than the reference compiler prints for them.
-std::string read_error_text(const std::string& path, unsigned long code,
-                            bool denied)
+// than the reference compiler prints for them. The caller names the path:
+// an action entry returns the reason only (W-29).
+std::string read_error_text(unsigned long code, bool denied)
 {
-    if (denied) return path + ": read access is denied";
+    if (denied) return "read access is denied";
     std::ostringstream message;
-    message << path << ": cannot read file";
+    message << "cannot read file";
 #ifdef _WIN32
     message << " (Win32 error " << code << ")";
 #else
@@ -110,38 +112,102 @@ bool has_long_path_prefix(const std::string& path)
     return path.size() >= length &&
            path.compare(0, length, kLongPathPrefix) == 0;
 }
+
+// Recognizes "\\?\" and "//?/" and translates the two bodies this module can
+// name into the plain spelling the rest of the path layer uses:
+//   \\?\C:\a\b            -> C:/a/b
+//   \\?\UNC\host\share\x  -> //host/share/x
+// The forward-slash form is the same prefix spelled with '/' (a user may type
+// either); "UNC" is case-insensitive, as it is on Windows. Any other body is
+// left alone and returns false: a device path is not a file path this module
+// can normalize, and the caller keeps its verbatim passthrough.
+bool translate_long_path_prefix(const std::string& path, std::string& plain)
+{
+    plain.clear();
+    std::size_t prefix_length = 0;
+    const std::size_t backslash_length = sizeof(kLongPathPrefix) - 1;
+    if (path.size() >= backslash_length &&
+        path.compare(0, backslash_length, kLongPathPrefix) == 0) {
+        prefix_length = backslash_length;
+    } else if (path.size() >= 4 && path.compare(0, 4, "//?/") == 0) {
+        prefix_length = 4;
+    } else {
+        return false;
+    }
+
+    std::string body = path.substr(prefix_length);
+    for (std::size_t i = 0; i < body.size(); ++i) {
+        if (body[i] == '\\') body[i] = '/';
+    }
+
+    // A drive-absolute body: the object manager's "C:" form.
+    if (body.size() >= 3 && is_alpha(body[0]) && body[1] == ':' &&
+        body[2] == '/') {
+        plain.swap(body);
+        return true;
+    }
+
+    // A network body: "UNC\server\share[\...]". Both the server and the share
+    // must be named; a trailing component is optional.
+    if (body.size() > 4 && (body[0] == 'U' || body[0] == 'u') &&
+        (body[1] == 'N' || body[1] == 'n') &&
+        (body[2] == 'C' || body[2] == 'c') && body[3] == '/') {
+        const std::size_t host_start = 4;
+        const std::size_t host_end = body.find('/', host_start);
+        if (host_end != std::string::npos && host_end > host_start) {
+            const std::size_t share_end = body.find('/', host_end + 1);
+            if (share_end != host_end + 1) {
+                plain = "//";
+                plain.append(body, host_start, body.size() - host_start);
+                return true;
+            }
+        }
+    }
+    return false;
+}
 #endif
 
-std::string current_working_directory()
+// The working directory as a stored spelling. Returns false when the process
+// cannot obtain it; a caller must not substitute "." or the root for an answer
+// the operating system refused to give.
+bool current_working_directory(std::string& result)
 {
+    result.clear();
 #ifdef _WIN32
     // Wide query converted back to UTF-8: the narrow working directory
     // stays in the same encoding as every other path here.
     const DWORD needed = GetCurrentDirectoryW(0, 0);
-    if (needed == 0) return std::string(".");
+    if (needed == 0) return false;
     std::vector<wchar_t> buffer(needed);
     const DWORD length = GetCurrentDirectoryW(needed, &buffer[0]);
-    if (length == 0 || length >= needed) return std::string(".");
-    std::string result;
+    if (length == 0 || length >= needed) return false;
     if (!wide_to_utf8(&buffer[0], static_cast<int>(length), result)) {
-        return std::string(".");
+        return false;
     }
     // A query that cannot answer must not silently become a different
     // directory: an empty conversion means exactly that. Win32 caps the
     // working directory at MAX_PATH in any case - SetCurrentDirectoryW
     // refuses a spelling longer than 258 characters, the prefix included -
     // so this is defence in depth rather than a live case.
-    if (result.empty()) return std::string(".");
-    return result;
+    return !result.empty();
 #else
     char* cwd = ::getcwd(0, 0);
-    if (cwd == 0) return std::string(".");
-    const std::string result(cwd);
+    if (cwd == 0) return false;
+    result.assign(cwd);
     // getcwd with malloc allocation must be freed; free is async-safe
     // here because no other thread touches this pointer.
     ::free(cwd);
-    return result;
+    return !result.empty();
 #endif
+}
+
+bool resolve_with_working_directory(const std::string& path,
+                                    std::string& result)
+{
+    std::string cwd;
+    if (!current_working_directory(cwd)) return false;
+    result = join_disk_path(cwd, path);
+    return true;
 }
 
 std::string trim_trailing_separators(const std::string& path)
@@ -164,18 +230,31 @@ std::string trim_trailing_separators(const std::string& path)
 #endif
 }
 
-// Absolute spelling of a disk path without any filesystem query. On
-// Windows a relative spelling is joined with the working directory and the
-// other non-fully-qualified forms (drive-relative "C:x", rooted "\x") are
-// resolved through the platform path API, so equivalent spellings compare
-// equal; POSIX prepends the working directory. Textual normalization only:
-// it never proves that two spellings name the same entry, and no case
-// folding is involved.
-std::string resolve_absolute(const std::string& path)
+// Absolute spelling of a disk path without any filesystem query beyond the
+// working directory. Returns false when the working directory is unknown and
+// a relative spelling needs it. On Windows a relative spelling is joined with
+// the working directory and the other non-fully-qualified forms (drive-relative
+// "C:x", rooted "\x") are resolved through the platform path API, so equivalent
+// spellings compare equal; POSIX prepends the working directory. Textual
+// normalization only: it never proves that two spellings name the same entry,
+// and no case folding is involved.
+bool resolve_absolute(const std::string& path, std::string& result)
 {
-    if (path.empty()) return path;
+    result.clear();
+    if (path.empty()) return true;
 #ifdef _WIN32
-    if (is_fully_qualified_disk_path(path)) return path;
+    // An explicit long-path prefix is a transport spelling, not part of the
+    // name: translate it once, here, so every caller of lexical_absolute
+    // (search roots, the output root, comparisons) sees the plain form.
+    std::string spelling = path;
+    std::string translated;
+    if (translate_long_path_prefix(path, translated)) {
+        spelling.swap(translated);
+    }
+    if (is_fully_qualified_disk_path(spelling)) {
+        result = spelling;
+        return true;
+    }
     // A relative spelling is joined textually, the way the reference layer
     // builds its absolute paths. The platform resolver is deliberately not
     // asked here: it trims trailing dots and spaces off the last component,
@@ -183,36 +262,39 @@ std::string resolve_absolute(const std::string& path)
     // long-path prefix is applied, and one name would silently be answered
     // by a different file. Its own normalization of '.' and '..' is not
     // needed either, because lexical_absolute performs it on every branch.
-    if (path[0] != '/' && path[0] != '\\' &&
-        !(path.size() >= 2 && is_alpha(path[0]) && path[1] == ':')) {
-        return join_disk_path(current_working_directory(), path);
+    if (spelling[0] != '/' && spelling[0] != '\\' &&
+        !(spelling.size() >= 2 && is_alpha(spelling[0]) &&
+          spelling[1] == ':')) {
+        return resolve_with_working_directory(spelling, result);
     }
     // Drive-relative and rooted spellings need the current drive and its
     // per-drive directory, which only the platform resolver knows.
     std::vector<wchar_t> wide;
-    if (!to_wide_text(path, wide) || wide.empty()) {
-        return join_disk_path(current_working_directory(), path);
+    if (!to_wide_text(spelling, wide) || wide.empty()) {
+        return resolve_with_working_directory(spelling, result);
     }
     nul_terminate(wide);
     // Query the required length first so long paths do not truncate.
     const DWORD needed = GetFullPathNameW(&wide[0], 0, 0, 0);
     if (needed == 0) {
-        return join_disk_path(current_working_directory(), path);
+        return resolve_with_working_directory(spelling, result);
     }
     std::vector<wchar_t> buffer(needed);
     const DWORD length =
         GetFullPathNameW(&wide[0], needed, &buffer[0], 0);
     if (length == 0 || length >= needed) {
-        return join_disk_path(current_working_directory(), path);
+        return resolve_with_working_directory(spelling, result);
     }
-    std::string result;
     if (!wide_to_utf8(&buffer[0], static_cast<int>(length), result)) {
-        return join_disk_path(current_working_directory(), path);
+        return resolve_with_working_directory(spelling, result);
     }
-    return result;
+    return true;
 #else
-    if (path[0] == '/') return path;
-    return join_disk_path(current_working_directory(), path);
+    if (path[0] == '/') {
+        result = path;
+        return true;
+    }
+    return resolve_with_working_directory(path, result);
 #endif
 }
 
@@ -231,7 +313,9 @@ std::string join_disk_path(const std::string& directory,
     // needs help. On POSIX "C:" is an ordinary relative name.)
     if (directory.size() == 2 && is_alpha(directory[0]) &&
         directory[1] == ':') {
-        return lexical_absolute(directory) + "/" + logical_name;
+        const std::string resolved = lexical_absolute(directory);
+        if (resolved.empty()) return std::string();
+        return resolved + "/" + logical_name;
     }
 #endif
     const std::string base = trim_trailing_separators(directory);
@@ -313,7 +397,7 @@ bool read_disk_file(const std::string& path, std::string& contents,
                     std::string& error)
 {
     if (has_embedded_nul(path)) {
-        error = path + ": path contains NUL character";
+        error = "path contains NUL character";
         return false;
     }
 #ifdef _WIN32
@@ -322,7 +406,7 @@ bool read_disk_file(const std::string& path, std::string& contents,
     // addressable, exactly like the reference compiler's io_win32 layer.
     std::vector<wchar_t> wide;
     if (!wide_win32_path(path, wide) || wide.empty()) {
-        error = path + ": cannot read file";
+        error = "cannot read file";
         return false;
     }
     nul_terminate(wide);
@@ -332,7 +416,7 @@ bool read_disk_file(const std::string& path, std::string& contents,
                                 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (handle == INVALID_HANDLE_VALUE) {
         const DWORD code = GetLastError();
-        error = read_error_text(path, code, code == ERROR_ACCESS_DENIED);
+        error = read_error_text(code, code == ERROR_ACCESS_DENIED);
         return false;
     }
     contents.clear();
@@ -341,7 +425,7 @@ bool read_disk_file(const std::string& path, std::string& contents,
         DWORD chunk = 0;
         if (!ReadFile(handle, buffer, sizeof(buffer), &chunk, 0)) {
             const DWORD code = GetLastError();
-            error = read_error_text(path, code, code == ERROR_ACCESS_DENIED);
+            error = read_error_text(code, code == ERROR_ACCESS_DENIED);
             CloseHandle(handle);
             return false;
         }
@@ -358,14 +442,14 @@ bool read_disk_file(const std::string& path, std::string& contents,
     errno = 0;
     std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
     if (!input) {
-        error = read_error_text(path, static_cast<unsigned long>(errno),
+        error = read_error_text(static_cast<unsigned long>(errno),
                                 errno == EACCES);
         return false;
     }
     contents.assign(std::istreambuf_iterator<char>(input),
                     std::istreambuf_iterator<char>());
     if (!input.eof() && input.fail()) {
-        error = path + ": cannot read file";
+        error = "cannot read file";
         return false;
     }
     return true;
@@ -374,7 +458,9 @@ bool read_disk_file(const std::string& path, std::string& contents,
 
 std::string lexical_absolute(const std::string& path)
 {
-    std::string absolute = resolve_absolute(path);
+    if (path.empty()) return std::string();
+    std::string absolute;
+    if (!resolve_absolute(path, absolute)) return std::string();
 #ifdef _WIN32
     absolute = normalize_separators(absolute);
 #endif
@@ -430,7 +516,11 @@ std::string lexical_absolute(const std::string& path)
     if (result.empty()) {
 #ifdef _WIN32
         if (!prefix.empty()) return prefix + "/";
-        return current_working_directory();
+        // The only way here with an empty prefix is a non-absolute absolute
+        // form; ask once more rather than inventing a root. A failed query is
+        // the same refusal as above.
+        std::string cwd;
+        return current_working_directory(cwd) ? cwd : std::string();
 #else
         return std::string("/");
 #endif
@@ -452,19 +542,27 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide)
 {
     wide.clear();
     if (path.empty()) return true;
-    // A spelling that already carries the prefix is exactly what the object
-    // manager expects; adding a second one would address an entry literally
-    // named "\\?\...".
-    if (has_long_path_prefix(path)) return to_wide_text(path, wide);
+
+    // An explicit long-path prefix is translated to its plain spelling before
+    // this layer re-applies the canonical prefix below. A recognized device
+    // path keeps the old verbatim passthrough: the translator accepts only
+    // the two bodies this module can name (a drive path and a UNC share).
+    std::string spelling = path;
+    std::string translated;
+    if (translate_long_path_prefix(path, translated)) {
+        spelling.swap(translated);
+    } else if (has_long_path_prefix(path)) {
+        return to_wide_text(path, wide);
+    }
 
     // The prefix bypasses Win32 path parsing, so nothing may be left for
     // that parsing to do: a relative, drive-relative or rooted spelling is
     // resolved to a fully qualified one first, and '.' and '..' are removed
-    // lexically because the API no longer interprets them.
-    const std::string absolute = lexical_absolute(path);
-    if (absolute.empty() || has_long_path_prefix(absolute)) {
-        return to_wide_text(absolute.empty() ? path : absolute, wide);
-    }
+    // lexically because the API no longer interprets them. A relative
+    // spelling whose working directory is unknown cannot be made absolute:
+    // that is a refusal, not a fallback to the original spelling.
+    const std::string absolute = lexical_absolute(spelling);
+    if (absolute.empty()) return false;
 
     const bool unc =
         absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/';
@@ -472,10 +570,9 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide)
         absolute.size() >= 3 && is_alpha(absolute[0]) &&
         absolute[1] == ':' && absolute[2] == '/';
     if (!unc && !drive_absolute) {
-        // Neither form is prefixable (a bare drive, or a working directory
-        // that could not be queried): keep the plain conversion rather
-        // than hand Win32 a prefix it would reject.
-        return to_wide_text(path, wide);
+        // Neither form is prefixable (a bare drive): keep the plain
+        // conversion rather than hand Win32 a prefix it would reject.
+        return to_wide_text(spelling, wide);
     }
 
     // The prefix is applied to every path, not only to long ones: it is
@@ -628,13 +725,12 @@ std::string normalize_separators(const std::string& path)
 // because the common schema library must keep performing no filesystem call
 // at all. Nothing here is used by the loader; the publisher is their only
 // caller besides the tests.
-// ---------------------------------------------------------------------------
-// Output-side helpers (plan 5 batch 3: the standalone publisher).
 //
-// Trimmed to the reference compiler's model on 2026-10-07. What is left is the
-// directory tree and the write itself, which is what protoc's WriteAllToDisk
-// does (command_line_interface.cc:541-610): verify the output directory exists,
-// create the missing parents, then open/write/close. The containment, case
+// Trimmed to the reference compiler's model by the plan-5 trim (`fbdcc0e`,
+// 2026-10-11). What is left is the directory tree and the write itself, which
+// is what protoc's WriteAllToDisk does (command_line_interface.cc:541-610):
+// create the parent directories, then open/write/close. The output root is
+// created when missing here where protoc verifies it. The containment, case
 // folding, native identity, hardlink and atomic temp+rename guards that used to
 // live here are gone, with their measured effect recorded in file_paths.hpp.
 // ---------------------------------------------------------------------------
@@ -648,55 +744,70 @@ std::string number_text(unsigned long long code)
     message << code;
     return message.str();
 }
-std::string write_error_text(const std::string& path, unsigned long long code)
+
+// After a failed open, a directory at the target is its own failure: Win32
+// reports ERROR_ACCESS_DENIED and POSIX EISDIR, and neither sentence says
+// what is actually there. The check runs only on the failure path, so no
+// successful write pays for an extra query (W-29).
+bool write_target_is_directory(const std::string& target)
 {
-#ifdef _WIN32
-    return path + ": cannot write file (Win32 error " +
-           number_text(code) + ")";
-#else
-    (void)code;
-    return path + ": cannot write file";
-#endif
-}
-std::string create_directory_error_text(const std::string& path,
-                                        unsigned long long code)
-{
-#ifdef _WIN32
-    return path + ": cannot create directory (Win32 error " +
-           number_text(code) + ")";
-#else
-    (void)code;
-    return path + ": cannot create directory";
-#endif
+    std::string ignored;
+    return disk_file_status(target, ignored) == FILE_STATUS_DIRECTORY;
 }
 
-} // namespace
-
-std::string parent_directory_of(const std::string& path)
-{
-    std::string trimmed = path;
-    while (trimmed.size() > 1 && trimmed[trimmed.size() - 1] == '/') {
-        trimmed.resize(trimmed.size() - 1);
-    }
-    const std::size_t slash = trimmed.rfind('/');
-    if (slash == std::string::npos) return std::string();
-    if (slash == 0) return "/";
-    std::string parent = trimmed.substr(0, slash);
+// The two messages below are the Win32 ones. The POSIX write and the POSIX
+// directory creation build their own text from strerror, so these helpers
+// have no caller there: they live in the Windows guard for that reason.
+// Outside it they are dead code, and a dead function is a warning in every
+// POSIX build (measured: the gcc and clang lanes of 2026-10-22).
 #ifdef _WIN32
-    // A bare drive component must stay qualified: "C:" is the root, and
-    // "C" would address the drive-relative spelling instead.
-    if (parent.size() == 2 && is_alpha(parent[0]) && parent[1] == ':') {
-        parent += "/";
+std::string write_error_text(unsigned long long code)
+{
+    return "cannot write file (Win32 error " + number_text(code) + ")";
+}
+std::string create_directory_error_text(unsigned long long code)
+{
+    return "cannot create directory (Win32 error " + number_text(code) + ")";
+}
+#endif
+
+// The length of the part of an absolute path that the filesystem provides and
+// this module never creates: the drive root ("C:/"), the UNC share
+// ("//server/share/") or the filesystem root ("/"). Everything below it is the
+// chain of directories the caller asks for.
+//
+// A UNC share is created by its server, so only what lies below the share is
+// this function's business; a path that names the share and nothing else has
+// no components to create.
+std::size_t root_prefix_length(const std::string& absolute)
+{
+#ifdef _WIN32
+    if (absolute.size() >= 3 && is_alpha(absolute[0]) &&
+        absolute[1] == ':' && absolute[2] == '/') {
+        return 3;
+    }
+    if (absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/') {
+        const std::size_t server_end = absolute.find('/', 2);
+        if (server_end == std::string::npos) return absolute.size();
+        const std::size_t share_end = absolute.find('/', server_end + 1);
+        if (share_end == std::string::npos) return absolute.size();
+        return share_end + 1;
     }
 #endif
-    return parent;
+    if (!absolute.empty() && absolute[0] == '/') return 1;
+    return 0;
 }
+
+// W-52: file-local by use. create_directory_plain's only caller is
+// make_directories_recursive, and that function's only caller is the public
+// make_directories, so both keep internal linkage instead of publishing two
+// declarations no header needs.
 bool create_directory_plain(const std::string& path, std::string& error)
 {
 #ifdef _WIN32
     std::vector<wchar_t> wide;
     if (!wide_win32_path(path, wide) || wide.empty()) {
-        error = path + ": cannot create directory";
+        error = "cannot create directory";
         return false;
     }
     nul_terminate(wide);
@@ -710,10 +821,10 @@ bool create_directory_plain(const std::string& path, std::string& error)
         if (disk_file_status(path, status_error) == FILE_STATUS_DIRECTORY) {
             return true;
         }
-        error = path + ": output path is an existing file, not a directory";
+        error = "output path is an existing file, not a directory";
         return false;
     }
-    error = create_directory_error_text(path, code);
+    error = create_directory_error_text(code);
     return false;
 #else
     if (::mkdir(path.c_str(), 0777) == 0) return true;
@@ -722,37 +833,67 @@ bool create_directory_plain(const std::string& path, std::string& error)
         if (disk_file_status(path, status_error) == FILE_STATUS_DIRECTORY) {
             return true;
         }
-        error = path + ": output path is an existing file, not a directory";
+        error = "output path is an existing file, not a directory";
         return false;
     }
     const int code = errno;
-    error = path + ": cannot create directory (" + std::strerror(code) + ")";
+    error = "cannot create directory (" + std::string(std::strerror(code)) + ")";
     return false;
 #endif
 }
+
+// Create every missing directory on the way to `absolute`.
+//
+// The chain is created from the root down, one component at a time, so the
+// call stack does not grow with the depth of the path. The recursion this
+// replaces walked the same chain from the bottom up and copied the whole
+// remaining path in every frame, which made the work grow with the square of
+// the depth and ended the process with a stack overflow on a path deep
+// enough.
+//
+// The number of components is bounded (the same bound the logical path rule
+// applies, easypb_schema::max_logical_path_components), and the count is
+// taken before the first directory is created: a refused path leaves no tree
+// behind.
 bool make_directories_recursive(const std::string& absolute, std::string& error)
 {
     if (absolute.empty() || absolute == "/") return true;
-#ifdef _WIN32
-    if (absolute.size() == 3 && is_alpha(absolute[0]) &&
-        absolute[1] == ':' && absolute[2] == '/') {
-        return true;
+
+    const std::size_t root_length = root_prefix_length(absolute);
+
+    // The components below the root, as the offset of their end.
+    std::vector<std::size_t> ends;
+    std::size_t start = root_length;
+    while (start < absolute.size()) {
+        std::size_t end = absolute.find('/', start);
+        if (end == std::string::npos) end = absolute.size();
+        if (end > start) ends.push_back(end);
+        if (end == absolute.size()) break;
+        start = end + 1;
     }
-#endif
-    if (absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/') {
-        // A UNC share root is created by its server; only what lies below it
-        // is this function's business.
-        const std::size_t server_end = absolute.find('/', 2);
-        if (server_end == std::string::npos) return true;
-        const std::size_t share_end = absolute.find('/', server_end + 1);
-        if (share_end == std::string::npos) return true;
-    }
-    const std::string parent = parent_directory_of(absolute);
-    if (!parent.empty() && !make_directories_recursive(parent, error)) {
+
+    const std::size_t limit = easypb_schema::max_logical_path_components();
+    if (ends.size() > limit) {
+        error = "cannot create directory (the path has " +
+                number_text(static_cast<unsigned long long>(ends.size())) +
+                " components, more than the " + number_text(limit) +
+                " this tool accepts)";
         return false;
     }
-    return create_directory_plain(absolute, error);
+
+    std::string path = absolute.substr(0, root_length);
+    std::size_t component_start = root_length;
+    for (std::size_t i = 0; i < ends.size(); ++i) {
+        if (!path.empty() && path[path.size() - 1] != '/') path.push_back('/');
+        path.append(absolute, component_start, ends[i] - component_start);
+        component_start = ends[i] + 1;
+        if (!create_directory_plain(path, error)) return false;
+    }
+    return true;
 }
+
+} // namespace
+
 bool make_directories(const std::string& directory, std::string& error)
 {
     error.clear();
@@ -760,9 +901,14 @@ bool make_directories(const std::string& directory, std::string& error)
         error = "cannot create an empty directory path";
         return false;
     }
+    if (has_embedded_nul(directory)) {
+        error = "path contains NUL character";
+        return false;
+    }
     const std::string absolute = lexical_absolute(directory);
     if (absolute.empty()) {
-        error = directory + ": cannot resolve directory";
+        error = "cannot resolve directory (the current working directory "
+                "is unknown)";
         return false;
     }
     return make_directories_recursive(absolute, error);
@@ -778,17 +924,35 @@ bool write_disk_file(const std::string& target, const std::string& contents,
                      std::string& error)
 {
     error.clear();
+    if (has_embedded_nul(target)) {
+        // The same rule the read path applies: a NUL never survives a native
+        // call, and truncating it would write at a different spelling than
+        // the caller named. Refuse before either platform branch.
+        error = "path contains NUL character";
+        return false;
+    }
 #ifdef _WIN32
     std::vector<wchar_t> wide;
     if (!wide_win32_path(target, wide) || wide.empty()) {
-        error = target + ": cannot write file";
+        error = "cannot write file";
         return false;
     }
     nul_terminate(wide);
-    HANDLE handle = CreateFileW(&wide[0], GENERIC_WRITE, 0, 0,
+    // Share read and write, exactly as the reference's _wopen does (the CRT
+    // default is _SH_DENYNO): a concurrent reader that permits a writer, or
+    // another holder with write access, must not block the replacement.
+    // Delete is not shared, matching the reference.
+    HANDLE handle = CreateFileW(&wide[0], GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
     if (handle == INVALID_HANDLE_VALUE) {
-        error = write_error_text(target, GetLastError());
+        // A directory answers ERROR_ACCESS_DENIED on Windows; name the
+        // condition instead of the generic code (W-29).
+        if (write_target_is_directory(target)) {
+            error = "cannot write file (the target is a directory)";
+            return false;
+        }
+        error = write_error_text(GetLastError());
         return false;
     }
     std::size_t done = 0;
@@ -801,39 +965,62 @@ bool write_disk_file(const std::string& target, const std::string& contents,
             written != chunk) {
             const DWORD code = GetLastError();
             CloseHandle(handle);
-            error = write_error_text(target, code);
+            error = write_error_text(code);
             return false;
         }
         done += chunk;
     }
     if (!CloseHandle(handle)) {
-        error = write_error_text(target, GetLastError());
+        error = write_error_text(GetLastError());
         return false;
     }
     return true;
 #else
-    const int descriptor =
-        ::open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    // Retry an interrupted open, as the reference's WriteAllToDisk does.
+    int descriptor = -1;
+    do {
+        descriptor =
+            ::open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    } while (descriptor < 0 && errno == EINTR);
     if (descriptor < 0) {
         const int code = errno;
-        error = target + ": cannot write file (" + std::strerror(code) + ")";
+        // A directory answers EISDIR; name the condition (W-29).
+        if (write_target_is_directory(target)) {
+            error = "cannot write file (the target is a directory)";
+            return false;
+        }
+        error = "cannot write file (" + std::string(std::strerror(code)) + ")";
         return false;
     }
+    // One bounded request at a time: the cap changes no output byte, only
+    // the size of one syscall. EINTR is not a failure, and a zero return is
+    // not progress (the old loop repeated forever on it).
+    const std::size_t chunk_limit = 64u * 1024u;
     std::size_t done = 0;
     while (done < contents.size()) {
-        const ssize_t written =
-            ::write(descriptor, contents.data() + done, contents.size() - done);
+        const std::size_t remaining = contents.size() - done;
+        const std::size_t chunk =
+            remaining < chunk_limit ? remaining : chunk_limit;
+        ssize_t written = -1;
+        do {
+            written = ::write(descriptor, contents.data() + done, chunk);
+        } while (written < 0 && errno == EINTR);
         if (written < 0) {
             const int code = errno;
             ::close(descriptor);
-            error = target + ": cannot write file (" + std::strerror(code) + ")";
+            error = "cannot write file (" + std::string(std::strerror(code)) + ")";
+            return false;
+        }
+        if (written == 0) {
+            ::close(descriptor);
+            error = "cannot write file (the write made no progress)";
             return false;
         }
         done += static_cast<std::size_t>(written);
     }
     if (::close(descriptor) != 0) {
         const int code = errno;
-        error = target + ": cannot write file (" + std::strerror(code) + ")";
+        error = "cannot write file (" + std::string(std::strerror(code)) + ")";
         return false;
     }
     return true;

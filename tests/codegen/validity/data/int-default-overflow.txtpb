@@ -1,0 +1,22 @@
+# W-06: both paths refuse an integer default that does not fit its field.
+file {
+  name: "int-default-overflow.proto"
+  syntax: "proto2"
+  message_type {
+    name: "IntDefaultOverflow"
+    field {
+      name: "i"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      default_value: "2147483648"
+    }
+    field {
+      name: "u"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      default_value: "4294967296"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+// An enum whose name is a C++ keyword, and a field of that type.
+//
+// The name reaches the header as the enum's own name and as the qualified
+// type of the field that uses it. Before the fix both said `class`, so the
+// header did not compile.
+//
+// The default names the enum's first value, which is the implicit default of
+// an enum field, so the reference is built from the enum's name as well.
+
+syntax = "proto2";
+
+package kwenum;
+
+enum class
+{
+    first = 0;
+    second = 1;
+}
+
+message Holder
+{
+    optional class kind = 1 [default = second];
+}

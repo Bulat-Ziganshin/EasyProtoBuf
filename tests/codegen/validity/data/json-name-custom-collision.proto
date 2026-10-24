@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+// W-43: two custom names that collide are an error in both syntaxes.
+message JsonCustomCollision
+{
+    int32 a = 1 [json_name = "same"];
+    int32 b = 2 [json_name = "same"];
+}

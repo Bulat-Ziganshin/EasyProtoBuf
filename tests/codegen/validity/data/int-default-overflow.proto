@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+// W-06: both paths keep refusing a value that does not fit the declared
+// field; the in-range control is plus-controls.
+message IntDefaultOverflow
+{
+    optional int32 i = 1 [default = 2147483648];
+    optional uint32 u = 2 [default = 4294967296];
+}

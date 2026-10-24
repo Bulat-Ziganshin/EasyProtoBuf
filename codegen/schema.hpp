@@ -11,6 +11,20 @@
 
 namespace easypb_schema {
 
+// The text of a descriptor view, as an owned string.
+//
+// An empty view may carry a null pointer - a default-constructed
+// std::string_view does, and the descriptor adapter's intern_text returns
+// exactly that for an empty descriptor string - and std::string(nullptr, 0)
+// is formally undefined (the ledger's W-35). The empty case is spelled out
+// here, in the one conversion door every schema frontend, the linker and the
+// generator use; a local copy of this helper is the defect the door removes.
+inline std::string view_text(const str_view& value)
+{
+    if (value.empty()) return std::string();
+    return std::string(value.data(), value.size());
+}
+
 // A SourceLocation with line == 0 and column == 0 is an unknown location.
 // It is used for descriptor-only data and for source metadata that has no
 // meaningful token (for example a missing option). Real lexer locations
@@ -63,7 +77,10 @@ enum DiagnosticCode
     // Plan 4 Step 5.1 (A25): a file's syntax value is neither proto2 nor
     // proto3 (protoc 30.1 writes "editions" for an editions file), so the
     // project cannot model its semantics. Refused loudly instead of being
-    // silently downgraded to proto2.
+    // silently downgraded to proto2. Both origins answer this code since
+    // S7e (W-60): the descriptor path classifies in `link_schema`, and the
+    // source parser throws it for an `edition` statement and for a `syntax`
+    // value the classifier rejects.
     DIAGNOSTIC_UNSUPPORTED_SYNTAX,
     // Plan 4 Step 5.1 (contract clause 12, D-23): a descriptor-origin field
     // number outside 1..536870911 or inside the reserved 19000..19999 range.
@@ -81,10 +98,10 @@ enum DiagnosticCode
     // a number and the enum does not declare `option allow_alias = true`.
     // protoc refuses the shape when it builds a descriptor ("... uses the same
     // enum value as ...") and our parser refuses it as source text
-    // (codegen/parser/proto_parser.cpp:1619-1624), which is why the option
+    // (codegen/parser/proto_parser.cpp:1769), which is why the option
     // travels in the model (`EnumOptions`) - without it the linker could not
-    // tell an intentional alias from this defect. Descriptor-origin only: the
-    // parser cannot produce the shape.
+    // tell an intentional alias from this defect. Both origins answer this
+    // code since S7e (W-60).
     DIAGNOSTIC_DUPLICATE_ENUM_NUMBER,
     // Plan 4 Step 5.1 (contract clause 12, D-28): a message declares a oneof no
     // field points at, so the declaration is unreachable rather than a choice
@@ -97,31 +114,29 @@ enum DiagnosticCode
     // all, so the type has no member and no number to resolve. protoc refuses
     // the shape when it builds a descriptor (`Enums must contain at least one
     // value.`) and our parser refuses the source twin as text ("enum must
-    // contain at least one value"), so this is the descriptor-origin half of
-    // that frontend parity rule. The check runs BEFORE the `allow_alias`
-    // early return: an empty enum that writes the option is still refused by
-    // protoc, so the option cannot licence an empty list. Descriptor-origin
-    // only - the parser cannot produce the shape.
+    // contain at least one value", proto_parser.cpp:1739), so both origins
+    // answer this code since S7e (W-60). The check runs BEFORE the
+    // `allow_alias` early return: an empty enum that writes the option is
+    // still refused by protoc, so the option cannot licence an empty list.
     DIAGNOSTIC_EMPTY_ENUM,
     // Plan 4 Step 5.1 (contract clause 12, the 0927-mimo review's F2): a
     // descriptor-origin file that declares `syntax = "proto3"` carries a field
     // with the `required` label, which proto3 does not have. protoc refuses the
     // shape when it builds the file from the same bytes (`ValidateProto3Field`,
     // descriptor.cc:7917, "Required fields are not allowed in proto3.") and our
-    // parser refuses its source twin (codegen/parser/proto_parser.cpp:1233), so
-    // this is the descriptor-origin half of that frontend parity rule. The gate
-    // is the field's OWN file: proto2 gives the label a meaning, so reading the
-    // wrong file here would refuse legal input. Descriptor-origin only - the
-    // parser cannot produce the shape.
+    // parser refuses its source twin (codegen/parser/proto_parser.cpp:1329),
+    // so both origins answer this code since S7e (W-60). The gate is the
+    // field's OWN file: proto2 gives the label a meaning, so reading the
+    // wrong file here would refuse legal input.
     DIAGNOSTIC_PROTO3_REQUIRED_FIELD,
     // Plan 4 Step 5.1 (contract clause 12, the 0927-mimo review's F2): the same
     // gate for a proto3 field that carries an explicit `default_value`, which
     // proto3 does not allow. protoc refuses it at the same site
     // (descriptor.cc:7922, "Explicit default values are not allowed in
     // proto3.") and the parser refuses the source twin
-    // (codegen/parser/proto_parser.cpp:1124), so the two codes are one rule
+    // (codegen/parser/proto_parser.cpp:1192), so the two codes are one rule
     // asked of two shapes: the shape, not the file class, is what the message
-    // names. Descriptor-origin only.
+    // names. Both origins answer the code since S7e (W-60).
     DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT,
     // Plan 4 clause 13 (ledger `D-39`, the 0927-mimo review's F9): a declaration
     // name the descriptor carries is not a legal protobuf symbol name - empty,
@@ -137,7 +152,43 @@ enum DiagnosticCode
     // the generator's question, not the linker's (contract clause 11). The two
     // messages share one code because they are one category - the name is not a
     // symbol name - and one rule asked of two values (E1/A3).
-    DIAGNOSTIC_INVALID_SYMBOL_NAME
+    DIAGNOSTIC_INVALID_SYMBOL_NAME,
+    // Plan 5 follow-up S1 (W-10): a descriptor-origin field declares a kind
+    // the generator cannot emit - no kind at all, a group, or a value outside
+    // the TYPE_* set. protoc resolves all three (an absent kind as the proto
+    // default TYPE_DOUBLE, a group as a generated group class) and emits
+    // working code; this project REFUSES them, because the emitter has no
+    // spelling for them and used to write "???type" / "???group" into the
+    // header. A deliberate "stricter than protoc" divergence, like the
+    // package-depth and the output-root rules. The check is gated on the
+    // descriptor origin, because a source-origin field carries no declared
+    // kind: deferred parsing leaves has_type unset and the kind is written
+    // during resolution.
+    DIAGNOSTIC_INVALID_FIELD_TYPE,
+    // Plan 5 follow-up S5 (W-44): the first value of a proto3 enum is not
+    // zero. protoc refuses the shape when it builds the file ("The first enum
+    // value must be zero for open enums.", descriptor.cc:8245) and our parser
+    // refuses the source twin as text ("the first proto3 enum value must be
+    // zero", proto_parser.cpp's enum rule), so this is the descriptor-origin
+    // half of that frontend parity rule. Only a proto3 file is asked: proto2
+    // gives the first value no special meaning. The check rides the
+    // reference-free enum sweep, so an enum nothing references is covered too.
+    DIAGNOSTIC_PROTO3_ENUM_FIRST_VALUE,
+    // Plan 5 follow-up S5 (W-45): an extension range a descriptor declares is
+    // not a range protoc would build. Four shapes share the code because they
+    // are one category - the declaration cannot describe extension numbers:
+    // a range in a proto3 file ("Extension ranges are not allowed in
+    // proto3.", descriptor.cc:7898), a non-positive start, a range whose
+    // exclusive end does not exceed its start (`BuildExtensionRange`,
+    // descriptor.cc:6884-6898), a range that includes a declared field number
+    // ("Extension range $0 to $1 includes field \"$2\" ($3).",
+    // descriptor.cc:6426-6430), and two overlapping ranges (`:6454-6482`).
+    // The source path refuses every one of them as text
+    // (proto_parser.cpp:1761/1794/1814), so this is the descriptor-origin half
+    // of the same parity rule. Descriptor-origin only: the parser refuses the
+    // same shapes as text before they reach the model, and its ranges are not
+    // retained in the descriptor tree at all.
+    DIAGNOSTIC_INVALID_EXTENSION_RANGE
 };
 
 struct Diagnostic
@@ -227,6 +278,28 @@ private:
 // FileDescriptorProto).
 typedef std::vector<int> DescriptorPath;
 
+// The deepest message nesting a schema may declare. The reference compiler
+// has the same limit and draws the line in the same place: its
+// MaxMessageDeclarationNestingDepth() is 32 (descriptor.h:3045) and it
+// refuses the 32nd level of nested messages - 31 levels are accepted, the
+// 32nd is not (compiler/parser.cc:785-789 and descriptor.cc:6364-6373, both
+// with the sentence "Reached maximum recursion limit for nested messages.").
+//
+// The rule lives here because three doors enforce it and they must not
+// disagree: the source parser refuses to descend deeper, the descriptor
+// loader refuses to decode a set that nests deeper, and the semantics layer
+// refuses a schema a library caller built by hand. A schema that passes all
+// three cannot make any later walk of the nesting recurse without a bound.
+//
+// The depth of a message is the number of LEVELS of its descriptor path: the
+// path holds a field number and an index per level
+// (easypb_schema::file_message_path, message_nested_path), so a file-level
+// message has two components and a message nested in it has four.
+inline int max_message_nesting_depth()
+{
+    return 32;
+}
+
 class SchemaFile;
 
 struct FieldSource
@@ -275,6 +348,12 @@ private:
     SchemaFile& operator=(const SchemaFile&);
 };
 
+// The label a diagnostic uses for a file: the logical name when the file has
+// one, the container path it came from otherwise (the anonymous single-file
+// `.pbs` shape, where the name is cleared on purpose). A failure must never
+// render an empty label for a file the user named on the command line (W-19).
+std::string schema_file_label(const SchemaFile& file);
+
 // Owns a set of schema files. Files live on the heap, so their addresses
 // stay stable while the owning vector grows. Logical-name index keys are
 // owned strings. Duplicate logical names are rejected with an exception.
@@ -292,6 +371,12 @@ public:
     ~SchemaSet();
 
     SchemaFile& add_file(const std::string& logical_name);
+    // Adds a file with no logical name: the anonymous single-file `.pbs`
+    // shape. `identity` is the container path the file came from; it becomes
+    // physical_name only and is deliberately NOT inserted into the name index
+    // (`--target <container>` must not select a file the descriptor does not
+    // name, W-18). The descriptor keeps an empty, absent name view.
+    SchemaFile& add_unnamed_file(const std::string& identity);
     SchemaFile* find_file(const std::string& logical_name) const;
     const std::vector<std::unique_ptr<SchemaFile> >& files() const;
     void add_target(SchemaFile& file);
@@ -345,6 +430,17 @@ inline DescriptorPath service_method_path(const DescriptorPath& service_path,
     return path;
 }
 
+// `MethodDescriptorProto.input_type` is field 2 and `.output_type` is field 3
+// (descriptor.proto). Unlike the name, the two are references, so a diagnostic
+// about one names the type field itself; `field_number` is 2 or 3.
+inline DescriptorPath service_method_type_path(const DescriptorPath& method_path,
+                                               int field_number)
+{
+    DescriptorPath path = method_path;
+    path.push_back(field_number);
+    return path;
+}
+
 inline DescriptorPath message_field_path(const DescriptorPath& message_path,
                                          int field_index)
 {
@@ -378,6 +474,18 @@ inline DescriptorPath message_oneof_path(const DescriptorPath& message_path,
     DescriptorPath path = message_path;
     path.push_back(8);
     path.push_back(oneof_index);
+    return path;
+}
+
+// `DescriptorProto.extension_range` is field 5. The model carries the ranges
+// themselves since `W-45`, so a range can be named by a descriptor path like
+// every other declaration.
+inline DescriptorPath message_extension_range_path(
+    const DescriptorPath& message_path, int range_index)
+{
+    DescriptorPath path = message_path;
+    path.push_back(5);
+    path.push_back(range_index);
     return path;
 }
 

@@ -1,0 +1,16 @@
+file {
+  name: "enum-first.proto"
+  package: "parity"
+  syntax: "proto3"
+  enum_type {
+    name: "E"
+    value {
+      name: "A"
+      number: 1
+    }
+    value {
+      name: "B"
+      number: 0
+    }
+  }
+}

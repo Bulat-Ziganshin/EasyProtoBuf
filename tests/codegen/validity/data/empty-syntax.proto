@@ -1,0 +1,7 @@
+syntax = "";
+
+// W-15: an explicit empty syntax is not the absent descriptor syntax.
+message EmptySyntax
+{
+    optional int32 value = 1;
+}

@@ -63,8 +63,8 @@ target("easypb_descriptor_loader")
     add_deps("easypb_file_io", "easypb_schema")
 target_end()
 
--- Plan 5's standalone publisher: containment, native collision checks,
--- directory creation and per-file replacement. It is NOT part of the
+-- Plan 5's standalone publisher: output-name validation, duplicate output-name
+-- refusal, directory creation and the in-place write. It is NOT part of the
 -- generation core (P11). See CMakeLists.txt for the same split.
 target("easypb_header_output")
     set_kind("static")

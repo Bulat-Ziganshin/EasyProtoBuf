@@ -1,0 +1,10 @@
+# W-42: FOO and foo fold to the same PascalCase name.
+file {
+  name: "enum-name-collision-case.proto"
+  syntax: "proto2"
+  enum_type {
+    name: "E"
+    value { name: "FOO" number: 0 }
+    value { name: "foo" number: 1 }
+  }
+}

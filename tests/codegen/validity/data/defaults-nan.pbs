@@ -1,0 +1,6 @@
+
+r
+defaults-nan.proto"\
+NanDefaults 
+	quiet_nan (:nanRquietNan+
+quiet_nan_float (:nanRquietNanFloat

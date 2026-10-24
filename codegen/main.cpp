@@ -5,9 +5,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <exception>
-#include <fstream>
 #include <iostream>
-#include <iterator>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -21,6 +20,10 @@
 #include "header_output.hpp"
 #include "schema_linker.hpp"
 #include "utils.hpp"
+
+// W-55: the helper lives in easypb_codegen; this file is in the global
+// namespace, so it names the owner once.
+using easypb_codegen::ends_with;
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -122,21 +125,35 @@ bool collect_arguments(int argc, char** argv, std::vector<std::string>& argument
 #endif
 }
 
+// The two helpers below belong to the parser-enabled profile: the descriptor
+// printing and the parser benchmark are the only callers, and the profile
+// without the parser refuses those modes before they are reached. Outside the
+// guard they are dead code, and a dead function is a warning in every build
+// of that profile (measured: the lite build of 2026-10-22).
+#if EASYPB_CODEGEN_WITH_PROTO_PARSER
 bool read_file(const std::string& filename, std::string& contents)
 {
-    // Native file calls truncate at an embedded NUL while the spelling
-    // keeps its full length: refuse instead of reading a prefix.
-    if (filename.find('\0') != std::string::npos) return false;
-    std::ifstream input(filename.c_str(), std::ios::in | std::ios::binary);
-    if (!input) return false;
-    contents.assign(std::istreambuf_iterator<char>(input),
-                    std::istreambuf_iterator<char>());
-    return input.good() || input.eof();
+    // The native read: wide on Windows, so a non-ASCII spelling and a path
+    // beyond MAX_PATH stay addressable on the utility modes exactly as they
+    // are on the generation path (S4/W-24). The embedded-NUL guard lives
+    // there too.
+    std::string error;
+    return easypb_file::read_disk_file(filename, contents, error);
 }
 
 FileDescriptorProto decode_single_file_descriptor(const std::string& filename,
                                                    const std::string& contents)
 {
+    // The nesting bound, before the decode: the decode descends into every
+    // nested message the set carries, so a set that nests deeper than the
+    // limit would overflow the stack inside the runtime's message codec. The
+    // check runs on the bytes and stops at the limit, so it cannot overflow
+    // the stack either.
+    easypb_schema::Diagnostic error;
+    if (!easypb_schema::check_descriptor_set_nesting(contents, filename,
+                                                     error)) {
+        throw std::runtime_error(filename + ": " + error.message);
+    }
     const FileDescriptorSet set = easypb::decode<FileDescriptorSet>(contents);
     if (set.file.empty()) {
         throw std::runtime_error(filename +
@@ -151,6 +168,7 @@ FileDescriptorProto decode_single_file_descriptor(const std::string& filename,
     }
     return set.file[0];
 }
+#endif
 
 #if EASYPB_CODEGEN_WITH_PROTO_PARSER
 std::string format_diagnostic(const easypb_proto::Diagnostic& diagnostic)
@@ -201,8 +219,26 @@ void report_schema_diagnostic(const easypb_schema::Diagnostic& diagnostic)
                << diagnostic.location.column;
     }
     if (output.tellp() > 0) output << ": ";
+    if (diagnostic.warning) output << "warning: ";
     output << diagnostic.message;
     std::cerr << output.str() << '\n';
+}
+
+// The warnings the load and the link stored - a dropped `extend` declaration,
+// a compatibility reference into a missing dependency - belong to the run, not
+// to the source frontend that happened to produce them. They are printed once,
+// on stderr, before generation; the exit code stays 0 and stdout stays the
+// header only (S4/W-14). The print path keeps its own per-file loop because it
+// never links.
+void report_schema_warnings(const easypb_schema::SchemaSet& schema)
+{
+    const std::vector<std::unique_ptr<easypb_schema::SchemaFile> >& files =
+        schema.files();
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        for (std::size_t j = 0; j < files[i]->warnings.size(); ++j) {
+            report_schema_diagnostic(files[i]->warnings[j]);
+        }
+    }
 }
 
 easypb_schema::Diagnostic make_schema_diagnostic(const std::string& file,
@@ -223,6 +259,7 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
 #if !EASYPB_CODEGEN_WITH_PROTO_PARSER
     for (std::size_t i = 1; i < arguments.size(); ++i) {
         const std::string& argument = arguments[i];
+        if (argument == "--") break;
         if (argument == "--print-descriptor" ||
             argument == "--benchmark-parser" ||
             argument == "--benchmark-ms" ||
@@ -233,22 +270,12 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     }
 #endif
 
-    // A long option spelled `--name=` hands the parser an empty value, and
-    // the option parser would consume the NEXT argument as that value. Refuse
-    // the spelling before any argument is interpreted (plan 5 C1: empty
-    // values are rejected).
-    for (std::size_t i = 1; i < arguments.size(); ++i) {
-        const std::string& argument = arguments[i];
-        if (argument == "--") break;
-        if (argument.size() > 2 && argument[0] == '-' && argument[1] == '-') {
-            const std::size_t equals = argument.find('=');
-            if (equals != std::string::npos && equals + 1 == argument.size()) {
-                throw std::runtime_error(
-                    argument.substr(0, equals) +
-                    " requires a non-empty value");
-            }
-        }
-    }
+    // The prescan that used to reject `--name=` here is gone: the option
+    // parser distinguishes an inline empty value from an absent one and its
+    // Value<std::string>/Value<T> refuse the empty string. The parser's own
+    // failure is translated below into the sentence this tool documents, so
+    // the grammar stays in one place and the value position is not inspected
+    // (W-22, W-23).
 
     CommandLine command;
     OptionParser parser("Allowed options");
@@ -320,9 +347,36 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     for (std::size_t i = 0; i < arguments.size(); ++i) {
         argv_pointers.push_back(arguments[i].c_str());
     }
-    parser.parse(static_cast<int>(arguments.size()),
-                 argv_pointers.empty() ? static_cast<const char* const*>(0)
-                                       : &argv_pointers[0]);
+    try {
+        parser.parse(static_cast<int>(arguments.size()),
+                     argv_pointers.empty() ? static_cast<const char* const*>(0)
+                                           : &argv_pointers[0]);
+    } catch (const popl::invalid_option& problem) {
+        // Value<std::string>::parse and Value<T>::parse refuse an empty value
+        // with this error and the spelling the user typed. An option the
+        // parser itself reports as missing a value ("Missing value for flag:
+        // -s") has no name here, so it keeps its own sentence.
+        if (problem.error() == popl::invalid_option::Error::missing_argument &&
+            problem.option() != 0 &&
+            problem.what_name() != popl::OptionName::unspecified) {
+            throw std::runtime_error(
+                problem.option()->name(problem.what_name(), true) +
+                " requires a non-empty value");
+        }
+        throw;
+    }
+
+    // An unknown or misspelled option is refused instead of silently ignored.
+    // The parser records it and never applies it, so a typo such as
+    // "--no-has-field" for "--no-has-fields" would otherwise generate a header
+    // that keeps the feature the caller asked to drop. The check runs before
+    // help is honoured, matching the reference compiler: protoc reports the
+    // unknown flag even when --help is present (S4/W-20). A token after "--"
+    // is positional by definition and never reaches this list.
+    if (!parser.unknown_options().empty()) {
+        throw std::runtime_error("Unknown flag: " +
+                                 parser.unknown_options()[0]);
+    }
 
     // print auto-generated help message
     if (groff_option->is_set()) {
@@ -352,10 +406,10 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         command.proto_paths.push_back(proto_path_option->value(i));
     }
     for (std::size_t i = 0; i < target_option->count(); ++i) {
+        // An empty value cannot reach this loop: every Value<std::string>
+        // refuses it in the parser, and the translation above turns that into
+        // the tool's sentence.
         const std::string target = target_option->value(i);
-        if (target.empty()) {
-            throw std::runtime_error("--target requires a non-empty name");
-        }
         bool seen = false;
         for (std::size_t j = 0; j < command.targets.size(); ++j) {
             if (command.targets[j] == target) {
@@ -561,6 +615,12 @@ int run_generation(const CommandLine& command)
         return 1;
     }
 
+    // The load and the link stored every warning the schema produced. The
+    // generation path used to drop them, although OPTIONS.md promises the
+    // compatibility warning; print them once, before generation, with the
+    // exit code still 0 and stdout still the header only (S4/W-14).
+    report_schema_warnings(schema);
+
     const std::vector<easypb_schema::SchemaFile*>& targets = schema.targets();
     if (targets.empty()) {
         report_schema_diagnostic(
@@ -579,13 +639,18 @@ int run_generation(const CommandLine& command)
                 make_schema_diagnostic(std::string(), message.str()));
             return 1;
         }
-        // Generate into memory first: a failure must leave stdout empty.
+        // Generate into memory first: a failure must leave stdout empty. The
+        // failure is a diagnostic, not an exception text: the --out-dir path
+        // builds the same one (generate_files), so both print one line in one
+        // shape, naming the target (W-66).
         std::string header;
         try {
             header = easypb_codegen::generate_header(*targets[0], linked,
                                                      command.generation_options);
         } catch (const std::exception& problem) {
-            std::fprintf(stderr, "Exception: %s\n", problem.what());
+            report_schema_diagnostic(make_schema_diagnostic(
+                easypb_schema::schema_file_label(*targets[0]),
+                problem.what()));
             return 1;
         }
         std::cout << header;

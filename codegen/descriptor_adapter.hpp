@@ -25,10 +25,9 @@ namespace easypb_schema {
 // Each file must carry a non-empty `name`: dependencies and target selection
 // both address files by their logical names, and one named descriptor is the
 // smallest unit this API accepts. The anonymous single-file `.pbs`
-// compatibility path belongs to descriptor_loader.hpp, which reuses the same
-// copy helper with an internal identity instead. Logical-name spelling rules
-// (relative path, no quotes or control bytes) are not checked here: they are
-// enforced where a name becomes a generated output path.
+// compatibility path uses append_unnamed_descriptor below instead. Logical-name
+// spelling rules (relative path, no quotes or control bytes) are not checked
+// here: they are enforced where a name becomes a generated output path.
 //
 // Duplicate logical names are rejected both within one call and against
 // every file appended earlier, with DIAGNOSTIC_DUPLICATE_SYMBOL naming the
@@ -38,6 +37,26 @@ namespace easypb_schema {
 bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                              const std::string& diagnostic_label,
                              SchemaSet& result, Diagnostic& error);
+
+// Append exactly one descriptor that has no logical name: the legacy
+// single-file `.pbs` workflow. `identity` is the container path; it becomes
+// physical_name and labels a diagnostic, but it is never interned into the
+// descriptor and never inserted into the set's name index (W-57, W-18). The
+// same deep copy and the same nesting bound as the named path apply.
+bool append_unnamed_descriptor(const FileDescriptorProto& file,
+                               const std::string& identity, SchemaSet& result,
+                               Diagnostic& error);
+
+// True when two decoded files carry the same modeled content: every field
+// descriptor.pb.hpp declares, with the presence bits that change what the
+// linker reads. The presence bits of `name` and `package` are not modeled
+// identity (W-48): ingest normalizes them, and the strings are compared
+// instead. The descriptor loader uses this for the overlap rule of `W-36` - a
+// file two containers both carry is merged when the two copies agree, and
+// refused as a conflict when they do not - and the rule is about the content
+// this project reads, not about the two containers' bytes.
+bool same_descriptor_file(const FileDescriptorProto& left,
+                          const FileDescriptorProto& right);
 
 } // namespace easypb_schema
 

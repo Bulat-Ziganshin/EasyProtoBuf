@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+// W-40: +inf and +nan are float constants and share the same refusal.
+message PlusInfNan
+{
+    optional double positive_infinity = 1 [default = +inf];
+    optional double quiet_nan = 2 [default = +nan];
+}

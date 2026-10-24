@@ -1,0 +1,10 @@
+syntax = "proto2";
+
+// W-04: the ERANGE family protoc canonicalizes instead of refusing.
+message FloatOverflowDefaults
+{
+    optional double overflow = 1 [default = 1e400];
+    optional double underflow = 2 [default = 1e-400];
+    optional double negative_underflow = 3 [default = -1e-400];
+    optional double subnormal = 4 [default = 1e-320];
+}

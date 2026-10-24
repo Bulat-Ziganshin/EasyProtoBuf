@@ -1,0 +1,22 @@
+//
+// The same collision one scope up: two top-level messages whose C++ names
+// are the same.
+//
+// The reference compiler accepts the schema and emits two `class_` classes,
+// so its header does not compile either. This project refuses the shape with
+// a diagnostic instead of writing a header that cannot mean what the schema
+// says.
+
+syntax = "proto2";
+
+package escapemessage;
+
+message class
+{
+    optional int32 value = 1;
+}
+
+message class_
+{
+    optional int32 other = 2;
+}

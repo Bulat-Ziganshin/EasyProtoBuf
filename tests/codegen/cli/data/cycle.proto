@@ -1,0 +1,4 @@
+syntax = "proto3";
+package cyc;
+message A { B b = 1; }
+message B { A a = 1; }

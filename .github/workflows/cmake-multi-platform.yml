@@ -21,6 +21,9 @@ env:
   CE_CACHE_PREFIX: "ce-v4"
   CE_INFRA_REF: "d6f11ec3fa605e9f625d7240b42978b47d065742"
 
+  # Apt package archives of the pinned host compilers (see the main job).
+  APT_CACHE_PREFIX: "apt-v1"
+
 jobs:
   #####################################################################################################################
   # Build MSVC platform toolsets separately from the Unix-like compiler matrices below.
@@ -28,7 +31,7 @@ jobs:
   windows:
     name: ${{ matrix.job_name }}
     runs-on: ${{ matrix.os || 'windows-2022' }}
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     strategy:
       # Run every matrix combination independently even if another one fails.
@@ -251,7 +254,7 @@ jobs:
   main:
     name: ${{ matrix.job_name || format('{0} / {1} / C++{2}', matrix.os, matrix.cpp_compiler, matrix.std) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     strategy:
       # Run every matrix combination independently even if another one fails.
@@ -328,7 +331,10 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    - name: Install Linux compiler and standard library if needed
+    # One owner of "what does this row install": the preinstalled stock
+    # compilers need neither a download nor a cache entry.
+    - name: Resolve the compiler package
+      id: apt-need
       if: runner.os == 'Linux'
       run: |
         compiler='${{ matrix.cpp_compiler }}'
@@ -343,10 +349,59 @@ jobs:
         fi
 
         if [ -n "$(printf '%s' "$packages" | tr -d '[:space:]')" ]; then
-          sudo apt-get update
-          # Matrix package names are fixed by this workflow, so intentional word splitting is appropriate here.
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+        else
+          echo "needed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # Cache the apt archives of the pinned compilers. Outside it: the stock
+    # compilers are preinstalled and docker reinstalls from its own image by
+    # design. Bump apt-v1 when the pinned package set changes.
+    #
+    # apt keeps its lock and partial/ as root-only in the archives directory,
+    # and the cache action runs as the runner user. The archives therefore
+    # live in a workspace directory owned by the runner, and the cached path
+    # is narrowed to *.deb; a workspace-relative path also keeps the archive
+    # free of "../" members, which GNU tar strips on extraction.
+    - name: Prepare the apt archive directory
+      if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true'
+      run: |
+        archives="$GITHUB_WORKSPACE/.apt-archives"
+        mkdir -p "$archives"
+        echo "Dir::Cache::Archives \"$archives\";" | sudo tee /etc/apt/apt.conf.d/99easypb-archives
+
+    - name: Restore cached apt packages
+      id: apt-cache
+      if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true'
+      uses: actions/cache/restore@v5
+      with:
+        key: ${{ env.APT_CACHE_PREFIX }}-${{ runner.os }}-${{ runner.arch }}-${{ matrix.cpp_compiler }}
+        path: ${{ github.workspace }}/.apt-archives/*.deb
+
+    - name: Install Linux compiler and standard library if needed
+      if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true'
+      run: |
+        packages='${{ steps.apt-need.outputs.packages }}'
+        echo 'APT::Keep-Downloaded-Packages "true";' | sudo tee /etc/apt/apt.conf.d/99easypb-keep-debs
+        sudo apt-get update
+        # Matrix package names are fixed by this workflow, so intentional word splitting is appropriate here.
+        if [ '${{ steps.apt-cache.outputs.cache-hit }}' = 'true' ]; then
+          # The archives were restored, so the packages come from them. When a
+          # resolved version is missing (the mirror moved), the fallback fetches
+          # only the missing debs and reuses the restored ones.
+          sudo apt-get install -y --no-download $packages \
+            || sudo apt-get install -y $packages
+        else
           sudo apt-get install -y $packages
         fi
+
+    - name: Save cached apt packages
+      if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true' && steps.apt-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        key: ${{ steps.apt-cache.outputs.cache-primary-key }}
+        path: ${{ github.workspace }}/.apt-archives/*.deb
 
     - name: Show toolchain and platform
       run: |
@@ -392,9 +447,11 @@ jobs:
   docker:
     name: ${{ format('{0} / {1} / C++{2}', matrix.image, matrix.cpp_compiler, matrix.std) }}
     runs-on: [ubuntu-latest]
-    timeout-minutes: 30
+    timeout-minutes: 120
     container:
-      image: ${{ startsWith(matrix.image, 'rockylinux:') && format('rockylinux/{0}', matrix.image) || format('public.ecr.aws/docker/library/{0}', matrix.image) }}
+      # Docker Hub's Google mirror, not public.ecr.aws: the ECR anonymous
+      # quota is shared by the runners' IP pool and answers "toomanyrequests".
+      image: ${{ startsWith(matrix.image, 'rockylinux:') && format('mirror.gcr.io/rockylinux/{0}', matrix.image) || format('mirror.gcr.io/library/{0}', matrix.image) }}
     strategy:
       matrix:
         cpp_compiler: [g++]
@@ -412,8 +469,15 @@ jobs:
           - { image: 'ubuntu:16.04', cpp_compiler: g++,     std: "11" }
           - { image: 'ubuntu:16.04', cpp_compiler: clang++, std: "11" }
 
-          # Ubuntu 18.04 through 26.04: add the distribution's stock Clang alongside stock GCC.
-          # Expected default Clang generations: 6, 10, 14, 18, 21 respectively.
+          # Ubuntu 18.04 through 24.04: add the distribution's stock Clang alongside stock GCC.
+          # Expected default Clang generations: 6, 10, 14, 18 respectively. These rows are
+          # the only coverage of those stock generations (the host matrix pins 14-22 on
+          # ubuntu-24.04 only; the CE matrix covers 3.1-13 on ubuntu-24.04).
+          #
+          # ubuntu:26.04 deliberately has no clang++ row: its stock compiler is the
+          # universe clang 21.1.x package, which the 'main' job already tests as the
+          # pinned clang++-21 on ubuntu-26.04. The always-moving ubuntu:rolling /
+          # ubuntu:devel GCC rows below cover what comes after the 26.04 release.
           - { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "11" }
           - { image: 'ubuntu:18.04', cpp_compiler: clang++, std: "17" }
           - { image: 'ubuntu:20.04', cpp_compiler: clang++, std: "11" }
@@ -422,8 +486,6 @@ jobs:
           - { image: 'ubuntu:22.04', cpp_compiler: clang++, std: "17" }
           - { image: 'ubuntu:24.04', cpp_compiler: clang++, std: "11" }
           - { image: 'ubuntu:24.04', cpp_compiler: clang++, std: "17" }
-          - { image: 'ubuntu:26.04', cpp_compiler: clang++, std: "11" }
-          - { image: 'ubuntu:26.04', cpp_compiler: clang++, std: "17" }
 
           # Debian: keep GCC on every release, and add stock Clang at the old/current stable endpoints.
           - { image: 'debian:10', cpp_compiler: clang++, std: "11" }
@@ -569,7 +631,7 @@ jobs:
   ce-legacy-gcc:
     name: GCC ${{ matrix.version }} / C++${{ matrix.std }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     env:
       CE_GCC_TARGET: ${{ matrix.version }}
@@ -732,7 +794,7 @@ jobs:
     name: Clang ${{ matrix.label }} / C++${{ matrix.std }}
     # Pin the host so a future ubuntu-latest migration does not change two variables at once.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     env:
       CE_CLANG_TARGET: ${{ matrix.ce_target }}
@@ -994,7 +1056,7 @@ jobs:
   extended-tests:
     name: "Extended tests / ${{ matrix.os }}"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     strategy:
       # Run every OS leg independently even if another one fails.

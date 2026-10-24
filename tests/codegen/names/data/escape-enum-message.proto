@@ -1,0 +1,22 @@
+//
+// A type name and a message name in the same scope: the enum `class` and
+// the message `class_` both become `class_`.
+//
+// The reference compiler accepts the schema and emits an `enum class_` and a
+// `class class_` in one scope, so its header does not compile either. This
+// project refuses the shape with a diagnostic instead of writing a header
+// that cannot mean what the schema says.
+
+syntax = "proto2";
+
+package escapeenummessage;
+
+enum class
+{
+    first = 0;
+}
+
+message class_
+{
+    optional int32 value = 1;
+}

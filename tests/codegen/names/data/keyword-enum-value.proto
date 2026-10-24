@@ -1,0 +1,20 @@
+// An enum VALUE whose name is a C++ keyword.
+//
+// The name reaches the header as the enumerator and as the qualified
+// reference an enum default is spelled with. Before the fix both said
+// `class`, so the header did not compile.
+
+syntax = "proto2";
+
+package kwenumvalue;
+
+enum E
+{
+    class = 0;
+    other = 1;
+}
+
+message Holder
+{
+    optional E kind = 1 [default = class];
+}

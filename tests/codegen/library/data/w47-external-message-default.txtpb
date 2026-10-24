@@ -1,0 +1,20 @@
+# W-47: the shape protoc refuses from source (a message default). Encoded
+# from this text with `protoc --encode=google.protobuf.FileDescriptorSet`, so
+# the bytes are the reference encoder's own, not hand-rolled.
+file {
+  name: "w47-external-message-default.proto"
+  package: "ext"
+  dependency: "w47-dep.proto"
+  message_type {
+    name: "Root"
+    field {
+      name: "x"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_MESSAGE
+      type_name: ".dep.Missing"
+      default_value: "x"
+      json_name: "x"
+    }
+  }
+}

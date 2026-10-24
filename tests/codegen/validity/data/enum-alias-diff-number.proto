@@ -1,0 +1,10 @@
+syntax = "proto2";
+
+// W-42: allow_alias licenses the same number, not two different numbers whose
+// folded names collide.
+enum AliasDiff
+{
+    option allow_alias = true;
+    ALIAS_DIFF_FOO = 0;
+    FOO = 1;
+}

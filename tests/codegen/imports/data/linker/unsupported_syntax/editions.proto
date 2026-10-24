@@ -9,9 +9,9 @@
 // branch the answer was a generic parse error (`expected a top-level .proto
 // statement`, DIAGNOSTIC_GENERIC), because the parser had no `edition`
 // statement branch while A25's DIAGNOSTIC_UNSUPPORTED_SYNTAX classified only at
-// the descriptor origin. The refusal remains a load-stage one: the file is
-// never classified, so its code stays DIAGNOSTIC_GENERIC and the message, not
-// the code, is what names editions.
+// the descriptor origin. Since S7e (W-60) the refusal carries the descriptor
+// origin's code, DIAGNOSTIC_UNSUPPORTED_SYNTAX, so the message and the code
+// both name editions.
 edition = "2023";
 package editions_test;
 message M { int32 x = 1; }

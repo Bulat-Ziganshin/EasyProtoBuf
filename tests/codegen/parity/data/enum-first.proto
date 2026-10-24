@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package parity;
+
+enum E {
+  A = 1;
+  B = 0;
+}

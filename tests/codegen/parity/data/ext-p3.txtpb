@@ -1,0 +1,12 @@
+file {
+  name: "ext-p3.proto"
+  package: "parity"
+  syntax: "proto3"
+  message_type {
+    name: "M"
+    extension_range {
+      start: 100
+      end: 200
+    }
+  }
+}

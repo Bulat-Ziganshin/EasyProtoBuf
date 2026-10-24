@@ -927,15 +927,17 @@ void test_invalid_syntax_preserves_chain()
     CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.message.find("broken.proto") != std::string::npos);
     CHECK(error.message.find("root.proto") != std::string::npos);
-    // The original file/line/column must survive: the stray ";" is on
-    // line 2 of broken.proto and must appear verbatim.
+    // W-61: the original file/line/column survive in the outer Diagnostic,
+    // and the message names the logical file only once. The renderer supplies
+    // the `file:line:column:` prefix; the wrapper must not embed it again.
     CHECK(error.location.line == 2);
     CHECK(error.location.column != 0);
+    CHECK(error.file == "broken.proto");
     {
-        std::ostringstream expected;
-        expected << "broken.proto:" << error.location.line << ":"
-                 << error.location.column;
-        CHECK(error.message.find(expected.str()) != std::string::npos);
+        std::ostringstream duplicated;
+        duplicated << "broken.proto:" << error.location.line << ":"
+                   << error.location.column;
+        CHECK(error.message.find(duplicated.str()) == std::string::npos);
     }
     CHECK(files.files().empty());
 }
@@ -1744,8 +1746,9 @@ void test_wide_conversion_applies_the_long_path_prefix()
     // touching the filesystem: a drive spelling gets the prefix, a network
     // spelling gets the UNC variant (the form the reference layer loses
     // while normalizing), and a spelling that already carries the prefix is
-    // passed through instead of being prefixed twice. No loader run can
-    // cover the network form, because a share is not available to tests.
+    // translated to the plain form and re-prefixed canonically instead of
+    // keeping its mixed separators. No loader run can cover the network form,
+    // because a share is not available to tests.
     std::vector<wchar_t> wide;
     CHECK(easypb_file::wide_win32_path("C:/deep/dir/leaf.proto", wide));
     CHECK(std::wstring(&wide[0], wide.size()) ==
@@ -1755,7 +1758,13 @@ void test_wide_conversion_applies_the_long_path_prefix()
           L"\\\\?\\UNC\\host\\share\\leaf.proto");
     CHECK(easypb_file::wide_win32_path("\\\\?\\C:/mixed\\path.proto", wide));
     CHECK(std::wstring(&wide[0], wide.size()) ==
-          L"\\\\?\\C:/mixed\\path.proto");
+          L"\\\\?\\C:\\mixed\\path.proto");
+    CHECK(easypb_file::wide_win32_path("//?/C:/mixed/path.proto", wide));
+    CHECK(std::wstring(&wide[0], wide.size()) ==
+          L"\\\\?\\C:\\mixed\\path.proto");
+    CHECK(easypb_file::wide_win32_path("\\\\?\\UNC\\host\\share\\x", wide));
+    CHECK(std::wstring(&wide[0], wide.size()) ==
+          L"\\\\?\\UNC\\host\\share\\x");
     // Backslashes come in and come out normalized.
     CHECK(easypb_file::wide_win32_path("C:\\deep\\leaf.proto", wide));
     CHECK(std::wstring(&wide[0], wide.size()) ==

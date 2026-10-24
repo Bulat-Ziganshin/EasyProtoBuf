@@ -20,6 +20,38 @@ bool parse_unsigned_integer(const std::string& text, std::uint64_t& result);
 bool parse_signed_32(const std::string& text, std::int32_t& result);
 bool is_float_text(const std::string& text);
 
+// Canonicalize a floating-point default the way protobuf's SimpleFtoa /
+// SimpleDtoa do. `single_precision` narrows the parsed value to float before
+// formatting; a double keeps its own precision. The function accepts the same
+// spellings the source grammar and the descriptor field carry, including
+// `inf`, `-inf` and `nan`. An out-of-range parse is not a refusal: overflow
+// becomes `inf`/`-inf`, underflow to zero becomes `0`/`-0`, and a finite
+// subnormal becomes the shortest decimal that round-trips, exactly as the
+// reference compiler stores the value (W-04). A text with no digits, trailing
+// text, or a malformed spelling returns false and leaves `result` untouched.
+bool canonical_float_default(const std::string& text, bool single_precision,
+                             std::string& result);
+
+// The default JSON spelling of a protobuf field name: every `_` is dropped and
+// the following ASCII letter is uppercased (`descriptor.cc:123-140`). The same
+// helper feeds the source frontend's `json_name` option, the pretty printer,
+// and the uniqueness validator so they cannot disagree.
+std::string to_json_name(const std::string& name);
+
+// Decode the C-escaped text a bytes default carries into the bytes it
+// denotes. The grammar is the one `valid_bytes_default_escape` accepts and
+// the one the reference compiler applies with `absl::CUnescape` while it
+// builds a bytes field (descriptor.cc:6728-6741): the simple escapes, an
+// octal escape of one to three digits, a hex escape of one or more digits
+// and `\u`/`\U` of exactly four/eight hex digits, the last two decoding to
+// the UTF-8 encoding of the code point. A string default is stored DECODED
+// and needs no decoding - only a bytes default does.
+//
+// Returns false and leaves `result` untouched when the text is not a valid
+// escape sequence. The generator core links this module, so the emitter can
+// decode a descriptor-origin bytes default without depending on the parser.
+bool decode_bytes_escape(const std::string& text, std::string& result);
+
 // One indexed declaration. Message and enum entries use the matching
 // FieldDescriptorProto TYPE_* kind; package scopes use SYMBOL_PACKAGE and
 // service names SYMBOL_SERVICE; every other declaration category (enum
@@ -144,6 +176,56 @@ bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error);
 // reference for the answer. Returns false and fills error at the first empty
 // enum or the first repeated number, in declaration order.
 bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error);
+
+// Validates the JSON-name uniqueness protoc enforces per message (W-43).
+// Two default names that fold to one JSON spelling are an error in proto3 and
+// a warning in proto2, matching the reference compiler's LEGACY_BEST_EFFORT
+// behaviour. Two custom `json_name` values that collide are an error in both
+// syntaxes; a custom name that collides with a default one follows the same
+// proto2-warning/proto3-error split. A pair of two non-custom names is
+// reported by the first pass only. Runs in both linking modes on the
+// descriptor alone, before resolution and indexing, like the enum-number
+// sweep beside it; a proto2 warning is stored on the file and printed after a
+// successful link.
+bool validate_json_names(SchemaFile& file, Diagnostic& error);
+
+// Validates every extension range the file's messages declare, top-level and
+// nested, over the available descriptor alone (plan 5 follow-up S5, W-45).
+// Five shapes share DIAGNOSTIC_INVALID_EXTENSION_RANGE, because they are one
+// category - the declaration does not describe usable extension numbers: a
+// range in a proto3 file, a non-positive start, an exclusive end that does not
+// exceed its start, a range that includes a declared field number, and two
+// overlapping ranges. protoc refuses all five while it builds a file
+// (descriptor.cc:6884-6896, :7898, :6426-6430, :6454-6482) and the source path
+// refuses every one of them as text (proto_parser.cpp's extension-range
+// parser), so this is the descriptor-origin half of the same frontend parity
+// rule. An unreferenced message is still descriptor input, so the check is
+// unconditional and runs before any resolution, in both linking modes, beside
+// the entry-shape and enum-number sweeps (A26's precedent). Returns false and
+// fills error at the first offending range, in declaration order.
+bool validate_extension_ranges(SchemaFile& file, Diagnostic& error);
+
+// Validates the message nesting of one descriptor: no message may be nested
+// deeper than easypb_schema::max_message_nesting_depth() levels, which is
+// the reference compiler's own limit (MaxMessageDeclarationNestingDepth(),
+// descriptor.h:3045). The reference refuses the 32nd level of nested messages
+// with "Reached maximum recursion limit for nested messages."
+// (compiler/parser.cc:785-789, descriptor.cc:6364-6373), and this carries
+// the same sentence.
+//
+// The check exists because three walks follow the nesting and none of them
+// may run unbounded: the source parser descends into the nested messages,
+// the runtime decoder decodes them, and the linker walks the linked schema.
+// The rule is enforced at each of those doors, and this function is the one
+// the descriptor door and the library door ask.
+//
+// The walk behind it uses an explicit stack and stops at the limit, so it
+// cannot overflow the stack on the very input it refuses. `label` names the
+// file in the diagnostic; the offending message is named by its descriptor
+// path.
+bool validate_message_nesting_depth(const FileDescriptorProto& file,
+                                    const std::string& label,
+                                    Diagnostic& error);
 
 // Validates every declaration name in the file lexically, over the available
 // descriptor alone (contract clause 13; fix round r18, ledger D-39): a name must

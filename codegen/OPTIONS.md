@@ -30,7 +30,7 @@ codegen -I schemas --out-dir build/generated common/state.proto common/node.prot
 
 `--target` is not used with source input: the input list itself is the selection.
 
-Top-level `service` and `rpc` declarations are validated and skipped while message codecs from the same file are generated. Codegen does not generate RPC client or server APIs.
+Top-level `service` and `rpc` declarations are validated, and every method's name and endpoint types are linked, while message codecs from the same file are generated. A duplicate method name or an endpoint that is missing or is not a message type is refused; method options are validated and discarded. Codegen does not generate RPC client or server APIs.
 
 ### Descriptor-set input
 
@@ -58,19 +58,27 @@ codegen --descriptor-set project.pbs \
     --out-dir build/generated
 ```
 
-A single-file set without `--target` keeps the thin compatibility path: external type declarations only, automatic dependency includes omitted, and a reference into a missing dependency tolerated with a warning, as before plan 5. Naming an explicit `--target` links the loaded set strictly instead, so a missing dependency is an error. `protoc --include_imports` produces the complete closure intended for that mode; dependency headers it declares must exist for the generated C++ to compile. `--target` is valid only with `--descriptor-set`.
+A single-file set without `--target` keeps the thin compatibility path: external type declarations only, and a reference into a missing dependency tolerated with a warning printed on stderr, as before plan 5. The tolerance covers the external **type**, not a default its declared kind decides: a message field may not carry a default, and an enum default must be an identifier (its membership belongs to the dependency header). The generated header still includes every direct dependency it names, exactly as the complete link does. Naming an explicit `--target` links the loaded set strictly instead, so a missing dependency is an error. A descriptor file with no logical name has no `--target` spelling: an unnamed single-file set is reachable only through this no-target compatibility path. `protoc --include_imports` produces the complete closure intended for that mode; dependency headers it declares must exist for the generated C++ to compile. `--target` is valid only with `--descriptor-set`.
 
-Descriptor-set input is useful when descriptor files are already available or when another tool produces them. Definitions of imported C++ types are never emitted inside the target's own header; a complete link includes the dependency header instead, so generate the dependencies as well. Fully qualified Protobuf names map to absolute C++ names in their package namespaces. See [Packages and C++ namespaces](GENERATED_CODE.md#packages-and-c-namespaces) for the generated names.
+Descriptor-set input is useful when descriptor files are already available or when another tool produces them. Definitions of imported C++ types are never emitted inside the target's own header; the header includes the dependency header instead, in both link modes, so generate the dependencies as well. Fully qualified Protobuf names map to absolute C++ names in their package namespaces. See [Packages and C++ namespaces](GENERATED_CODE.md#packages-and-c-namespaces) for the generated names.
 
 Without `--descriptor-set`, Codegen infers the common input mode from file extensions: an invocation containing both `.pbs` and non-`.pbs` names is rejected. `--descriptor-set` forces every positional input to be decoded as a binary descriptor set; it does not enable mixing descriptor sets with `.proto` source files.
 
+## Option syntax
+
+Options may appear before or after the positional inputs. A first `--` ends option parsing: every later token is an input spelling, even if it starts with `-`, and `--help` after it is a file name rather than the help switch (`protoc` has no such separator; this is a Codegen extension).
+
+An unknown or misspelled option is an error, not a silent no-op: `--nope`, `-Z` and a typo such as `--no-has-field` are refused with `Unknown flag: <token>`. A required value is **the next token, whatever that token looks like**: `--out-dir --help` names an output directory `--help`, and `-I --out-dir` names a search root `--out-dir`. This is the POSIX `getopt` rule — the next argv element is the value, dash-prefixed or not — and a value is refused only when there is no next token at all (`Missing value for flag: <option>`). The inline form `--name=-value` writes the value directly and stays available. `--name=` (an explicitly empty value) is refused as well. A short option writes its value as `-sVALUE` or `-s=VALUE`: in the short form one `=` immediately after the option letter is the separator, exactly as in the long form, so `-I=dir` searches `dir` and `-s=` is an explicitly empty value refused with the same sentence as the long form (`-s requires a non-empty value`). A value that really begins with `=` is written `-s==VALUE` or `-s =VALUE`. A switch takes no value, so `-c=` is an unknown flag. A `--` where an option is expected ends option parsing; in the value position it is the value, exactly as `getopt` takes it. (`protoc` refuses a next token that starts with `-`; this is a deliberate Codegen divergence, decided on 2026-10-22.)
+
 ## Target selection and output
 
-- `--target NAME` — a logical `.proto` name to generate from a descriptor set. Repeatable; order preserved, duplicates dropped. Valid only with `--descriptor-set`. Without it, a single-file set uses the compatibility path and a multi-file set fails with target-selection guidance.
+- `--target NAME` — a logical `.proto` name to generate from a descriptor set. Repeatable; order preserved, duplicates dropped. Valid only with `--descriptor-set`. Without it, a single-file set uses the compatibility path and a multi-file set fails with target-selection guidance. A file with no logical name cannot be named by `--target`.
 - `--out-dir DIR` — write one generated header per selected target below `DIR` instead of stdout. Relative subdirectories of a logical name are recreated below `DIR`. `DIR` may be given only once. Required whenever more than one header would be written.
 - Without `--out-dir`, exactly one selected header is written to stdout; several selected headers without `--out-dir` fail with a guidance error.
 
-Publication writes each generated header in place below `DIR`: the output directory and every parent directory of an output are created first, then each file is created or truncated and written. It refuses two targets that map to one output file, and it reports the first failure without claiming partial success. It is not a transaction across files: a run that fails after writing one header leaves the earlier headers written, and a process interrupted mid-write may leave that one header truncated — the same guarantee the reference compiler gives.
+Publication writes each generated header in place below `DIR`: the output directory and every parent directory of an output are created first, then each file is created or truncated and written. It refuses two targets that map to one output file, and it reports the first failure without claiming partial success. It is not a transaction across files: a run that fails after writing one header leaves the earlier headers written, and a process interrupted mid-write may leave that one header truncated — the same guarantee the reference compiler gives. Files are written in byte-wise output-name order, so on a case-folding filesystem two names that differ only in case (`api/x.pb.hpp`, `api/X.pb.hpp`) always leave the same survivor, whatever order the targets were named in — the rule the reference compiler's name-keyed output map applies.
+
+Two bounds apply to the output side. An output name must be a logical path, so a name that escapes `DIR` by its own spelling (`../escape.pb.hpp`) is refused before anything is written; the reference compiler writes such a name one directory above the output root, and Codegen refuses it. And a path with more than 100 components is refused — a logical name that carries more than 100 of them is refused at the mapping layer, before the publisher creates anything.
 
 ## Structural options
 
@@ -90,11 +98,11 @@ The two options cannot be used together. Without either override, Codegen follow
 
 ## C++ type options
 
-`-s, --string-type arg (=std::string)` selects the C++ type for all string and bytes fields. For decode-only messages, `std::string_view` or another non-owning view may be used when the decoded object never outlives the input buffer.
+`-s, --string-type arg (=::std::string)` selects the C++ type for all string and bytes fields. For decode-only messages, `std::string_view` or another non-owning view may be used when the decoded object never outlives the input buffer.
 
-`-r, --repeated-type arg (=std::vector)` selects the container for repeated fields. `{}` or `{0}` is replaced by the element type. If no placeholder is present, `<{}>` is appended. For example, `--repeated-type 'std::deque<{}>'` produces `std::deque<int32_t>`. Include the corresponding container header before the generated header.
+`-r, --repeated-type arg (=::std::vector)` selects the container for repeated fields. `{}` or `{0}` is replaced by the element type. If no placeholder is present, `<{}>` is appended. For example, `--repeated-type 'std::deque<{}>'` produces `std::deque<int32_t>`. Include the corresponding container header before the generated header.
 
-`-m, --map-type arg (=std::map)` selects the container for map fields. `{0}` and `{1}` are replaced by the key and value types. If no placeholders are present, `<{0},{1}>` is appended. Include the corresponding container header before the generated header.
+`-m, --map-type arg (=::std::map)` selects the container for map fields. `{0}` and `{1}` are replaced by the key and value types. If no placeholders are present, `<{0},{1}>` is appended. Include the corresponding container header before the generated header.
 
 C++ types can also be specified per field with the `(easypb.cpp).type` custom option. See [C++ field type generation](GENERATED_CODE.md#c-field-type-generation) for details.
 
@@ -118,7 +126,7 @@ codegen --benchmark-parser [--benchmark-ms 500] a.proto b.proto
 
 For a reproducible real-world workload, pass schemas from the [`tests/codegen/parser/differential/corpus/`](../tests/codegen/parser/differential/corpus/) directory. Tests on a 4 GHz Zen3 CPU showed 100–200 MB/s parsing throughput.
 
-Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation links the loaded set first, so imported types resolve; the run stops only when an import cannot be found or a reference stays unresolved, instead of guessing whether the type is a message or enum.
+Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation reports the warnings its load and link stored — a dropped `extend` declaration, a compatibility reference into a missing dependency — on stderr before it writes the header, with the exit code still 0; stdout stays the header only. The generation run stops only when an import cannot be found or a reference stays unresolved, instead of guessing whether the type is a message or enum.
 
 `--print-descriptor` and `--benchmark-parser` cannot be used together. `--benchmark-parser` accepts `.proto` source files, not descriptor-set input. Structural, packed-field, and C++ type generation options cannot be combined with either utility mode.
 

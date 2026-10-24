@@ -1,0 +1,16 @@
+# W-39: the descriptor grammar's CUnescape accepts the uppercase hex escape,
+# and the own-path decoder must accept it too. The stored value is the byte A.
+file {
+  name: "defaults-bytes-upper-hex.proto"
+  syntax: "proto2"
+  message_type {
+    name: "UpperHexBytes"
+    field {
+      name: "data"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_BYTES
+      default_value: "\\X41"
+    }
+  }
+}

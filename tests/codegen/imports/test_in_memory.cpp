@@ -143,7 +143,7 @@ int main(int argc, char** argv)
     easypb_schema::LinkedSchema linked;
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE, linked,
                                      error));
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
 
     easypb_codegen::GenerationOptions options;
     std::string option_error;

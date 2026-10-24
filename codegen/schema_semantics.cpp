@@ -1,11 +1,15 @@
 #include "schema_semantics.hpp"
 #include "schema_semantics_internal.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cerrno>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <iomanip>
 #include <limits>
+#include <locale>
 #include <sstream>
 #include <utility>
 
@@ -24,13 +28,10 @@ std::string joined_name(const std::string& parent, const str_view& leaf)
     result.reserve(parent.size() + 1 + leaf.size());
     result.append(parent);
     result.push_back('.');
-    result.append(leaf.data(), leaf.size());
+    // W-35: an empty view may carry a null pointer, and append(nullptr, 0)
+    // is formally undefined, so the empty leaf contributes only the dot.
+    if (!leaf.empty()) result.append(leaf.data(), leaf.size());
     return result;
-}
-
-std::string view_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
 }
 
 std::string format_path(const DescriptorPath& path)
@@ -192,6 +193,154 @@ bool is_float_text(const std::string& text)
 
 namespace {
 
+// protobuf's SimpleFtoa/SimpleDtoa keep at least two exponent digits but drop
+// redundant leading zeros (older MSVCRT versions emit e-008). The formatting
+// half is shared by both input paths after W-04.
+std::string normalize_float_exponent(std::string text)
+{
+    const std::size_t marker = text.find_first_of("eE");
+    if (marker == std::string::npos) return text;
+
+    std::size_t first_digit = marker + 1;
+    if (first_digit < text.size() &&
+        (text[first_digit] == '+' || text[first_digit] == '-')) {
+        ++first_digit;
+    }
+
+    while (first_digit + 2 < text.size() && text[first_digit] == '0') {
+        text.erase(first_digit, 1);
+    }
+    return text;
+}
+
+std::string format_float(double value, int precision)
+{
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << std::setprecision(precision) << value;
+    return normalize_float_exponent(output.str());
+}
+
+// ASCII whitespace, spelled out: `std::isspace` is locale-dependent, and a
+// default value is bytes, not a locale's text.
+bool is_ascii_whitespace(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+           c == '\v' || c == '\f';
+}
+
+// W-04's second predicate: a full parse whose value is a finite subnormal.
+// glibc reports ERANGE for every subnormal result, the canonical shortest
+// decimal included, so `is_float_text` is false for the canonical text too and
+// the validator would reject its own normalization without this distinction.
+// (The MSVC CRT reports the opposite - errno stays clear, which is the
+// disagreement that used to split the two input paths.) The first-character
+// gate keeps a non-canonical spelling outside the predicate for the same
+// reason the adapter's normalizer does: a leading `+` (W-40) and a leading
+// space (W-03) are refused by validate_default, so the predicate must not
+// quietly accept a spelling the validator rejects.
+bool is_subnormal_float_text(const std::string& text)
+{
+    if (text.empty()) return false;
+    const char first = text[0];
+    if (!(first == '-' || first == '.' ||
+          (first >= '0' && first <= '9'))) {
+        return false;
+    }
+    char* end = 0;
+    errno = 0;
+    const double parsed = std::strtod(text.c_str(), &end);
+    return end != text.c_str() && *end == '\0' &&
+           std::fpclassify(parsed) == FP_SUBNORMAL;
+}
+
+} // namespace
+
+bool canonical_float_default(const std::string& text, bool single_precision,
+                             std::string& result)
+{
+    if (text.empty()) return false;
+
+    std::size_t start = 0;
+    if (text[0] == '+' || text[0] == '-') start = 1;
+    const std::string body = text.substr(start);
+    if (body == "inf") {
+        result = (!text.empty() && text[0] == '-') ? "-inf" : "inf";
+        return true;
+    }
+    if (body == "nan") {
+        result = "nan";
+        return true;
+    }
+
+    char* end = 0;
+    errno = 0;
+    const double parsed = std::strtod(text.c_str(), &end);
+    if (end == text.c_str() || *end != '\0') return false;
+
+    // W-04: overflow is not a refusal. `strtod` returns +-infinity and sets
+    // ERANGE; protoc stores exactly `inf` / `-inf` and keeps going.
+    if (std::isinf(parsed)) {
+        result = std::signbit(parsed) ? "-inf" : "inf";
+        return true;
+    }
+    if (std::isnan(parsed)) {
+        result = "nan";
+        return true;
+    }
+
+    if (single_precision) {
+        const float value = static_cast<float>(parsed);
+        std::string formatted =
+            format_float(value, std::numeric_limits<float>::digits10);
+        char* parsed_end = 0;
+        const float round_trip =
+            static_cast<float>(std::strtod(formatted.c_str(), &parsed_end));
+        if (parsed_end == formatted.c_str() || *parsed_end != '\0' ||
+            round_trip != value) {
+            formatted =
+                format_float(value, std::numeric_limits<float>::digits10 + 3);
+        }
+        result.swap(formatted);
+        return true;
+    }
+
+    std::string formatted =
+        format_float(parsed, std::numeric_limits<double>::digits10);
+    char* parsed_end = 0;
+    const double round_trip = std::strtod(formatted.c_str(), &parsed_end);
+    if (parsed_end == formatted.c_str() || *parsed_end != '\0' ||
+        round_trip != parsed) {
+        formatted =
+            format_float(parsed, std::numeric_limits<double>::digits10 + 2);
+    }
+    result.swap(formatted);
+    return true;
+}
+
+std::string to_json_name(const std::string& name)
+{
+    bool capitalize_next = false;
+    std::string result;
+    result.reserve(name.size());
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        const char character = name[i];
+        if (character == '_') {
+            capitalize_next = true;
+        } else if (capitalize_next) {
+            result.push_back(character >= 'a' && character <= 'z'
+                                 ? static_cast<char>(character - 'a' + 'A')
+                                 : character);
+            capitalize_next = false;
+        } else {
+            result.push_back(character);
+        }
+    }
+    return result;
+}
+
+namespace {
+
 std::string package_prefix(const SchemaFile& file)
 {
     if (!file.file.has_package || file.file.package.empty()) return std::string();
@@ -234,7 +383,7 @@ bool report_scope_collision(const SchemaFile& file,
         existing_kind;
     SourceLocation location = declaration_location(file, path);
     if (location.line == 0) message += " at " + format_path(path);
-    error.file = view_text(file.file.name);
+    error.file = schema_file_label(file);
     error.location = location;
     error.message = message;
     error.warning = false;
@@ -464,17 +613,17 @@ bool add_symbol(const SchemaFile& file, SymbolIndex& symbols,
         // file has no recorded position, so its path stands in for one.
         const SchemaFile* previous = inserted.first->second.owner;
         SourceLocation location = declaration_location(file, path);
-        std::string text = message + " in \"" + view_text(file.file.name) + "\"";
+        std::string text = message + " in \"" + schema_file_label(file) + "\"";
         if (location.line == 0 && !path.empty()) {
             text += " at " + format_path(path);
         }
-        text += "; already defined in \"" + view_text(previous->file.name) + "\"";
+        text += "; already defined in \"" + schema_file_label(*previous) + "\"";
         const SourceLocation previous_location =
             declaration_location(*previous, inserted.first->second.path);
         if (previous_location.line == 0 && !inserted.first->second.path.empty()) {
             text += " at " + format_path(inserted.first->second.path);
         }
-        error.file = view_text(file.file.name);
+        error.file = schema_file_label(file);
         error.location = location;
         error.message = text;
         error.warning = false;
@@ -597,6 +746,17 @@ bool is_named_kind(int kind)
            kind == FieldDescriptorProto::TYPE_GROUP;
 }
 
+// The kinds the descriptor model defines. A field whose declared kind is
+// outside this set names a kind that does not exist: the reference compiler
+// resolves an unknown value as the proto default (TYPE_DOUBLE) and emits
+// working code, but this project's emitter has no spelling for it and used to
+// write "???type" into the header (plan 5 follow-up S1, W-10).
+bool is_known_field_kind(int kind)
+{
+    return kind >= FieldDescriptorProto::TYPE_DOUBLE &&
+           kind <= FieldDescriptorProto::TYPE_SINT64;
+}
+
 // The field-number bounds both frontends enforce. The parser refuses these
 // shapes as source text (proto_parser.cpp:1049-1060: 0, above the maximum,
 // and the reserved range) and resolve_message refuses them on
@@ -656,6 +816,13 @@ bool enclosing_scope(const std::string& scope, std::string& outer)
 // owner is just the first file indexed - and the question is asked about the
 // VISIBLE set only, so an unimported declarer still covers nothing.
 //
+// `package_head` is a dotted absolute spelling (`.a.b`): every caller reaches
+// this function through `candidate_is_visible`, whose `candidate` argument is
+// the index's own spelling - `raw` under the `raw[0] == '.'` guard,
+// `scope_candidate`'s head, or `winning_head + "." + rest` - so the leading
+// dot and the non-empty head are preconditions, not cases (W-53, re-measured
+// after S7b).
+//
 // The equality form this function carried before fix round r5 came from
 // `descriptor.cc`'s `FindSymbol`, whose package special case answers which
 // file OWNS the merged node; the rule a lookup needs is `IsInPackage`, and
@@ -678,7 +845,6 @@ bool enclosing_scope(const std::string& scope, std::string& outer)
 bool package_is_visible(const std::set<const SchemaFile*>& visible_files,
                         const std::string& package_head)
 {
-    if (package_head.empty() || package_head[0] != '.') return false;
     const str_view head_pkg = str_view(package_head).substr(1);
     for (std::set<const SchemaFile*>::const_iterator it = visible_files.begin();
          it != visible_files.end(); ++it) {
@@ -723,30 +889,12 @@ bool nested_in_field_message(const ResolveContext& context,
            field_path[field_path.size() - 2] == 2;
 }
 
-// protoc's ownership rule for a synthetic map entry (A22, measured): the
-// reference belongs to the owning map field exactly when the entry is nested
-// directly in the field's own message, the field is repeated, and the field's
-// own NAME derives the entry's simple name through the shared map_entry_name
-// (A24). The ownership test never looks at the raw reference text, which
-// differs by origin (relative for source, absolute for descriptors).
+// protoc's ownership rule for a synthetic map entry (A22, measured) is
+// `internal::owns_map_entry`, declared in schema_semantics_internal.hpp and
+// defined beside the other seam rules below: the rule is a precondition that
+// includes the entry's own marker, so a direct test can prove a real nested
+// message is not claimed as an entry (W-49).
 //
-// The entry's own map_entry marker proves the message kind, and that is the
-// only kind test that survives deferred resolution: a source map field carries
-// no assigned kind until linking, so requiring TYPE_MESSAGE here would reject
-// every legal source map field the loader deferred.
-bool owns_map_entry(const ResolveContext& context, const SymbolEntry& entry,
-                    const DescriptorProto& entry_message)
-{
-    if (context.field == 0 || context.owner == 0 || context.field_path == 0) {
-        return false;
-    }
-    if (entry.owner != context.owner) return false;
-    if (context.field->label != FieldDescriptorProto::LABEL_REPEATED) return false;
-    if (!nested_in_field_message(context, entry.path)) return false;
-    return map_entry_name(view_text(context.field->name)) ==
-           entry_message.name;
-}
-
 // True when the resolved symbol is a synthetic map entry owned by some other
 // field, so naming it is a user attempt to use an entry as a field type.
 bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entry)
@@ -757,7 +905,14 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
     if (!entry_message->options.has_map_entry || !entry_message->options.map_entry) {
         return false;
     }
-    return !owns_map_entry(context, entry, *entry_message);
+    // A method endpoint resolves with no field context; nothing can own the
+    // entry there, so it stays foreign. The rule itself takes references and
+    // therefore cannot express the absence.
+    if (context.field == 0 || context.owner == 0 || context.field_path == 0) {
+        return true;
+    }
+    return !internal::owns_map_entry(*context.owner, *context.field_path,
+                                      *context.field, entry, *entry_message);
 }
 
 // Implements protoc's lexical name lookup over the compilation-wide index.
@@ -1015,7 +1170,7 @@ void warn_once(SchemaFile& file, const std::string& message,
         }
     }
     Diagnostic diagnostic;
-    diagnostic.file = view_text(file.file.name);
+    diagnostic.file = schema_file_label(file);
     diagnostic.location = location;
     diagnostic.warning = true;
     diagnostic.message = stored;
@@ -1070,7 +1225,7 @@ bool fail_at_code(const SchemaFile& file, const std::string& message,
     // empty descriptor path into the message (ledger `D-59`). Every caller that
     // passes a real path keeps the suffix.
     if (location.line == 0 && !path.empty()) text += " at " + format_path(path);
-    error.file = view_text(file.file.name);
+    error.file = schema_file_label(file);
     error.location = location;
     error.message = text;
     error.warning = false;
@@ -1104,7 +1259,36 @@ bool is_valid_symbol_name(const str_view& name)
     return true;
 }
 
-// The one site that turns a malformed declaration name into a diagnostic, so
+// True when `text` is an IDENTIFIER in the reference compiler's sense, which
+// is stricter than the symbol-name rule above: the first character must be a
+// letter or an underscore, the rest may also be digits
+// (`io::Tokenizer::IsIdentifier`, whose character classes are ASCII-only -
+// `Letter` is `[A-Za-z_]`, `Alphanumeric` is `[A-Za-z0-9_]`).
+//
+// The reference compiler uses this rule for the default value of an enum
+// field ("Default value for an enum field must be an identifier.",
+// descriptor.cc's enum branch of the descriptor builder), and it asks it
+// BEFORE it asks whether the default names a value of the enum: a default of
+// "1A" is a legal symbol name, so the membership check alone would let it
+// through and the emitter would write `::p::E::1A`, which is not C++.
+bool is_identifier(const std::string& text)
+{
+    if (text.empty()) return false;
+    const char first = text[0];
+    const bool first_is_letter =
+        (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') ||
+        first == '_';
+    if (!first_is_letter) return false;
+    for (std::size_t i = 1; i < text.size(); ++i) {
+        const char character = text[i];
+        const bool letter = (character >= 'a' && character <= 'z') ||
+                            (character >= 'A' && character <= 'Z');
+        const bool digit = character >= '0' && character <= '9';
+        if (!letter && !digit && character != '_') return false;
+    }
+    return true;
+}
+
 // every kind reports the same category with the same code (E1/A3). The message
 // mirrors protoc's two wordings - an empty name is "missing", an illegal
 // character is "not a valid identifier" - while the code stays DIAGNOSTIC_
@@ -1139,6 +1323,51 @@ bool check_symbol_name(const SchemaFile& file, const str_view& name,
 {
     if (is_valid_symbol_name(name)) return true;
     return fail_symbol_name(file, name, kind, scope, path, error);
+}
+
+// One message the nesting walk has not visited yet.
+struct PendingMessage
+{
+    const DescriptorProto* message;
+    int depth;
+    DescriptorPath path;
+};
+
+// The depth of the deepest message the file declares, or 0 when it declares no
+// message at all. The walk uses an explicit stack, so it never recurses, and
+// it stops at the limit, so the depth it measures never exceeds the limit it
+// enforces: a descriptor that nests deeper is reported, not descended into.
+//
+// The path of the message that is too deep is stored in `offending_path` (left
+// empty when the file is within the limit).
+int deepest_message_nesting(const FileDescriptorProto& file,
+                             DescriptorPath& offending_path)
+{
+    const int limit = max_message_nesting_depth();
+    std::vector<PendingMessage> pending;
+    for (std::size_t i = 0; i < file.message_type.size(); ++i) {
+        PendingMessage entry;
+        entry.message = &file.message_type[i];
+        entry.depth = 1;
+        entry.path = file_message_path(static_cast<int>(i));
+        pending.push_back(entry);
+    }
+    while (!pending.empty()) {
+        const PendingMessage entry = pending.back();
+        pending.pop_back();
+        if (entry.depth >= limit) {
+            offending_path = entry.path;
+            return entry.depth;
+        }
+        for (std::size_t i = 0; i < entry.message->nested_type.size(); ++i) {
+            PendingMessage nested;
+            nested.message = &entry.message->nested_type[i];
+            nested.depth = entry.depth + 1;
+            nested.path = message_nested_path(entry.path, static_cast<int>(i));
+            pending.push_back(nested);
+        }
+    }
+    return 0;
 }
 
 // The recursive half of validate_symbol_names: the message's own name, then its
@@ -1291,7 +1520,7 @@ bool fail_malformed_map_entry(const SchemaFile& file,
                               const std::string& entry_name, Diagnostic& error)
 {
     error = Diagnostic();
-    error.file = view_text(file.file.name);
+    error.file = schema_file_label(file);
     error.location = unknown_location();
     error.message = "Malformed map entry " + entry_name +
                     ": fields 1 and 2 are required";
@@ -1361,9 +1590,10 @@ bool validate_message_map_entries(const SchemaFile& file,
         // reference check and are refused as `DIAGNOSTIC_MAP_ENTRY_TYPE`, the
         // value-enum-key clause is `D-33`'s recorded class, and the extension
         // members are refused by their PRESENCE alone (the declaration's own
-        // numbers are the reference compiler's business, contract clause 12),
-        // which is why `DescriptorProto` counts fields 5 and 6 instead of
-        // modelling them (ledger `D-62`).
+        // numbers are the reference compiler's business, contract clause 12).
+        // Field 5 is modelled since `W-45` - the extension-range rules need
+        // its numbers - while field 6 stays a count, so presence is all this
+        // shape needs from either (ledger `D-62`).
         const FieldDescriptorProto* key = 0;
         const FieldDescriptorProto* value = 0;
         for (std::size_t i = 0; i < message.field.size(); ++i) {
@@ -1376,6 +1606,21 @@ bool validate_message_map_entries(const SchemaFile& file,
         if (message.field.size() != 2) {
             return fail_map_entry_shape(file, qualified_name,
                                         "exactly two fields", error);
+        }
+        // W-37: protoc locates the pair by POSITION, not by number
+        // (`ValidateMapEntry`: `message->map_key()` is `field(0)` and
+        // `message->map_value()` is `field(1)`, descriptor.cc:8462-8471), so a
+        // descriptor that declares field 2 first and field 1 second is not a
+        // map entry however the numbers look. The numbers are still required,
+        // because the entry's own shape says the key is 1 and the value is 2;
+        // what this adds is that the declaration order must agree with the
+        // numbers, which is the only shape protoc's positional read accepts.
+        if (message.field[0].number != 1 || message.field[1].number != 2) {
+            return fail_map_entry_shape(
+                file, qualified_name,
+                "an order that declares the field numbered 1 first and the "
+                "field numbered 2 second",
+                error);
         }
         // An absent label is read as LABEL_OPTIONAL, because that is protoc's
         // own default for the field (`proto.label()`), so only a label the
@@ -1402,7 +1647,7 @@ bool validate_message_map_entries(const SchemaFile& file,
             return fail_map_entry_shape(file, qualified_name,
                                         "no nested messages or enums", error);
         }
-        if (message.extension_range_count != 0 ||
+        if (!message.extension_range.empty() ||
             message.extension_count != 0) {
             return fail_map_entry_shape(file, qualified_name,
                                         "no extension ranges or extension "
@@ -1421,6 +1666,68 @@ bool validate_message_map_entries(const SchemaFile& file,
     return true;
 }
 
+// W-42's port of protoc's two helpers: `EnumValueToPascalCase`
+// (descriptor.cc:853-872) and `PrefixRemover` (:875-935). The folded key is
+// what makes `FOO`/`foo` and `E_FOO`/`FOO` collide even when the exact-name
+// rule and the number rule would not.
+std::string enum_value_to_pascal_case(const std::string& input)
+{
+    bool next_upper = true;
+    std::string result;
+    result.reserve(input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        const char character = input[i];
+        if (character == '_') {
+            next_upper = true;
+        } else {
+            if (next_upper && character >= 'a' && character <= 'z') {
+                result.push_back(static_cast<char>(character - 'a' + 'A'));
+            } else if (!next_upper && character >= 'A' &&
+                       character <= 'Z') {
+                result.push_back(static_cast<char>(character - 'A' + 'a'));
+            } else {
+                result.push_back(character);
+            }
+            next_upper = false;
+        }
+    }
+    return result;
+}
+
+struct EnumPrefixRemover
+{
+    explicit EnumPrefixRemover(const std::string& prefix)
+    {
+        for (std::size_t i = 0; i < prefix.size(); ++i) {
+            const char character = prefix[i];
+            if (character == '_') continue;
+            prefix_.push_back(character >= 'A' && character <= 'Z'
+                                  ? static_cast<char>(character - 'A' + 'a')
+                                  : character);
+        }
+    }
+
+    std::string maybe_remove(const std::string& input) const
+    {
+        std::size_t i = 0;
+        std::size_t j = 0;
+        for (; i < input.size() && j < prefix_.size(); ++i) {
+            if (input[i] == '_') continue;
+            const char lower = input[i] >= 'A' && input[i] <= 'Z'
+                                   ? static_cast<char>(input[i] - 'A' + 'a')
+                                   : input[i];
+            if (lower != prefix_[j++]) return input;
+        }
+        if (j < prefix_.size()) return input;
+        while (i < input.size() && input[i] == '_') ++i;
+        if (i == input.size()) return input;
+        return input.substr(i);
+    }
+
+private:
+    std::string prefix_;
+};
+
 // D-28 (fix round r13, contract clause 12): every enum's value numbers, over
 // every available file, before anything is resolved and in both linking modes -
 // A26's reference-free precedent, one sweep beside the entry-shape sweep,
@@ -1436,7 +1743,9 @@ bool validate_message_map_entries(const SchemaFile& file,
 // fix round r13, which is what lets an intentional alias -
 // `tests/codegen/enums/data/enum_codegen.proto`'s `STARTED = 1; ACTIVE = 1;` -
 // link, so refusing an aliased enum would be the same divergence D-28 closed,
-// in the other direction.
+// in the other direction. A third question rides the same sweep since S5:
+// a proto3 enum's FIRST value must be zero (`W-44`), which the source path
+// refuses as text and protoc refuses while it builds the file.
 bool validate_enum_value_numbers_in_enum(const SchemaFile& file,
                                          const EnumDescriptorProto& enumeration,
                                          const std::string& enum_name,
@@ -1459,6 +1768,68 @@ bool validate_enum_value_numbers_in_enum(const SchemaFile& file,
                 "value",
             declaration_location(file, enum_path), enum_path,
             DIAGNOSTIC_EMPTY_ENUM, error);
+    }
+    // W-44: a proto3 enum must declare zero as its FIRST value, and the rule
+    // is asked before the option's early return below because protoc asks it
+    // before its alias branch too (`CheckEnumValueUniqueness`,
+    // descriptor.cc:8245: `The first enum value must be zero for open enums.`).
+    // The parser refuses the source twin with the same sentence this message
+    // carries (`proto_parser.cpp`'s enum rule, "the first proto3 enum value
+    // must be zero"), so the two frontends agree on the rule. Only a proto3
+    // file is asked: proto2 gives the first value no special meaning.
+    if (classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3 &&
+        enumeration.value[0].number != 0) {
+        const DescriptorPath value_path = enum_value_path(enum_path, 0);
+        return fail_at_code(
+            file,
+            "enum \"" + enum_name + "\" declares \"" +
+                view_text(enumeration.value[0].name) + "\" = " +
+                number_text(enumeration.value[0].number) +
+                " as its first value; the first proto3 enum value must be zero",
+            declaration_location(file, value_path), value_path,
+            DIAGNOSTIC_PROTO3_ENUM_FIRST_VALUE, error);
+    }
+    // W-42: protoc compares enum value names after stripping the enum-name
+    // prefix and PascalCasing the remainder (`CheckEnumValueUniqueness`,
+    // descriptor.cc:6957-7021). The check runs before the allow_alias early
+    // return because the option licenses same-number aliases, not two
+    // different names that fold together: `E_FOO = 0; FOO = 1;` is refused
+    // even with allow_alias. A pair that maps to the same number is skipped
+    // here and handled by the number rule below (or accepted as an alias);
+    // a pair with the identical name is skipped for the exact-name rule.
+    const std::string enum_prefix = view_text(enumeration.name);
+    const EnumPrefixRemover remover(enum_prefix);
+    std::map<std::string, std::size_t> folded_names;
+    for (std::size_t i = 0; i < enumeration.value.size(); ++i) {
+        const str_view& value_name = enumeration.value[i].name;
+        const std::string folded = enum_value_to_pascal_case(
+            remover.maybe_remove(view_text(value_name)));
+        const std::pair<std::map<std::string, std::size_t>::iterator, bool>
+            inserted = folded_names.insert(
+                std::map<std::string, std::size_t>::value_type(folded, i));
+        if (inserted.second) continue;
+        const EnumValueDescriptorProto& earlier =
+            enumeration.value[inserted.first->second];
+        if (earlier.name == value_name || earlier.number == enumeration.value[i].number) {
+            continue;
+        }
+        const bool allow_alias =
+            enumeration.options.has_allow_alias &&
+            enumeration.options.allow_alias;
+        std::string message =
+            "Enum name " + view_text(value_name) + " has the same name as " +
+            view_text(earlier.name) +
+            " if you ignore case and strip out the enum name prefix (if any).";
+        if (allow_alias) {
+            message +=
+                " (If you are using allow_alias, please assign the same "
+                "number to each enum value name.)";
+        }
+        const DescriptorPath value_path =
+            enum_value_path(enum_path, static_cast<int>(i));
+        return fail_at_code(
+            file, message, declaration_location(file, value_path),
+            value_path, DIAGNOSTIC_DUPLICATE_SYMBOL, error);
     }
     if (enumeration.options.has_allow_alias &&
         enumeration.options.allow_alias) {
@@ -1517,6 +1888,110 @@ bool validate_message_enum_value_numbers(const SchemaFile& file,
     return true;
 }
 
+// W-45: the extension ranges a descriptor declares, over the descriptor alone.
+// Four shapes protoc refuses when it builds a file share one code, because
+// they are one category - the declaration does not describe usable extension
+// numbers:
+//
+//   * a range in a proto3 file (`Extension ranges are not allowed in proto3.`,
+//     descriptor.cc:7898);
+//   * a non-positive start (`BuildExtensionRange`, :6884-6890, "Extension
+//     numbers must be positive integers.");
+//   * an exclusive end that does not exceed its start (`:6892-6896`);
+//   * a range that includes a declared field number (:6426-6430), and two
+//     overlapping ranges (:6454-6482).
+//
+// The source path refuses every one of them as text before it reaches the
+// model (`proto_parser.cpp`'s `parse_extensions`, `add_range` and
+// `validate_message_constraints`), so this is the descriptor-origin half of
+// the same frontend parity rule. The walk is the declaration order the other
+// reference-free sweeps use, so the first offending range is the one reported.
+bool validate_message_extension_ranges(const SchemaFile& file,
+                                       const DescriptorProto& message,
+                                       const std::string& qualified_name,
+                                       const DescriptorPath& message_path,
+                                       bool is_proto3, Diagnostic& error)
+{
+    for (std::size_t i = 0; i < message.extension_range.size(); ++i) {
+        const DescriptorProto_ExtensionRange& range = message.extension_range[i];
+        const DescriptorPath range_path =
+            message_extension_range_path(message_path, static_cast<int>(i));
+        const std::string bounds =
+            "[" + number_text(range.start) + ", " + number_text(range.end) +
+            ")";
+        if (is_proto3) {
+            // protoc reports one error for the message, at its first range,
+            // because a proto3 file cannot carry extension ranges at all.
+            return fail_at_code(
+                file,
+                "message \"" + qualified_name +
+                    "\" declares extension range " + bounds +
+                    "; extension ranges are allowed only in proto2",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+        }
+        if (range.start <= 0) {
+            return fail_at_code(
+                file,
+                "message \"" + qualified_name + "\" declares extension range " +
+                    bounds +
+                    " whose start is not positive; extension numbers must be "
+                    "positive integers",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+        }
+        if (range.end <= range.start) {
+            return fail_at_code(
+                file,
+                "message \"" + qualified_name + "\" declares extension range " +
+                    bounds +
+                    " whose end is not greater than its start",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+        }
+        for (std::size_t j = 0; j < message.field.size(); ++j) {
+            const FieldDescriptorProto& field = message.field[j];
+            if (field.number < range.start || field.number >= range.end) {
+                continue;
+            }
+            return fail_at_code(
+                file,
+                "extension range " + bounds + " in message \"" +
+                    qualified_name + "\" includes field \"" +
+                    view_text(field.name) + "\" (" + number_text(field.number) +
+                    ")",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            const DescriptorProto_ExtensionRange& earlier =
+                message.extension_range[j];
+            if (range.end <= earlier.start || earlier.end <= range.start) {
+                continue;
+            }
+            return fail_at_code(
+                file,
+                "extension range " + bounds + " in message \"" +
+                    qualified_name + "\" overlaps range [" +
+                    number_text(earlier.start) + ", " +
+                    number_text(earlier.end) + ")",
+                declaration_location(file, range_path), range_path,
+                DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+        }
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_extension_ranges(
+                file, message.nested_type[i],
+                joined_name(qualified_name, message.nested_type[i].name),
+                message_nested_path(message_path, static_cast<int>(i)),
+                is_proto3, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
 // The text for a reference that failed because the name is known but must not
 // be used as a type here. Each category states the rule instead of copying
 // protoc's wording: its texts are editions-era UX paragraphs, and the
@@ -1537,10 +2012,10 @@ std::string reference_failure_message(const SchemaFile& file,
         const std::string defining = defining_file_name(symbols, resolved);
         std::string message = "type \"" + resolved + "\"";
         if (defining.empty()) {
-            message += " is not visible from \"" + view_text(file.file.name) + "\"";
+            message += " is not visible from \"" + schema_file_label(file) + "\"";
         } else {
             message += " is defined in \"" + defining + "\", which is not visible "
-                       "from \"" + view_text(file.file.name) + "\"";
+                       "from \"" + schema_file_label(file) + "\"";
         }
         message += "; add the import of that file";
         return message;
@@ -1634,7 +2109,7 @@ bool valid_bytes_default_escape(const std::string& text)
             escaped == '"' || escaped == '?') {
             continue;
         }
-        if (escaped == 'x') {
+        if (escaped == 'x' || escaped == 'X') {
             std::uint32_t value = 0;
             std::size_t digits = 0;
             while (i + 1 < text.size() && is_hex_digit(text[i + 1])) {
@@ -1683,12 +2158,149 @@ bool valid_bytes_default_escape(const std::string& text)
 
 } // namespace
 
-// validate_default joins the `internal` seam (P1 unit tests). The other large
-// validators - validate_symbol_names, validate_enum_value_numbers and
-// validate_map_entry_shapes - are already public, so it is the only anonymous
-// helper the unit suite needs declared here; its definition stays in this
-// translation unit, beside the rules that call it.
+// The decoder that belongs to the grammar above: it turns the C-escaped text
+// a bytes default carries into the bytes it denotes, with exactly the escapes
+// `valid_bytes_default_escape` accepts. The reference compiler does the same
+// with `absl::CUnescape` while it builds a bytes field
+// (descriptor.cc:6728-6741), and this project's own parser does it with the
+// tokenizer's own escape handling (proto_parser.cpp:380-435) - so the two
+// frontends and the emitter agree on what a bytes default means.
+//
+// The decode is byte-exact: a `\u`/`\U` escape becomes the UTF-8 encoding of
+// the code point (the bytes a protobuf string literal holds), and an octal or
+// hex escape becomes the byte it names.
+bool decode_bytes_escape(const std::string& text, std::string& result)
+{
+    std::string decoded;
+    decoded.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '\\') {
+            decoded.push_back(text[i]);
+            continue;
+        }
+        if (i + 1 == text.size()) return false;
+        const char escaped = text[++i];
+        switch (escaped) {
+            case 'a': decoded.push_back('\a'); break;
+            case 'b': decoded.push_back('\b'); break;
+            case 'f': decoded.push_back('\f'); break;
+            case 'n': decoded.push_back('\n'); break;
+            case 'r': decoded.push_back('\r'); break;
+            case 't': decoded.push_back('\t'); break;
+            case 'v': decoded.push_back('\v'); break;
+            case '\\': decoded.push_back('\\'); break;
+            case '\'': decoded.push_back('\''); break;
+            case '"': decoded.push_back('"'); break;
+            case '?': decoded.push_back('?'); break;
+            case 'x':
+            case 'X': {
+                std::uint32_t value = 0;
+                std::size_t digits = 0;
+                while (i + 1 < text.size() && is_hex_digit(text[i + 1])) {
+                    const char c = text[++i];
+                    value = value * 16u +
+                            (c <= '9' ? static_cast<std::uint32_t>(c - '0')
+                                      : static_cast<std::uint32_t>((c | 0x20) - 'a' + 10));
+                    ++digits;
+                    if (value > 255u) return false;
+                }
+                if (digits == 0) return false;
+                decoded.push_back(static_cast<char>(value));
+                break;
+            }
+            case 'u':
+            case 'U': {
+                const std::size_t digits = escaped == 'u' ? 4u : 8u;
+                std::uint32_t value = 0;
+                for (std::size_t d = 0; d < digits; ++d) {
+                    if (i + 1 >= text.size() || !is_hex_digit(text[i + 1])) {
+                        return false;
+                    }
+                    const char c = text[++i];
+                    value = value * 16u +
+                            (c <= '9' ? static_cast<std::uint32_t>(c - '0')
+                                      : static_cast<std::uint32_t>((c | 0x20) - 'a' + 10));
+                }
+                if (value > 0x10FFFFu || (value >= 0xD800u && value < 0xE000u)) {
+                    return false;
+                }
+                // The UTF-8 encoding of the code point, the same bytes the
+                // parser's own escape handling produces.
+                if (value <= 0x7Fu) {
+                    decoded.push_back(static_cast<char>(value));
+                } else if (value <= 0x7FFu) {
+                    decoded.push_back(static_cast<char>(0xC0u | (value >> 6)));
+                    decoded.push_back(static_cast<char>(0x80u | (value & 0x3Fu)));
+                } else if (value <= 0xFFFFu) {
+                    decoded.push_back(static_cast<char>(0xE0u | (value >> 12)));
+                    decoded.push_back(static_cast<char>(0x80u | ((value >> 6) & 0x3Fu)));
+                    decoded.push_back(static_cast<char>(0x80u | (value & 0x3Fu)));
+                } else {
+                    decoded.push_back(static_cast<char>(0xF0u | (value >> 18)));
+                    decoded.push_back(static_cast<char>(0x80u | ((value >> 12) & 0x3Fu)));
+                    decoded.push_back(static_cast<char>(0x80u | ((value >> 6) & 0x3Fu)));
+                    decoded.push_back(static_cast<char>(0x80u | (value & 0x3Fu)));
+                }
+                break;
+            }
+            default:
+                if (escaped < '0' || escaped > '7') return false;
+                {
+                    std::uint32_t value = static_cast<std::uint32_t>(escaped - '0');
+                    std::size_t digits = 1;
+                    while (digits < 3 && i + 1 < text.size() &&
+                           text[i + 1] >= '0' && text[i + 1] <= '7') {
+                        value = value * 8u + static_cast<std::uint32_t>(text[++i] - '0');
+                        ++digits;
+                    }
+                    if (value > 255u) return false;
+                    decoded.push_back(static_cast<char>(value));
+                }
+                break;
+        }
+    }
+    result.swap(decoded);
+    return true;
+}
+
+// The rules this seam declares, defined here in `namespace internal` rather
+// than in the anonymous block above: owns_map_entry and validate_default. The
+// three message-level validators stay anonymous and are reached through the
+// forwarders at the end of this file, after the anonymous block closes. The
+// definitions stay in this translation unit, so declaration and definition
+// cannot drift.
 namespace internal {
+
+// Ownership rule for a synthetic map entry, asked after the caller has proved
+// the resolved symbol is a message and the message carries the map_entry
+// marker. The marker is checked again here because it is this rule's
+// PRECONDITION, not a courtesy of the one caller (W-49): a real nested message
+// whose name, nesting and label happen to match must never be claimed as some
+// field's entry.
+//
+// The remaining clauses are protoc's own (A22, measured): the entry is nested
+// directly in the field's own message, the field is repeated, and the field's
+// NAME derives the entry's simple name through the shared map_entry_name
+// (A24). The raw reference text is deliberately not consulted; it differs by
+// origin (relative for source, absolute for descriptors).
+bool owns_map_entry(const SchemaFile& owner, const DescriptorPath& field_path,
+                    const FieldDescriptorProto& field,
+                    const SymbolEntry& entry,
+                    const DescriptorProto& entry_message)
+{
+    if (!entry_message.options.has_map_entry ||
+        !entry_message.options.map_entry) {
+        return false;
+    }
+    if (entry.owner != &owner) return false;
+    if (field.label != FieldDescriptorProto::LABEL_REPEATED) return false;
+    ResolveContext context;
+    context.owner = &owner;
+    context.field_path = &field_path;
+    context.field = &field;
+    if (!nested_in_field_message(context, entry.path)) return false;
+    return map_entry_name(view_text(field.name)) == entry_message.name;
+}
 
 // Type-dependent semantic validation for the textual default_value stored
 // during parsing. Unknown kinds are the caller's responsibility: the caller
@@ -1698,9 +2310,55 @@ namespace internal {
 bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                       const std::set<const SchemaFile*>& visible_files,
                       const FieldDescriptorProto& field, bool unknown,
-                      const DescriptorPath& field_path, Diagnostic& error)
+                      bool external, const DescriptorPath& field_path,
+                      Diagnostic& error)
 {
     if (!field.has_default_value) return true;
+    // W-64: the position is computed on the first refusal and at most
+    // once. The error-free path must not pay for it (the deliberate
+    // laziness of 3b2e59e), and the exclusive branches below would
+    // otherwise spell the same call nineteen times.
+    SourceLocation where;
+    bool have_where = false;
+    const auto default_location = [&]() -> const SourceLocation& {
+        if (!have_where) {
+            where = field_default_location(file, field_path);
+            have_where = true;
+        }
+        return where;
+    };
+    // The declared kind is known even when the definition is not, so the
+    // kind-decided half of the rule is checked BEFORE the unknown-kind
+    // deferral: compatibility mode leaves both flags true for an external
+    // reference, and only the membership half needs the definition (W-47).
+    // A message default is never legal, and an enum default must at least be
+    // an identifier. The A5 warning already deferred membership to the
+    // dependency header. A scalar kind cannot be external - the compatibility
+    // classifier tolerates only message and enum references - so an unexpected
+    // scalar falls through to the ordinary path below.
+    const std::string value = view_text(field.default_value);
+    if (external) {
+        if (field.type == FieldDescriptorProto::TYPE_MESSAGE ||
+            field.type == FieldDescriptorProto::TYPE_GROUP) {
+            return fail_at(file, "message fields cannot have defaults",
+                           default_location(),
+                           field_path, error);
+        }
+        if (field.type == FieldDescriptorProto::TYPE_ENUM) {
+            if (value.empty()) {
+                return fail_at(file, "enum default must name an enum value",
+                               default_location(),
+                               field_path, error);
+            }
+            if (!is_identifier(value)) {
+                return fail_at(file,
+                               "Default value for an enum field must be an identifier.",
+                               default_location(),
+                               field_path, error);
+            }
+            return true;
+        }
+    }
     // An unresolvable named type may be an imported enum (whose default is
     // then legal) or an imported message (whose default complete linking
     // will reject). Either way validation is deferred with a warning instead
@@ -1710,13 +2368,39 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         warn_once(file,
                   kDeferredDefaultPrefix + view_text(field.type_name),
                   DIAGNOSTIC_GENERIC,
-                  field_default_location(file, field_path), field_path);
+                  default_location(), field_path);
         return true;
     }
     if (field.type == FieldDescriptorProto::TYPE_STRING) {
         return true;
     }
-    const std::string value = view_text(field.default_value);
+    // W-40 (option B): every leading `+` on a numeric default is refused on
+    // both paths. The source half is asked in the parser before the type
+    // switch; this descriptor half is the one rule for a hand-written `.pbs`.
+    // `protoc` itself accepts `+7` here because its integer path uses
+    // `strtol`, but a descriptor generated from source never carries the
+    // sign, so the stricter uniform answer is the owner's recorded decision.
+    // The check is before the numeric switch, so `+1e400`/`+1e-400` are
+    // refused before W-04's canonicalizer can see them (the adapter leaves
+    // every leading `+` alone for the same reason).
+    const bool numeric_default_type =
+        field.type == FieldDescriptorProto::TYPE_FLOAT ||
+        field.type == FieldDescriptorProto::TYPE_DOUBLE ||
+        field.type == FieldDescriptorProto::TYPE_INT32 ||
+        field.type == FieldDescriptorProto::TYPE_INT64 ||
+        field.type == FieldDescriptorProto::TYPE_UINT32 ||
+        field.type == FieldDescriptorProto::TYPE_UINT64 ||
+        field.type == FieldDescriptorProto::TYPE_SINT32 ||
+        field.type == FieldDescriptorProto::TYPE_SINT64 ||
+        field.type == FieldDescriptorProto::TYPE_FIXED32 ||
+        field.type == FieldDescriptorProto::TYPE_FIXED64 ||
+        field.type == FieldDescriptorProto::TYPE_SFIXED32 ||
+        field.type == FieldDescriptorProto::TYPE_SFIXED64;
+    if (numeric_default_type && !value.empty() && value[0] == '+') {
+        return fail_at(file, "numeric default value may not start with '+'",
+                       default_location(), field_path,
+                       error);
+    }
     std::int32_t signed32 = 0;
     std::int64_t signed64 = 0;
     switch (field.type) {
@@ -1730,29 +2414,58 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_BYTES:
             if (!valid_bytes_default_escape(value)) {
                 return fail_at(file, "invalid escaping in bytes default value",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_BOOL:
             if (value != "true" && value != "false") {
                 return fail_at(file, "bool default must be true or false",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_FLOAT:
         case FieldDescriptorProto::TYPE_DOUBLE:
-            if (!is_float_text(value)) {
+            // W-03's last sub-case: a floating-point default whose stored text
+            // starts with whitespace is refused, as the reference compiler
+            // refuses it (`Couldn't parse default value " inf"`). `strtod`
+            // skips the space, so `is_float_text` used to say yes and the
+            // emitter's trim hid the shape. The source path cannot produce
+            // it: the lexer skips whitespace before the token and stores the
+            // value alone.
+            if (!value.empty() && is_ascii_whitespace(value[0])) {
+                return fail_at(file,
+                               "floating-point default value may not have leading whitespace",
+                               default_location(),
+                               field_path, error);
+            }
+            // W-04: the strict predicate still refuses an ERANGE text that
+            // bypassed the adapter (a hand-built SchemaFile in a unit test),
+            // but a canonical finite subnormal also reports ERANGE on this
+            // CRT. The second predicate is exactly that case and accepts it.
+            if (!is_float_text(value) &&
+                !is_subnormal_float_text(value)) {
                 return fail_at(file, "invalid floating-point default",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
         case FieldDescriptorProto::TYPE_ENUM:
             if (value.empty()) {
                 return fail_at(file, "enum default must name an enum value",
-                               field_default_location(file, field_path),
+                               default_location(),
+                               field_path, error);
+            }
+            // The identifier rule comes FIRST, exactly as the reference
+            // compiler asks it (descriptor.cc's enum default branch): a
+            // default of "1A" is a legal symbol name, so the membership check
+            // alone would let it through and the emitter would write
+            // `::p::E::1A` - not a C++ name - into the header.
+            if (!is_identifier(value)) {
+                return fail_at(file,
+                               "Default value for an enum field must be an identifier.",
+                               default_location(),
                                field_path, error);
             }
             {
@@ -1768,7 +2481,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                 if (enumeration == 0) {
                     return fail_at(file,
                                    "cannot validate default for unknown enum type " + enum_name,
-                                   field_default_location(file, field_path),
+                                   default_location(),
                                    field_path, error);
                 }
                 for (std::size_t i = 0; i < enumeration->value.size(); ++i) {
@@ -1776,19 +2489,20 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                 }
                 return fail_at(file,
                                "enum type " + enum_name + " has no value named " + value,
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
         case FieldDescriptorProto::TYPE_MESSAGE:
+        case FieldDescriptorProto::TYPE_GROUP:
             return fail_at(file, "message fields cannot have defaults",
-                           field_default_location(file, field_path),
+                           default_location(),
                            field_path, error);
         case FieldDescriptorProto::TYPE_INT32:
         case FieldDescriptorProto::TYPE_SINT32:
         case FieldDescriptorProto::TYPE_SFIXED32:
             if (!parse_signed_32(value, signed32)) {
                 return fail_at(file, "default does not fit signed 32-bit field",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
@@ -1796,7 +2510,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_FIXED32:
             if (!parse_unsigned_with_optional_plus(value, 4294967295ull)) {
                 return fail_at(file, "default does not fit unsigned 32-bit field",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
@@ -1805,7 +2519,7 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_SFIXED64:
             if (!parse_signed_64(value, signed64)) {
                 return fail_at(file, "default does not fit signed 64-bit field",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
@@ -1813,13 +2527,13 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         case FieldDescriptorProto::TYPE_FIXED64:
             if (!parse_unsigned_with_optional_plus(value, 18446744073709551615ull)) {
                 return fail_at(file, "default does not fit unsigned 64-bit field",
-                               field_default_location(file, field_path),
+                               default_location(),
                                field_path, error);
             }
             return true;
         default:
             return fail_at(file, "unsupported field type in default validation",
-                           field_default_location(file, field_path),
+                           default_location(),
                            field_path, error);
     }
 }
@@ -1886,7 +2600,7 @@ bool validate_field_declared_shape(SchemaFile& file, FieldDescriptorProto& field
     // protoc refuses while it builds a descriptor ("Repeated fields can't
     // have default values.", descriptor.cc:6652-6655) and our parser
     // refuses as source text ("default value is not allowed on repeated or
-    // oneof fields", proto_parser.cpp:1128). Reference-free and asked in
+    // oneof fields", proto_parser.cpp:1196). Reference-free and asked in
     // BOTH modes: no resolution can turn a repeated field into a singular
     // one. It is asked BEFORE the proto3 block below, because protoc
     // reports this shape first - the repeated-default check lives in the
@@ -1910,11 +2624,12 @@ bool validate_field_declared_shape(SchemaFile& file, FieldDescriptorProto& field
     // (`ValidateProto3Field`, descriptor.cc:7912-7930, reached from
     // `ValidateProto3Message`), and our parser refuses both as source text
     // ("required fields are not allowed in proto3",
-    // codegen/parser/proto_parser.cpp:1233, and "explicit default values
-    // are not allowed in proto3", :1124), so this is the descriptor-origin
-    // half of that frontend parity rule. The gate is the field's OWN file:
-    // proto2 gives both shapes a meaning, so reading the wrong file here
-    // would refuse legal input (the proto2 controls in
+    // codegen/parser/proto_parser.cpp:1329, and "explicit default values
+    // are not allowed in proto3", :1192). Since S7e both source refusals
+    // carry the same codes as the checks below (W-60), so the two origins
+    // agree on the code as well as on the verdict. The gate is the field's
+    // OWN file: proto2 gives both shapes a meaning, so reading the wrong
+    // file here would refuse legal input (the proto2 controls in
     // test_descriptor_origin_proto3_field_rules_are_refused).
     //
     // The open-enum first-value rule is the same family and NOT here: the
@@ -1957,6 +2672,50 @@ bool validate_field_declared_shape(SchemaFile& file, FieldDescriptorProto& field
                            error);
         }
     }
+    // Plan 5 follow-up S1 (W-10): the kinds the EMITTER cannot spell. The
+    // reference compiler resolves all three - an absent kind as the proto
+    // default TYPE_DOUBLE, an unknown kind the same way, a group as a
+    // generated group class - and emits working code; this project refuses
+    // them, because the generator has no group types at all (the source
+    // parser refuses a group outright: "group fields are not supported") and
+    // because the emitter used to write "???type" / "???group" into the
+    // header at rc=0. A deliberate "stricter than protoc" divergence, like
+    // the package-depth and the output-root rules.
+    //
+    // The gate is the ORIGIN, not the shape: a source-origin field carries no
+    // declared kind at all (deferred parsing leaves has_type unset and the
+    // kind is written during resolution), so the same "no kind" test would
+    // refuse every source field. The descriptor path is the only one that can
+    // carry a kind the generator cannot use.
+    //
+    // The check sits AFTER the proto3 block above, so a proto3 group keeps
+    // the proto3 wording and only a proto2 group reaches the rule below.
+    if (file.from_descriptor_set) {
+        if (!field.has_type) {
+            return fail_at_code(
+                file,
+                "field \"" + view_text(field.name) +
+                    "\" declares no type, so there is nothing to generate for it",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_FIELD_TYPE, error);
+        }
+        if (field.type == FieldDescriptorProto::TYPE_GROUP) {
+            return fail_at_code(
+                file,
+                "field \"" + view_text(field.name) +
+                    "\" is a group, and this generator does not support group types",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_FIELD_TYPE, error);
+        }
+        if (!is_known_field_kind(field.type)) {
+            std::ostringstream text;
+            text << "field \"" << view_text(field.name)
+                 << "\" declares an unknown type (kind " << field.type << ")";
+            return fail_at_code(
+                file, text.str(), declaration_location(file, field_path),
+                field_path, DIAGNOSTIC_INVALID_FIELD_TYPE, error);
+        }
+    }
     return true;
 }
 
@@ -1970,9 +2729,9 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                         Diagnostic& error)
 {
     // Set when the compatibility policy permitted an external reference:
-    // the declared metadata is kept verbatim and the field's default is
-    // not validated, because the external definition cannot answer and the
-    // A5 warning already states that defaults were not validated.
+    // the declared metadata is kept verbatim. The default is still checked
+    // for what the declared kind decides (W-47); only membership of a named
+    // enum value needs the definition, which the set does not carry.
     if (field.has_type_name) {
         if (!link_types) {
             // Deferred: never resolve locally. The resolved kind is
@@ -2008,11 +2767,17 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                 // a divergence from the oracle, which accepts such a
                 // descriptor (fix round r4, ledger D-12). The two kinds
                 // therefore agree here, and the declared one is kept.
-                const bool declared_group =
-                    field.type == FieldDescriptorProto::TYPE_GROUP &&
-                    resolved->kind == FieldDescriptorProto::TYPE_MESSAGE;
+                //
+                // The plan-5 follow-up's S1 (W-10) ended that exemption: a
+                // descriptor-origin group is refused by the declared-shape
+                // sweep before this point, because the generator has no
+                // group types (the owner's decision of 2026-10-21, a
+                // deliberate "stricter than protoc" divergence). The
+                // comparison below therefore never sees a group, and the
+                // exemption that made it agree with a message is gone with
+                // it.
                 if (file.from_descriptor_set && field.has_type &&
-                    !declared_group && field.type != resolved->kind) {
+                    field.type != resolved->kind) {
                     return fail_at_code(
                         file,
                         kind_mismatch_message(field, resolved_name,
@@ -2061,13 +2826,11 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                                    field_type_location(file, field_path),
                                    field_path, error);
                 }
-                // Authoritative metadata is not rewritten: a group keeps
-                // its declared TYPE_GROUP, because overwriting it with
-                // TYPE_MESSAGE would silently change the wire encoding the
-                // generator emits for it.
-                field.type = declared_group
-                    ? FieldDescriptorProto::TYPE_GROUP
-                    : resolved->kind;
+                // Authoritative metadata is not rewritten: the declared kind
+                // stays the kind the descriptor named. A group never reaches
+                // this line - the declared-shape sweep refuses it - so the
+                // kind here is always the resolved definition's.
+                field.type = resolved->kind;
                 field.has_type = true;
                 if (field.type_name != resolved_name) {
                     field.type_name = file.strings.save(resolved_name);
@@ -2113,7 +2876,7 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                         ? reference_failure_message(file, symbols, raw, outcome,
                                                     resolved_name)
                         : missing_reference_message(raw, scope, resolved_name);
-                if (unresolved_policy.external_warned_types != 0 &&
+                if (unresolved_policy.mode() == UnresolvedPolicy::EXTERNAL &&
                     !invisible_reference) {
                     // Step 7.2: compatibility mode tolerates a MISSING
                     // target only when the descriptor classifies the
@@ -2154,17 +2917,18 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
                     // absolute name invented, no first enumerator or
                     // integer zero for its default.
                     *external_reference = true;
-                    if (unresolved_policy.missing_external != 0) {
-                        *unresolved_policy.missing_external = true;
+                    if (unresolved_policy.missing_external() != 0) {
+                        *unresolved_policy.missing_external() = true;
                     }
                     const std::string type_name = view_text(field.type_name);
-                    if (unresolved_policy.external_warned_types
+                    if (unresolved_policy.warned_types()
                             ->insert(type_name).second) {
                         warn_once(file, external_reference_message(type_name),
                                   DIAGNOSTIC_GENERIC, unknown_location(),
                                   field_path);
                     }
-                } else if (unresolved_policy.deferred) {
+                } else if (unresolved_policy.mode() ==
+                           UnresolvedPolicy::DEFERRED) {
                     warn_once(file,
                               reason +
                               "; it is kept as TYPE_MESSAGE until imports are linked",
@@ -2241,15 +3005,18 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
     }
     // Scalar kinds are known without linking; named kinds are validated
     // only when linking (link_types) so a shadowed local match cannot
-    // decide packed/default validity ahead of import linking.
+    // decide packed/default validity ahead of import linking. A tolerated
+    // external reference still reaches the rule (W-47): the declared kind is
+    // known, so the message/enum half of the default rule applies even
+    // though the definition does not.
     if (!field.has_type_name) {
-        if (!validate_default(file, symbols, visible_files, field, false,
+        if (!validate_default(file, symbols, visible_files, field, false, false,
                               field_path, error)) {
             return false;
         }
-    } else if (link_types && !external_reference) {
+    } else if (link_types) {
         if (!validate_default(file, symbols, visible_files, field, unknown,
-                              field_path, error)) {
+                              external_reference, field_path, error)) {
             return false;
         }
     }
@@ -2324,6 +3091,160 @@ bool validate_nested_types(SchemaFile& file, const SymbolIndex& symbols,
                              link_types,
                              message.nested_type[i], scope, nested_path, error)) {
             return false;
+        }
+    }
+    return true;
+}
+
+// One endpoint of one service method (`W-16`). protoc's `CrossLinkMethod`
+// (descriptor.cc:7714-7757) resolves both endpoints in the method's own scope
+// with a message placeholder: a name that resolves nowhere is "not defined",
+// and a name that resolves to anything but a message is "not a message type".
+// The source frontend used to discard the method table, so neither shape was
+// reachable from `.proto`; the model retains the names now, and this is the
+// rule both frontends answer.
+//
+// What a name that resolves nowhere means is the caller's policy, exactly as
+// it is for a field: the parser's standalone pass warns and keeps the raw text
+// (deferred), compatibility tolerates only an absolute name (a descriptor
+// carries no kind for a method endpoint, so the absolute spelling is the one
+// fact that says the file meant an external message), and complete linking
+// refuses. A map entry, a non-type declaration and an invisible declaration
+// are fatal in every mode: no import can turn them into a message, and an
+// invisible declared type is the undeclared-dependency shape protoc refuses.
+bool resolve_method_type(SchemaFile& file, const SymbolIndex& symbols,
+                         const std::set<const SchemaFile*>& visible_files,
+                         const UnresolvedPolicy& unresolved_policy,
+                         bool link_types, const std::string& method_scope,
+                         const char* endpoint, const DescriptorPath& type_path,
+                         const str_view& declared, Diagnostic& error)
+{
+    if (!link_types) return true;
+
+    const std::string raw = view_text(declared);
+    const std::string subject =
+        "method \"" + method_scope + "\" " + endpoint + " type";
+    ResolveContext context;
+    ResolveOutcome outcome = RESOLVE_MISSING;
+    std::string resolved_name;
+    const SymbolEntry* resolved =
+        resolve_name(raw, method_scope, symbols, visible_files, context,
+                     &outcome, &resolved_name);
+    if (resolved != 0) {
+        if (resolved->kind != FieldDescriptorProto::TYPE_MESSAGE) {
+            // The code is the field rule's own: the declaration resolves, but
+            // cannot stand where a message is required. protoc's sentence is
+            // `"<name>" is not a message type.`
+            return fail_at_code(
+                file,
+                subject + " \"" + raw + "\" resolves to \"" + resolved_name +
+                    "\", which is not a message type",
+                declaration_location(file, type_path), type_path,
+                DIAGNOSTIC_NOT_A_TYPE, error);
+        }
+        return true;
+    }
+    if (outcome != RESOLVE_MISSING) {
+        return fail_at_code(
+            file,
+            subject + " \"" + raw + "\": " +
+                reference_failure_message(file, symbols, raw, outcome,
+                                          resolved_name),
+            declaration_location(file, type_path), type_path,
+            outcome_code(outcome), error);
+    }
+
+    const std::string reason =
+        subject + ": " + missing_reference_message(raw, method_scope,
+                                                   resolved_name);
+    if (unresolved_policy.mode() == UnresolvedPolicy::EXTERNAL) {
+        // The compatibility half. Unlike a field, a method endpoint carries no
+        // declared kind to classify, so the absolute spelling is the whole
+        // test - a relative name is source-style metadata and is refused, as
+        // a relative field type is.
+        const bool classified = !declared.empty() && declared[0] == '.';
+        if (!classified) {
+            return fail_at_code(
+                file,
+                reason +
+                    "; compatibility mode accepts an unresolved method type "
+                    "only when the descriptor supplies an absolute type name",
+                declaration_location(file, type_path), type_path,
+                DIAGNOSTIC_UNRESOLVED_TYPE, error);
+        }
+        if (unresolved_policy.missing_external() != 0) {
+            *unresolved_policy.missing_external() = true;
+        }
+        if (unresolved_policy.warned_types()->insert(raw).second) {
+            warn_once(file, external_reference_message(raw), DIAGNOSTIC_GENERIC,
+                      unknown_location(), type_path);
+        }
+        return true;
+    }
+    if (unresolved_policy.mode() == UnresolvedPolicy::DEFERRED) {
+        warn_once(file,
+                  reason + "; the endpoint is kept unresolved until imports "
+                           "are linked",
+                  DIAGNOSTIC_UNRESOLVED_TYPE,
+                  declaration_location(file, type_path), type_path);
+        return true;
+    }
+    return fail_at_code(file, reason, declaration_location(file, type_path),
+                        type_path, DIAGNOSTIC_UNRESOLVED_TYPE, error);
+}
+
+// The service half of a resolution pass (`W-16`): every retained method's
+// input and output endpoint, in declaration order. It runs after the message
+// walk, so an endpoint may name any message of the file (the index is complete
+// before either walk starts). A missing endpoint field is refused in every
+// mode: the declaration does not say what the method takes or returns, and
+// only a descriptor can carry that shape.
+bool resolve_services(SchemaFile& file, const SymbolIndex& symbols,
+                      const std::set<const SchemaFile*>& visible_files,
+                      const UnresolvedPolicy& unresolved_policy,
+                      bool link_types, Diagnostic& error)
+{
+    const std::string prefix = package_prefix(file);
+    for (std::size_t i = 0; i < file.file.service.size(); ++i) {
+        const ServiceDescriptorProto& service = file.file.service[i];
+        const DescriptorPath service_path = file_service_path(static_cast<int>(i));
+        const std::string service_scope = joined_name(prefix, service.name);
+        for (std::size_t j = 0; j < service.method.size(); ++j) {
+            const MethodDescriptorProto& method = service.method[j];
+            const DescriptorPath method_path =
+                service_method_path(service_path, static_cast<int>(j));
+            const std::string method_scope =
+                joined_name(service_scope, method.name);
+            if (!method.has_input_type || method.input_type.empty()) {
+                return fail_at_code(
+                    file,
+                    "method \"" + method_scope + "\" carries no input type "
+                    "name",
+                    declaration_location(file, method_path), method_path,
+                    DIAGNOSTIC_MISSING_TYPE_NAME, error);
+            }
+            if (!method.has_output_type || method.output_type.empty()) {
+                return fail_at_code(
+                    file,
+                    "method \"" + method_scope + "\" carries no output type "
+                    "name",
+                    declaration_location(file, method_path), method_path,
+                    DIAGNOSTIC_MISSING_TYPE_NAME, error);
+            }
+            if (!resolve_method_type(
+                    file, symbols, visible_files, unresolved_policy, link_types,
+                    method_scope, "input",
+                    service_method_type_path(method_path, 2), method.input_type,
+                    error)) {
+                return false;
+            }
+            if (!resolve_method_type(
+                    file, symbols, visible_files, unresolved_policy, link_types,
+                    method_scope, "output",
+                    service_method_type_path(method_path, 3),
+                    method.output_type, error)) {
+                return false;
+            }
         }
     }
     return true;
@@ -2428,6 +3349,7 @@ bool validate_message_map_entries(const SchemaFile& file,
 // moved into `internal`, and these using-declarations are the one-line bridge.
 using internal::UnresolvedPolicy;
 using internal::resolve_message;
+using internal::resolve_services;
 
 bool validate_map_entry_shapes(SchemaFile& file, Diagnostic& error)
 {
@@ -2477,6 +3399,183 @@ bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error)
     return true;
 }
 
+namespace {
+
+std::string json_conflict_message(const FieldDescriptorProto& later,
+                                  const std::string& later_json,
+                                  bool later_custom,
+                                  const FieldDescriptorProto& earlier,
+                                  const std::string& earlier_json,
+                                  bool earlier_custom)
+{
+    const char* later_kind = later_custom ? "custom" : "default";
+    const char* earlier_kind = earlier_custom ? "custom" : "default";
+    std::string message =
+        std::string("The ") + later_kind + " JSON name of field \"" +
+        view_text(later.name) + "\" (\"" + later_json +
+        "\") conflicts with the " + earlier_kind +
+        " JSON name of field \"" + view_text(earlier.name) + "\"";
+    if (later_json != earlier_json) {
+        message += " (\"" + earlier_json + "\")";
+    }
+    message += ".";
+    return message;
+}
+
+bool validate_message_json_names(SchemaFile& file,
+                                 const DescriptorProto& message,
+                                 const DescriptorPath& message_path,
+                                 Diagnostic& error)
+{
+    const bool is_proto3 =
+        classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3;
+    const std::size_t count = message.field.size();
+    std::vector<std::string> default_names;
+    default_names.reserve(count);
+
+    // Pass 1: every field's default JSON name. A collision is an error in
+    // proto3 and the reference compiler's LEGACY_BEST_EFFORT warning in
+    // proto2; generation continues in the latter case.
+    std::map<std::string, std::size_t> default_by_name;
+    for (std::size_t i = 0; i < count; ++i) {
+        const FieldDescriptorProto& field = message.field[i];
+        default_names.push_back(to_json_name(view_text(field.name)));
+        const std::pair<std::map<std::string, std::size_t>::iterator, bool>
+            inserted = default_by_name.insert(
+                std::map<std::string, std::size_t>::value_type(
+                    default_names.back(), i));
+        if (inserted.second) continue;
+
+        const FieldDescriptorProto& earlier =
+            message.field[inserted.first->second];
+        const DescriptorPath field_path =
+            message_field_path(message_path, static_cast<int>(i));
+        const std::string message_text = json_conflict_message(
+            field, default_names.back(), false, earlier,
+            default_names[inserted.first->second], false);
+        if (is_proto3) {
+            return fail_at_code(
+                file, message_text, declaration_location(file, field_path),
+                field_path, DIAGNOSTIC_DUPLICATE_SYMBOL, error);
+        }
+        warn_once(file, message_text, DIAGNOSTIC_DUPLICATE_SYMBOL,
+                  declaration_location(file, field_path), field_path);
+    }
+
+    // Pass 2: the effective names. A pair of two default names was already
+    // reported by pass 1 and is skipped; every pair involving a custom name
+    // follows the same proto2-warning/proto3-error split, except that two
+    // custom names are an error in both syntaxes.
+    std::map<std::string, std::size_t> effective_by_name;
+    for (std::size_t i = 0; i < count; ++i) {
+        const FieldDescriptorProto& field = message.field[i];
+        const std::string default_name = default_names[i];
+        const bool custom =
+            field.has_json_name &&
+            view_text(field.json_name) != default_name;
+        const std::string effective =
+            custom ? view_text(field.json_name) : default_name;
+        const std::pair<std::map<std::string, std::size_t>::iterator, bool>
+            inserted = effective_by_name.insert(
+                std::map<std::string, std::size_t>::value_type(effective, i));
+        if (inserted.second) continue;
+
+        const std::size_t earlier_index = inserted.first->second;
+        const FieldDescriptorProto& earlier = message.field[earlier_index];
+        const bool earlier_custom =
+            earlier.has_json_name &&
+            view_text(earlier.json_name) != default_names[earlier_index];
+        if (!custom && !earlier_custom) continue;
+
+        const DescriptorPath field_path =
+            message_field_path(message_path, static_cast<int>(i));
+        const std::string message_text = json_conflict_message(
+            field, effective, custom, earlier,
+            earlier_custom ? view_text(earlier.json_name)
+                           : default_names[earlier_index],
+            earlier_custom);
+        if (is_proto3 || (custom && earlier_custom)) {
+            return fail_at_code(
+                file, message_text, declaration_location(file, field_path),
+                field_path, DIAGNOSTIC_DUPLICATE_SYMBOL, error);
+        }
+        warn_once(file, message_text, DIAGNOSTIC_DUPLICATE_SYMBOL,
+                  declaration_location(file, field_path), field_path);
+    }
+
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_json_names(
+                file, message.nested_type[i],
+                message_nested_path(message_path, static_cast<int>(i)),
+                error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool validate_json_names(SchemaFile& file, Diagnostic& error)
+{
+    // W-43: the reference compiler runs two passes per message
+    // (`CheckFieldJsonNameUniqueness`, descriptor.cc:6489-6584): default
+    // names first, then the effective names with custom `json_name` values.
+    // This walk mirrors that shape over the available descriptor alone.
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!validate_message_json_names(
+                file, file.file.message_type[i],
+                file_message_path(static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_extension_ranges(SchemaFile& file, Diagnostic& error)
+{
+    // The same reference-free walk as validate_enum_value_numbers: top-level
+    // messages in declaration order, then their nested types recursively. No
+    // symbol index and no visibility set is consulted - a range and a declared
+    // field number are provable from the available descriptor alone - so the
+    // check runs before any resolution and in both linking modes (W-45).
+    const std::string prefix = package_prefix(file);
+    const bool is_proto3 =
+        classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3;
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!validate_message_extension_ranges(
+                file, file.file.message_type[i],
+                joined_name(prefix, file.file.message_type[i].name),
+                file_message_path(static_cast<int>(i)), is_proto3, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_message_nesting_depth(const FileDescriptorProto& file,
+                                    const std::string& label,
+                                    Diagnostic& error)
+{
+    // The reference compiler refuses the 32nd level of nested messages with
+    // "Reached maximum recursion limit for nested messages."
+    // (compiler/parser.cc:785-789 for the source frontend,
+    // descriptor.cc:6364-6373 for the descriptor one), and its limit is
+    // MaxMessageDeclarationNestingDepth() == 32 (descriptor.h:3045). The
+    // sentence is the reference compiler's own, so a reader compares the two
+    // verdicts without translating between them.
+    DescriptorPath offending;
+    const int depth = deepest_message_nesting(file, offending);
+    if (depth < max_message_nesting_depth()) return true;
+    error.file = label;
+    error.location = unknown_location();
+    error.message = "Reached maximum recursion limit for nested messages.";
+    if (!offending.empty()) error.message += " at " + format_path(offending);
+    error.warning = false;
+    error.code = DIAGNOSTIC_GENERIC;
+    return false;
+}
+
 bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
 {
     // protoc validates every declaration name lexically while it builds the
@@ -2495,6 +3594,22 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
     const std::string prefix = package_prefix(file);
     const str_view& package = file.file.package;
     if (file.file.has_package && !package.empty()) {
+        // W-38: protoc's limit counts DOTS, not components
+        // (`kPackageLimit = 100`, descriptor.cc:96; `std::count(...) >
+        // kPackageLimit`, :6024-6030). The accepted boundary is therefore
+        // 101 components and the first refusal is 102, measured against
+        // libprotoc 30.1. The rule runs in this reference-free sweep so both
+        // link modes and both input paths answer it before indexing.
+        const std::size_t dots =
+            static_cast<std::size_t>(std::count(package.begin(),
+                                                package.end(), '.'));
+        if (dots > 100u) {
+            static const DescriptorPath package_path = {2};
+            return fail_at(file,
+                           "package depth exceeds the maximum of 101 components",
+                           declaration_location(file, package_path),
+                           package_path, error);
+        }
         // D-59 (fix round r25): a package component belongs to the package, so
         // its scope is the package's own name, and its location is the
         // package field's descriptor path ([2], the path
@@ -2505,7 +3620,17 @@ bool validate_symbol_names(SchemaFile& file, Diagnostic& error)
         // per-file form cost a 4-byte allocation for every file that declares a
         // package, whether or not this check ever has anything to report, and
         // `check_symbol_name` only reads the path.
-        static const DescriptorPath package_path(1, 2);
+        //
+        // The vector is spelled as an initializer list, not as
+        // `DescriptorPath(1, 2)`: the two-argument form also reads as the
+        // iterator-pair constructor, and clang 3.1 cannot discard that
+        // reading - libstdc++ 4.8's iterator_traits of a non-iterator is a
+        // hard error there, not a substitution failure, so the lane died with
+        // "no type named 'iterator_category' in 'std::iterator_traits<int>'"
+        // (measured: the clang 3.1 lane of 2026-10-22). The list form is the
+        // one reading that cannot be mistaken for the other: one element, the
+        // value 2 - the package field's descriptor path.
+        static const DescriptorPath package_path = {2};
         std::size_t start = 0;
         for (;;) {
             const std::size_t dot = package.find('.', start);
@@ -2647,8 +3772,10 @@ bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
                   const std::set<const SchemaFile*>& visible_files,
                   bool allow_unresolved, Diagnostic& error)
 {
-    UnresolvedPolicy unresolved_policy;
-    unresolved_policy.deferred = allow_unresolved;
+    // The exclusive-mode policy: FATAL for a complete link, DEFERRED when the
+    // caller is the parser's standalone pass (W-59).
+    const UnresolvedPolicy unresolved_policy =
+        allow_unresolved ? UnresolvedPolicy::deferred() : UnresolvedPolicy();
     const std::string prefix = package_prefix(file);
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
         if (!resolve_message(file, symbols, visible_files, unresolved_policy,
@@ -2658,7 +3785,10 @@ bool resolve_file(SchemaFile& file, const SymbolIndex& symbols,
             return false;
         }
     }
-    return true;
+    // W-16: the service half of the same pass. It runs after every message,
+    // so a method may reference any message the file declares.
+    return resolve_services(file, symbols, visible_files, unresolved_policy,
+                            true, error);
 }
 
 bool resolve_file_compat(SchemaFile& file, const SymbolIndex& symbols,
@@ -2671,9 +3801,8 @@ bool resolve_file_compat(SchemaFile& file, const SymbolIndex& symbols,
     // missing-information report are the caller's, because both describe the
     // whole link (A5, A4), not one message; the walk is the same declaration
     // order resolve_file uses, so the first failure is deterministic.
-    UnresolvedPolicy unresolved_policy;
-    unresolved_policy.external_warned_types = &warned_types;
-    unresolved_policy.missing_external = &missing_external;
+    const UnresolvedPolicy unresolved_policy =
+        UnresolvedPolicy::external(warned_types, missing_external);
     const std::string prefix = package_prefix(file);
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
         if (!resolve_message(file, symbols, visible_files, unresolved_policy,
@@ -2683,7 +3812,11 @@ bool resolve_file_compat(SchemaFile& file, const SymbolIndex& symbols,
             return false;
         }
     }
-    return true;
+    // W-16: a method endpoint follows the same tolerance as a field type - an
+    // absolute name the thin set does not carry is an external reference -
+    // and the same caller-owned warning bound.
+    return resolve_services(file, symbols, visible_files, unresolved_policy,
+                            true, error);
 }
 
 bool is_deferred_default_warning(const Diagnostic& diagnostic)
@@ -2718,8 +3851,7 @@ bool validate_deferred_file(SchemaFile& file, Diagnostic& error)
     // checks run here.
     const SymbolIndex no_symbols;
     const std::set<const SchemaFile*> no_visible_files;
-    UnresolvedPolicy unresolved_policy;
-    unresolved_policy.deferred = true;
+    const UnresolvedPolicy unresolved_policy = UnresolvedPolicy::deferred();
     const std::string prefix = package_prefix(file);
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
         if (!resolve_message(file, no_symbols, no_visible_files,
@@ -2729,7 +3861,11 @@ bool validate_deferred_file(SchemaFile& file, Diagnostic& error)
             return false;
         }
     }
-    return true;
+    // W-16: the endpoint fields are reference-free shape; the names themselves
+    // are not resolved (link_types == false), because a later linking pass is
+    // what makes an imported message visible.
+    return resolve_services(file, no_symbols, no_visible_files,
+                            unresolved_policy, false, error);
 }
 
 } // namespace easypb_schema

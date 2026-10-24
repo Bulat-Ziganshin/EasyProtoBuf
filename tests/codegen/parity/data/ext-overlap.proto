@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+package parity;
+
+message M {
+  extensions 100 to 199;
+  extensions 150 to 249;
+}

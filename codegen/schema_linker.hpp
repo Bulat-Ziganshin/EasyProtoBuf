@@ -22,7 +22,12 @@ struct LinkedSchema {
     const SchemaSet* files;      // null in the invalid empty state
     SymbolIndex symbols;
     std::map<const SchemaFile*, std::set<const SchemaFile*> > visible_files;
-    bool complete;
+    // True when the link rested on local information alone: every import edge
+    // resolved inside the loaded set and no reference was tolerated as an
+    // external one. A complete link is local by construction; a compatibility
+    // link is local only for a self-contained thin descriptor. The mode is the
+    // caller's own argument to link_schema and is never reported here.
+    bool local_only;
 
     // The plan-4 contract declares this struct without a constructor; the
     // user-provided default constructor is a C++11 requirement, not drift:
@@ -31,7 +36,7 @@ struct LinkedSchema {
     // too. The consequence is that LinkedSchema is no longer an aggregate, so
     // it cannot be brace-initialized; files == 0 remains the documented
     // invalid-empty marker the publish-on-success rule depends on.
-    LinkedSchema() : files(0), complete(false) {}
+    LinkedSchema() : files(0), local_only(false) {}
 };
 
 // Links all files in the set according to mode. On success fills result and

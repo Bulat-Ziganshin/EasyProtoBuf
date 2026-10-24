@@ -41,6 +41,17 @@ std::string text(const str_view& value)
     return std::string(value.data(), value.size());
 }
 
+// The (count, value) constructor of a vector of integers is ambiguous on the
+// earliest supported Clang: with both arguments `int`, the iterator-pair
+// template deduces `InputIt = int` and is preferred over the non-template
+// overload, so libstdc++ 4.8 rejects the instantiation. Spelling the count as
+// a size_type makes the template non-viable and keeps this constructor.
+std::vector<std::int32_t> repeated_indexes(std::size_t count,
+                                           std::int32_t value)
+{
+    return std::vector<std::int32_t>(count, value);
+}
+
 // Adds a descriptor-origin file with the given logical name and dependency
 // lists (the make_file shape test_graph.cpp uses). Indexes in public_indexes
 // and weak_indexes address positions in deps. physical_name is left empty to
@@ -141,7 +152,7 @@ void check_duplicate_failure(easypb_schema::SchemaSet& set,
     CHECK(error.message != "link_schema: not implemented");
     CHECK(error.file == redeclaring);
     CHECK(linked.files == 0);
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(linked.symbols.symbols.empty());
     CHECK(linked.visible_files.empty());
 }
@@ -321,11 +332,11 @@ bool link_verdict(easypb_schema::SchemaSet& set,
         set, easypb_schema::LINK_COMPLETE, linked, error);
     if (linked_ok) {
         CHECK(linked.files == &set);
-        CHECK(linked.complete);
+        CHECK(linked.local_only);
     } else {
         // Publish-on-failure (A1, E3): nothing readable survives a failure.
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     return linked_ok;
 }
@@ -411,7 +422,7 @@ Chain make_chain_fixture(easypb_schema::SchemaSet& set, bool public_bc, bool wea
 {
     const std::vector<std::string> no_deps;
     const std::vector<std::int32_t> no_indexes;
-    const std::vector<std::int32_t> index_zero(1, 0);
+    const std::vector<std::int32_t> index_zero = repeated_indexes(1, 0);
 
     easypb_schema::SchemaFile& a = make_file(
         set, "a.proto", std::vector<std::string>(1, "b.proto"),
@@ -446,7 +457,7 @@ struct Diamond
 Diamond make_diamond_fixture(easypb_schema::SchemaSet& set)
 {
     const std::vector<std::int32_t> no_indexes;
-    const std::vector<std::int32_t> index_zero(1, 0);
+    const std::vector<std::int32_t> index_zero = repeated_indexes(1, 0);
     std::vector<std::string> a_deps;
     a_deps.push_back("b.proto");
     a_deps.push_back("c.proto");
@@ -549,7 +560,7 @@ void test_complete_link_publishes_after_every_stage()
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                      linked, error));
     CHECK(linked.files == &set);
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
     // Stage 5: the field resolved against a's visible set and was rewritten to
     // the absolute name the index holds.
     CHECK(text(chain.a->file.message_type[0].field[0].type_name) ==
@@ -579,7 +590,7 @@ void test_complete_link_publishes_after_every_stage()
     CHECK(!error.message.empty());
     CHECK(error.message != "link_schema: not implemented");
     CHECK(linked.files == 0);
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(linked.symbols.symbols.empty());
     CHECK(linked.visible_files.empty());
 
@@ -592,7 +603,7 @@ void test_complete_link_publishes_after_every_stage()
     CHECK(!easypb_schema::link_schema(cyclic, easypb_schema::LINK_COMPLETE,
                                       reused, error));
     CHECK(reused.files == 0);
-    CHECK(!reused.complete);
+    CHECK(!reused.local_only);
     CHECK(reused.visible_files.empty());
 
     // The same rule for the resolution stage: the failure below is reported by
@@ -609,7 +620,7 @@ void test_complete_link_publishes_after_every_stage()
                                       error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
     CHECK(reused.files == 0);
-    CHECK(!reused.complete);
+    CHECK(!reused.local_only);
     CHECK(reused.symbols.symbols.empty());
     CHECK(reused.visible_files.empty());
 }
@@ -711,7 +722,7 @@ void test_visibility_diamond_public_exports_are_complete()
 void test_visibility_public_chain_re_exports_recursively()
 {
     const std::vector<std::int32_t> no_indexes;
-    const std::vector<std::int32_t> index_zero(1, 0);
+    const std::vector<std::int32_t> index_zero = repeated_indexes(1, 0);
 
     easypb_schema::SchemaSet set;
     easypb_schema::SchemaFile& a = make_file(
@@ -938,7 +949,7 @@ void test_conflicting_declaration_reports_one_code()
         CHECK(error.file == "a.proto");
         CHECK(error.message.find("Same") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     // Producer 2: the same collision split over two files.
     {
@@ -956,7 +967,7 @@ void test_conflicting_declaration_reports_one_code()
         errors[1] = error;
         CHECK(error.message.find("Same") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
 
     CHECK(codes[0] == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
@@ -2029,7 +2040,7 @@ void test_foreign_map_entry_references_are_rejected()
     {
         easypb_schema::SchemaSet set;
         make_map_fixture(set, "foo", "ItemEntry");
-        easypb_schema::SchemaFile& file = *set.find_file("a.proto");
+        CHECK(set.find_file("a.proto") != 0);
         easypb_schema::Diagnostic error;
         CHECK(!link_verdict(set, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_MAP_ENTRY_TYPE);
@@ -2299,7 +2310,7 @@ void test_task2_pair_links_and_its_two_mutations_fail()
     // check fires first (A7 is tested with a declared kind below).
     {
         easypb_schema::SchemaSet set;
-        const StateReport pair = make_state_report_fixture(set, true);
+        make_state_report_fixture(set, true);
         easypb_schema::Diagnostic error;
         CHECK(!link_verdict(set, error));
         CHECK(error.file == "report.proto");
@@ -2424,7 +2435,7 @@ void test_descriptor_origin_field_numbers_are_validated()
         // appends the descriptor path (fail_at_code's convention).
         CHECK(error.message.find(" at [") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     // The legal bounds on both sides stay legal: number 1, one below the
     // reserved range, one above it, and the maximum itself.
@@ -2489,7 +2500,7 @@ void test_descriptor_origin_named_kind_needs_type_name()
         CHECK(error.message.find(sentence) == 0);
         CHECK(error.message.find(" at [") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     // A scalar kind with no type_name is the ordinary case and links.
     {
@@ -2755,7 +2766,7 @@ void test_unsupported_syntax_is_refused_before_resolution()
         CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
         CHECK(error.file == "z.proto");
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
         CHECK(linked.symbols.symbols.empty());
     }
     // proto3 is not refused: the classification is the subject, so the fixture
@@ -2789,7 +2800,7 @@ void test_unsupported_syntax_is_refused_before_resolution()
             linked, error));
         CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
 }
 
@@ -2948,7 +2959,7 @@ void test_input_order_and_targets_do_not_decide_the_verdict()
         easypb_schema::Diagnostic error;
         CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                           linked, error));
-        CHECK(linked.complete);
+        CHECK(linked.local_only);
         // Two package scopes, three messages and one field.
         CHECK(linked.symbols.symbols.size() == 6);
         const std::string names = resolved_field_names(set);
@@ -3089,14 +3100,20 @@ void test_warning_hygiene_drops_only_stale_unresolved_warnings()
     CHECK(a.warnings[0].message == "a note another pass recorded");
 }
 
-// D-12 (fix round r4): a group field declares TYPE_GROUP and names the group
-// message, and a group IS a message - protoc's model carries TYPE_GROUP only on
-// the field. The index records every message as TYPE_MESSAGE, so the declared-
-// kind comparison must treat the two as agreeing or every legal proto2 group is
-// refused; protoc accepts the same descriptor (review r4's oracle, exit 0).
-// The declared kind must also SURVIVE the link: overwriting it with
-// TYPE_MESSAGE would silently change the wire encoding the generator emits.
-void test_group_field_links_and_keeps_its_declared_kind()
+// D-12 (fix round r4) said a group field must LINK and keep its declared
+// kind: a group IS a message, protoc's model carries TYPE_GROUP only on the
+// field, and protoc accepts the same descriptor (review r4's oracle, exit 0).
+// The plan-5 follow-up's session S1 (W-10) OVERRODE that: the generator has
+// no group types at all - the source parser refuses a group outright ("group
+// fields are not supported") - and the emitter used to answer one with
+// "???group" in the header at rc=0. The owner's decision of 2026-10-21 is a
+// deliberate "stricter than protoc" divergence, so a descriptor-origin group
+// is refused with DIAGNOSTIC_INVALID_FIELD_TYPE, in both link modes.
+//
+// The control from review r4 still holds: a genuine kind disagreement - a
+// field declaring an enum but naming a message - is still refused, and with
+// its own code.
+void test_group_field_is_refused()
 {
     // A descriptor-origin group: nested message G, field g of TYPE_GROUP.
     easypb_schema::SchemaSet set;
@@ -3111,13 +3128,12 @@ void test_group_field_links_and_keeps_its_declared_kind()
     file.file.message_type.push_back(m);
 
     easypb_schema::Diagnostic error;
-    CHECK(link_verdict(set, error));
-    CHECK(text(file.file.message_type[0].field[0].type_name) == ".pkg.M.G");
-    CHECK(file.file.message_type[0].field[0].type ==
-          FieldDescriptorProto::TYPE_GROUP);
+    CHECK(!link_verdict(set, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
+    CHECK(error.message.find("group") != std::string::npos);
 
-    // A group field that also has a body field still links, and the body's own
-    // scalar is untouched by the group handling.
+    // A group field that also has a body field is refused the same way: the
+    // group's own body is not what the rule asks about.
     easypb_schema::SchemaSet nested;
     easypb_schema::SchemaFile& host = make_simple_file(nested, "group2.proto", "pkg");
     host.from_descriptor_set = true;
@@ -3144,9 +3160,8 @@ void test_group_field_links_and_keeps_its_declared_kind()
     host.file.message_type.push_back(outer);
 
     easypb_schema::Diagnostic error2;
-    CHECK(link_verdict(nested, error2));
-    CHECK(host.file.message_type[0].field[0].type ==
-          FieldDescriptorProto::TYPE_GROUP);
+    CHECK(!link_verdict(nested, error2));
+    CHECK(error2.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
 
     // The control from review r4 still holds: a genuine kind disagreement - a
     // field declaring an enum but naming a message - is still refused. Without
@@ -3384,7 +3399,7 @@ void test_relative_package_head_reference_resolves()
             no_indexes);
         set_package(dep, "a.b");
         add_message(dep, "Type");
-        const std::vector<std::int32_t> public_index(1, 0);
+        const std::vector<std::int32_t> public_index = repeated_indexes(1, 0);
         easypb_schema::SchemaFile& pub = make_file(
             set, "dep_pub.proto", std::vector<std::string>(1, "dep_ab.proto"),
             public_index, no_indexes);
@@ -4027,7 +4042,7 @@ void test_unsupported_syntax_beats_the_cross_syntax_rule()
         CHECK(error.code == easypb_schema::DIAGNOSTIC_UNSUPPORTED_SYNTAX);
         CHECK(error.file == "z.proto");
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
 }
 
@@ -4084,7 +4099,7 @@ bool link_compat(easypb_schema::SchemaSet& set,
         CHECK(linked.files == &set);
     } else {
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     return linked_ok;
 }
@@ -4122,7 +4137,7 @@ bool read_binary_file(const std::string& path, std::string& contents)
 }
 
 // 7.3 row 1 and 2: a classified external message is accepted even though its
-// dependency is absent, `complete == false` comes from the null-target edge
+// dependency is absent, `local_only == false` comes from the null-target edge
 // alone (A4), and the same input under LINK_COMPLETE is a missing import.
 void test_compat_accepts_a_classified_external_message()
 {
@@ -4140,7 +4155,7 @@ void test_compat_accepts_a_classified_external_message()
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
         CHECK(link_compat(set, linked, error));
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
         CHECK(file.warnings.size() == 1);
         CHECK(file.warnings[0].warning);
         CHECK(file.warnings[0].code == easypb_schema::DIAGNOSTIC_GENERIC);
@@ -4265,7 +4280,7 @@ void test_compat_missing_dependency_without_external_references()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(file.warnings.empty());
     const FieldDescriptorProto& field = file.file.message_type[0].field[0];
     CHECK(field.type == FieldDescriptorProto::TYPE_ENUM);
@@ -4293,7 +4308,7 @@ void test_compat_warns_once_per_external_type_name()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(file.warnings.size() == 1);
     CHECK(file.warnings[0].location.line == 0);
     CHECK(file.warnings[0].message.find(".ext.Type") != std::string::npos);
@@ -4347,9 +4362,12 @@ void test_compat_rejects_unclassified_external_references()
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
         CHECK(!link_compat(set, linked, error));
-        CHECK(error.code == easypb_schema::DIAGNOSTIC_UNRESOLVED_TYPE);
-        CHECK(error.message.find("explicit message or enum kind") !=
-              std::string::npos);
+        // The descriptor names a type but declares no kind, so the declared
+        // shape is refused BEFORE the compatibility mode's own rule is asked:
+        // the mode tolerates an unresolved reference only when the descriptor
+        // supplies an explicit message or enum kind, and a field with no kind
+        // at all cannot supply one (the plan-5 follow-up's S1, W-10).
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
     }
 }
 
@@ -4371,7 +4389,7 @@ void test_compat_resolves_local_references_normally()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
     CHECK(file.warnings.empty());
     const FieldDescriptorProto& field = file.file.message_type[0].field[0];
     CHECK(field.type == FieldDescriptorProto::TYPE_ENUM);
@@ -4612,7 +4630,7 @@ void test_compat_binder_still_rejects_malformed_indexes()
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = make_file(
             set, "thin.pbs", std::vector<std::string>(1, "a.proto"),
-            std::vector<std::int32_t>(1, 5), std::vector<std::int32_t>());
+            repeated_indexes(1, 5), std::vector<std::int32_t>());
         file.from_descriptor_set = true;
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
@@ -4625,7 +4643,7 @@ void test_compat_binder_still_rejects_malformed_indexes()
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = make_file(
             set, "thin.pbs", std::vector<std::string>(1, "a.proto"),
-            std::vector<std::int32_t>(2, 0), std::vector<std::int32_t>());
+            repeated_indexes(2, 0), std::vector<std::int32_t>());
         file.from_descriptor_set = true;
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
@@ -4636,7 +4654,7 @@ void test_compat_binder_still_rejects_malformed_indexes()
 }
 
 // 7.3 row 15: a weak import of an absent file is tolerated exactly like a
-// normal missing target (A18): a null-target edge and `complete == false`,
+// normal missing target (A18): a null-target edge and `local_only == false`,
 // never silence - while the same fixture under LINK_COMPLETE stays the hard
 // error it has always been.
 void test_compat_tolerates_a_missing_weak_target()
@@ -4645,12 +4663,12 @@ void test_compat_tolerates_a_missing_weak_target()
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = make_file(
             set, "thin.pbs", std::vector<std::string>(1, "gone.proto"),
-            std::vector<std::int32_t>(), std::vector<std::int32_t>(1, 0));
+            std::vector<std::int32_t>(), repeated_indexes(1, 0));
         file.from_descriptor_set = true;
         easypb_schema::LinkedSchema linked;
         easypb_schema::Diagnostic error;
         CHECK(link_compat(set, linked, error));
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
         CHECK(file.warnings.empty());
         CHECK(file.edges.size() == 1);
         CHECK(file.edges[0].target == 0);
@@ -4659,7 +4677,7 @@ void test_compat_tolerates_a_missing_weak_target()
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = make_file(
             set, "thin.pbs", std::vector<std::string>(1, "gone.proto"),
-            std::vector<std::int32_t>(), std::vector<std::int32_t>(1, 0));
+            std::vector<std::int32_t>(), repeated_indexes(1, 0));
         file.from_descriptor_set = true;
         easypb_schema::Diagnostic error;
         CHECK(!link_verdict(set, error));
@@ -4690,7 +4708,7 @@ void test_compat_preserves_an_external_enum_default()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(file.warnings.size() == 1);
     CHECK(file.warnings[0].code == easypb_schema::DIAGNOSTIC_GENERIC);
     const FieldDescriptorProto& field = file.file.message_type[0].field[0];
@@ -4722,7 +4740,7 @@ void test_compat_then_complete_never_consults_the_escape_hatch()
     easypb_schema::LinkedSchema linked;
     easypb_schema::Diagnostic error;
     CHECK(link_compat(set, linked, error));
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
 
     easypb_schema::Diagnostic complete_error;
     CHECK(!link_verdict(set, complete_error));
@@ -4735,8 +4753,8 @@ void test_compat_then_complete_never_consults_the_escape_hatch()
 // (dependency absent, no external reference) + external (dependency absent,
 // external references) + empty (no file) + integration-multi (two files).
 enum CorpusVerdict {
-    CORPUS_CLEAN,             // accept, complete == true, no warnings
-    CORPUS_INCOMPLETE,        // accept, complete == false
+    CORPUS_CLEAN,             // accept, local_only == true, no warnings
+    CORPUS_INCOMPLETE,        // accept, local_only == false
     CORPUS_PRECONDITION,      // reject at 7.1 (no file / two files)
     CORPUS_MALFORMED_ENTRY    // reject at A26's entry-shape check
 };
@@ -4817,7 +4835,7 @@ void test_corpus_compatibility_mode(const std::string& fixture_dir)
                 const bool entry = message.options.has_map_entry &&
                                    message.options.map_entry;
                 if (entry) {
-                    CHECK(message.extension_range_count == 0);
+                    CHECK(message.extension_range.empty());
                     CHECK(message.extension_count == 0);
                 }
             }
@@ -4844,7 +4862,7 @@ void test_corpus_compatibility_mode(const std::string& fixture_dir)
             CHECK(linked.files == &set);
         } else {
             CHECK(linked.files == 0);
-            CHECK(!linked.complete);
+            CHECK(!linked.local_only);
             // The checkpoint's non-count assertion (A25): NO fixture may be
             // refused as an unsupported syntax. Such a refusal would mean the
             // classifier turned a supported value into an unsupported one,
@@ -4858,14 +4876,14 @@ void test_corpus_compatibility_mode(const std::string& fixture_dir)
         case CORPUS_CLEAN:
             CHECK(accepted);
             if (accepted) {
-                CHECK(linked.complete);
+                CHECK(linked.local_only);
                 CHECK(set.files()[0]->warnings.empty());
             }
             break;
         case CORPUS_INCOMPLETE:
             CHECK(accepted);
             if (accepted) {
-                CHECK(!linked.complete);
+                CHECK(!linked.local_only);
                 CHECK(set.files()[0]->warnings.size() == fixture.warnings);
             }
             break;
@@ -5059,7 +5077,7 @@ void test_underscore_map_fields_collide_on_the_shared_entry_name()
     }
 }
 
-// F-H1 (refuted): the muse review's HIGH finding read "a field with neither a
+// F-H1 (refuted, then overridden): the muse review's HIGH finding read "a field with neither a
 // declared kind nor a type_name slips past the A7/clause-12 guard, and protoc
 // rejects that shape too", and proposed refusing it with MISSING_TYPE_NAME.
 // Measured over a real descriptor set mutated by deleting the field's `type`
@@ -5068,11 +5086,19 @@ void test_underscore_map_fields_collide_on_the_shared_entry_name()
 // claimed to close. The rows below keep both accepted shapes and the
 // neighbour the same measurement settled, so a later session that wants the
 // refusal has to produce a new counter-example rather than re-read the report.
-void test_descriptor_origin_field_without_a_declared_kind_links()
+//
+// That later session is the plan-5 follow-up's S1 (W-10), and the owner's
+// decision of 2026-10-21 takes the refusal anyway: a field that declares no
+// kind has no spelling in a generated header, and the emitter used to answer
+// one with "???type" at rc=0. The shape is a deliberate "stricter than
+// protoc" divergence, and the measurement below is the new counter-example
+// the F-H1 note asked for - protoc accepts all three shapes, this project
+// refuses them.
+void test_descriptor_origin_field_without_a_declared_kind_is_refused()
 {
     // Neither `type` nor `type_name`: protoc reads the absent kind as its own
-    // proto2 default and accepts; the link accepts and leaves the metadata
-    // alone.
+    // proto2 default and accepts; this project refuses the shape, because the
+    // emitter has no kind to write.
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
@@ -5089,17 +5115,14 @@ void test_descriptor_origin_field_without_a_declared_kind_links()
         file.file.message_type.push_back(holder);
 
         easypb_schema::Diagnostic error;
-        CHECK(link_verdict(set, error));
-        // The absent kind stays absent - the model reads it as kind 0, NOT as
-        // protoc's default. Both readers accept the field at link time, so the
-        // difference is a generation question (plan 5), named here so it is
-        // not mistaken for a link verdict.
-        CHECK(!file.file.message_type[0].field[0].has_type);
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
     }
     // A type_name with no declared kind: protoc builds the NAMED type from the
-    // name (exit 0), and the link fills the kind from the definition - the one
-    // place a descriptor-origin kind is written without a comparison, because
-    // there is no declared kind to compare (A7's guard is `has_type && ...`).
+    // name (exit 0), and the link could fill the kind from the definition
+    // (A7's guard is `has_type && ...`). The refusal is the same: the
+    // descriptor does not say what the field is, and the rule asks the
+    // descriptor, not the resolution.
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
@@ -5116,16 +5139,13 @@ void test_descriptor_origin_field_without_a_declared_kind_links()
         file.file.message_type.push_back(holder);
 
         easypb_schema::Diagnostic error;
-        CHECK(link_verdict(set, error));
-        const FieldDescriptorProto& linked_field =
-            file.file.message_type[1].field[0];
-        CHECK(linked_field.has_type);
-        CHECK(linked_field.type == FieldDescriptorProto::TYPE_MESSAGE);
+        CHECK(!link_verdict(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
     }
     // Neighbour from the same measurement: a DECLARED scalar kind carrying a
     // type_name is refused by protoc (`Field with primitive type has
     // type_name.`) and here by the A7 comparison - so "no declared kind" is
-    // accepted while "a declared kind that contradicts the name" is not.
+    // refused too, with its own code.
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
@@ -5711,7 +5731,11 @@ void test_descriptor_origin_proto3_field_rules_are_refused()
         CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
         CHECK(error.message.find("group") != std::string::npos);
     }
-    // (h) The proto2 control of that shape still links, group kind and all.
+    // (h) The proto2 control of that shape is refused too, with the kind's
+    // own code: the generator has no group types at all, so a group is
+    // refused in either syntax (the plan-5 follow-up's S1, W-10, and the
+    // owner's decision of 2026-10-21 - a deliberate "stricter than protoc"
+    // divergence, where protoc generates a group class for the shape).
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
@@ -5727,7 +5751,9 @@ void test_descriptor_origin_proto3_field_rules_are_refused()
         message.field[0].type = FieldDescriptorProto::TYPE_GROUP;
 
         easypb_schema::Diagnostic error;
-        CHECK(accepted_in_both_modes(set, error));
+        CHECK(refused_in_both_modes(set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE);
+        CHECK(error.message.find("group") != std::string::npos);
     }
 }
 
@@ -6238,7 +6264,7 @@ void test_pool_growth_after_link_keeps_every_published_name()
     easypb_schema::Diagnostic error;
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                      linked, error));
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
 
     CHECK(text(a.file.message_type[0].field[0].type_name) == ".shared.Value");
     CHECK(text(a.file.message_type[0].field[1].type_name) == ".shared.Other");
@@ -6380,7 +6406,7 @@ void test_descriptor_only_isolation_reports_a_descriptor_path()
         CHECK(error.file == "iso.pbs");
         CHECK(error.message.find("at [4, 0, 2, 0]") != std::string::npos);
         CHECK(linked.files == 0);
-        CHECK(!linked.complete);
+        CHECK(!linked.local_only);
     }
     // (b) a declared dependency the set does not contain: an in-memory graph
     // error naming the importing logical file and the missing logical import,
@@ -6443,7 +6469,7 @@ void make_repeat_fixture(easypb_schema::SchemaSet& set, bool reverse)
 {
     const std::vector<std::string> no_deps;
     const std::vector<std::int32_t> no_indexes;
-    const std::vector<std::int32_t> index_zero(1, 0);
+    const std::vector<std::int32_t> index_zero = repeated_indexes(1, 0);
 
     for (int pass = 0; pass < 3; ++pass) {
         const int which = reverse ? 2 - pass : pass;
@@ -6498,7 +6524,7 @@ void test_repeated_runs_publish_identical_views()
         CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                          first, error));
         CHECK(first.files == &set);
-        CHECK(first.complete);
+        CHECK(first.local_only);
         const std::string first_view = view_fingerprint(set, first);
         // Lines are sorted by logical name, so the root's line is the last
         // one; what matters is that it names the resolved absolute type and
@@ -6512,7 +6538,7 @@ void test_repeated_runs_publish_identical_views()
         CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                          second, second_error));
         CHECK(second.files == &set);
-        CHECK(second.complete);
+        CHECK(second.local_only);
         CHECK(view_fingerprint(set, second) == first_view);
         // The visibility sets are compared directly too, key for key: the
         // fingerprints above compare the names they resolve to, this compares
@@ -6535,7 +6561,7 @@ void test_repeated_runs_publish_identical_views()
         CHECK(easypb_schema::link_schema(backward_set,
                                          easypb_schema::LINK_COMPLETE,
                                          backward, backward_error));
-        CHECK(backward.complete);
+        CHECK(backward.local_only);
         CHECK(view_fingerprint(backward_set, backward) ==
               view_fingerprint(forward_set, forward));
 
@@ -6630,7 +6656,7 @@ void test_iterator_rules_stability_across_file_order()
         easypb_schema::Diagnostic error;
         CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
                                          linked, error));
-        CHECK(linked.complete);
+        CHECK(linked.local_only);
         const easypb_schema::SchemaFile* const a = set.find_file("a.proto");
         CHECK(a != 0);
         CHECK(text(a->file.message_type[0].field[1].type_name) == ".sub.X");
@@ -6683,11 +6709,20 @@ ServiceDescriptorProto& add_service_named(
 }
 
 void add_method(easypb_schema::SchemaFile& file,
-                ServiceDescriptorProto& service, const char* name)
+                ServiceDescriptorProto& service, const char* name,
+                const char* input_type = 0, const char* output_type = 0)
 {
     MethodDescriptorProto method;
     method.name = file.strings.save(name);
     method.has_name = true;
+    if (input_type != 0) {
+        method.input_type = file.strings.save(input_type);
+        method.has_input_type = true;
+    }
+    if (output_type != 0) {
+        method.output_type = file.strings.save(output_type);
+        method.has_output_type = true;
+    }
     service.method.push_back(method);
 }
 
@@ -7008,11 +7043,19 @@ void build_map_entry_shape(easypb_schema::SchemaFile& file,
             break;
         }
         case MAP_SHAPE_EXTENSION_RANGE:
-            // D-62: the counters stand for DescriptorProto's wire fields 5 and
-            // 6, which no other reader of this model wants. The decode-level
-            // twin - that these counters can only be filled by those fields -
-            // is test_map_entry_extension_data_is_counted_and_refused.
-            entry.extension_range_count = 1;
+            // D-62: wire field 5 is modelled as a range list since W-45, so the
+            // shape carries one range; the sweep refuses its PRESENCE, which is
+            // all the map-entry rule asks. The decode-level twin - that the
+            // range survives the decoder with its numbers - is
+            // test_map_entry_extension_data_is_counted_and_refused.
+            {
+                DescriptorProto_ExtensionRange range;
+                range.start = 10;
+                range.end = 20;
+                range.has_start = true;
+                range.has_end = true;
+                entry.extension_range.push_back(range);
+            }
             break;
         case MAP_SHAPE_EXTENSION_MEMBER:
             entry.extension_count = 1;
@@ -7166,10 +7209,16 @@ void test_map_entry_extension_data_is_counted_and_refused()
         if (decoded.file[0].message_type.size() != 1) return;
         const DescriptorProto& entry =
             decoded.file[0].message_type[0].nested_type[0];
-        // The decoder's own read of wire fields 5 and 6 - and the sweep asks
-        // exactly these two counters.
-        CHECK(entry.extension_range_count == (shape == 1 ? 1 : 0));
+        // The decoder's own read of wire fields 5 and 6 - the sweep asks the
+        // range list and the extension count.
+        CHECK(entry.extension_range.size() == (shape == 1 ? 1u : 0u));
         CHECK(entry.extension_count == (shape == 2 ? 1 : 0));
+        if (shape == 1 && entry.extension_range.size() == 1) {
+            CHECK(entry.extension_range[0].start == 10);
+            CHECK(entry.extension_range[0].end == 20);
+            CHECK(entry.extension_range[0].has_start);
+            CHECK(entry.extension_range[0].has_end);
+        }
 
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file = set.add_file("root.proto");
@@ -7583,15 +7632,19 @@ void test_descriptor_origin_method_names_are_validated()
         CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
         CHECK(error.message.find("go") != std::string::npos);
     }
-    // Control: a well-formed service with two distinct method names links.
+    // Control: a well-formed service with two distinct method names whose
+    // endpoints resolve to messages of the same file links. The endpoints are
+    // required since W-16, so a named-but-bare method is not "well-formed".
     {
         easypb_schema::SchemaSet set;
         easypb_schema::SchemaFile& file =
             make_simple_file(set, "method-ok.pbs", "pkg");
         file.from_descriptor_set = true;
+        add_message(file, "Request");
+        add_message(file, "Response");
         ServiceDescriptorProto& service = add_service_named(file, "S");
-        add_method(file, service, "go");
-        add_method(file, service, "stop");
+        add_method(file, service, "go", ".pkg.Request", ".pkg.Response");
+        add_method(file, service, "stop", ".pkg.Request", ".pkg.Response");
 
         easypb_schema::Diagnostic error;
         CHECK(accepted_in_both_modes(set, error));
@@ -7688,7 +7741,7 @@ int main(int argc, char** argv)
     test_input_order_and_targets_do_not_decide_the_verdict();
     test_already_resolved_input_is_resolved_again();
     test_warning_hygiene_drops_only_stale_unresolved_warnings();
-    test_group_field_links_and_keeps_its_declared_kind();
+    test_group_field_is_refused();
     test_warning_hygiene_drops_the_paired_default_warning();
     test_seeded_prefix_warning_survives_the_link();
     test_relative_package_head_reference_resolves();
@@ -7720,7 +7773,7 @@ int main(int argc, char** argv)
     test_corpus_compatibility_mode(fixture_dir);
     test_map_entry_sweep_reaches_every_depth();
     test_underscore_map_fields_collide_on_the_shared_entry_name();
-    test_descriptor_origin_field_without_a_declared_kind_links();
+    test_descriptor_origin_field_without_a_declared_kind_is_refused();
     test_descriptor_origin_duplicate_enum_number_is_refused();
     test_descriptor_origin_empty_enum_is_refused();
     test_descriptor_origin_proto3_field_rules_are_refused();

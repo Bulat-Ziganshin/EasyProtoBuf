@@ -1,0 +1,12 @@
+// W-47's control: an external message field with NO default. Compatibility
+// mode tolerates the type and warns; this shape stays accepted.
+syntax = "proto2";
+
+package ext;
+
+import "w47-dep.proto";
+
+message Root
+{
+    optional dep.Missing x = 1;
+}

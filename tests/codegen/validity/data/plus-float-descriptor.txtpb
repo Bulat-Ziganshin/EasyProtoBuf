@@ -1,0 +1,16 @@
+# W-40: protoc's descriptor float path also refuses +1.0; codegen refuses it
+# through the same one-rule precheck.
+file {
+  name: "plus-float-descriptor.proto"
+  syntax: "proto2"
+  message_type {
+    name: "PlusFloatDescriptor"
+    field {
+      name: "d"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "+1.0"
+    }
+  }
+}

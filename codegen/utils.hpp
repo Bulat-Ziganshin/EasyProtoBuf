@@ -11,8 +11,11 @@
 
 #include "descriptor.pb.hpp"
 
-// Return true if `value` starts with `prefix`.
-bool starts_with(str_view value, str_view prefix);
+// The generator's own text helpers. W-55: they used to live in the global
+// namespace, and codegen/ is a PUBLIC include path of easypb_codegen_core, so
+// every consumer that linked the core inherited names as generic as
+// number_to_string. The include graph is unchanged; only the names owners are.
+namespace easypb_codegen {
 
 // Return true if `value` ends with `suffix`.
 bool ends_with(str_view value, str_view suffix);
@@ -21,18 +24,13 @@ bool ends_with(str_view value, str_view suffix);
 // missing from some legacy MinGW libstdc++ implementations.
 std::string number_to_string(int32_t value);
 
-// Returns a version of 'str' where every occurrence of
-// 'find' is substituted by 'replace'.
-// - http://stackoverflow.com/questions/20406744/
-std::string string_replace_all(
-    str_view str,   // where to work
-    str_view find,  // substitute 'find'
-    str_view replace //      by 'replace'
-);
-
 // Use format_str to format remaining arguments similar to std::format.
-// All arguments should be convertible to str_view, and the only
-// formatting templates supported are {} and {\d}.
+// All arguments should be convertible to str_view, and the only formatting
+// templates supported are {}, {\d} and multi-digit {\d\d...}: `{10}` names the
+// eleventh argument. A digit run that is not closed by `}` stays literal, and
+// an index past the last argument throws. Arguments the chosen format string
+// does not use stay tolerated: live call sites pass one argument to a
+// user-supplied template that need not name it (W-63).
 // Arguments are taken by reference on purpose. The by-value pack copied every
 // lvalue argument into the parameter first - and the callers pass exactly the
 // strings that must not be copied: the generator's own accumulation buffers
@@ -66,7 +64,11 @@ std::string myformat(str_view format_str, const Args&... args)
             if (i > start) {
                 result.append(fmt + start, i - start);
             }
-            result.append(arg[arg_num].data(), arg[arg_num].size());
+            // W-35: an empty argument may be a null view, and append(nullptr, 0)
+            // is formally undefined; the empty argument contributes nothing.
+            if (!arg[arg_num].empty()) {
+                result.append(arg[arg_num].data(), arg[arg_num].size());
+            }
         };
 
         // "{}" in the format string is replaced by the next input argument
@@ -76,12 +78,32 @@ std::string myformat(str_view format_str, const Args&... args)
             start = i+2;
             i += 1;
         }
-        // "{\d}" in the format string is replaced by the input argument number #d
-        else if(i+2<fmt_size && fmt[i]=='{' && isdigit(static_cast<unsigned char>(fmt[i+1])) && fmt[i+2]=='}')
+        // "{\d\d...}" in the format string is replaced by the input argument
+        // number the digit run names; one digit is the ordinary case and
+        // `{10}` names the eleventh argument (W-63). The run must close with
+        // `}` and must not overflow; anything else stays literal, exactly as
+        // an unrecognized placeholder did before.
+        else if(fmt[i]=='{' && i+2<fmt_size &&
+                isdigit(static_cast<unsigned char>(fmt[i+1])))
         {
-            process_next_arg(static_cast<size_t>(fmt[i+1] - '0'));
-            start = i+3;
-            i += 2;
+            const size_t max_index = static_cast<size_t>(-1);
+            size_t index = 0;
+            size_t j = i + 1;
+            bool overflow = false;
+            while (j < fmt_size && isdigit(static_cast<unsigned char>(fmt[j]))) {
+                const size_t digit = static_cast<size_t>(fmt[j] - '0');
+                if (index > (max_index - digit) / 10) {
+                    overflow = true;
+                    break;
+                }
+                index = index * 10 + digit;
+                ++j;
+            }
+            if (!overflow && j < fmt_size && fmt[j] == '}') {
+                process_next_arg(index);
+                start = j + 1;
+                i = j;
+            }
         }
     }
 
@@ -92,5 +114,7 @@ std::string myformat(str_view format_str, const Args&... args)
 
     return result;
 }
+
+} // namespace easypb_codegen
 
 #endif

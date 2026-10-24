@@ -1,0 +1,7 @@
+syntax = "proto2";
+
+package parity;
+
+message M {
+  map<string, int32> items = 1;
+}

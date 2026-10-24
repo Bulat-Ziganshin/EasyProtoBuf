@@ -37,8 +37,9 @@ The grammar uses the intended lexical and syntactic forms directly:
   declarations;
 - proto2 groups are outside the EasyPB parser;
 - service/RPC declarations are accepted at top level, including unary and streaming endpoints;
-- service and RPC options are validated and consumed; service names participate
-  in package-scope validation, but service metadata is not retained;
+- service and RPC options are validated and consumed; service names and method
+  names/endpoints are retained, service names participate in package-scope
+  validation, and the linker resolves the endpoints;
 - map keys must be an allowed scalar key type;
 - map and oneof fields reject invalid labels and field options;
 - field numbers are 1..536870911, excluding 19000..19999;
@@ -73,7 +74,7 @@ The trimmed descriptor subset cannot retain every source construct.
 The EasyPB parser therefore:
 
 - stores imports in `ParsedProto::imports`;
-- validates and consumes top-level service/RPC declarations without storing them in the trimmed descriptor model;
+- validates and consumes top-level service/RPC declarations, storing the service name and each method's name and endpoint types in the trimmed descriptor model;
 - stores proto3 in `FileDescriptorProto.syntax`; proto2 is represented by an absent field 12, matching `protoc`;
 - consumes arbitrary options structurally, including parenthesized custom-name
   parts at any dotted position and leading dots inside parentheses, but

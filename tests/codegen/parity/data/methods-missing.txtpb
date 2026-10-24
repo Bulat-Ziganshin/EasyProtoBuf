@@ -1,0 +1,21 @@
+file {
+  name: "methods-missing.proto"
+  package: "parity"
+  message_type {
+    name: "Request"
+    field {
+      name: "id"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+  service {
+    name: "S"
+    method {
+      name: "A"
+      input_type: ".parity.Missing"
+      output_type: ".parity.Request"
+    }
+  }
+}

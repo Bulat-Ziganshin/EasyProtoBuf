@@ -13,17 +13,6 @@ namespace easypb_schema {
 
 namespace {
 
-std::string view_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
-}
-
-std::string importing_name(const SchemaFile& file)
-{
-    if (file.file.has_name) return view_text(file.file.name);
-    return std::string();
-}
-
 // Source coordinates come from imports only. When the descriptor list
 // and the location-bearing list agree positionally the index is used
 // directly; otherwise the first matching path supplies the position so
@@ -62,7 +51,7 @@ bool fail_import(SchemaSet& files, const SchemaFile& importer,
                  const std::string& message, Diagnostic& error)
 {
     clear_all_edges(files);
-    error.file = importing_name(importer);
+    error.file = schema_file_label(importer);
     error.location = location;
     error.message = message;
     error.warning = false;
@@ -76,12 +65,21 @@ std::string cycle_text(const std::vector<SchemaFile*>& chain)
     output << "import cycle: ";
     for (std::size_t i = 0; i < chain.size(); ++i) {
         if (i != 0) output << " -> ";
-        output << importing_name(*chain[i]);
+        output << schema_file_label(*chain[i]);
     }
     return output.str();
 }
 
 } // namespace
+
+std::string schema_file_label(const SchemaFile& file)
+{
+    // A named file keeps its logical name exactly as before; the anonymous
+    // single-file descriptor shape has no name and is labeled by the
+    // container the user passed (W-19).
+    if (file.file.has_name) return view_text(file.file.name);
+    return file.physical_name;
+}
 
 StringPool::StringPool() {}
 
@@ -152,6 +150,18 @@ SchemaFile& SchemaSet::add_file(const std::string& logical_name)
     file.file.has_name = true;
     file.physical_name = logical_name;
     index_[logical_name] = &file;
+    return file;
+}
+
+SchemaFile& SchemaSet::add_unnamed_file(const std::string& identity)
+{
+    files_.push_back(std::unique_ptr<SchemaFile>(new SchemaFile()));
+    SchemaFile& file = *files_.back();
+    // No logical name and no index entry: the identity is a container path,
+    // not something a caller may address the file by (W-57, W-18).
+    file.file.name = str_view();
+    file.file.has_name = false;
+    file.physical_name = identity;
     return file;
 }
 
@@ -342,7 +352,7 @@ bool bind_import_edges(SchemaSet& files, bool allow_missing,
 
     for (std::size_t file_index = 0; file_index < owned.size(); ++file_index) {
         SchemaFile& importer = *owned[file_index];
-        const std::string importer_name = importing_name(importer);
+        const std::string importer_name = schema_file_label(importer);
         const std::size_t dependency_count = importer.file.dependency.size();
 
         // Repeated dependency names are rejected before index checks so
@@ -557,7 +567,7 @@ bool bind_import_edges(SchemaSet& files, bool allow_missing,
                     view_text(current->file.dependency[edge_index]);
                 std::ostringstream message;
                 message << cycle_text(chain) << " (import \"" << edge_name
-                        << "\" in \"" << importing_name(*current)
+                        << "\" in \"" << schema_file_label(*current)
                         << "\" closes the cycle)";
                 const SourceLocation where =
                     import_location(*current, edge_index, edge_name);
@@ -565,7 +575,7 @@ bool bind_import_edges(SchemaSet& files, bool allow_missing,
                 // cycle; the message itself names the discovery chain
                 // from the DFS-tree root with the entry point repeated
                 // at the end (for example "a.proto -> a.proto").
-                error.file = importing_name(*current);
+                error.file = schema_file_label(*current);
                 error.location = where;
                 error.message = message.str();
                 error.warning = false;

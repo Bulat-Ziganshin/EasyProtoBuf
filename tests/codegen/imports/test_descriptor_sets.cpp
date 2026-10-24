@@ -9,7 +9,9 @@
 // build/plan5-codegen-integration-process/invariants.md, group D):
 //   D1 inputs are deep-copied; buffers may be destroyed after ingestion
 //   D2 every retained string is interned in the owning pool
-//   D3 duplicate logical names are rejected within and across calls
+//   D3 duplicate logical names are rejected within one container and across
+//      different definitions; an identical copy from another container merges
+//      (plan 5 follow-up S5/W-36)
 //   D4 ingestion never selects targets
 //   D5 descriptor origin is labeled without inventing a file
 //   D6 no common operation requires physical_name to exist on disk
@@ -371,7 +373,7 @@ void test_adapter_owns_a_decoded_buffer_and_generates_after_destruction(
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE, linked,
                                      error));
     CHECK(linked.files == &set);
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
 
     // D1, generation half: the poisoned-buffer ingestion generates the same
     // bytes as a fresh ingestion of the same container through the same
@@ -393,6 +395,43 @@ void test_adapter_owns_a_decoded_buffer_and_generates_after_destruction(
             CHECK(from_owned == generate_linked_one(*live_target, live_linked));
         }
     }
+}
+
+// W-43/D2: the newly modeled `json_name` is interned like every other
+// retained string. Read it after the decoded buffer was poisoned.
+void test_adapter_owns_json_name(const std::string& fixture_dir)
+{
+    const std::string path =
+        fixture_dir + "/codegen/validity/data/json-names-distinct.pbs";
+    std::string bytes;
+    CHECK(read_binary_file(path, bytes));
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    {
+        const FileDescriptorSet decoded =
+            easypb::decode<FileDescriptorSet>(bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() != 1) return;
+        CHECK(easypb_schema::append_descriptor_files(decoded.file, path, set,
+                                                     error));
+    }
+    if (!bytes.empty()) {
+        std::memset(&bytes[0], '\xA5', bytes.size());
+    }
+    bytes.clear();
+    bytes.shrink_to_fit();
+
+    CHECK(set.files().size() == 1);
+    if (set.files().size() != 1) return;
+    const easypb_schema::SchemaFile& file = *set.files()[0];
+    const FieldDescriptorProto* a =
+        find_field(file, "JsonNamesDistinct", "a");
+    const FieldDescriptorProto* b =
+        find_field(file, "JsonNamesDistinct", "b");
+    CHECK(a != 0 && a->has_json_name);
+    CHECK(b != 0 && b->has_json_name);
+    CHECK(a != 0 && text(a->json_name) == "alpha");
+    CHECK(b != 0 && text(b->json_name) == "beta");
 }
 
 // --- the standalone container wrapper --------------------------------------
@@ -429,7 +468,7 @@ void test_loader_loads_a_complete_container(const std::string& fixture_dir)
     easypb_schema::LinkedSchema linked;
     CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE, linked,
                                      error));
-    CHECK(linked.complete);
+    CHECK(linked.local_only);
 }
 
 // An empty container is refused, not quietly ignored: zero FileDescriptorProto
@@ -473,13 +512,38 @@ void test_loader_rejects_an_unnamed_file_in_a_multi_file_container()
     std::remove(scratch.c_str());
 }
 
-// D5: a container holding exactly one unnamed file keeps the legacy stdout
-// compatibility path. The container path is an internal identity that keys
-// the set and labels diagnostics, and it is never written into the copied
-// descriptor.
-void test_loader_single_anonymous_file_keeps_the_identity_out_of_the_descriptor()
+// W-57: the tracked anonymous fixture through the public loader. The container
+// path is physical metadata only: the descriptor has no name and no name bit,
+// and the identity is not in the set's index. The identity is also never
+// interned into the file's pool - a fact the public API cannot observe, but
+// the code path (add_unnamed_file, not add_file) is the proof.
+void test_loader_anonymous_fixture_keeps_no_identity(
+    const std::string& fixture_dir)
 {
-    const std::string scratch = "imports-descriptor-anonymous.pbs";
+    const std::string path = fixture_dir + "/codegen/cli/data/anon.pbs";
+    std::vector<std::string> inputs(1, path);
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::load_descriptor_sets(inputs, set, error));
+    CHECK(set.files().size() == 1);
+    CHECK(set.targets().empty());
+    if (set.files().size() != 1) return;
+    const easypb_schema::SchemaFile& slot = *set.files()[0];
+    CHECK(slot.from_descriptor_set);
+    CHECK(!slot.file.has_name);
+    CHECK(slot.file.name.empty());
+    CHECK(slot.physical_name == path);
+    CHECK(set.find_file(path) == 0);
+    CHECK(set.find_file("") == 0);
+}
+
+// D5: a container holding exactly one unnamed file keeps the legacy stdout
+// compatibility path. The container path is an internal identity that labels
+// diagnostics and is never written into the copied descriptor; it is not a
+// logical name, so after the ingest it is not addressable through the set
+// (S4/W-18: `--target <container>` must not select the unnamed file).
+void test_loader_single_anonymous_file_is_not_addressable()
+{    const std::string scratch = "imports-descriptor-anonymous.pbs";
     CHECK(write_binary_file(scratch, anonymous_file_set()));
     std::vector<std::string> inputs(1, scratch);
     easypb_schema::SchemaSet set;
@@ -488,12 +552,14 @@ void test_loader_single_anonymous_file_keeps_the_identity_out_of_the_descriptor(
     CHECK(set.files().size() == 1);
     CHECK(set.targets().empty());
     if (set.files().size() == 1) {
-        const easypb_schema::SchemaFile* slot = set.find_file(scratch);
+        const easypb_schema::SchemaFile* slot = set.files()[0].get();
         CHECK(slot != 0);
         if (slot != 0) {
             CHECK(slot->from_descriptor_set);
             CHECK(slot->file.name.empty());
             CHECK(!slot->file.has_name);
+            CHECK(set.find_file(scratch) == 0);
+            CHECK(set.find_file("") == 0);
             // The rest of the file is interned normally: the package and the
             // message name survive the container bytes.
             CHECK(text(slot->file.package) == "legacy");
@@ -534,10 +600,12 @@ void test_loader_rejects_duplicate_names_within_one_container()
     std::remove(distinct.c_str());
 }
 
-// D3 across containers: the adapter's second call sees the first container's
-// file. Both the two-containers-in-one-call shape and the second call on an
-// already-populated set are refused, and each failure clears the set.
-void test_loader_rejects_duplicate_names_across_containers(
+// D3 across containers, under W-36: one logical file several containers carry
+// is one file. An identical copy is merged (the load succeeds and the set keeps
+// one file), while two DIFFERENT definitions of the same logical name are
+// refused - silently keeping one of them would generate a header from a schema
+// the caller may not have meant - and the diagnostic names both containers.
+void test_loader_merges_duplicate_names_across_containers(
     const std::string& fixture_dir)
 {
     const std::string path =
@@ -547,19 +615,42 @@ void test_loader_rejects_duplicate_names_across_containers(
     easypb_schema::Diagnostic error;
     CHECK(easypb_schema::load_descriptor_sets(once, set, error));
     CHECK(set.files().size() == 1);
-    CHECK(!easypb_schema::load_descriptor_sets(once, set, error));
+    // The same container again: its one file is identical, so it is merged and
+    // the set stays usable with the first copy.
+    CHECK(easypb_schema::load_descriptor_sets(once, set, error));
+    CHECK(set.files().size() == 1);
+    CHECK(set.find_file("integration-proto2.proto") != 0);
+
+    // Two containers carrying one logical name, in a single call: merged.
+    std::vector<std::string> twice(2, path);
+    CHECK(easypb_schema::load_descriptor_sets(twice, set, error));
+    CHECK(set.files().size() == 1);
+
+    // The conflict half: a second container defines the SAME logical name with
+    // a different package, which no merge can reconcile.
+    const std::string conflicting = "imports-descriptor-conflict.pbs";
+    std::string changed;
+    changed += wire_message_field(
+        1, named_file("integration-proto2.proto") +
+               wire_text_field(2, "conflict"));
+    CHECK(write_binary_file(conflicting, changed));
+    std::vector<std::string> inputs;
+    inputs.push_back(path);
+    inputs.push_back(conflicting);
+    CHECK(!easypb_schema::load_descriptor_sets(inputs, set, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
-    CHECK(error.file == path);
+    CHECK(error.file == conflicting);
     CHECK(error.message.find("\"integration-proto2.proto\"") !=
           std::string::npos);
-    CHECK(set.files().empty());
-
-    // Two containers carrying one logical name, in a single call.
-    std::vector<std::string> twice(2, path);
-    CHECK(!easypb_schema::load_descriptor_sets(twice, set, error));
-    CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+    CHECK(error.message.find(path) != std::string::npos);
+    // W-19/W-29: the conflicting container IS the diagnostic's file
+    // (`error.file`, checked above), so the message names it once - as the
+    // label - and not a second time in its text.
+    CHECK(error.message.find(conflicting) == std::string::npos);
+    CHECK(error.message.find(conflicting + ": ") != 0);
     CHECK(set.files().empty());
     CHECK(set.targets().empty());
+    std::remove(conflicting.c_str());
 }
 
 // D2, the custom half: `(easypb.cpp).type` strings are interned like every
@@ -618,7 +709,7 @@ void test_loader_custom_type_strings_survive_the_container(
         set, easypb_schema::LINK_EXTERNAL_DESCRIPTOR_COMPATIBILITY, linked,
         error));
     CHECK(linked.files == &set);
-    CHECK(!linked.complete);
+    CHECK(!linked.local_only);
     CHECK(file.warnings.empty());
 
     // Generation, live vs owned: the custom template is read from the option,
@@ -674,12 +765,14 @@ int main(int argc, char** argv)
     test_adapter_rejects_duplicate_names_within_and_across_calls();
     test_adapter_owns_a_decoded_buffer_and_generates_after_destruction(
         fixture_dir);
+    test_adapter_owns_json_name(fixture_dir);
     test_loader_loads_a_complete_container(fixture_dir);
     test_loader_rejects_an_empty_container(fixture_dir);
     test_loader_rejects_an_unnamed_file_in_a_multi_file_container();
-    test_loader_single_anonymous_file_keeps_the_identity_out_of_the_descriptor();
+    test_loader_anonymous_fixture_keeps_no_identity(fixture_dir);
+    test_loader_single_anonymous_file_is_not_addressable();
     test_loader_rejects_duplicate_names_within_one_container();
-    test_loader_rejects_duplicate_names_across_containers(fixture_dir);
+    test_loader_merges_duplicate_names_across_containers(fixture_dir);
     test_loader_custom_type_strings_survive_the_container(fixture_dir);
 
     if (failures != 0) {

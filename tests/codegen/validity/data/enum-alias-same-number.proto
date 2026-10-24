@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+// W-42: a same-number alias survives the folded-name check.
+enum AliasSame
+{
+    option allow_alias = true;
+    ALIAS_SAME_FOO = 0;
+    FOO = 0;
+}

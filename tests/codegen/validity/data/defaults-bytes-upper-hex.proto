@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+// W-39: the source lexer and the descriptor decoder both accept the uppercase
+// hex escape; the stored text is the canonical decoded byte.
+message UpperHexBytes
+{
+    optional bytes data = 1 [default = "\X41"];
+}

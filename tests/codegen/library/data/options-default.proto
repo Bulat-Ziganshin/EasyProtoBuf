@@ -1,0 +1,13 @@
+// W-11's fixture: the shapes a default-constructed GenerationOptions must
+// spell correctly. A repeated scalar needs cpp_repeated_type's template
+// arguments, and a map needs cpp_map_type's two, so an unfinalized option set
+// emits the invalid `::std::vector a;` / `::std::map m;`.
+syntax = "proto2";
+
+package library;
+
+message Defaults
+{
+    repeated int32 a = 1;
+    map<int32, string> m = 2;
+}

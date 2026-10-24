@@ -1,0 +1,12 @@
+// W-47's source-path control: an unresolved type that carries a default.
+// The source frontend always links completely, so it refuses the unresolved
+// type; the default rule is not a compatibility escape hatch for .proto
+// input either.
+syntax = "proto2";
+
+package src;
+
+message M
+{
+    optional Missing f = 1 [default = x];
+}

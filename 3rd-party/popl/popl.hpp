@@ -1013,6 +1013,18 @@ inline void OptionParser::parse(const std::string& ini_filename)
     }
 }
 
+/// A short option's value may be written after '=' exactly as a long one's:
+/// "-s=V" names the value "V" and "-s=" names the empty value. One leading
+/// '=' is the separator; a value that really begins with '=' is written
+/// "-s==V". The reference compiler's -I=dir has the same effect through its
+/// virtual=disk split (command_line_interface.cc:2062-2108).
+inline std::string short_option_value(const std::string& rest)
+{
+    if (!rest.empty() && rest[0] == '=')
+        return rest.substr(1);
+    return rest;
+}
+
 inline void OptionParser::parse(int argc, const char* const argv[])
 {
     for (int n = 1; n < argc; ++n)
@@ -1020,20 +1032,26 @@ inline void OptionParser::parse(int argc, const char* const argv[])
         const std::string arg(argv[n]);
         if (arg == "--")
         {
-            /// from here on only non opt args
+            /// from here on only non opt args: the first -- ends option
+            /// parsing, so the tail must not be visited by this loop again
+            /// (the old branch appended the tail and kept parsing it, which
+            /// processed every tail token twice)
             for (int m = n + 1; m < argc; ++m)
                 non_option_args_.emplace_back(argv[m]);
+            break;
         }
         else if (arg.find("--") == 0)
         {
             /// long option arg
             std::string opt = arg.substr(2);
             std::string optarg;
+            bool has_inline_value = false;
             size_t equalIdx = opt.find('=');
             if (equalIdx != std::string::npos)
             {
                 optarg = opt.substr(equalIdx + 1);
                 opt.resize(equalIdx);
+                has_inline_value = true;
             }
 
             Option_ptr option = find_option(opt);
@@ -1048,8 +1066,25 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                 }
                 else if (option->argument_type() == Argument::required)
                 {
-                    if (optarg.empty() && n < argc - 1)
-                        optarg = argv[++n];
+                    if (!has_inline_value)
+                    {
+                        /// a required value is the next token, whatever that
+                        /// token looks like: a token that starts with "-" is
+                        /// the value too, the "--" separator included (the
+                        /// owner's decision of 2026-10-22, which reverses the
+                        /// "Missing value for flag" rule the S4 session
+                        /// copied from the reference compiler, and which
+                        /// follows the POSIX getopt, whose long-option branch
+                        /// takes the next argv element as it is). The
+                        /// separator still ends option parsing where an
+                        /// option is expected.
+                        if (n < argc - 1)
+                            optarg = argv[++n];
+                        else
+                            throw invalid_option(option.get(),
+                                invalid_option::Error::missing_argument,
+                                "Missing value for flag: --" + opt);
+                    }
                 }
             }
 
@@ -1076,16 +1111,35 @@ inline void OptionParser::parse(int argc, const char* const argv[])
                     if (option->argument_type() == Argument::required)
                     {
                         /// use the rest of the current argument as optarg
-                        optarg = opt.substr(m + 1);
-                        /// or the next arg
-                        if (optarg.empty() && n < argc - 1)
-                            optarg = argv[++n];
+                        const std::string rest = opt.substr(m + 1);
+                        /// or the next arg, which is the value whatever it
+                        /// looks like (the same missing-value rule as the
+                        /// long form above). A non-empty rest is the value
+                        /// even when it is only '=': "-s=" is an explicitly
+                        /// empty value, refused by Value<T>::parse, and must
+                        /// not consume the next token.
+                        if (rest.empty())
+                        {
+                            if (n < argc - 1)
+                                optarg = argv[++n];
+                            else
+                                throw invalid_option(option.get(),
+                                    invalid_option::Error::missing_argument,
+                                    "Missing value for flag: -" +
+                                        std::string(1, c));
+                        }
+                        else
+                        {
+                            optarg = short_option_value(rest);
+                        }
                         m = opt.size();
                     }
                     else if (option->argument_type() == Argument::optional)
                     {
-                        /// use the rest of the current argument as optarg
-                        optarg = opt.substr(m + 1);
+                        /// use the rest of the current argument as optarg;
+                        /// the same one-leading-'=' rule as the required
+                        /// branch, so the two cannot drift
+                        optarg = short_option_value(opt.substr(m + 1));
                         m = opt.size();
                     }
                 }

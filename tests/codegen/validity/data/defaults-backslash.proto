@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+// A backslash inside a string default. The decoded text is three bytes:
+// 'a', '\', 'b' - a backslash must not become a backspace.
+message BackslashDefaults
+{
+    optional string backslash = 1 [default = "a\\b"];
+}

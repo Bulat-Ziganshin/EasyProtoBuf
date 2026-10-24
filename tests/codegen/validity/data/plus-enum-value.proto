@@ -1,0 +1,7 @@
+syntax = "proto2";
+
+// W-40: enum values accept only the minus sign.
+enum PlusEnum
+{
+    PLUS_ENUM_A = +0;
+}

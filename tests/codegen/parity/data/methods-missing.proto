@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+package parity;
+
+message Request {
+  optional int32 id = 1;
+}
+
+service S {
+  rpc A (Missing) returns (Request);
+}

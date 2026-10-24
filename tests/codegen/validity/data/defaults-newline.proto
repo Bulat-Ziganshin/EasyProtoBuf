@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+// A newline inside a string default. The decoded text is three bytes:
+// 'a', LF, 'b' - a newline must not split the C++ literal.
+message NewlineDefaults
+{
+    optional string newline = 1 [default = "a\nb"];
+}

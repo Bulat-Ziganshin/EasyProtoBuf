@@ -1,0 +1,8 @@
+
+µ
+defaults-float-overflow.proto"‹
+FloatOverflowDefaults
+overflow (:1e400
+	underflow (:1e-400#
+negative_underflow (:-1e-400
+	subnormal (:1e-320bproto2

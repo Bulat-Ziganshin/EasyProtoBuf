@@ -1,0 +1,11 @@
+# A descriptor whose field declares no type at all. protoc resolves the
+# absent kind as the proto default (TYPE_DOUBLE); this project refuses it
+# instead, because the emitter could only write "???type" for it.
+file {
+  name: "field-type-absent.proto"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL }
+  }
+}

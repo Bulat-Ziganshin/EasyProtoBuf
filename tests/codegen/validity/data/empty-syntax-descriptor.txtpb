@@ -1,0 +1,10 @@
+# W-15: a descriptor's empty syntax string is proto2; only an explicit source
+# statement is refused (empty-syntax.proto).
+file {
+  name: "empty-syntax-descriptor.proto"
+  syntax: ""
+  message_type {
+    name: "EmptySyntaxDescriptor"
+    field { name: "value" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}

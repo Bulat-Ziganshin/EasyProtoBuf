@@ -15,27 +15,34 @@ namespace easypb_codegen {
 // tree (plan 5 P11): the generation core neither knows nor asks where its
 // text goes. Every header is already generated, named and validated by the
 // caller (`generate_files` maps the logical name through
-// `generated_header_path`, which is where an escaping name is refused); this
-// function adds the filesystem half, modelled on the reference compiler's
-// WriteAllToDisk (compiler/command_line_interface.cc:541-610):
+// `generated_header_path`); this function adds the filesystem half, modelled
+// on the reference compiler's WriteAllToDisk
+// (compiler/command_line_interface.cc:541-610):
 //
 //   - two targets mapping to one output name are refused before the first
 //     write (the reference compiler's own output map silently drops one);
-//   - the output directory must exist, and a file at that spelling is refused;
+//   - every output name is validated as a logical path, so a name that
+//     escapes the output root is refused here as well as one layer up
+//     (owner decision of 2026-10-21; the reference compiler writes such a
+//     name one directory ABOVE the output root);
+//   - the output directory is created when missing, and a file at that spelling
+//     is refused;
 //   - the parent directories of each output are created, so a header nested
 //     below the output root needs no directory made by hand;
 //   - each file is created or truncated and written in place.
 //
-// Deliberately NOT provided, by owner decision of 2026-10-07, because the
+// Deliberately NOT provided, by the owner's plan-5 trim decision (`fbdcc0e`,
+// 2026-10-11), because the
 // reference compiler does not provide it and the guards are measurably weaker
 // than they look:
 //
-//   - containment below the output root. A name escaping the root is still
-//     refused, one layer up, by `generated_header_path`: measured on a
-//     descriptor set naming "../escape.proto", ours refuses (rc=1, nothing
-//     written) where protoc 30.1 writes one directory ABOVE the output
-//     directory (rc=0). What is gone is the second, walk-based half: a
-//     symlink below the output root is now followed, as it is in protoc.
+//   - containment below the output root. A name escaping the root is refused
+//     by the name check above and, one layer up, by `generated_header_path`:
+//     measured on a descriptor set naming "../escape.proto", ours refuses
+//     (rc=1, nothing written) where protoc 30.1 writes one directory ABOVE
+//     the output directory (rc=0). What is gone is the second, walk-based
+//     half: a symlink below the output root is now followed, as it is in
+//     protoc.
 //   - letter-case collision and native identity. Measured on two targets
 //     whose names differ only in case: before, rc=1
 //     "one entry on this case-folding filesystem"; now rc=0 and one header,

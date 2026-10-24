@@ -9,12 +9,12 @@
 #include <vector>
 
 namespace easypb_proto {
-namespace {
 
-std::string view_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
-}
+// W-35: the guarded conversion lives in schema.hpp, beside the storage it
+// converts; one door for every frontend.
+using easypb_schema::view_text;
+
+namespace {
 
 // Joins already-quoted list items (search roots) and import chains
 // alike: every element is wrapped in double quotes.
@@ -233,8 +233,10 @@ bool read_and_parse_source(const std::string& logical,
     {
         std::string read_error;
         if (!easypb_file::read_disk_file(disk_path, contents, read_error)) {
+            // The renderer already prints the file label; the reason names
+            // no path (W-19/W-29). The chain suffix stays.
             std::ostringstream message;
-            message << "file \"" << logical << "\": " << read_error;
+            message << read_error;
             if (!chain.empty()) {
                 message << " (chain " << chain_text(chain, logical) << ")";
             }
@@ -256,20 +258,17 @@ bool read_and_parse_source(const std::string& logical,
     // the physical disk path for diagnostics.
     slot.physical_name = disk_path;
     if (!ok) {
+        // W-61: the outer Diagnostic already carries the file and the position,
+        // and the renderer prints `file:line:column: ` in front of the message,
+        // so this wrapper names only the logical file, the import chain and the
+        // parser's own text. Re-embedding parse_error.file/location here made
+        // the reader see the position twice.
         std::ostringstream message;
         message << "while loading \"" << logical << "\"";
         if (!chain.empty()) {
             message << " (chain " << chain_text(chain, logical) << ")";
         }
-        message << ": ";
-        if (!parse_error.file.empty()) message << parse_error.file;
-        if (parse_error.location.line != 0) {
-            message << ":" << parse_error.location.line << ":"
-                    << parse_error.location.column;
-        }
-        if (!parse_error.message.empty()) {
-            message << ": " << parse_error.message;
-        }
+        message << ": " << parse_error.message;
         return fail(error, parse_error.file.empty()
                                        ? logical
                                        : parse_error.file,
@@ -465,6 +464,18 @@ bool resolve_root(const std::string& argument, LoaderState& state,
                     "input file name is empty; pass a .proto path or a "
                     "logical name");
     }
+    // A relative spelling cannot be answered without a working directory.
+    // Refuse it before the status and containment branches: neither may turn
+    // the unknown cwd into an answer (a logical name under a root, or "lies
+    // outside all search roots"). An absolute spelling is unaffected.
+    if (easypb_file::lexical_absolute(argument).empty()) {
+        std::ostringstream message;
+        message << "root \"" << argument
+                << "\": cannot resolve a relative spelling "
+                   "(the current working directory is unknown)";
+        return fail(error, argument, easypb_schema::unknown_location(),
+                    easypb_schema::DIAGNOSTIC_INVALID_IMPORT, message.str());
+    }
     std::string status_error;
     const easypb_file::FileStatus root_status =
         easypb_file::disk_file_status(argument, status_error);
@@ -564,8 +575,22 @@ bool load_source_files(const SourceLoaderOptions& options,
     state.search_roots_absolute.reserve(state.search_roots.size());
     for (std::size_t i = 0; i < state.search_roots.size(); ++i) {
         if (state.search_roots[i].empty()) state.search_roots[i] = ".";
-        state.search_roots_absolute.push_back(
-            easypb_file::lexical_absolute(state.search_roots[i]));
+        const std::string absolute =
+            easypb_file::lexical_absolute(state.search_roots[i]);
+        if (absolute.empty()) {
+            // A root that cannot be made absolute must not become a root that
+            // matches nothing (or, worse, the filesystem root): the process
+            // has no working directory to anchor a relative root at.
+            std::ostringstream message;
+            message << "search root \"" << state.search_roots[i]
+                    << "\": cannot resolve a relative spelling "
+                       "(the current working directory is unknown)";
+            return fail(error, state.search_roots[i],
+                        easypb_schema::unknown_location(),
+                        easypb_schema::DIAGNOSTIC_INVALID_IMPORT,
+                        message.str());
+        }
+        state.search_roots_absolute.push_back(absolute);
     }
 
     for (std::size_t i = 0; i < roots.size(); ++i) {

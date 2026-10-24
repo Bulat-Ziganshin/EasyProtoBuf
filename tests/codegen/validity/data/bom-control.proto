@@ -1,0 +1,7 @@
+syntax = "proto2";
+
+// W-41: this file is stored with a leading UTF-8 BOM; the lexer consumes it.
+message BomMessage
+{
+    optional int32 value = 1 [default = 7];
+}

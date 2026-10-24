@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+// W-42: stripping the enum-name prefix turns E_FOO into the same folded name
+// as FOO.
+enum E
+{
+    E_FOO = 0;
+    FOO = 1;
+}

@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package parity;
+
+message M {
+  extensions 100 to 199;
+}

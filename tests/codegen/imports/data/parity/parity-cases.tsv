@@ -1,4 +1,15 @@
 case	origin	protoc	expected	kind	note
+s-unsupported-syntax-accept	source	accept	accept	pair	
+s-unsupported-syntax-reject	source	reject	DIAGNOSTIC_UNSUPPORTED_SYNTAX	pair	
+s-unsupported-syntax-editions-inverse	source	accept	DIAGNOSTIC_UNSUPPORTED_SYNTAX	inverse	protoc 30.1 accepts this shape; this project refuses it by A25 because the model carries no editions semantics - a recorded capability boundary whose owner is plan 5
+s-proto3-required-field-accept	source	accept	accept	pair	
+s-proto3-required-field-reject	source	reject	DIAGNOSTIC_PROTO3_REQUIRED_FIELD	pair	
+s-proto3-explicit-default-accept	source	accept	accept	pair	
+s-proto3-explicit-default-reject	source	reject	DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT	pair	
+s-duplicate-enum-number-accept	source	accept	accept	pair	
+s-duplicate-enum-number-reject	source	reject	DIAGNOSTIC_DUPLICATE_ENUM_NUMBER	pair	
+s-empty-enum-accept	source	accept	accept	pair	
+s-empty-enum-reject	source	reject	DIAGNOSTIC_EMPTY_ENUM	pair	
 s-invalid-import-accept	source	accept	accept	pair	
 s-invalid-import-duplicate-reject	source	reject	DIAGNOSTIC_INVALID_IMPORT	pair	
 s-invalid-import-dotdot-reject	source	reject	DIAGNOSTIC_INVALID_IMPORT	pair	
@@ -31,6 +42,8 @@ d-invalid-field-number-zero-reject	descriptor	reject	DIAGNOSTIC_INVALID_FIELD_NU
 d-invalid-field-number-reserved-reject	descriptor	reject	DIAGNOSTIC_INVALID_FIELD_NUMBER	pair	
 d-missing-type-name-accept	descriptor	accept	accept	pair	
 d-missing-type-name-reject	descriptor	reject	DIAGNOSTIC_MISSING_TYPE_NAME	pair	
+d-invalid-field-type-accept	descriptor	accept	accept	pair	
+d-invalid-field-type-absent-reject	descriptor	accept	DIAGNOSTIC_INVALID_FIELD_TYPE	inverse	protoc 30.1 accepts this shape and resolves it: an absent kind is the proto default (TYPE_DOUBLE), an unknown kind the same way, a group a generated group class. This project refuses all three by the owner's decision of 2026-10-21 (plan 5 follow-up, session S1, W-10): the generator has no group types at all, and the emitter used to write "???type" or "???group" into the header at rc=0 - a deliberate "stricter than protoc" divergence, like the package-depth and the output-root rules
 d-duplicate-enum-number-accept	descriptor	accept	accept	pair	
 d-duplicate-enum-number-reject	descriptor	reject	DIAGNOSTIC_DUPLICATE_ENUM_NUMBER	pair	
 d-empty-oneof-accept	descriptor	accept	accept	pair	
@@ -79,7 +92,7 @@ d-invalid-symbol-name-method-accept	descriptor	accept	accept	pair
 d-packed-false-optional-accept	descriptor	accept	accept	pair	
 d-packed-false-string-accept	descriptor	accept	accept	pair	
 d-packed-false-message-accept	descriptor	accept	accept	pair	
-d-group-proto2-accept	descriptor	accept	accept	pair	
+d-invalid-field-type-group-reject	descriptor	accept	DIAGNOSTIC_INVALID_FIELD_TYPE	inverse	protoc 30.1 accepts this shape and resolves it: an absent kind is the proto default (TYPE_DOUBLE), an unknown kind the same way, a group a generated group class. This project refuses all three by the owner's decision of 2026-10-21 (plan 5 follow-up, session S1, W-10): the generator has no group types at all, and the emitter used to write "???type" or "???group" into the header at rc=0 - a deliberate "stricter than protoc" divergence, like the package-depth and the output-root rules
 d-oneof-member-optional-accept	descriptor	accept	accept	pair	
 d-unsupported-syntax-editions-only-reject	descriptor	reject	DIAGNOSTIC_UNSUPPORTED_SYNTAX	pair	
 d-unsupported-syntax-edition-2024-reject	descriptor	reject	DIAGNOSTIC_UNSUPPORTED_SYNTAX	pair	

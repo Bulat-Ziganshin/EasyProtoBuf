@@ -1,0 +1,10 @@
+# W-43: two default JSON names fold to fooBar in proto3; this is an error.
+file {
+  name: "json-name-default-collision.proto"
+  syntax: "proto3"
+  message_type {
+    name: "JsonDefaultCollision"
+    field { name: "foo_bar" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+    field { name: "fooBar" number: 2 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}

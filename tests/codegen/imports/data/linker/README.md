@@ -192,11 +192,11 @@ pack-text row, because `A25`'s naming belongs to plan 5's parser branch.
 Plan 5 implemented that branch, and the fixture's header now carries the
 re-measurement: the SOURCE frontend refuses the statement by name -
 `editions syntax is not supported: only "proto2" and "proto3" are accepted` -
-while the refusal stays a load-stage one (the file is never classified, so its
-code stays `DIAGNOSTIC_GENERIC` and the message is what names editions). The
-fixture is still deliberately outside the differential table: the relation
-remains an inverse, `protoc` 30.1 accepting what this project refuses by
-decision.
+and since S7e (`W-60`) the refusal also carries `DIAGNOSTIC_UNSUPPORTED_SYNTAX`,
+the code the descriptor origin assigns, so the message and the code both name
+editions. The fixture is still deliberately outside the differential table: the
+relation remains an inverse, `protoc` 30.1 accepting what this project refuses
+by decision.
 
 The `relative/` subtree keeps its own inventory (`relative/README.md`), which the
 first table summarizes.

@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+// W-43: distinct custom JSON names are carried on both paths and printed by
+// --print-descriptor.
+message JsonNamesDistinct
+{
+    optional int32 a = 1 [json_name = "alpha"];
+    optional int32 b = 2 [json_name = "beta"];
+}

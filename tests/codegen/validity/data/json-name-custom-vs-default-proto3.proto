@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+// W-43: the same custom-vs-default pair is an error in proto3.
+message JsonCustomVsDefaultProto3
+{
+    int32 foo_bar = 1;
+    int32 b = 2 [json_name = "fooBar"];
+}

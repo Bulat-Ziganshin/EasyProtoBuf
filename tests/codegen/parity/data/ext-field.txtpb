@@ -1,0 +1,17 @@
+file {
+  name: "ext-field.proto"
+  package: "parity"
+  message_type {
+    name: "M"
+    field {
+      name: "a"
+      number: 5
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+    extension_range {
+      start: 1
+      end: 11
+    }
+  }
+}

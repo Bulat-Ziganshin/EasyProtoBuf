@@ -16,9 +16,9 @@
 //   P8  directory creation reports failure as failure
 //   P10 the logical mapping stays pure and platform-free
 // P1/P2's CLI-level snapshots live in `codegen.imports.cli`; the per-file
-// half of P2 is injected here directly, because a denied directory (POSIX) or
-// a read-only replacement target (Windows) is a publisher-level failure with
-// an observable the CLI cannot stage portably.
+// half of P2 is injected here directly, because a refused replacement target
+// (a read-only file on Windows, a directory on POSIX) is a publisher-level
+// failure with an observable the CLI cannot stage portably.
 //
 // Scratch lives in a per-process directory named after this process id below
 // the pinned working directory, so a rerun never reads a previous run's tree
@@ -48,6 +48,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -169,41 +170,6 @@ bool any_temporary_files(const std::string& directory, bool& found)
 #endif
 }
 
-std::vector<std::string> list_names(const std::string& directory)
-{
-    std::vector<std::string> names;
-#ifdef _WIN32
-    WIN32_FIND_DATAW entry;
-    std::vector<wchar_t> wide_pattern;
-    const std::string pattern = directory + "/*";
-    if (!easypb_file::wide_win32_path(pattern, wide_pattern) ||
-        wide_pattern.empty()) {
-        return names;
-    }
-    wide_pattern.push_back(L'\0');
-    HANDLE handle = FindFirstFileW(&wide_pattern[0], &entry);
-    if (handle == INVALID_HANDLE_VALUE) return names;
-    do {
-        std::string name;
-        if (!easypb_file::utf8_from_wide(entry.cFileName, name)) continue;
-        if (name == "." || name == "..") continue;
-        names.push_back(name);
-    } while (FindNextFileW(handle, &entry));
-    FindClose(handle);
-#else
-    DIR* dir = ::opendir(directory.c_str());
-    if (dir == 0) return names;
-    struct dirent* entry = 0;
-    while ((entry = ::readdir(dir)) != 0) {
-        const std::string name(entry->d_name);
-        if (name == "." || name == "..") continue;
-        names.push_back(name);
-    }
-    ::closedir(dir);
-#endif
-    return names;
-}
-
 easypb_codegen::GeneratedFile generated(const std::string& name,
                                         const std::string& content)
 {
@@ -223,6 +189,17 @@ void test_generated_header_path_maps_and_rejects()
     CHECK(easypb_codegen::generated_header_path("a/b/c") == "a/b/c.pb.hpp");
     CHECK(easypb_codegen::generated_header_path("a.protobuf") ==
           "a.protobuf.pb.hpp");
+    // W-25: a final `.protodevel` is stripped first, exactly like the
+    // reference compiler (compiler/code_generator_lite.cc:41-48); only the
+    // final suffix is removed, and `.protodevel` beats `.proto`.
+    CHECK(easypb_codegen::generated_header_path("legacy.protodevel") ==
+          "legacy.pb.hpp");
+    CHECK(easypb_codegen::generated_header_path("dir/legacy.protodevel") ==
+          "dir/legacy.pb.hpp");
+    CHECK(easypb_codegen::generated_header_path("legacy.protodevel.proto") ==
+          "legacy.protodevel.pb.hpp");
+    CHECK(easypb_codegen::generated_header_path("legacy.proto.protodevel") ==
+          "legacy.proto.pb.hpp");
     // Only the FINAL suffix is a `.proto` replacement, and a dot-leading
     // component is still a component.
     CHECK(easypb_codegen::generated_header_path("x.proto/y") ==
@@ -298,16 +275,22 @@ void test_publisher_rejects_duplicate_names_before_writing(
     CHECK(!path_exists(path_join(out, "one.pb.hpp")));
 }
 
-// The publisher writes the name it is handed, the way the reference compiler
-// does. A name that escapes the output root is refused one level earlier, where
-// the generator maps it: generated_header_path (the pure logical mapping)
-// throws for a logical name carrying "..", so that is the check a descriptor set
-// naming "../escape.proto" meets. Measured against protoc 30.1 on exactly that
-// input: protoc writes one directory ABOVE the output directory, rc=0.
-void test_unsafe_names_are_refused_by_the_mapping_not_the_publisher(
+// The publisher refuses a name that escapes the output root.
+//
+// The reference compiler writes such a name: protoc writes one directory
+// ABOVE --cpp_out when a descriptor set asks it to (measured against protoc
+// 30.1, build/plan5-code-review-1021-summary/verify/G2.md). This project
+// refuses it, by the owner's decision of 2026-10-21, and the refusal happens
+// in the publisher itself: the name a GeneratedFile carries is a logical path
+// (the contract codegen/header_paths.hpp states), and a name that is not one
+// never becomes a file.
+//
+// The mapping layer refuses the same spelling one layer up, so the check here
+// closes the hole a hand-built GeneratedFile would otherwise have.
+void test_publisher_refuses_a_name_that_escapes_the_root(
     const std::string& work)
 {
-    const std::string out = path_join(work, "unsafe");
+    const std::string out = path_join(work, "escaping");
     CHECK(make_directory(out));
 
     // The upstream refusal is the one that holds.
@@ -319,14 +302,60 @@ void test_unsafe_names_are_refused_by_the_mapping_not_the_publisher(
     }
     CHECK(threw);
 
-    // And a hand-built list still publishes what it is given: the publisher no
-    // longer re-validates, exactly like the reference.
+    // And the publisher refuses it too, with a diagnostic, and writes
+    // nothing.
     std::vector<easypb_codegen::GeneratedFile> files;
-    files.push_back(generated("good.pb.hpp", "GOOD"));
-
+    files.push_back(generated("../escape.pb.hpp", "ESCAPE"));
     easypb_schema::Diagnostic error;
-    CHECK(easypb_codegen::publish_headers(out, files, error));
-    CHECK(path_is_file(path_join(out, "good.pb.hpp")));
+    CHECK(!easypb_codegen::publish_headers(out, files, error));
+    CHECK(!error.message.empty());
+    CHECK(error.message.find("cannot be published") != std::string::npos);
+    CHECK(!path_exists(path_join(work, "escape.pb.hpp")));
+
+    // The same for a name that escapes through a nested component.
+    std::vector<easypb_codegen::GeneratedFile> nested;
+    nested.push_back(generated("sub/../../escape2.pb.hpp", "ESCAPE2"));
+    easypb_schema::Diagnostic nested_error;
+    CHECK(!easypb_codegen::publish_headers(out, nested, nested_error));
+    CHECK(!nested_error.message.empty());
+    CHECK(!path_exists(path_join(work, "escape2.pb.hpp")));
+
+    // A name that stays inside the root is still published.
+    std::vector<easypb_codegen::GeneratedFile> good;
+    good.push_back(generated("sub/inside.pb.hpp", "INSIDE"));
+    easypb_schema::Diagnostic good_error;
+    CHECK(easypb_codegen::publish_headers(out, good, good_error));
+    CHECK(good_error.message.empty());
+    CHECK(path_is_file(path_join(out, "sub/inside.pb.hpp")));
+}
+
+// The directory creation is bounded.
+//
+// The recursion this replaces walked one level per path component with no
+// bound, and a descriptor set whose logical name is a deep chain of
+// components drove it into a stack overflow (0xC00000FD). The chain is
+// created iteratively now, and a path with more components than the limit is
+// refused with a diagnostic - before the first directory is created, so a
+// refused path leaves no tree behind.
+void test_directory_creation_is_bounded(const std::string& work)
+{
+    // A shallow path is created.
+    const std::string shallow = path_join(work, "shallow");
+    std::string error;
+    CHECK(easypb_file::make_directories(path_join(shallow, "a/b/c"), error));
+    CHECK(error.empty());
+    CHECK(path_is_directory(path_join(shallow, "a/b/c")));
+
+    // A path with more components than the limit is refused, and nothing is
+    // created. The path is built in memory only: the tool must not build a
+    // tree of that depth to find out.
+    std::string deep = path_join(work, "deep");
+    for (std::size_t i = 0; i < 200; ++i) deep += "/d";
+    std::string deep_error;
+    CHECK(!easypb_file::make_directories(deep, deep_error));
+    CHECK(!deep_error.empty());
+    CHECK(deep_error.find("components") != std::string::npos);
+    CHECK(!path_exists(path_join(work, "deep")));
 }
 
 void test_publisher_reports_a_file_as_out_dir(const std::string& work)
@@ -357,12 +386,34 @@ void test_publisher_rejects_an_existing_directory_at_the_target(
 
     easypb_schema::Diagnostic error;
     CHECK(!easypb_codegen::publish_headers(out, files, error));
-    CHECK(!error.message.empty());
+    // W-29: the condition is named, and the reason carries no path: the
+    // publisher's Diagnostic names the target itself.
+    CHECK(error.message == "cannot write file (the target is a directory)");
+    CHECK(error.message.find(out) == std::string::npos);
+    CHECK(error.file == easypb_file::lexical_absolute(
+                            path_join(out, "blocked.pb.hpp")));
+    CHECK(path_is_directory(path_join(out, "blocked.pb.hpp")));
+}
+
+// W-29: a directory at the write target is its own failure on both platforms
+// (Win32 answers ERROR_ACCESS_DENIED, POSIX EISDIR), and the action entry
+// returns the reason alone; the caller names the path.
+void test_write_reports_a_directory_target(const std::string& work)
+{
+    const std::string target = path_join(work, "write-directory.pb.hpp");
+    CHECK(make_directory(target));
+
+    std::string error;
+    CHECK(!easypb_file::write_disk_file(target, "X", error));
+    CHECK(error == "cannot write file (the target is a directory)");
+    CHECK(error.find(target) == std::string::npos);
+    CHECK(path_is_directory(target));
 }
 
 // --- P6: containment --------------------------------------------------------
 //
-// Removed with the 2026-10-07 trim: protoc writes wherever the mapped name
+// Removed with the plan-5 trim (`fbdcc0e`, 2026-10-11): protoc writes wherever
+// the mapped name
 // points, including one directory above the output root when a descriptor set
 // asks it to (measured). The name itself is still validated, upstream, by
 // easypb_codegen::generated_header_path - test_generated_header_path_maps_and_
@@ -378,6 +429,25 @@ void test_publisher_rejects_an_existing_directory_at_the_target(
 
 
 // --- P2: a later-file failure leaves earlier files replaced, no partial ------
+//
+// The publisher writes one file at a time, in byte-wise name order, and stops
+// at the first failure, reporting it as a diagnostic. The files it wrote
+// before the failure stay written: there is no rollback, and the failure is
+// never hidden.
+//
+// The refusal is staged where it needs no privilege. On Windows a read-only
+// target does it. On POSIX a read-only target would do it too - but only for
+// an ordinary user, and the container jobs run as root, which ignores the
+// permission bits: the publication SUCCEEDED there and this test failed on
+// every POSIX lane (measured: the matrix of 2026-10-22). A read-only
+// *directory*, the injection this test used before, does not refuse the
+// write at all: the publisher truncates the target in place, the way the
+// reference compiler does, and truncating a file needs no permission on the
+// directory that holds it.
+//
+// So on POSIX the target is a directory, which no user can open for writing.
+// The write fails where the file would have been opened, so the target keeps
+// what it held, and the publisher reports the failure.
 
 void test_publisher_keeps_old_content_when_a_later_replace_fails(
     const std::string& work)
@@ -388,32 +458,33 @@ void test_publisher_keeps_old_content_when_a_later_replace_fails(
     const std::string second_dir = path_join(out, "sub");
     const std::string second = path_join(second_dir, "second.pb.hpp");
     CHECK(make_directory(second_dir));
-    CHECK(write_text_file(second, "OLD SECOND"));
 
-    std::vector<easypb_codegen::GeneratedFile> files;
-    files.push_back(generated("first.pb.hpp", "NEW FIRST"));
-    files.push_back(generated("sub/second.pb.hpp", "NEW SECOND"));
-
-    // The injection makes the second replacement fail after the first file is
-    // already in place: a read-only target on Windows, a read-only directory
-    // on POSIX. Either way the promised observable is the same.
+    // The target of the second file, and the "old content" it holds.
 #ifdef _WIN32
+    CHECK(write_text_file(second, "OLD SECOND"));
     std::vector<wchar_t> wide_second;
     CHECK(easypb_file::wide_win32_path(second, wide_second) &&
           !wide_second.empty());
     wide_second.push_back(L'\0');
     CHECK(SetFileAttributesW(&wide_second[0], FILE_ATTRIBUTE_READONLY) != 0);
 #else
-    CHECK(::chmod(second_dir.c_str(), 0500) == 0);
+    CHECK(make_directory(second));
+    const std::string marker = path_join(second, "marker.txt");
+    CHECK(write_text_file(marker, "OLD SECOND"));
 #endif
+
+    std::vector<easypb_codegen::GeneratedFile> files;
+    files.push_back(generated("first.pb.hpp", "NEW FIRST"));
+    files.push_back(generated("sub/second.pb.hpp", "NEW SECOND"));
+    // A third file, written after the failing one: the publisher stops at the
+    // first failure, so this one is never written.
+    files.push_back(generated("third.pb.hpp", "NEW THIRD"));
 
     easypb_schema::Diagnostic error;
     const bool published = easypb_codegen::publish_headers(out, files, error);
 
 #ifdef _WIN32
     SetFileAttributesW(&wide_second[0], FILE_ATTRIBUTE_NORMAL);
-#else
-    CHECK(::chmod(second_dir.c_str(), 0700) == 0);
 #endif
 
     CHECK(!published);
@@ -422,13 +493,265 @@ void test_publisher_keeps_old_content_when_a_later_replace_fails(
     std::string content;
     CHECK(read_text_file(first, content));
     CHECK(content == "NEW FIRST");          // per-file replacement happened
+#ifdef _WIN32
     CHECK(read_text_file(second, content));
+#else
+    CHECK(read_text_file(marker, content));
+#endif
     CHECK(content == "OLD SECOND");         // the failed file kept its bytes
+    CHECK(!path_exists(path_join(out, "third.pb.hpp")));  // it stopped there
     bool leftovers = false;
     CHECK(any_temporary_files(out, leftovers));
     CHECK(!leftovers);
     CHECK(any_temporary_files(second_dir, leftovers));
     CHECK(!leftovers);
+}
+
+// --- W-28: the writer's share mode -----------------------------------------
+
+#ifdef _WIN32
+HANDLE open_holder(const std::string& path, DWORD access, DWORD share)
+{
+    std::vector<wchar_t> wide;
+    if (!easypb_file::wide_win32_path(path, wide) || wide.empty()) {
+        return INVALID_HANDLE_VALUE;
+    }
+    wide.push_back(L'\0');
+    return CreateFileW(&wide[0], access, share, 0, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_NORMAL, 0);
+}
+
+std::string backslash_spelling(const std::string& path)
+{
+    std::string result = path;
+    for (std::size_t i = 0; i < result.size(); ++i) {
+        if (result[i] == '/') result[i] = '\\';
+    }
+    return result;
+}
+
+std::string slash_spelling(const std::string& path)
+{
+    std::string result = path;
+    for (std::size_t i = 0; i < result.size(); ++i) {
+        if (result[i] == '\\') result[i] = '/';
+    }
+    return result;
+}
+
+// The canonical prefixed form of an absolute path: a drive spelling takes
+// "\\?\", a network spelling takes "\\?\UNC\". The work directory can be on
+// a share, so the test must not assume a drive.
+std::string prefixed_spelling(const std::string& absolute)
+{
+    if (absolute.size() >= 2 && absolute[0] == '/' && absolute[1] == '/') {
+        return "\\\\?\\UNC\\" + backslash_spelling(absolute.substr(2));
+    }
+    return "\\\\?\\" + backslash_spelling(absolute);
+}
+#endif
+
+// The Windows writer must not deny a concurrent reader that permits a writer,
+// nor a holder that already has write access. The share set is the measured
+// one of the reference's _wopen (_SH_DENYNO): read and write, not delete. A
+// reader that denies writers still blocks the open, in both tools.
+void test_writer_shares_a_concurrent_reader(const std::string& work)
+{
+#ifdef _WIN32
+    const std::string out = path_join(work, "share-mode");
+    CHECK(make_directory(out));
+    const std::string target = path_join(out, "shared.pb.hpp");
+    std::string content;
+    std::string error;
+
+    // A reader that permits a writer.
+    CHECK(write_text_file(target, "OLD"));
+    HANDLE reader = open_holder(target, GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE);
+    CHECK(reader != INVALID_HANDLE_VALUE);
+    CHECK(easypb_file::write_disk_file(target, "NEW", error));
+    CHECK(error.empty());
+    if (reader != INVALID_HANDLE_VALUE) CloseHandle(reader);
+    CHECK(read_text_file(target, content));
+    CHECK(content == "NEW");
+
+    // An existing holder with write access: this is the case that separates
+    // FILE_SHARE_READ from FILE_SHARE_READ | FILE_SHARE_WRITE.
+    CHECK(write_text_file(target, "OLD2"));
+    HANDLE writer = open_holder(target, GENERIC_READ | GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE);
+    CHECK(writer != INVALID_HANDLE_VALUE);
+    error.clear();
+    CHECK(easypb_file::write_disk_file(target, "NEW2", error));
+    CHECK(error.empty());
+    if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+    CHECK(read_text_file(target, content));
+    CHECK(content == "NEW2");
+
+    // The control: a reader that denies writers. protoc fails here too, and
+    // the bytes already on disk must survive.
+    CHECK(write_text_file(target, "OLD3"));
+    HANDLE exclusive = open_holder(target, GENERIC_READ, FILE_SHARE_READ);
+    CHECK(exclusive != INVALID_HANDLE_VALUE);
+    error.clear();
+    CHECK(!easypb_file::write_disk_file(target, "NEW3", error));
+    CHECK(error.find("cannot write file") != std::string::npos);
+    if (exclusive != INVALID_HANDLE_VALUE) CloseHandle(exclusive);
+    CHECK(read_text_file(target, content));
+    CHECK(content == "OLD3");
+#else
+    (void)work;
+#endif
+}
+
+// --- W-31: a relative output root with an unknown working directory ---------
+
+// The natural trigger on POSIX is a deleted working directory: the process
+// keeps running, but getcwd no longer has an answer. The child must refuse
+// the relative spelling instead of anchoring it at the filesystem root.
+void test_relative_output_uses_a_known_cwd(const std::string& work)
+{
+#ifndef _WIN32
+    const std::string doomed = path_join(work, "deleted-cwd");
+    CHECK(make_directory(doomed));
+    const std::string absolute = easypb_file::lexical_absolute(doomed);
+    CHECK(!absolute.empty());
+
+    std::ostringstream relative_name;
+    relative_name << "s7b-relative-output-" << process_id();
+    const std::string name = relative_name.str();
+
+    // Do not duplicate buffered output into the child.
+    std::cout.flush();
+    std::cerr.flush();
+    const pid_t child = ::fork();
+    CHECK(child >= 0);
+    if (child == 0) {
+        if (::chdir(doomed.c_str()) != 0) ::_exit(10);
+        if (::rmdir(absolute.c_str()) != 0) ::_exit(11);
+
+        std::string error;
+        if (easypb_file::make_directories(name, error)) ::_exit(12);
+        if (error.find("current working directory") == std::string::npos) {
+            ::_exit(13);
+        }
+        std::string status_error;
+        if (easypb_file::disk_file_status("/" + name, status_error) !=
+            easypb_file::FILE_STATUS_ABSENT) {
+            ::_exit(14);
+        }
+        ::_exit(0);
+    }
+
+    int status = 0;
+    CHECK(::waitpid(child, &status, 0) == child);
+    const bool exited = WIFEXITED(status) != 0;
+    if (!exited || WEXITSTATUS(status) != 0) {
+        std::cerr << "deleted-cwd child failed with status " << status << '\n';
+    }
+    CHECK(exited);
+    CHECK(exited && WEXITSTATUS(status) == 0);
+    // The parent's working directory is untouched, and the scratch directory
+    // the child removed stays removed.
+    CHECK(!path_exists(doomed));
+#else
+    (void)work;
+#endif
+}
+
+// --- W-34: an embedded NUL is refused at every write/create entry -----------
+
+void test_embedded_nul_is_refused_on_write(const std::string& work)
+{
+    const std::string out = path_join(work, "nul-write");
+    CHECK(make_directory(out));
+    const std::string prefix = path_join(out, "nul-target");
+    const std::string with_nul =
+        prefix + std::string(1, '\0') + ".pb.hpp";
+
+    std::string error;
+    CHECK(!easypb_file::write_disk_file(with_nul, "CONTENT", error));
+    CHECK(error.find("path contains NUL character") != std::string::npos);
+    CHECK(!path_exists(prefix));
+
+    error.clear();
+    CHECK(!easypb_file::make_directories(with_nul, error));
+    CHECK(error.find("path contains NUL character") != std::string::npos);
+    CHECK(!path_exists(prefix));
+
+    // The publisher reaches the same shared entry through its out-dir.
+    std::vector<easypb_codegen::GeneratedFile> files;
+    files.push_back(generated("nul-target.pb.hpp", "CONTENT"));
+    easypb_schema::Diagnostic publish_error;
+    CHECK(!easypb_codegen::publish_headers(with_nul, files, publish_error));
+    CHECK(publish_error.message.find("path contains NUL character") !=
+          std::string::npos);
+    CHECK(!path_exists(prefix));
+}
+
+// --- W-46: the long-path prefix is a transport spelling ---------------------
+
+void test_long_path_prefix_is_translated(const std::string& work)
+{
+#ifdef _WIN32
+    // The two prefix spellings and the two bodies the module accepts.
+    const std::string plain_drive = "C:/s7b-prefix/a/b";
+    CHECK(easypb_file::lexical_absolute("\\\\?\\C:\\s7b-prefix\\a\\b") ==
+          easypb_file::lexical_absolute(plain_drive));
+    CHECK(easypb_file::lexical_absolute("//?/C:/s7b-prefix/a/b") ==
+          easypb_file::lexical_absolute(plain_drive));
+    CHECK(easypb_file::lexical_absolute(
+              "\\\\?\\UNC\\server\\share\\x") ==
+          easypb_file::lexical_absolute("//server/share/x"));
+    CHECK(easypb_file::lexical_absolute("//?/UNC/server/share/x") ==
+          easypb_file::lexical_absolute("//server/share/x"));
+
+    const std::string out = path_join(work, "long-prefix");
+    CHECK(make_directory(out));
+    const std::string absolute_out = easypb_file::lexical_absolute(out);
+    CHECK(!absolute_out.empty());
+    const std::string prefixed_out = prefixed_spelling(absolute_out);
+    const std::string forward_out = slash_spelling(prefixed_out);
+
+    std::string error;
+    const std::string target_plain =
+        path_join(absolute_out, "prefix.pb.hpp");
+    CHECK(easypb_file::write_disk_file(
+        prefixed_out + "\\prefix.pb.hpp", "PREFIXED", error));
+    CHECK(error.empty());
+    std::string content;
+    CHECK(read_text_file(target_plain, content));
+    CHECK(content == "PREFIXED");
+
+    // The forward-slash spelling of the same prefix.
+    error.clear();
+    CHECK(easypb_file::write_disk_file(
+        forward_out + "/forward.pb.hpp", "FORWARD", error));
+    CHECK(error.empty());
+    CHECK(read_text_file(path_join(absolute_out, "forward.pb.hpp"),
+                         content));
+    CHECK(content == "FORWARD");
+
+    // Directory creation sees the same spelling.
+    error.clear();
+    CHECK(easypb_file::make_directories(
+        prefixed_out + "\\nested\\tree", error));
+    CHECK(error.empty());
+    CHECK(path_is_directory(path_join(out, "nested/tree")));
+
+    // The publisher accepts the prefixed out-dir end to end.
+    std::vector<easypb_codegen::GeneratedFile> files;
+    files.push_back(generated("published.pb.hpp", "PUBLISHED"));
+    easypb_schema::Diagnostic publish_error;
+    CHECK(easypb_codegen::publish_headers(prefixed_out, files,
+                                          publish_error));
+    CHECK(publish_error.message.empty());
+    CHECK(read_text_file(path_join(absolute_out, "published.pb.hpp"),
+                         content));
+    CHECK(content == "PUBLISHED");
+#else
+    (void)work;
+#endif
 }
 
 } // namespace
@@ -445,10 +768,16 @@ int main()
     test_generated_header_path_maps_and_rejects();
     test_publisher_writes_and_replaces(root);
     test_publisher_rejects_duplicate_names_before_writing(root);
-    test_unsafe_names_are_refused_by_the_mapping_not_the_publisher(root);
+    test_publisher_refuses_a_name_that_escapes_the_root(root);
+    test_directory_creation_is_bounded(root);
     test_publisher_reports_a_file_as_out_dir(root);
     test_publisher_rejects_an_existing_directory_at_the_target(root);
+    test_write_reports_a_directory_target(root);
     test_publisher_keeps_old_content_when_a_later_replace_fails(root);
+    test_writer_shares_a_concurrent_reader(root);
+    test_relative_output_uses_a_known_cwd(root);
+    test_embedded_nul_is_refused_on_write(root);
+    test_long_path_prefix_is_translated(root);
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

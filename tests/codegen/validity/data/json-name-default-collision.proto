@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+// W-43: proto3 refuses two default JSON names that fold together.
+message JsonDefaultCollision
+{
+    int32 foo_bar = 1;
+    int32 fooBar = 2;
+}

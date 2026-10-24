@@ -1,0 +1,3 @@
+syntax = "proto2";
+package s;
+message Root { required int32 a = 1; }

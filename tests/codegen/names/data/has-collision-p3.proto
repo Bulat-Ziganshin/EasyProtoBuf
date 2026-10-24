@@ -1,0 +1,17 @@
+// The same shape as has-collision.proto, in proto3.
+//
+// The syntax does not change the shape: the generator emits a presence flag
+// for a singular field in every syntax, so the two members would still have
+// the same name. The reference compiler accepts the schema in proto3 too (a
+// proto3 scalar field has no presence accessor at all, so nothing collides
+// there).
+
+syntax = "proto3";
+
+package hascollisionp3;
+
+message M
+{
+    int32 foo = 1;
+    int32 has_foo = 2;
+}

@@ -252,6 +252,433 @@ if(BUILD_TESTING)
         ${easypb_test_include_dir} ${codegen_enums_generated_dir})
     add_test(NAME codegen.enums.runtime COMMAND codegen_enums_runtime_test)
 
+    # Plan 5 follow-up S1 (W-02, W-03, W-05, W-10, W-12): the emitter's value
+    # and field-type layer. The lane generates every fixture through BOTH
+    # input paths, runs the runtime check of the default values, and drives
+    # the refusals through the CLI. The descriptor path builds the headers
+    # the runtime checker reads, because it is the one every build profile
+    # has; the driver compares the source path's header with the descriptor
+    # path's byte for byte. Compiling the descriptor-path header is the
+    # build's job (cl.exe started from a test script outside the Visual
+    # Studio environment cannot find its own standard library headers), and
+    # the equality check extends that compile to the source path.
+    set(codegen_validity_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/validity)
+    set(codegen_validity_data_dir ${codegen_validity_dir}/data)
+    set(codegen_validity_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-validity)
+    set(codegen_validity_descriptor_dir
+        ${codegen_validity_generated_dir}/descriptor)
+    set(codegen_validity_fixtures
+        defaults-quote
+        defaults-backslash
+        defaults-newline
+        defaults-nul
+        defaults-quote-byte
+        defaults-trigraph
+        defaults-inf
+        defaults-nan
+        defaults-float-overflow
+        defaults-bytes-upper-hex
+        packages-deep-101
+        enum-alias-same-number
+        json-names-distinct
+        json-name-custom-vs-default-proto2
+        json-name-proto2-warning
+        empty-syntax-descriptor
+        plus-controls
+        plus-descriptor-controls
+        leading-space-control)
+
+    foreach(name ${codegen_validity_fixtures})
+        add_custom_command(
+            OUTPUT ${codegen_validity_descriptor_dir}/${name}.pb.hpp
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_validity_data_dir}/${name}.pbs
+                -DOUTPUT=${codegen_validity_descriptor_dir}/${name}.pb.hpp
+                -P ${codegen_validity_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_validity_data_dir}/${name}.pbs
+                ${codegen_validity_dir}/generate_header.cmake
+            VERBATIM)
+    endforeach()
+    add_custom_target(codegen_validity_generated
+        DEPENDS
+            ${codegen_validity_descriptor_dir}/defaults-quote.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-backslash.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-newline.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-nul.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-quote-byte.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-trigraph.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-inf.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-nan.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-float-overflow.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-bytes-upper-hex.pb.hpp
+            ${codegen_validity_descriptor_dir}/packages-deep-101.pb.hpp
+            ${codegen_validity_descriptor_dir}/enum-alias-same-number.pb.hpp
+            ${codegen_validity_descriptor_dir}/json-names-distinct.pb.hpp
+            ${codegen_validity_descriptor_dir}/json-name-custom-vs-default-proto2.pb.hpp
+            ${codegen_validity_descriptor_dir}/json-name-proto2-warning.pb.hpp
+            ${codegen_validity_descriptor_dir}/empty-syntax-descriptor.pb.hpp
+            ${codegen_validity_descriptor_dir}/plus-controls.pb.hpp
+            ${codegen_validity_descriptor_dir}/plus-descriptor-controls.pb.hpp
+            ${codegen_validity_descriptor_dir}/leading-space-control.pb.hpp)
+
+    add_executable(codegen_validity_runtime_test
+        ${codegen_validity_dir}/validity_runtime.cpp)
+    add_dependencies(codegen_validity_runtime_test codegen_validity_generated)
+    target_include_directories(codegen_validity_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_validity_descriptor_dir})
+
+    add_test(NAME codegen.validity
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_validity_data_dir}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-validity
+            -DRUNTIME=$<TARGET_FILE:codegen_validity_runtime_test>
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_validity_dir}/test_validity.cmake)
+
+    # Plan 5 follow-up S2 (W-08, W-09): the emitter's name layer. The lane
+    # generates every fixture through BOTH input paths, checks that every
+    # escaped name still carries the data the schema names, and drives the
+    # presence-flag collision through the CLI. The descriptor path builds the
+    # headers the runtime checker reads, because it is the one every build
+    # profile has; the driver compares the source path's header with the
+    # descriptor path's byte for byte. Compiling the descriptor-path header
+    # is the build's job (cl.exe started from a test script outside the
+    # Visual Studio environment cannot find its own standard library
+    # headers), and the equality check extends that compile to the source
+    # path.
+    set(codegen_names_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/names)
+    set(codegen_names_data_dir ${codegen_names_dir}/data)
+    set(codegen_names_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-names)
+    set(codegen_names_descriptor_dir
+        ${codegen_names_generated_dir}/descriptor)
+    set(codegen_names_fixtures
+        keyword-field
+        keyword-message
+        keyword-enum
+        keyword-enum-value
+        keyword-nested)
+
+    foreach(name ${codegen_names_fixtures})
+        add_custom_command(
+            OUTPUT ${codegen_names_descriptor_dir}/${name}.pb.hpp
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_names_data_dir}/${name}.pbs
+                -DOUTPUT=${codegen_names_descriptor_dir}/${name}.pb.hpp
+                -P ${codegen_names_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_names_data_dir}/${name}.pbs
+                ${codegen_names_dir}/generate_header.cmake
+            VERBATIM)
+    endforeach()
+    add_custom_target(codegen_names_generated
+        DEPENDS
+            ${codegen_names_descriptor_dir}/keyword-field.pb.hpp
+            ${codegen_names_descriptor_dir}/keyword-message.pb.hpp
+            ${codegen_names_descriptor_dir}/keyword-enum.pb.hpp
+            ${codegen_names_descriptor_dir}/keyword-enum-value.pb.hpp
+            ${codegen_names_descriptor_dir}/keyword-nested.pb.hpp)
+
+    add_executable(codegen_names_runtime_test
+        ${codegen_names_dir}/names_runtime.cpp)
+    add_dependencies(codegen_names_runtime_test codegen_names_generated)
+    target_include_directories(codegen_names_runtime_test PRIVATE
+        ${easypb_test_include_dir} ${codegen_names_descriptor_dir})
+
+    add_test(NAME codegen.names
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_names_data_dir}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-names
+            -DRUNTIME=$<TARGET_FILE:codegen_names_runtime_test>
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_names_dir}/test_names.cmake)
+
+    # Plan 5 follow-up S3 (W-01, W-30, W-32): the boundaries of untrusted
+    # input. The lane drives the nesting limit through BOTH input paths (the
+    # 31 levels the reference compiler accepts, the 32 it refuses),
+    # compiles the accepted header with the tree's own compiler and standard,
+    # checks that the accepted nesting carries the schema's data, and drives
+    # the refusals through the CLI. The descriptor path builds the header the
+    # runtime checker reads, because it is the one every build profile has;
+    # the driver compares the source path's header with the descriptor path's
+    # byte for byte.
+    set(codegen_limits_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/limits)
+    set(codegen_limits_data_dir ${codegen_limits_dir}/data)
+    set(codegen_limits_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-limits)
+    set(codegen_limits_descriptor_dir
+        ${codegen_limits_generated_dir}/descriptor)
+
+    # MSVC cannot compile the accepted header. Its compiler limit is 16
+    # levels of nested struct definitions - C1046, "compiler limit: struct
+    # nested too deeply" - and the accepted nesting is 31, so the limit bites
+    # at the 17th struct. The header is a chain of nested definitions:
+    #
+    #     struct M0 { struct M1 { ... struct M30 { ... }; }; };
+    #
+    # Every MSVC lane of 2026-10-22 therefore died in the build of the
+    # runtime checker, and with it the whole Windows half of the CI: the
+    # build failure ends the job before ctest runs, so no Windows lane
+    # executed a single test.
+    #
+    # Clang 22.1.0 through 23.1.0 has the other reason to skip. A declaration
+    # whose type is spelled as a long nested-name-specifier costs exponential
+    # time there - roughly twice the work for every level past ~20 - so one
+    # `M0::M1::...::M30 v;` alone dwarfs the whole tree. Neither warnings, nor
+    # -fsyntax-only instead of -c, nor removing <easypb.hpp> moves it; the
+    # struct definitions alone compile in milliseconds, it is the mention of
+    # the deep type that explodes. The generated header carries 62 such
+    # declarations, so every clang 22/23 lane of 2026-10-22 paid ~8 minutes
+    # for the runtime checker's TU and ~6 more for the driver's -fsyntax-only
+    # per build type, and seven lanes were canceled at their job timeout.
+    # GCC and Clang 20/21 stay flat at depth 28 (tens of milliseconds;
+    # Clang 21.1.0 measured clean on the Compiler Explorer machines), and
+    # LLVM main already resolves the same source in ~5 ms, so this gate
+    # lifts with Clang 24.
+    #
+    # The limit itself does not move. It stays the reference compiler's own
+    # (31 accepted, the 32nd refused - the driver's own verdict below), and
+    # the generator keeps printing the nesting the way it does. What these
+    # profiles give up is the compile of that one header and the runtime
+    # check that reads it; the lane's other three things need no compiler
+    # and stay - both input paths agree byte for byte, the 32nd level is
+    # refused, the deep name is refused. Nested types themselves remain
+    # covered on MSVC by the nested lane, which is shallower.
+    set(codegen_limits_skip_reason "the compiler limit of this profile")
+    if(MSVC)
+        set(codegen_limits_compiles_accepted 0)
+        set(codegen_limits_skip_reason
+            "MSVC refuses a chain of 31 nested struct definitions (C1046)")
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+            AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 22
+            AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 24)
+        # AppleClang is deliberately outside this branch: it has its own
+        # numbering and its macOS lanes ran this test in under 2 s.
+        set(codegen_limits_compiles_accepted 0)
+        set(codegen_limits_skip_reason
+            "Clang 22-23 grow a 31-level nested name exponentially (fixed in LLVM 24)")
+    else()
+        set(codegen_limits_compiles_accepted 1)
+    endif()
+
+    if(codegen_limits_compiles_accepted)
+        add_custom_command(
+            OUTPUT ${codegen_limits_descriptor_dir}/nesting-31.pb.hpp
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_limits_data_dir}/nesting-31.pbs
+                -DOUTPUT=${codegen_limits_descriptor_dir}/nesting-31.pb.hpp
+                -P ${codegen_limits_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_limits_data_dir}/nesting-31.pbs
+                ${codegen_limits_dir}/generate_header.cmake
+            VERBATIM)
+        add_custom_target(codegen_limits_generated
+            DEPENDS ${codegen_limits_descriptor_dir}/nesting-31.pb.hpp)
+
+        add_executable(codegen_limits_runtime_test
+            ${codegen_limits_dir}/limits_runtime.cpp)
+        add_dependencies(codegen_limits_runtime_test codegen_limits_generated)
+        target_include_directories(codegen_limits_runtime_test PRIVATE
+            ${easypb_test_include_dir} ${codegen_limits_descriptor_dir})
+    endif()
+
+    # The tree's own standard: the C++11 profile passes its standard through
+    # EASYPB_CXX_FLAGS, so CMAKE_CXX_STANDARD is empty there and the flags
+    # carry it. The flags are split into a list, because the profile's
+    # standard arrives as one string with a leading space, and a compiler
+    # does not read " -std=c++11" as the option it is.
+    if(CMAKE_CXX_STANDARD)
+        set(codegen_limits_std_flag "-std=c++${CMAKE_CXX_STANDARD}")
+    else()
+        set(codegen_limits_std_flag "")
+    endif()
+    separate_arguments(codegen_limits_cxx_flags NATIVE_COMMAND
+        "${CMAKE_CXX_FLAGS}")
+
+    # The driver compiles the accepted header and runs the checker that reads
+    # it - the two steps the skip profiles (MSVC, Clang 22-23) cannot do. It
+    # is told which profile it runs in and why the steps are skipped, and the
+    # compiler arguments and the runtime checker are passed only
+    # where they exist.
+    #
+    # The two calls below are spelled out instead of sharing one argument
+    # list: the compiler flags reach the driver as ONE argument, with the
+    # semicolons that separate them, and a list would split that argument
+    # into "-Wall", "-Wextra" and the rest - the driver would then call the
+    # compiler without the flags it is supposed to use.
+    if(codegen_limits_compiles_accepted)
+        add_test(NAME codegen.limits
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DDATA_DIR=${codegen_limits_data_dir}
+                -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-limits
+                -DRUNTIME=$<TARGET_FILE:codegen_limits_runtime_test>
+                -DCXX=${CMAKE_CXX_COMPILER}
+                "-DCXX_FLAGS=${codegen_limits_cxx_flags}"
+                -DCXX_STD_FLAG=${codegen_limits_std_flag}
+                -DINCLUDE_DIR=${easypb_test_include_dir}
+                -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+                -DCOMPILE_ACCEPTED=1
+                -P ${codegen_limits_dir}/test_limits.cmake)
+    else()
+        add_test(NAME codegen.limits
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DDATA_DIR=${codegen_limits_data_dir}
+                -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-limits
+                -DINCLUDE_DIR=${easypb_test_include_dir}
+                "-DSKIP_REASON=${codegen_limits_skip_reason}"
+                -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+                -DCOMPILE_ACCEPTED=0
+                -P ${codegen_limits_dir}/test_limits.cmake)
+    endif()
+
+    # Plan 5 follow-up S5 (W-16, W-36, W-37, W-44, W-45, W-68): one rule,
+    # two input paths. The lane drives every accepted fixture through BOTH
+    # fronts and requires one header byte for byte, and requires every
+    # refusal the source path makes on the descriptor path too. The
+    # descriptor halves are committed, so the lane never calls protoc.
+    #
+    # The accepted headers are compiled by the build, not by the driver:
+    # cl.exe started from a test script outside the Visual Studio
+    # environment cannot find its own standard library headers (C1083 on
+    # <cstdint>). One compile unit per fixture is generated here because
+    # several fixtures declare the same package-scope name (parity::M), and
+    # the driver's byte-for-byte comparison extends the compile to the
+    # source path.
+    set(codegen_parity_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/parity)
+    set(codegen_parity_data_dir ${codegen_parity_dir}/data)
+    set(codegen_parity_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-parity)
+    file(MAKE_DIRECTORY ${codegen_parity_generated_dir})
+
+    set(codegen_parity_compile_fixtures
+        methods-ok
+        map-ok
+        enum-ok
+        ext-ok
+        w36-same
+        w68-root
+        w68-dep)
+    set(codegen_parity_compile_sources)
+    set(codegen_parity_headers)
+    foreach(name ${codegen_parity_compile_fixtures})
+        # The merged W-36 header is the header of a single identical
+        # container; the test proves the merge produces those same bytes.
+        if("${name}" STREQUAL "w36-same")
+            set(codegen_parity_input
+                ${codegen_parity_data_dir}/w36-same-a.pbs)
+        else()
+            set(codegen_parity_input ${codegen_parity_data_dir}/${name}.pbs)
+        endif()
+        set(codegen_parity_header
+            ${codegen_parity_generated_dir}/${name}.pb.hpp)
+        add_custom_command(
+            OUTPUT ${codegen_parity_header}
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_parity_input}
+                -DOUTPUT=${codegen_parity_header}
+                -P ${codegen_parity_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_parity_input}
+                ${codegen_parity_dir}/generate_header.cmake
+            VERBATIM)
+        file(WRITE
+            ${codegen_parity_generated_dir}/compile-${name}.cpp
+            "#include \"${name}.pb.hpp\"\n")
+        list(APPEND codegen_parity_compile_sources
+            ${codegen_parity_generated_dir}/compile-${name}.cpp)
+        list(APPEND codegen_parity_headers ${codegen_parity_header})
+    endforeach()
+    add_custom_target(codegen_parity_generated
+        DEPENDS ${codegen_parity_headers})
+    add_library(codegen_parity_compile_check STATIC
+        ${codegen_parity_compile_sources})
+    add_dependencies(codegen_parity_compile_check codegen_parity_generated)
+    target_include_directories(codegen_parity_compile_check PRIVATE
+        ${easypb_test_include_dir} ${codegen_parity_generated_dir})
+
+    add_test(NAME codegen.parity
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_parity_data_dir}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-parity
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_parity_dir}/test_parity.cmake)
+
+    # Plan 5 follow-up S6 (W-11, W-47, W-48, W-58): the library API. A caller
+    # that links easypb_codegen_core must get the CLI's answer: the entry
+    # points finalize a copy of the options, the compatibility link checks a
+    # default for its declared kind, ingest normalizes the file's name and
+    # package presence bits, and the link result says one thing (`local_only`).
+    # The lane links only the core, so it is parser-free and runs in the lite
+    # profile; the `.proto` control is guarded by FULL_BUILD. The W-11 header
+    # is compiled by the build through the binary's emit mode (a compiler
+    # started from a test script outside the Visual Studio environment cannot
+    # find its own standard library headers), and the driver compares the
+    # library's header with the CLI's byte for byte.
+    set(codegen_library_dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/codegen/library)
+    set(codegen_library_data_dir ${codegen_library_dir}/data)
+    set(codegen_library_generated_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-library)
+    file(MAKE_DIRECTORY ${codegen_library_generated_dir})
+
+    add_executable(codegen_library_test codegen/library/test_library.cpp)
+    target_link_libraries(codegen_library_test PRIVATE easypb_codegen_core)
+
+    set(codegen_library_options_header
+        ${codegen_library_generated_dir}/options-default.pb.hpp)
+    add_custom_command(
+        OUTPUT ${codegen_library_options_header}
+        COMMAND $<TARGET_FILE:codegen_library_test>
+            --emit-options-default ${codegen_library_options_header}
+            ${codegen_library_data_dir}
+        DEPENDS
+            codegen_library_test
+            ${codegen_library_data_dir}/options-default.pbs
+        VERBATIM)
+    add_custom_target(codegen_library_options_generated
+        DEPENDS ${codegen_library_options_header})
+
+    set(codegen_library_compile_source
+        ${codegen_library_generated_dir}/compile-options-default.cpp)
+    file(WRITE ${codegen_library_compile_source}
+        "#include \"options-default.pb.hpp\"\n")
+    add_library(codegen_library_compile_check STATIC
+        ${codegen_library_compile_source})
+    add_dependencies(codegen_library_compile_check
+        codegen_library_options_generated)
+    set_source_files_properties(${codegen_library_compile_source} PROPERTIES
+        OBJECT_DEPENDS ${codegen_library_options_header})
+    target_include_directories(codegen_library_compile_check PRIVATE
+        ${easypb_test_include_dir} ${codegen_library_generated_dir})
+
+    add_test(NAME codegen.library
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DLIBRARY_TEST=$<TARGET_FILE:codegen_library_test>
+            -DDATA_DIR=${codegen_library_data_dir}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-library
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${codegen_library_dir}/test_library.cmake)
+
     set(codegen_packages_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/packages)
     set(codegen_packages_data_dir ${codegen_packages_dir}/data)
@@ -299,6 +726,7 @@ if(BUILD_TESTING)
             ${codegen_packages_module_header}
             ${codegen_packages_import_header}
             ${codegen_packages_no_class_header}
+            ${codegen_packages_generated_dir}/other.pb.hpp
         COMMAND ${CMAKE_COMMAND}
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>
             -DDATA_DIR=${codegen_packages_data_dir}
@@ -313,6 +741,7 @@ if(BUILD_TESTING)
             ${codegen_packages_data_dir}/shadow.pbs
             ${codegen_packages_data_dir}/module-package.pbs
             ${codegen_packages_data_dir}/import-package.pbs
+            ${codegen_packages_data_dir}/other.pbs
             ${codegen_packages_dir}/generate_headers.cmake
         VERBATIM)
     add_custom_target(codegen_packages_generated
@@ -324,7 +753,8 @@ if(BUILD_TESTING)
             ${codegen_packages_shadow_header}
             ${codegen_packages_module_header}
             ${codegen_packages_import_header}
-            ${codegen_packages_no_class_header})
+            ${codegen_packages_no_class_header}
+            ${codegen_packages_generated_dir}/other.pb.hpp)
 
     add_executable(codegen_packages_runtime_test
         ${codegen_packages_dir}/package_runtime_main.cpp
@@ -512,6 +942,7 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>
             -DDATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/codegen/parser/data
+            -DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/codegen/cli/data
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-cli
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/cli/test_codegen_cli.cmake)
@@ -527,6 +958,40 @@ if(BUILD_TESTING)
     add_test(NAME codegen.imports.output COMMAND codegen_imports_output_test)
     set_tests_properties(codegen.imports.output PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+    # W-31's natural working-directory failure cannot be staged through Win32,
+    # so this test includes the unmodified file_paths.cpp with
+    # GetCurrentDirectoryW stubbed. It is standalone: linking
+    # easypb_header_output would define the module's symbols twice. It needs
+    # easypb_schema for max_logical_path_components only.
+    if(WIN32)
+        add_executable(codegen_imports_output_cwd_test
+            codegen/imports/test_cwd_failure.cpp)
+        target_include_directories(codegen_imports_output_cwd_test PRIVATE
+            ${PROJECT_SOURCE_DIR}/codegen)
+        target_link_libraries(codegen_imports_output_cwd_test
+            PRIVATE easypb_schema)
+        add_test(NAME codegen.imports.output.cwd
+            COMMAND codegen_imports_output_cwd_test)
+        set_tests_properties(codegen.imports.output.cwd PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endif()
+
+    # W-33's counter-example is POSIX-only. The test includes file_paths.cpp
+    # with a wrapped write to inject EINTR and a zero return; the schema
+    # library is linked for max_logical_path_components only.
+    if(NOT WIN32)
+        add_executable(codegen_imports_output_posix_writer_test
+            codegen/imports/test_posix_writer.cpp)
+        target_include_directories(codegen_imports_output_posix_writer_test
+            PRIVATE ${PROJECT_SOURCE_DIR}/codegen)
+        target_link_libraries(codegen_imports_output_posix_writer_test
+            PRIVATE easypb_schema)
+        add_test(NAME codegen.imports.output.posix-writer
+            COMMAND codegen_imports_output_posix_writer_test)
+        set_tests_properties(codegen.imports.output.posix-writer PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endif()
 
     # Plan 5's in-memory lane: the owned adapter and the linked generator
     # through easypb_codegen_core alone (T4: no descriptor-file wrapper, no

@@ -14,6 +14,20 @@ foreach(name names alpha beta external shadow module-package import-package)
     endif()
 endforeach()
 
+# W-68: a compatibility-mode header names its direct dependencies, so the
+# thin `external.pbs` root includes "other.pb.hpp". The dependency is a real
+# generated header here, not a hand-written stand-in: `other.pbs` is the same
+# `other.proto` fixture compiled alone, which is exactly what a consumer of
+# `external.generated.hpp` has to provide.
+execute_process(
+    COMMAND "${CODEGEN}" --descriptor-set "${DATA_DIR}/other.pbs"
+    RESULT_VARIABLE other_result
+    OUTPUT_FILE "${OUTPUT_DIR}/other.pb.hpp"
+    ERROR_VARIABLE other_error)
+if(NOT other_result EQUAL 0)
+    message(FATAL_ERROR "Generating other.pb.hpp failed: ${other_error}")
+endif()
+
 execute_process(
     COMMAND "${CODEGEN}" --descriptor-set --no-class "${DATA_DIR}/names.pbs"
     RESULT_VARIABLE no_class_result

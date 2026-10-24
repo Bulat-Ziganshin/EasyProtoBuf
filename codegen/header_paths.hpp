@@ -7,11 +7,18 @@ namespace easypb_codegen {
 
 // Pure mapping from a logical `.proto` name to the generated header name.
 //
-// A final `.proto` suffix becomes `.pb.hpp`; any other name gains an appended
-// `.pb.hpp`. Relative subdirectories and '/' separators are preserved, so
-// `common/state.proto` maps to `common/state.pb.hpp` and the result is the
-// same spelling an include directive carries and an output root joins below
-// itself.
+// A final `.protodevel` suffix is stripped first, then a final `.proto`
+// suffix, and `.pb.hpp` is appended; any other name gains an appended
+// `.pb.hpp`. The order is the reference compiler's
+// (`compiler/code_generator_lite.cc:41-48`): `legacy.protodevel` maps to
+// `legacy.pb.hpp`, `legacy.protodevel.proto` to `legacy.protodevel.pb.hpp`
+// (only the final `.proto` is stripped) and `legacy.proto.protodevel` to
+// `legacy.proto.pb.hpp` (only the final `.protodevel` is stripped). The
+// logical name itself keeps its suffix - `// Source:` prints it (W-13); only
+// the output name is stripped (W-25). Relative subdirectories and '/'
+// separators are preserved, so `common/state.proto` maps to
+// `common/state.pb.hpp` and the result is the same spelling an include
+// directive carries and an output root joins below itself.
 //
 // The logical name is validated with the plan-3 logical-path rules (non-empty,
 // relative, '/'-separated, no empty/'.'/'..' components, no quotes or control

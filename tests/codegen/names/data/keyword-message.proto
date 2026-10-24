@@ -1,0 +1,19 @@
+// A message whose name is a C++ keyword, and a field of that type.
+//
+// The name reaches the header three times: as the struct's own name, as the
+// qualified type of the field that uses it, and as the parameter type of the
+// generated codec functions. Before the fix all three said `class`.
+
+syntax = "proto2";
+
+package kwmessage;
+
+message class
+{
+    optional int32 value = 1;
+}
+
+message Holder
+{
+    optional class payload = 1;
+}

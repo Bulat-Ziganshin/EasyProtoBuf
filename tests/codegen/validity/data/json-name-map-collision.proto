@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+// W-43: a map field is still a source field, so its custom `json_name` takes
+// part in the same uniqueness check. protoc refuses this pair; a source-only
+// fixture because there is no protoc-written descriptor to pair it with.
+message JsonMapCollision
+{
+    map<string, int32> a = 1 [json_name = "same"];
+    map<string, int32> b = 2 [json_name = "same"];
+}

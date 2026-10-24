@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+package consumer;
+
+import "w68-dep.proto";
+
+message M {
+  optional dep.Ext e = 1;
+}

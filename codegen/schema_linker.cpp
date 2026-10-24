@@ -20,13 +20,6 @@ namespace easypb_schema {
 
 namespace {
 
-// Each translation unit keeps its own copy, following schema.cpp and
-// schema_semantics.cpp: there is no shared declaration for this helper.
-std::string view_text(const str_view& value)
-{
-    return std::string(value.data(), value.size());
-}
-
 // Cycle-free by construction: bind_import_edges rejects cycles before the
 // linker runs, so a plain memoized DFS needs no in-progress marker, and the
 // entry inserted below is always complete by the time it is read back. Do not
@@ -133,13 +126,13 @@ std::string unsupported_edition_text(int32_t edition)
 bool fail_unsupported_syntax(const SchemaFile& file, Diagnostic& error)
 {
     error = Diagnostic();
-    error.file = view_text(file.file.name);
+    error.file = schema_file_label(file);
     error.location = unknown_location();
     const std::string decided =
         file.file.has_edition
             ? "edition " + unsupported_edition_text(file.file.edition)
             : "syntax \"" + view_text(file.file.syntax) + "\"";
-    error.message = "file \"" + view_text(file.file.name) + "\" declares " +
+    error.message = "file \"" + schema_file_label(file) + "\" declares " +
                     decided + ", which is not supported: " +
                     "only absent, \"proto2\", and \"proto3\" are accepted";
     error.warning = false;
@@ -252,11 +245,22 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
     // available descriptor, not a by-product of a reference, and
     // `maps/data/malformed_map.pbs` is the fixture consumed here. D-28's
     // enum-number rule rides the same reference-free stage for the same reason,
-    // D-32's empty-enum rule rides it too, and so does D-39's lexical name rule
-    // (Step 7.2 repeats all four).
+    // D-32's empty-enum rule rides it too, so does D-39's lexical name rule,
+    // and S5's range and proto3-first-value rules (W-45, W-44) are the same
+    // kind of descriptor-only fact (Step 7.2 repeats all of them).
+    //
+    // The nesting bound rides the same stage and comes first: the sweeps below
+    // descend into the nested messages, and a descriptor that nests deeper than
+    // the limit would overflow the stack inside the first of them.
+    if (!validate_message_nesting_depth(file.file, view_text(file.file.name),
+                                        error)) {
+        return false;
+    }
     if (!validate_symbol_names(file, error)) return false;
     if (!validate_map_entry_shapes(file, error)) return false;
     if (!validate_enum_value_numbers(file, error)) return false;
+    if (!validate_json_names(file, error)) return false;
+    if (!validate_extension_ranges(file, error)) return false;
 
     // Everything is built into a local and assigned once, at the end (A1).
     LinkedSchema linked;
@@ -278,20 +282,22 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
         return false;
     }
 
-    // A4: `complete` describes the input. Any null-target edge produced above
-    // or any permitted external reference makes it false; it stays true only
-    // for a thin descriptor whose whole dependency graph and every field
-    // resolved locally. A10's warning hygiene is not repeated here: a
-    // descriptor-origin file carries no stale warnings from the parser's
-    // standalone pass, and this mode resolves no external reference whose
-    // warning a later pass could make stale.
+    // W-58: the flag names the one thing a link result can say about its
+    // input - whether the link rested on local information alone. Any
+    // null-target edge produced above or any permitted external reference
+    // makes it false; it stays true only for a thin descriptor whose whole
+    // dependency graph and every field resolved locally. The mode itself is
+    // the caller's argument, not a property of the result. A10's warning
+    // hygiene is not repeated here: a descriptor-origin file carries no stale
+    // warnings from the parser's standalone pass, and this mode resolves no
+    // external reference whose warning a later pass could make stale.
     bool missing_edge = false;
     for (std::size_t i = 0; i < file.edges.size(); ++i) {
         if (file.edges[i].target == 0) missing_edge = true;
     }
 
     linked.files = &files;
-    linked.complete = !missing_edge && !missing_external;
+    linked.local_only = !missing_edge && !missing_external;
     result = std::move(linked);
     return true;
 }
@@ -355,11 +361,25 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // descriptor and an unreferenced declaration still reaches the generator
     // (contract clause 13). It is asked FIRST so the reported failure is the
     // most fundamental one, and because a name that is not a symbol name should
-    // not be indexed, compared for collisions or walked as an entry.
+    // not be indexed, compared for collisions or walked as an entry. S5 adds
+    // two more descriptor-only facts to the stage: a proto3 enum's first value
+    // (`W-44`) and every extension range's shape (`W-45`).
     for (std::size_t i = 0; i < ordered.size(); ++i) {
+        // The nesting of the linked schema is bounded before the first walk
+        // that follows it: the sweeps below descend into the nested messages,
+        // and a schema that nests deeper than the limit would overflow the
+        // stack inside the first of them. The rule is the reference
+        // compiler's own (descriptor.h:3045).
+        if (!validate_message_nesting_depth(ordered[i]->file,
+                                            view_text(ordered[i]->file.name),
+                                            error)) {
+            return false;
+        }
         if (!validate_symbol_names(*ordered[i], error)) return false;
         if (!validate_map_entry_shapes(*ordered[i], error)) return false;
         if (!validate_enum_value_numbers(*ordered[i], error)) return false;
+        if (!validate_json_names(*ordered[i], error)) return false;
+        if (!validate_extension_ranges(*ordered[i], error)) return false;
     }
 
     // Everything is built into a local and assigned once, at the end (A1).
@@ -404,7 +424,7 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // returned before this line leaves `result` in the invalid empty state set
     // at entry, never a partial view.
     linked.files = &files;
-    linked.complete = true;
+    linked.local_only = true;
     // A move, not a copy (fix round r5, ledger H-8/P-05). `LinkedSchema`
     // declares only a user-provided default constructor, which does not
     // suppress the implicit move assignment, and every member moves in O(1):

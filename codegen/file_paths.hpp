@@ -9,8 +9,8 @@ namespace easypb_file {
 // Native physical-path helpers for standalone source input. This module
 // owns every filesystem call and every platform path rule; the common
 // logical-path module and the import graph binder never touch the disk.
-// Output support (containment, collisions, directory creation) is added
-// in a later step; this header covers input only.
+// The input and output-side helpers share this module: the output block
+// below declares directory creation and the in-place write.
 //
 // Physical-path encoding is platform-specific. POSIX physical paths are
 // opaque native bytes and pass to OS calls unchanged. Windows physical
@@ -61,7 +61,8 @@ std::string join_disk_path(const std::string& directory,
 //     names one is reported distinctly instead of "not found";
 //   - FILE_STATUS_ERROR: the file exists but cannot be reached (denied
 //     access), or the spelling itself is unusable (embedded NUL). The
-//     reason is stored in error.
+//     reason is stored in error, and it names the candidate that was
+//     probed (a probe keeps the path; see the action/probe boundary below).
 enum FileStatus {
     FILE_STATUS_ABSENT,
     FILE_STATUS_FILE,
@@ -71,7 +72,8 @@ enum FileStatus {
 FileStatus disk_file_status(const std::string& path, std::string& error);
 
 // Read an entire file as bytes. Returns false and stores a short reason
-// (including the path) in error on failure.
+// without the path in error on failure: the caller names the path it passed
+// (the action-entry rule below).
 bool read_disk_file(const std::string& path, std::string& contents,
                     std::string& error);
 
@@ -79,8 +81,11 @@ bool read_disk_file(const std::string& path, std::string& contents,
 // become '/' on Windows only), duplicate separators collapsed and
 // '.'/'..' resolved lexically without touching the filesystem. Used to
 // test whether a disk file lies under a search root before the file is
-// read. This is textual normalization only and never proof of physical
-// identity; equivalent spellings of one file do compare equal here.
+// read. Returns an empty string when the input is empty or a relative
+// spelling cannot be resolved because the working directory is unknown;
+// callers treat that as a refusal, never as the filesystem root. This is
+// textual normalization only and never proof of physical identity;
+// equivalent spellings of one file do compare equal here.
 std::string lexical_absolute(const std::string& path);
 
 // Splits a lexical-absolute file path into the remainder under a
@@ -106,32 +111,37 @@ bool strip_search_root_prefix(const std::string& file_absolute,
 bool utf8_from_wide(const wchar_t* text, std::string& utf8);
 
 // Converts one UTF-8 disk path to the wide spelling to hand to a Win32 W
-// API. The spelling is made absolute through lexical_absolute, its
-// separators become '\', and the long-path prefix is prepended - "\\?\"
+// API. An explicit "\\?\" or "//?/" prefix on a drive-absolute or
+// "UNC\server\share" spelling is translated to the plain form first; the
+// spelling is then made absolute through lexical_absolute, its separators
+// become '\', and the canonical long-path prefix is prepended - "\\?\"
 // for a drive path, "\\?\UNC\" for a network share - exactly like the
 // io_win32 layer of the reference compiler. The prefix is what makes a
 // path beyond MAX_PATH reachable without a manifest or a registry
 // setting, and it also stops the API from post-processing the spelling:
 // trailing dots and spaces stay literal, as they are in the stored
-// spelling, and '.'/'..' were already resolved lexically. A spelling that
-// already carries the prefix is passed through verbatim, and a path that
-// cannot be made absolute falls back to the plain conversion this module
-// used before long paths were supported; both paths are non-empty
-// buffers without a terminator, so callers still append one. Returns
-// false only when the spelling is not valid UTF-8 or contains a NUL.
-// Exposed for the tests and for later output-side helpers; every call in
-// this module that reaches the disk goes through it.
+// spelling, and '.'/'..' were already resolved lexically. A device
+// spelling ("\\?\GLOBALROOT\...") is not translated and keeps its
+// verbatim passthrough. A relative spelling whose working directory is
+// unknown is refused instead of falling back to the relative form; every
+// path that is made absolute produces a non-empty buffer without a
+// terminator, so callers still append one. Returns false when the
+// spelling is not valid UTF-8, contains a NUL, or cannot be made
+// absolute. Exposed for the tests and for the output-side helpers;
+// every call in this module that reaches the disk goes through it.
 bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 #endif
 
 // ---------------------------------------------------------------------------
 // Output-side additions (plan 5, step 4: the standalone publisher).
 //
-// Trimmed to the reference compiler's model on 2026-10-07: the publisher writes
-// files at paths the generator already mapped and validated, creating the
-// directory tree and writing each file, exactly as protoc's
-// WriteAllToDisk does (VerifyDirectoryExists, TryCreateParentDirectory, then
-// open/write/close - command_line_interface.cc:541-610).
+// Trimmed to the reference compiler's model by the plan-5 trim (`fbdcc0e`,
+// 2026-10-11). The publisher writes files at paths the generator already
+// mapped and validated: it creates the parent directories and writes each
+// file in place, as protoc's WriteAllToDisk does (TryCreateParentDirectory,
+// then open/write/close - command_line_interface.cc:541-610). The output root
+// is the one deliberate divergence: protoc verifies that it exists
+// (VerifyDirectoryExists), this publisher creates it.
 //
 // The guards this module used to carry - containment below the output root,
 // case-folding collision probing, native file identity, hardlink detection and
@@ -144,20 +154,40 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 // directory by protoc; and two output names that are one entry on a
 // case-folding filesystem silently overwrite here, as they do in protoc.
 //
-// The loader never needed these and must not have them: identity, case folding
-// and replacement belong to the only component that writes an output tree, so
-// they sit beside the input ones instead of inside the common library, which
-// performs no filesystem call at all.
+// The loader never needed these and must not have them: what remains of the
+// output side - directory creation and the in-place write - belongs to the only
+// component that writes an output tree, so it sits beside the input helpers
+// instead of inside the common library, which performs no filesystem call at
+// all.
+//
+// Both entries refuse a spelling that contains an embedded NUL on every
+// platform, the same rule the read path applies: every native call would
+// truncate the spelling at the NUL and address an entry the caller did not
+// name. The Windows writer shares the target with concurrent readers and with
+// holders that have write access (FILE_SHARE_READ | FILE_SHARE_WRITE, the share
+// set the reference's _wopen carries); it does not share delete.
+//
+// The boundary between an action and a probe: an ACTION entry
+// (read_disk_file, make_directories, write_disk_file) returns the reason
+// alone and the caller names the path it passed, so a Diagnostic that carries
+// the path in its `file` prints it once. A PROBE (disk_file_status) names the
+// candidate it probed, because a caller may have several candidates and the
+// text has to say which one answered (W-29).
 // ---------------------------------------------------------------------------
 
 // Create every missing directory on the way to `directory`; existing
-// directories are accepted. Returns false with a reason on failure.
+// directories are accepted. Returns false with a reason (without the path:
+// the caller names it) on failure, including a directory spelling that cannot
+// be made absolute because the working directory is unknown.
 bool make_directories(const std::string& directory, std::string& error);
 
 // Write `contents` to `target`, creating or truncating it. The target keeps
 // either its previous content or the complete new content unless the process
-// dies mid-write; a failure removes nothing and reports the reason. This is
-// the reference compiler's write model - no temporary file, no rename.
+// dies mid-write; a failure removes nothing and reports the reason without
+// the path (the caller names it). A directory at `target` is refused as
+// `cannot write file (the target is a directory)` on both platforms. This is
+// the reference compiler's write model - no temporary file, no rename. A
+// target containing an embedded NUL is refused on every platform.
 bool write_disk_file(const std::string& target,
                      const std::string& contents,
                      std::string& error);

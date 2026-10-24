@@ -1,0 +1,24 @@
+//
+// A nested type is a member of its parent, so the nested message `has_foo`
+// and the presence flag of the field `foo` ask for the same member name.
+//
+// The reference compiler accepts the schema and generates a header that
+// compiles: it flattens the nested type to `M_HasFoo` and spells its
+// accessors as methods, so nothing collides there. This generator declares
+// the nested type inside the struct, so the shape is refused with a
+// diagnostic instead of writing a header that cannot mean what the schema
+// says.
+
+syntax = "proto2";
+
+package nestedflag;
+
+message M
+{
+    optional int32 foo = 1;
+
+    message has_foo
+    {
+        optional int32 value = 1;
+    }
+}

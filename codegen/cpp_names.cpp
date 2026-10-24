@@ -5,7 +5,12 @@
 #include <stdexcept>
 #include <vector>
 
+#include "schema.hpp"
+
 namespace easypb_codegen {
+
+// W-35: one guarded conversion door, declared in schema.hpp.
+using easypb_schema::view_text;
 namespace {
 
 bool is_identifier_start(char c)
@@ -20,16 +25,31 @@ bool is_identifier_continue(char c)
     return std::isalnum(value) != 0 || c == '_';
 }
 
-const std::set<std::string>& cpp_keywords()
+// The names a generated C++ declaration may not carry verbatim.
+//
+// The list is the C++ keywords of the language the project builds for, plus
+// the two macro names the reference compiler escapes as well: its own list
+// (compiler/cpp/helpers.cc:120-217) holds "NULL" and "assert" among the
+// keywords it resolves, and both are hazards in a generated header - "NULL"
+// is a macro that expands to a literal, so a member named NULL would expand
+// under the compiler.
+//
+// One set serves two rules, so the two rules cannot disagree: the package
+// rule REFUSES a package component from this set (a namespace named after a
+// keyword does not compile, and the project refuses it rather than escaping
+// it), and the declaration rule ESCAPES a name from this set (a declaration
+// named after a keyword does not compile either, and the reference compiler
+// escapes it - see cpp_identifier).
+const std::set<std::string>& cpp_reserved_names()
 {
     static const char* const values[] = {
-        "alignas", "alignof", "and", "and_eq", "asm", "atomic_cancel",
-        "atomic_commit", "atomic_noexcept", "auto", "bitand", "bitor",
-        "bool", "break", "case", "catch", "char", "char8_t", "char16_t",
-        "char32_t", "class", "compl", "concept", "const", "consteval",
-        "constexpr", "constinit", "const_cast", "continue", "co_await",
-        "co_return", "co_yield", "decltype", "default", "delete", "do",
-        "double", "dynamic_cast", "else", "enum", "explicit", "export",
+        "NULL", "alignas", "alignof", "and", "and_eq", "asm", "assert",
+        "atomic_cancel", "atomic_commit", "atomic_noexcept", "auto", "bitand",
+        "bitor", "bool", "break", "case", "catch", "char", "char8_t",
+        "char16_t", "char32_t", "class", "compl", "concept", "const",
+        "consteval", "constexpr", "constinit", "const_cast", "continue",
+        "co_await", "co_return", "co_yield", "decltype", "default", "delete",
+        "do", "double", "dynamic_cast", "else", "enum", "explicit", "export",
         "extern", "false", "float", "for", "friend", "goto", "if",
         "inline", "int", "long", "mutable", "namespace", "new",
         "noexcept", "not", "not_eq", "nullptr", "operator", "or", "or_eq",
@@ -93,6 +113,21 @@ bool has_reserved_identifier_form(const std::string& component,
 
 } // namespace
 
+// The C++ name a Protobuf declaration name maps to.
+//
+// A name that cannot be spelled verbatim in C++ gets an underscore
+// appended, exactly as the reference compiler does: its ResolveKeyword
+// (compiler/cpp/helpers.cc:509-514) appends "_" to a keyword, and its
+// ResolveKnownNameCollisions (helpers.cc:516-546) does the same for the
+// names that would collide with a known method. Every other name is
+// returned unchanged, so a header that carries no reserved name keeps the
+// bytes it had.
+std::string cpp_identifier(const std::string& name)
+{
+    if (cpp_reserved_names().count(name) == 0) return name;
+    return name + "_";
+}
+
 std::string cpp_absolute_name(const str_view& absolute_proto_name)
 {
     if (absolute_proto_name.size() < 2 || absolute_proto_name[0] != '.') {
@@ -100,20 +135,23 @@ std::string cpp_absolute_name(const str_view& absolute_proto_name)
             "absolute Protobuf type name must begin with '.'");
     }
 
+    // Every component of the path becomes a C++ name of its own: the package
+    // components are namespaces and the rest are type names, and a name that
+    // is a C++ keyword cannot be spelled verbatim in either place. The rule
+    // is uniform because the reference compiler's is - it escapes a package
+    // word (compiler/cpp/helpers.cc:548-557) the same way it escapes a type
+    // name (helpers.cc:451-469). This project refuses a keyword package
+    // component instead (validate_cpp_package), so in practice only the type
+    // components are ever affected.
+    const std::string path = view_text(absolute_proto_name);
+    const std::vector<std::string> components = split_components(
+        path.substr(1), '.', "Protobuf type name");
+
     std::string result;
-    result.reserve(absolute_proto_name.size() + 8);
-    for (std::size_t i = 0; i < absolute_proto_name.size(); ++i) {
-        const char c = absolute_proto_name[i];
-        if (c == '.') {
-            if (i + 1 == absolute_proto_name.size() ||
-                absolute_proto_name[i + 1] == '.') {
-                throw std::runtime_error(
-                    "invalid Protobuf type name: empty name component");
-            }
-            result += "::";
-        } else {
-            result += c;
-        }
+    result.reserve(path.size() + 8);
+    for (std::size_t i = 0; i < components.size(); ++i) {
+        result += "::";
+        result += cpp_identifier(components[i]);
     }
     return result;
 }
@@ -204,7 +242,7 @@ void validate_cpp_package(const std::string& package)
                     "' is not a valid C++ namespace identifier");
             }
         }
-        if (cpp_keywords().count(component) != 0) {
+        if (cpp_reserved_names().count(component) != 0) {
             throw std::runtime_error(
                 "Protobuf package component '" + component +
                 "' is a C++ keyword and cannot be used as a namespace");

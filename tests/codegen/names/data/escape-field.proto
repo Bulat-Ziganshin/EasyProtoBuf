@@ -1,0 +1,19 @@
+//
+// The escape rule is not injective: `class` and `class_` are two different
+// Protobuf names, but the C++ spelling of both is `class_`, so the struct
+// would declare the member twice.
+//
+// The reference compiler escapes a keyword the same way (its ResolveKeyword
+// appends "_", compiler/cpp/helpers.cc:509-514), so it has the same hole: it
+// accepts the schema and emits two `class_()` accessors that differ only in
+// their return type, which C++ forbids. A diagnostic is the better answer.
+
+syntax = "proto2";
+
+package escapefield;
+
+message M
+{
+    optional int32 class = 1;
+    optional int32 class_ = 2;
+}

@@ -151,32 +151,66 @@ def source_case(name, root, linker, kind="pair", note=""):
                 roots=[name + ".proto"], linker=linker, kind=kind, note=note)
 
 
-def probe_case(name, root):
-    """A fixture kept for the record with NO row: measured, and named by the
-    fixtures README and the ledger row that records the asymmetry."""
-    case = source_case(name, root, "accept")
-    case["no_row"] = True
-    return case
+A25_EDITION_NOTE = (
+    "protoc 30.1 accepts this shape; this project refuses it by A25 because "
+    "the model carries no editions semantics - a recorded capability boundary "
+    "whose owner is plan 5")
 
 
 SOURCE_CASES = [
-    # --- UNSUPPORTED_SYNTAX: not a source row, and the measurement why ---
-    # The source frontend answers BOTH of these with DIAGNOSTIC_GENERIC before
-    # any link runs (a parse error, not A25's capability statement), so the
-    # code's rows live at the descriptor origin. These three shapes are kept as
-    # evidence for ledger D-30 and carry no row - a row may not name GENERIC.
-    # Since 2026-10-04 the editions probe's message names editions (plan 5's
-    # parser branch); its CODE is still the load-stage GENERIC, so the shape
-    # stays rowless for the same reason.
-    probe_case("probe-source-proto3",
-               'syntax = "proto3";\npackage s;\n'
-               'message Root { int32 a = 1; }\n'),
-    probe_case("probe-source-proto4",
-               'syntax = "proto4";\npackage s;\n'
-               'message Root { int32 a = 1; }\n'),
-    probe_case("probe-source-editions",
-               'edition = "2023";\npackage s;\n'
-               'message Root { int32 a = 1; }\n'),
+    # --- UNSUPPORTED_SYNTAX: the parser's code channel (S7e, W-60) ---------
+    # The source frontend used to answer both shapes with DIAGNOSTIC_GENERIC
+    # before any link ran, so the three fixtures carried no row. The parser's
+    # throw now carries the descriptor twin's code, so the family is a real
+    # source row: a `pair` where protoc refuses the same text, and the
+    # recorded `inverse` for editions (protoc accepts it and models
+    # `syntax: "editions"`).
+    source_case("s-unsupported-syntax-accept",
+                'syntax = "proto3";\npackage s;\n'
+                'message Root { int32 a = 1; }\n', "accept"),
+    source_case("s-unsupported-syntax-reject",
+                'syntax = "proto4";\npackage s;\n'
+                'message Root { int32 a = 1; }\n',
+                "DIAGNOSTIC_UNSUPPORTED_SYNTAX"),
+    source_case("s-unsupported-syntax-editions-inverse",
+                'edition = "2023";\npackage s;\n'
+                'message Root { int32 a = 1; }\n',
+                "DIAGNOSTIC_UNSUPPORTED_SYNTAX", kind="inverse",
+                note=A25_EDITION_NOTE),
+
+    # --- the proto3 field rules and the enum shapes (S7e, W-60) ------------
+    # Each accept twin is the proto2 control of the same declaration, exactly
+    # as the descriptor family's accept twins are: a rule that refused the
+    # label, the default, the alias or the single value as such - rather than
+    # as a shape its syntax forbids - fails this lane instead of passing it.
+    source_case("s-proto3-required-field-accept",
+                'syntax = "proto2";\npackage s;\n'
+                'message Root { required int32 a = 1; }\n', "accept"),
+    source_case("s-proto3-required-field-reject",
+                'syntax = "proto3";\npackage s;\n'
+                'message Root { required int32 a = 1; }\n',
+                "DIAGNOSTIC_PROTO3_REQUIRED_FIELD"),
+    source_case("s-proto3-explicit-default-accept",
+                'syntax = "proto2";\npackage s;\n'
+                'message Root { optional int32 a = 1 [default = 5]; }\n',
+                "accept"),
+    source_case("s-proto3-explicit-default-reject",
+                'syntax = "proto3";\npackage s;\n'
+                'message Root { int32 a = 1 [default = 5]; }\n',
+                "DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT"),
+    source_case("s-duplicate-enum-number-accept",
+                'syntax = "proto2";\npackage s;\nenum E {\n'
+                '  option allow_alias = true;\n  A = 1;\n  B = 1;\n}\n',
+                "accept"),
+    source_case("s-duplicate-enum-number-reject",
+                'syntax = "proto2";\npackage s;\nenum E { A = 1; B = 1; }\n',
+                "DIAGNOSTIC_DUPLICATE_ENUM_NUMBER"),
+    source_case("s-empty-enum-accept",
+                'syntax = "proto2";\npackage s;\nenum E { A = 1; }\n',
+                "accept"),
+    source_case("s-empty-enum-reject",
+                'syntax = "proto2";\npackage s;\nenum E {}\n',
+                "DIAGNOSTIC_EMPTY_ENUM"),
 
     # --- INVALID_IMPORT: the source spelling rules ------------------------
     source_case("s-invalid-import-accept",
@@ -317,10 +351,15 @@ A26_UNREFERENCED_NOTE = (
     "whether or not a field references it (the reference-free strictness, "
     "measured 2026-09-29 by fix round r25 and re-derived by fix round r26)")
 
-A25_EDITION_NOTE = (
-    "protoc 30.1 accepts this shape; this project refuses it by A25 because "
-    "the model carries no editions semantics - a recorded capability boundary "
-    "whose owner is plan 5")
+INVALID_FIELD_TYPE_NOTE = (
+    "protoc 30.1 accepts this shape and resolves it: an absent kind is the "
+    "proto default (TYPE_DOUBLE), an unknown kind the same way, a group a "
+    "generated group class. This project refuses all three by the owner's "
+    "decision of 2026-10-21 (plan 5 follow-up, session S1, W-10): the "
+    "generator has no group types at all, and the emitter used to write "
+    "\"???type\" or \"???group\" into the header at rc=0 - a deliberate "
+    "\"stricter than protoc\" divergence, like the package-depth and the "
+    "output-root rules")
 
 ENTRY_KEY_INT32 = ('      field { name: "key" number: 1 label: '
                    'LABEL_OPTIONAL type: TYPE_INT32 }\n')
@@ -572,15 +611,23 @@ EXTRA_CASES = [
         "accept"),
 
     # --- The group and oneof controls (r25, D-54/D-56) ---------------------
+    # A proto2 group is one of the three shapes the plan-5 follow-up's S1
+    # (W-10) refuses: the generator has no group types, and the emitter used
+    # to write "???group" for one. protoc accepts the shape and generates a
+    # group class for it, so the row is an INVERSE one - the disagreement is
+    # by decision, and the decision is recorded in the ledger's Decisions
+    # table. The accept column of the code it answers with is
+    # d-invalid-field-type-accept, below.
     descriptor_case(
-        "d-group-proto2-accept",
+        "d-invalid-field-type-group-reject",
         file_block("root.proto",
                    '  message_type {\n    name: "M"\n'
                    '    field { name: "g" number: 1 label: LABEL_OPTIONAL '
                    'type: TYPE_GROUP type_name: ".p.M.G" }\n'
                    '    nested_type { name: "G" }\n  }\n',
                    syntax="proto2"),
-        "accept"),
+        "DIAGNOSTIC_INVALID_FIELD_TYPE", kind="inverse",
+        note=INVALID_FIELD_TYPE_NOTE),
     descriptor_case(
         "d-oneof-member-optional-accept",
         file_block("root.proto",
@@ -919,15 +966,42 @@ DESCRIPTOR_CASES = [
                     "DIAGNOSTIC_INVALID_FIELD_NUMBER"),
 
     # --- MISSING_TYPE_NAME, and the P-19 control --------------------------
+    # The accept column is a field that names no type: a SCALAR needs no
+    # type_name, so the field is legal and the rule does not reach it. It
+    # used to carry no kind at all, which the S1 refusal (W-10) turned into
+    # a refusal of its own - the accept column of this code needs a shape the
+    # code still accepts.
     descriptor_case("d-missing-type-name-accept",
                     root_set('  message_type {\n    name: "M"\n'
                              '    field { name: "a" number: 1 label: '
-                             'LABEL_OPTIONAL }\n  }\n'), "accept"),
+                             'LABEL_OPTIONAL type: TYPE_INT32 }\n  }\n'),
+                    "accept"),
     descriptor_case("d-missing-type-name-reject",
                     root_set('  message_type {\n    name: "M"\n'
                              '    field { name: "a" number: 1 label: '
                              'LABEL_OPTIONAL type: TYPE_MESSAGE }\n  }\n'),
                     "DIAGNOSTIC_MISSING_TYPE_NAME"),
+
+    # --- INVALID_FIELD_TYPE (the plan-5 follow-up's S1, W-10) --------------
+    # The kinds the emitter cannot spell. protoc accepts all of them and
+    # emits working code; this project refuses them by decision, so the rows
+    # are inverse ones. The UNKNOWN kind (a type outside the TYPE_* set) is
+    # NOT a row: protoc's text format will not carry an enumeration value it
+    # does not know ("Unknown enumeration value of \"99\" for field \"type\""),
+    # and a row's fixture must be protoc's own encoding of a text this
+    # project tracks. That shape is measured by the validity lane instead
+    # (tests/codegen/validity/data/field-type-unknown.pbs).
+    descriptor_case("d-invalid-field-type-accept",
+                    root_set('  message_type {\n    name: "M"\n'
+                             '    field { name: "a" number: 1 label: '
+                             'LABEL_OPTIONAL type: TYPE_INT32 }\n  }\n'),
+                    "accept"),
+    descriptor_case("d-invalid-field-type-absent-reject",
+                    root_set('  message_type {\n    name: "M"\n'
+                             '    field { name: "a" number: 1 label: '
+                             'LABEL_OPTIONAL }\n  }\n'),
+                    "DIAGNOSTIC_INVALID_FIELD_TYPE", kind="inverse",
+                    note=INVALID_FIELD_TYPE_NOTE),
 
     # --- DUPLICATE_ENUM_NUMBER --------------------------------------------
     descriptor_case("d-duplicate-enum-number-accept",
