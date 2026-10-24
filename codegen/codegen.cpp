@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <iostream>
 #include <map>
 #include <set>
@@ -693,15 +694,23 @@ std::string string_default_str(const FieldDescriptorProto& field,
 // They are not C++ identifiers, so the emitter spells them the way the
 // reference compiler's own generated code does.
 //
-// Every other spelling is refused before the emitter runs: the source lexer
-// stores the token alone, and `validate_default` refuses a leading `+` (W-40)
-// and a leading space (W-03) on the descriptor path. The text this function
-// reads is therefore canonical, and it translates rather than normalizes - a
-// trim here would hide the diagnostic the validator just produced.
+// Everything this function reads is canonical: the source parser and the
+// descriptor adapter both store `canonical_float_default`'s output, so a
+// spelling that survived them (a hand-built schema, or a future layer that
+// bypassed the adapter) is refused here rather than reinterpreted. The
+// refusal is defence in depth, not a user-facing path: `validate_default`
+// already rejects the same text with a positioned diagnostic (CR-02, R1).
 std::string float_default_str(const FieldDescriptorProto& field)
 {
     if (field.default_value.empty()) return "";
     const std::string text = view_text(field.default_value);
+
+    if (!easypb_schema::is_canonical_float_default(
+            text, field.type == FieldDescriptorProto::TYPE_FLOAT)) {
+        throw std::runtime_error(
+            myformat("Field '{0}' carries the non-canonical floating-point "
+                     "default '{1}'", field.name, text));
+    }
 
     const std::string limits =
         field.type == FieldDescriptorProto::TYPE_FLOAT ? "float" : "double";
@@ -717,6 +726,50 @@ std::string float_default_str(const FieldDescriptorProto& field)
     // W-04: the canonical text for negative zero is "-0", but the C++ token
     // `-0` is an integer zero and would initialize a floating member as +0.0.
     if (text == "-0") return " = -0.0";
+    return myformat(" = {0}", text);
+}
+
+
+// The initializer of an integral member.
+//
+// Both frontends store the canonical decimal spelling, so the text is read
+// again only to decide how C++ can spell it. A 64-bit extreme needs a typed
+// literal: `-9223372036854775808` and `18446744073709551615` are
+// unsuffixed-decimal forms that C++11 calls ill-formed, even though GCC
+// accepts them without `-pedantic-errors` (CR-05). Every other integral value
+// fits `long long` as an unsuffixed decimal, so it keeps the historical
+// spelling. A non-canonical text is refused here for the same reason the
+// float emitter refuses one: the emitter must not become a third interpreter
+// of the literal (R1).
+std::string integral_default_str(const FieldDescriptorProto& field)
+{
+    const std::string text = view_text(field.default_value);
+    std::string canonical;
+    if (!easypb_schema::canonical_integral_default(text, canonical) ||
+        canonical != text) {
+        throw std::runtime_error(
+            myformat("Field '{0}' carries the non-canonical integral default "
+                     "'{1}'", field.name, text));
+    }
+
+    bool negative = false;
+    std::uint64_t magnitude = 0;
+    (void)easypb_schema::parse_integral_default_literal(text, negative,
+                                                        magnitude);
+    const std::uint64_t int64_limit = 9223372036854775808ull;
+    const bool signed64 =
+        field.type == FieldDescriptorProto::TYPE_INT64 ||
+        field.type == FieldDescriptorProto::TYPE_SINT64 ||
+        field.type == FieldDescriptorProto::TYPE_SFIXED64;
+    if (signed64 && negative && magnitude == int64_limit) {
+        return " = (-9223372036854775807LL - 1)";
+    }
+    if (!signed64 &&
+        (field.type == FieldDescriptorProto::TYPE_UINT64 ||
+         field.type == FieldDescriptorProto::TYPE_FIXED64) &&
+        magnitude > int64_limit - 1u) {
+        return myformat(" = {0}ULL", text);
+    }
     return myformat(" = {0}", text);
 }
 
@@ -779,7 +832,10 @@ std::string default_value_str(const FieldDescriptorProto& field,
             field.type == FieldDescriptorProto::TYPE_BYTES) {
             return string_default_str(field, context);
         }
-        return myformat(" = {0}", field.default_value);
+        if (field.type == FieldDescriptorProto::TYPE_BOOL) {
+            return myformat(" = {0}", field.default_value);
+        }
+        return integral_default_str(field);
     } else {
         // C++ doesn't initialize scalar fields by default, so we need to enforce the initialization
         return field.type == FieldDescriptorProto::TYPE_BOOL

@@ -4,6 +4,9 @@
 #   CODEGEN the standalone codegen executable
 #   INPUT  the .pbs descriptor set
 #   OUTPUT the header to write
+# Optional:
+#   OPTIONS extra codegen flags (a CMake list), for the --no-has-fields half
+#           of the default-value family
 
 foreach(required_var CODEGEN INPUT OUTPUT)
     if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
@@ -15,7 +18,7 @@ get_filename_component(output_dir "${OUTPUT}" DIRECTORY)
 file(MAKE_DIRECTORY "${output_dir}")
 
 execute_process(
-    COMMAND "${CODEGEN}" --descriptor-set "${INPUT}"
+    COMMAND "${CODEGEN}" --descriptor-set ${OPTIONS} "${INPUT}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE generated
     ERROR_VARIABLE error)

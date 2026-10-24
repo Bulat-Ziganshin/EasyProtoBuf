@@ -101,7 +101,7 @@ void test_proto2_defaults_and_literals()
     const FieldDescriptorProto* xs = find_field(m, "xs");
     CHECK(s && s->has_default_value && text(s->default_value) == std::string("a\nb\xE2\x98\xBA", 6));
     CHECK(b && b->has_default_value && text(b->default_value) == "\\000\\377A");
-    CHECK(i && text(i->default_value) == "-0x2a");
+    CHECK(i && text(i->default_value) == "-42");
     CHECK(d && text(d->default_value) == "1000");
     CHECK(xs && xs->has_options && xs->options.has_packed && xs->options.packed);
 }
@@ -246,8 +246,8 @@ void test_numeric_literal_forms()
     easypb_proto::Diagnostic error;
     CHECK(easypb_proto::parse_proto("numbers.proto", source, parsed, error));
     const DescriptorProto& message = parsed.file.message_type[0];
-    CHECK(find_field(message, "oct") && text(find_field(message, "oct")->default_value) == "077");
-    CHECK(find_field(message, "hex") && text(find_field(message, "hex")->default_value) == "0xffffffff");
+    CHECK(find_field(message, "oct") && text(find_field(message, "oct")->default_value) == "63");
+    CHECK(find_field(message, "hex") && text(find_field(message, "hex")->default_value) == "4294967295");
     CHECK(find_field(message, "neg_inf") && text(find_field(message, "neg_inf")->default_value) == "-inf");
     CHECK(find_field(message, "not_a_number") && text(find_field(message, "not_a_number")->default_value) == "nan");
     CHECK(find_field(message, "fraction") && text(find_field(message, "fraction")->default_value) == "50");
@@ -255,6 +255,72 @@ void test_numeric_literal_forms()
     CHECK(find_field(message, "tiny") && text(find_field(message, "tiny")->default_value) == "1e-08");
     CHECK(find_field(message, "negative_zero") && text(find_field(message, "negative_zero")->default_value) == "-0");
     CHECK(find_field(message, "rounded") && text(find_field(message, "rounded")->default_value) == "1.23456788");
+}
+
+// R1's source half: the parser stores the canonical text the descriptor path
+// stores, for the whole numeric-default spelling family. CR-01 (an INTEGER
+// token on a float/double is octal/hex-aware, never decimal text), CR-17
+// (integral defaults become decimal) and CR-05's 64-bit extremes (the stored
+// text is canonical; the emitter owns the typed C++ literal) are asserted on
+// the same schema so a regression in one path is visible in one place.
+void test_numeric_default_spellings_are_canonical()
+{
+    const std::string source =
+        "syntax = \"proto2\";\n"
+        "message M {\n"
+        " optional float f_octal = 1 [default = 010];\n"
+        " optional double d_octal = 2 [default = 010];\n"
+        " optional float f_hex = 3 [default = 0x10];\n"
+        " optional double d_hex = 4 [default = 0x10];\n"
+        " optional float f_neg_octal = 5 [default = -010];\n"
+        " optional int32 i32_octal = 6 [default = 010];\n"
+        " optional int32 i32_hex = 7 [default = 0x10];\n"
+        " optional int32 i32_neg_zero = 8 [default = -0];\n"
+        " optional int64 i64_octal = 9 [default = 077];\n"
+        " optional int64 i64_min = 10 [default = -9223372036854775808];\n"
+        " optional int64 i64_max = 11 [default = 9223372036854775807];\n"
+        " optional uint64 u64_max = 12 [default = 18446744073709551615];\n"
+        " optional uint64 u64_hex_max = 13 [default = 0xFFFFFFFFFFFFFFFF];\n"
+        "}\n";
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("spellings.proto", source, parsed, error));
+    const DescriptorProto& message = parsed.file.message_type[0];
+    struct Row {
+        const char* name;
+        const char* expected;
+    };
+    const Row rows[] = {
+        {"f_octal", "8"},
+        {"d_octal", "8"},
+        {"f_hex", "16"},
+        {"d_hex", "16"},
+        {"f_neg_octal", "-8"},
+        {"i32_octal", "8"},
+        {"i32_hex", "16"},
+        {"i32_neg_zero", "0"},
+        {"i64_octal", "63"},
+        {"i64_min", "-9223372036854775808"},
+        {"i64_max", "9223372036854775807"},
+        {"u64_max", "18446744073709551615"},
+        {"u64_hex_max", "18446744073709551615"}
+    };
+    for (std::size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+        const FieldDescriptorProto* field = find_field(message, rows[i].name);
+        CHECK(field != 0);
+        if (field != 0) {
+            CHECK(field->has_default_value);
+            CHECK(text(field->default_value) == rows[i].expected);
+        }
+    }
+
+    // CR-18's overlap: the integer token `08` is not octal and protoc refuses
+    // it on the float path too (its ConsumeNumber reads an INTEGER token with
+    // the octal parser first). The parser's refusal happens before any
+    // canonicalization, so the value never silently becomes 8.
+    CHECK(!easypb_proto::parse_proto("bad-octal-float.proto",
+        "message M { optional float x = 1 [default = 08]; }", parsed, error));
+    CHECK(error.message.find("Integer out of range") != std::string::npos);
 }
 
 void test_lexer_diagnostics()
@@ -1443,6 +1509,7 @@ int main()
     test_rejects_wrong_default_token_kind();
     test_64_bit_default_ranges();
     test_numeric_literal_forms();
+    test_numeric_default_spellings_are_canonical();
     test_lexer_diagnostics();
     test_edition_statement_is_refused_by_name();
     test_rejects_reserved_conflicts();

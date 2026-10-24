@@ -940,6 +940,136 @@ void test_integer_parsing_boundaries_follow_protoc()
     }
 }
 
+// R1's single owner: the canonical text every numeric default flows through.
+// CR-01 (INTEGER token on a float field is octal/hex-aware), CR-02 (the
+// reference compiler's `INF`/`Infinity`/`NAN`/`nan(payload)` spellings) and
+// CR-17 (integral defaults become decimal) are all properties of these
+// helpers, so each row is asserted here as well as through the CLI lane.
+void test_default_canonicalization_helpers()
+{
+    struct IntegralCase {
+        const char* text;
+        bool ok;
+        const char* canonical;
+    };
+    const IntegralCase integral_cases[] = {
+        {"0", true, "0"},
+        {"010", true, "8"},
+        {"077", true, "63"},
+        {"0x10", true, "16"},
+        {"0XFF", true, "255"},
+        {"-0", true, "0"},
+        {"-010", true, "-8"},
+        {"-0x10", true, "-16"},
+        {"18446744073709551615", true, "18446744073709551615"},
+        {"-9223372036854775808", true, "-9223372036854775808"},
+        {"08", false, ""},
+        {"0x", false, ""},
+        {"+7", false, ""},
+        {"", false, ""},
+        {"-", false, ""}
+    };
+    for (std::size_t i = 0; i < sizeof(integral_cases) / sizeof(integral_cases[0]);
+         ++i) {
+        std::string canonical;
+        const bool ok = easypb_schema::canonical_integral_default(
+            integral_cases[i].text, canonical);
+        CHECK(ok == integral_cases[i].ok);
+        if (ok) CHECK(canonical == integral_cases[i].canonical);
+    }
+
+    struct LiteralCase {
+        const char* text;
+        bool ok;
+        bool negative;
+        std::uint64_t magnitude;
+    };
+    const LiteralCase literal_cases[] = {
+        {"010", true, false, 8},
+        {"-0x10", true, true, 16},
+        {"-0", true, true, 0},
+        {"18446744073709551615", true, false, 18446744073709551615ull}
+    };
+    for (std::size_t i = 0; i < sizeof(literal_cases) / sizeof(literal_cases[0]);
+         ++i) {
+        bool negative = false;
+        std::uint64_t magnitude = 0;
+        const bool ok = easypb_schema::parse_integral_default_literal(
+            literal_cases[i].text, negative, magnitude);
+        CHECK(ok == literal_cases[i].ok);
+        if (ok) {
+            CHECK(negative == literal_cases[i].negative);
+            CHECK(magnitude == literal_cases[i].magnitude);
+        }
+    }
+
+    struct FloatCase {
+        const char* text;
+        bool canonical;
+        const char* canonical_text;
+    };
+    const FloatCase float_cases[] = {
+        {"inf", true, "inf"},
+        {"-inf", true, "-inf"},
+        {"nan", true, "nan"},
+        {"INF", false, "inf"},
+        {"Infinity", false, "inf"},
+        {"-Infinity", false, "-inf"},
+        {"NAN", false, "nan"},
+        {"nan(0x1)", false, "nan"},
+        {"8", true, "8"},
+        {"-0", true, "-0"},
+        {"1e400", false, "inf"},
+        {"-1e-400", false, "-0"},
+        {"+8", false, "8"},
+        {" 8", false, "8"},
+        {"1.0", false, "1"}
+    };
+    for (std::size_t i = 0; i < sizeof(float_cases) / sizeof(float_cases[0]);
+         ++i) {
+        std::string canonical;
+        const bool ok = easypb_schema::canonical_float_default(
+            float_cases[i].text, false, canonical);
+        CHECK(ok);
+        if (ok) CHECK(canonical == float_cases[i].canonical_text);
+        CHECK(easypb_schema::is_canonical_float_default(
+                  float_cases[i].text, false) == float_cases[i].canonical);
+    }
+
+    struct TokenCase {
+        const char* text;
+        bool ok;
+        double value;
+    };
+    const TokenCase token_cases[] = {
+        {"010", true, 8.0},
+        {"0x10", true, 16.0},
+        {"-010", true, -8.0},
+        {"0", true, 0.0},
+        {"18446744073709551616", true, 18446744073709551616.0},
+        {"08", false, 0.0},
+        {"0xG", false, 0.0},
+        {"-", false, 0.0}
+    };
+    for (std::size_t i = 0; i < sizeof(token_cases) / sizeof(token_cases[0]);
+         ++i) {
+        double value = 0.0;
+        const bool ok = easypb_schema::integer_token_as_double(
+            token_cases[i].text, value);
+        CHECK(ok == token_cases[i].ok);
+        if (ok) CHECK(value == token_cases[i].value);
+    }
+
+    // The adapter gate keeps the two refusal spellings out of the normalizer.
+    CHECK(easypb_schema::can_normalize_default_text("8"));
+    CHECK(easypb_schema::can_normalize_default_text("-8"));
+    CHECK(easypb_schema::can_normalize_default_text("INF"));
+    CHECK(!easypb_schema::can_normalize_default_text("+8"));
+    CHECK(!easypb_schema::can_normalize_default_text(" 8"));
+    CHECK(!easypb_schema::can_normalize_default_text(""));
+}
+
+
 // --- P1 rule split: direct calls -------------------------------------------
 //
 // resolve_message was split (P1) into five rule helpers, declared in
@@ -1391,6 +1521,30 @@ void test_rule_default_validator_directly()
         CHECK(!easypb_schema::internal::validate_default(
             file, symbols, visible, field, false, false, field_path, error));
         CHECK(error.message.find("does not fit signed 32-bit field") !=
+              std::string::npos);
+    }
+    // CR-02: the validator accepts exactly the canonical float text. The
+    // adapter has already normalized a descriptor by the time this runs, so
+    // an `INF` reaching the validator is a hand-built SchemaFile and must be
+    // refused rather than read with a second interpretation.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_FLOAT);
+        field.default_value = file.strings.save("8");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, false, field_path, error));
+    }
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_FLOAT);
+        field.default_value = file.strings.save("INF");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, false, field_path, error));
+        CHECK(error.message.find("invalid floating-point default") !=
               std::string::npos);
     }
     // A bool default must be exactly true or false.
@@ -1847,6 +2001,7 @@ int main()
     test_message_defaults_are_rejected();
     test_map_entry_name_follows_protoc();
     test_integer_parsing_boundaries_follow_protoc();
+    test_default_canonicalization_helpers();
     test_rule_shape_d55_repeated_default_is_refused();
     test_rule_encoding_d51_packed_is_presence_and_value();
     test_rule_encoding_d56_oneof_member_must_be_optional();

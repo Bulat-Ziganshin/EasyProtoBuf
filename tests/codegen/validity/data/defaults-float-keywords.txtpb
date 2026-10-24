@@ -1,0 +1,47 @@
+# CR-02: the descriptor spellings the reference compiler accepts but protoc's
+# source grammar cannot produce (its float-default path is case-insensitive and
+# reads the C99 `nan(payload)` shape). A hand-written descriptor may carry any
+# of them; the adapter must canonicalize all of them to `inf`/`-inf`/`nan`
+# before the validator and the emitter see the text.
+file {
+  name: "defaults-float-keywords.proto"
+  syntax: "proto2"
+  message_type {
+    name: "FloatKeywordSpellings"
+    field {
+      name: "f_upper_inf"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_FLOAT
+      default_value: "INF"
+    }
+    field {
+      name: "f_infinity"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_FLOAT
+      default_value: "Infinity"
+    }
+    field {
+      name: "d_negative_infinity"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "-Infinity"
+    }
+    field {
+      name: "f_upper_nan"
+      number: 4
+      label: LABEL_OPTIONAL
+      type: TYPE_FLOAT
+      default_value: "NAN"
+    }
+    field {
+      name: "d_nan_payload"
+      number: 5
+      label: LABEL_OPTIONAL
+      type: TYPE_DOUBLE
+      default_value: "nan(0x1)"
+    }
+  }
+}

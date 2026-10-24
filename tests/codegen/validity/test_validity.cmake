@@ -77,6 +77,44 @@ function(require_empty variable_name description)
     endif()
 endfunction()
 
+function(require_absent variable_name unexpected description)
+    string(FIND "${${variable_name}}" "${unexpected}" position)
+    if(NOT position EQUAL -1)
+        message(FATAL_ERROR "${description}: found '${unexpected}' in ${variable_name}")
+    endif()
+endfunction()
+
+# The first differing line of two generated headers. The two frontends run the
+# same canonicalizers, so a disagreement is a defect in one of them and the
+# sentence alone does not say which way it went.
+function(require_identical_headers first_var second_var description)
+    if("${${first_var}}" STREQUAL "${${second_var}}")
+        return()
+    endif()
+    string(REPLACE "\n" ";" first_lines "${${first_var}}")
+    string(REPLACE "\n" ";" second_lines "${${second_var}}")
+    list(LENGTH first_lines first_count)
+    list(LENGTH second_lines second_count)
+    set(limit "${first_count}")
+    if(second_count LESS limit)
+        set(limit "${second_count}")
+    endif()
+    set(difference "the files differ past the ${limit} lines they share")
+    math(EXPR last_index "${limit} - 1")
+    if(limit GREATER 0)
+        foreach(index RANGE 0 ${last_index})
+            list(GET first_lines ${index} first_line)
+            list(GET second_lines ${index} second_line)
+            if(NOT first_line STREQUAL second_line)
+                set(difference
+                    "line ${index}:\n  descriptor: ${first_line}\n  source:     ${second_line}")
+                break()
+            endif()
+        endforeach()
+    endif()
+    message(FATAL_ERROR "${description} (${difference})")
+endfunction()
+
 file(REMOVE_RECURSE "${WORK_DIR}")
 file(MAKE_DIRECTORY "${WORK_DIR}/descriptor")
 file(MAKE_DIRECTORY "${WORK_DIR}/source")
@@ -151,6 +189,89 @@ foreach(name ${paired_fixtures})
     # the descriptor-path header of every fixture. When the source path
     # runs, the comparison above proves its header is the same file, so it
     # compiles too.
+endforeach()
+
+# --- CR-01/02/05/17: the default-value pipeline family -----------------------
+#
+# Matrix: numeric spelling x field type (float, double, int32, int64, uint64)
+# x input path (source, .pbs) x option set (default, --no-has-fields). The
+# `defaults-spellings` pair carries the spellings both frontends can write;
+# `defaults-float-keywords` carries the CR-02 spellings only a descriptor can
+# carry (protoc's source grammar is case-sensitive).
+#
+# 1. P2: the source and descriptor headers are compared byte for byte for
+#    every option set.
+# 2. P1: the descriptor is protoc's own `--descriptor_set_out`, so agreement
+#    with its header is agreement with protoc's decoded value; the runtime
+#    checker reads the same values as numbers.
+# 3. P3: the build's `codegen_validity_pedantic_check` target compiles these
+#    headers under -std=c++11 -pedantic-errors, and the equality above
+#    extends that compile to the source headers.
+foreach(options "" "--no-has-fields")
+    if("${options}" STREQUAL "")
+        set(option_label "default")
+    else()
+        set(option_label "no-has-fields")
+    endif()
+
+    run_ok(family_desc_out family_desc_err
+        ${CODEGEN} --descriptor-set ${options}
+        "${DATA_DIR}/defaults-spellings.pbs")
+    require_empty(family_desc_err
+        "The defaults-spellings descriptor stderr (${option_label})")
+    require_contains(family_desc_out "float f_octal = 8;"
+        "CR-01 float octal (${option_label})")
+    require_contains(family_desc_out "double d_octal = 8;"
+        "CR-01 double octal (${option_label})")
+    require_contains(family_desc_out "float f_hex = 16;"
+        "CR-01 float hex (${option_label})")
+    require_contains(family_desc_out "float f_neg_octal = -8;"
+        "CR-01 negative octal (${option_label})")
+    require_contains(family_desc_out "::int32_t i32_octal = 8;"
+        "CR-17 int32 octal (${option_label})")
+    require_contains(family_desc_out "::int32_t i32_hex = 16;"
+        "CR-17 int32 hex (${option_label})")
+    require_contains(family_desc_out "::int32_t i32_neg_zero = 0;"
+        "CR-17 negative zero (${option_label})")
+    require_contains(family_desc_out "::int64_t i64_octal = 63;"
+        "CR-17 int64 octal (${option_label})")
+    require_contains(family_desc_out "::int64_t i64_min = (-9223372036854775807LL - 1);"
+        "CR-05 int64 minimum (${option_label})")
+    require_contains(family_desc_out "::uint64_t u64_max = 18446744073709551615ULL;"
+        "CR-05 uint64 maximum (${option_label})")
+    require_contains(family_desc_out "::uint64_t u64_hex_max = 18446744073709551615ULL;"
+        "CR-17 hex uint64 maximum (${option_label})")
+
+    if(FULL_BUILD)
+        run_ok(family_src_out family_src_err
+            ${CODEGEN} -I "${DATA_DIR}" ${options}
+            "${DATA_DIR}/defaults-spellings.proto")
+        require_empty(family_src_err
+            "The defaults-spellings source stderr (${option_label})")
+        require_identical_headers(family_desc_out family_src_out
+            "The source and descriptor paths disagree for defaults-spellings (${option_label})")
+    endif()
+
+    run_ok(keyword_desc_out keyword_desc_err
+        ${CODEGEN} --descriptor-set ${options}
+        "${DATA_DIR}/defaults-float-keywords.pbs")
+    require_empty(keyword_desc_err
+        "The defaults-float-keywords stderr (${option_label})")
+    require_contains(keyword_desc_out
+        "::std::numeric_limits<float>::infinity()"
+        "CR-02 INF spelling (${option_label})")
+    require_contains(keyword_desc_out
+        "::std::numeric_limits<float>::quiet_NaN()"
+        "CR-02 NAN spelling (${option_label})")
+    require_contains(keyword_desc_out
+        "::std::numeric_limits<double>::quiet_NaN()"
+        "CR-02 nan(payload) spelling (${option_label})")
+    require_absent(keyword_desc_out "= INF" "CR-02 raw INF (${option_label})")
+    require_absent(keyword_desc_out "= Infinity"
+        "CR-02 raw Infinity (${option_label})")
+    require_absent(keyword_desc_out "= NAN" "CR-02 raw NAN (${option_label})")
+    require_absent(keyword_desc_out "= nan("
+        "CR-02 raw nan(payload) (${option_label})")
 endforeach()
 
 # Descriptor-only accepted shapes: the absent/empty syntax of a descriptor is

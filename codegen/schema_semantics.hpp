@@ -18,19 +18,62 @@ bool packable_type(int type);
 bool valid_map_key_type(int type);
 bool parse_unsigned_integer(const std::string& text, std::uint64_t& result);
 bool parse_signed_32(const std::string& text, std::int32_t& result);
-bool is_float_text(const std::string& text);
+
+// The adapter's gate for every canonicalizable default family: a text may be
+// normalized unless it starts with '+' (the W-40 refusal) or ASCII whitespace
+// (the W-03 refusal). Keeping the refusal spellings out of the normalizer is
+// what lets the validator report them instead of hiding them behind a
+// rewritten value (CR-02).
+bool can_normalize_default_text(const std::string& text);
 
 // Canonicalize a floating-point default the way protobuf's SimpleFtoa /
 // SimpleDtoa do. `single_precision` narrows the parsed value to float before
 // formatting; a double keeps its own precision. The function accepts the same
 // spellings the source grammar and the descriptor field carry, including
-// `inf`, `-inf` and `nan`. An out-of-range parse is not a refusal: overflow
-// becomes `inf`/`-inf`, underflow to zero becomes `0`/`-0`, and a finite
-// subnormal becomes the shortest decimal that round-trips, exactly as the
-// reference compiler stores the value (W-04). A text with no digits, trailing
-// text, or a malformed spelling returns false and leaves `result` untouched.
+// `inf`/`infinity` and `nan`/`nan(payload)` in any ASCII case (CR-02). An
+// out-of-range parse is not a refusal: overflow becomes `inf`/`-inf`,
+// underflow to zero becomes `0`/`-0`, and a finite subnormal becomes the
+// shortest decimal that round-trips, exactly as the reference compiler stores
+// the value (W-04). A text with no digits, trailing text, or a malformed
+// spelling returns false and leaves `result` untouched.
 bool canonical_float_default(const std::string& text, bool single_precision,
                              std::string& result);
+
+// The value overload, for the source parser's INTEGER-token branch: format an
+// already-parsed double exactly as the text overload would. It always
+// succeeds.
+bool canonical_float_default(double value, bool single_precision,
+                             std::string& result);
+
+// True when `text` is exactly the text `canonical_float_default` writes for
+// its value. The adapter stores that form; the default validator and the
+// emitter accept nothing else, so a spelling cannot be re-interpreted at a
+// later layer (CR-02, R1).
+bool is_canonical_float_default(const std::string& text,
+                                bool single_precision);
+
+// Parse a source INTEGER token or a descriptor integer default: an optional
+// '-' followed by a decimal, octal (leading 0) or hex (leading 0x/0X)
+// magnitude. `negative` reports the sign and `magnitude` the absolute value.
+// Returns false for an empty or lone-sign text, a digit outside the base, or
+// a magnitude above uint64.
+bool parse_integral_default_literal(const std::string& text, bool& negative,
+                                    std::uint64_t& magnitude);
+
+// The canonical decimal spelling of an integral default. protoc stores every
+// integral default as the decimal value it parsed (`parser.cc:1265-1307`,
+// `descriptor.cc:2835`), so `010`, `0x10` and `-0` become `8`, `16` and `0`
+// on both input paths (CR-17). Returns false and leaves `result` untouched
+// when `parse_integral_default_literal` rejects the text.
+bool canonical_integral_default(const std::string& text, std::string& result);
+
+// Convert a source INTEGER token to the value a float/double default carries.
+// This is protoc's `ConsumeNumber` integer branch (`parser.cc:231-255`): the
+// token is parsed with the octal/hex-aware integer parser, and a decimal
+// token above uint64 falls back to a floating parse. An octal/hex token that
+// is malformed or out of range returns false (protoc's "Integer out of
+// range."). `text` may carry a leading '-'.
+bool integer_token_as_double(const std::string& text, double& result);
 
 // The default JSON spelling of a protobuf field name: every `_` is dropped and
 // the following ASCII letter is uppercased (`descriptor.cc:123-140`). The same

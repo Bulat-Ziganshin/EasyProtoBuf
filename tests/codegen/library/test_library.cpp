@@ -654,6 +654,73 @@ void test_w58_local_only()
     }
 }
 
+// --- R1: the emitter accepts only the canonical default text ----------------
+
+// The adapter and the source parser store `canonical_float_default` /
+// `canonical_integral_default` output; the emitter must not interpret the
+// text a second time. A caller that builds a SchemaFile itself can bypass
+// both frontends, so the emitter's refusal is the last line of defence
+// (CR-02, R1). The production path never reaches it: the adapter normalized
+// the same text while copying.
+void test_r1_emitter_refuses_non_canonical_defaults()
+{
+    FileDescriptorProto file;
+    make_simple_file(file, "raw-default.proto", "p");
+    FieldDescriptorProto raw;
+    raw.name = "d";
+    raw.has_name = true;
+    raw.number = 2;
+    raw.has_number = true;
+    raw.label = FieldDescriptorProto::LABEL_OPTIONAL;
+    raw.has_label = true;
+    raw.type = FieldDescriptorProto::TYPE_DOUBLE;
+    raw.has_type = true;
+    raw.default_value = "INF";
+    raw.has_default_value = true;
+    file.message_type[0].field.push_back(raw);
+
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    std::vector<FileDescriptorProto> files(1, file);
+    CHECK(easypb_schema::append_descriptor_files(files, "raw-default", set,
+                                                 error));
+    easypb_schema::LinkedSchema linked;
+    CHECK(easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE, linked,
+                                     error));
+    CHECK(linked.files != 0);
+    CHECK(set.files().size() == 1);
+    if (linked.files == 0 || set.files().size() != 1) return;
+
+    easypb_schema::SchemaFile& schema = *set.files()[0];
+    FieldDescriptorProto& field = schema.file.message_type[0].field[1];
+
+    // CR-02: the raw float spelling stored after the adapter has run.
+    field.default_value = schema.strings.save("INF");
+    bool threw = false;
+    try {
+        (void)easypb_codegen::generate_header(
+            schema, linked, easypb_codegen::GenerationOptions());
+    } catch (const std::exception& problem) {
+        threw = true;
+        CHECK(contains(problem.what(),
+                       "non-canonical floating-point default"));
+    }
+    CHECK(threw);
+
+    // CR-17: the raw integral spelling.
+    field.type = FieldDescriptorProto::TYPE_INT32;
+    field.default_value = schema.strings.save("010");
+    threw = false;
+    try {
+        (void)easypb_codegen::generate_header(
+            schema, linked, easypb_codegen::GenerationOptions());
+    } catch (const std::exception& problem) {
+        threw = true;
+        CHECK(contains(problem.what(), "non-canonical integral default"));
+    }
+    CHECK(threw);
+}
+
 // --- the emit mode for the build's compile check ----------------------------
 
 bool emit_options_default(const std::string& data_dir, const std::string& path)
@@ -718,6 +785,7 @@ int main(int argc, char** argv)
     test_w48_identity_comparison();
     test_w47_library_compat();
     test_w58_local_only();
+    test_r1_emitter_refuses_non_canonical_defaults();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

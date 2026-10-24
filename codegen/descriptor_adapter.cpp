@@ -19,6 +19,27 @@ str_view intern_text(StringPool& strings, str_view value)
     return strings.save(value.data(), value.size());
 }
 
+// The FIELD kinds whose default text is an integer literal. bool, enum,
+// string and bytes carry their own spellings and must not be touched.
+bool integral_default_type(int type)
+{
+    switch (type) {
+        case FieldDescriptorProto::TYPE_INT32:
+        case FieldDescriptorProto::TYPE_INT64:
+        case FieldDescriptorProto::TYPE_UINT32:
+        case FieldDescriptorProto::TYPE_UINT64:
+        case FieldDescriptorProto::TYPE_SINT32:
+        case FieldDescriptorProto::TYPE_SINT64:
+        case FieldDescriptorProto::TYPE_FIXED32:
+        case FieldDescriptorProto::TYPE_FIXED64:
+        case FieldDescriptorProto::TYPE_SFIXED32:
+        case FieldDescriptorProto::TYPE_SFIXED64:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void intern_enum(StringPool& strings, EnumDescriptorProto& enum_type)
 {
     enum_type.name = intern_text(strings, enum_type.name);
@@ -43,37 +64,52 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         // out-of-range spellings `strtod` reports, so a hand-written `.pbs`
         // carrying `1e400`, `1e-400` or a finite subnormal is re-serialized
         // as the canonical text `inf`, `0`, `-0` or the subnormal decimal.
-        // Copy that one range, and only when the raw text starts with a
-        // digit, `-` or `.`: a leading `+` (W-40) and a leading space (W-03)
-        // are refusals, not spellings, so the adapter must not normalize them
-        // - that would hide the diagnostic behind a rewritten value.
+        // CR-02: the same canonicalizer owns every spelling the reference
+        // compiler accepts, including `INF`, `Infinity`, `NAN` and
+        // `nan(payload)` (its `io::NoLocaleStrtod` is case-insensitive and
+        // reads the C99 payload shape). The gate is `can_normalize_default_text`
+        // alone: a leading `+` (W-40) and a leading space (W-03) are refusals,
+        // not spellings, so the adapter must not normalize them - that would
+        // hide the diagnostic behind a rewritten value.
         //
         // The canonicalizer runs on every normalizable spelling, exactly as
-        // the source parser runs it, and the gate is the leading byte alone.
-        // An `is_float_text` gate used to decide this and it split the two
-        // paths on MSVC: the CRTs disagree about ERANGE for a finite
-        // subnormal (`strtod("1e-320")` sets ERANGE on glibc and leaves
-        // errno clear on the MSVC CRT), so the descriptor path kept the raw
-        // spelling while the source path stored the canonical one, and the
-        // two generated headers stopped matching for `defaults-float-overflow`.
-        // The canonical output is idempotent: the text a protoc-written
-        // descriptor already carries comes back unchanged, so
-        // `--print-descriptor` bytes do not move for any accepted row.
+        // the source parser runs it. An `is_float_text` gate used to decide
+        // this and it split the two paths on MSVC: the CRTs disagree about
+        // ERANGE for a finite subnormal (`strtod("1e-320")` sets ERANGE on
+        // glibc and leaves errno clear on the MSVC CRT), so the descriptor
+        // path kept the raw spelling while the source path stored the
+        // canonical one, and the two generated headers stopped matching for
+        // `defaults-float-overflow`. The canonical output is idempotent: the
+        // text a protoc-written descriptor already carries comes back
+        // unchanged, so `--print-descriptor` bytes do not move for any
+        // accepted row.
         if (field.has_default_value && field.has_type &&
             (field.type == FieldDescriptorProto::TYPE_FLOAT ||
              field.type == FieldDescriptorProto::TYPE_DOUBLE)) {
             // W-35: the default may be the empty null view; the one guarded
             // conversion owns the empty case.
             const std::string raw = view_text(field.default_value);
-            const bool normalizable =
-                !raw.empty() &&
-                (raw[0] == '-' || raw[0] == '.' ||
-                 (raw[0] >= '0' && raw[0] <= '9'));
-            if (normalizable) {
+            if (can_normalize_default_text(raw)) {
                 std::string normalized;
                 if (canonical_float_default(
                         raw, field.type == FieldDescriptorProto::TYPE_FLOAT,
                         normalized) &&
+                    normalized != raw) {
+                    field.default_value = strings.save(normalized);
+                }
+            }
+        } else if (field.has_default_value && field.has_type &&
+                   integral_default_type(field.type)) {
+            // CR-17's descriptor half: protoc re-renders an integral default
+            // from its parsed value (`descriptor.cc:2835`), so the adapter
+            // must do the same or a hand-written `.pbs` carrying `010` would
+            // emit a different header from the source path. A text the shared
+            // parser rejects keeps its spelling; validate_default owns the
+            // range and grammar diagnostics.
+            const std::string raw = view_text(field.default_value);
+            if (can_normalize_default_text(raw)) {
+                std::string normalized;
+                if (canonical_integral_default(raw, normalized) &&
                     normalized != raw) {
                     field.default_value = strings.save(normalized);
                 }

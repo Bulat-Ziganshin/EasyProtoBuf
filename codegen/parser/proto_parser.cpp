@@ -463,8 +463,9 @@ private:
     }
 };
 
-// The shared helpers parse_unsigned_integer, parse_signed_32, is_float_text,
-// canonical_float_default and the scalar-type classifiers (builtin_type,
+// The shared helpers parse_unsigned_integer, parse_signed_32,
+// canonical_integral_default, canonical_float_default,
+// integer_token_as_double and the scalar-type classifiers (builtin_type,
 // packable_type, valid_map_key_type) live in schema_semantics.hpp/.cpp so the
 // parser and the shared semantic passes classify types and validate scalar
 // defaults identically. The 64-bit default-range helpers stay private to the
@@ -1241,9 +1242,27 @@ private:
             // (`1e400` -> inf, `1e-400` -> 0, `-1e-400` -> -0 and finite
             // subnormals -> their shortest decimal), so the parser and the
             // descriptor adapter store the same text.
-            if (!easypb_schema::canonical_float_default(
-                    value.text,
-                    field.type == FieldDescriptorProto::TYPE_FLOAT, stored)) {
+            //
+            // CR-01: an INTEGER token is not decimal text. protoc reads it
+            // with the octal/hex-aware integer parser and converts the value
+            // to double (`parser.cc:231-255`, `:1265-1307`), which is why
+            // `[default = 010]` means 8, not 10. The FLOAT token keeps the
+            // decimal path.
+            const bool single_precision =
+                field.type == FieldDescriptorProto::TYPE_FLOAT;
+            if (value.kind == Constant::INTEGER_VALUE) {
+                double numeric = 0;
+                if (!easypb_schema::integer_token_as_double(value.text,
+                                                            numeric)) {
+                    throw ParseFailure(value.location, "Integer out of range.");
+                }
+                if (!easypb_schema::canonical_float_default(
+                        numeric, single_precision, stored)) {
+                    throw ParseFailure(value.location,
+                                       "invalid floating-point default");
+                }
+            } else if (!easypb_schema::canonical_float_default(
+                           value.text, single_precision, stored)) {
                 throw ParseFailure(value.location,
                                    "invalid floating-point default");
             }
@@ -1256,7 +1275,15 @@ private:
             if (value.kind != Constant::INTEGER_VALUE) {
                 throw ParseFailure(value.location, "integral default must be an integer literal");
             }
-            stored = value.text;
+            // CR-17: both frontends store the decimal value, exactly as
+            // protoc's descriptor builder re-renders it, so `010` and `0x10`
+            // cannot reach the header as their source spelling. A text the
+            // shared parser rejects (`08`, an out-of-range magnitude) keeps
+            // its spelling and is refused by validate_default, which owns the
+            // range diagnostics.
+            if (!easypb_schema::canonical_integral_default(value.text, stored)) {
+                stored = value.text;
+            }
         }
         field.default_value = out_.strings.save(stored);
         field.has_default_value = true;

@@ -1,0 +1,20 @@
+
+£
+defaults-spellings.proto"†
+DefaultSpellings
+f_octal (:8RfOctal
+d_octal (:8RdOctal
+f_hex (:16RfHex
+d_hex (:16RdHex"
+f_neg_octal (:-8R	fNegOctal
+	i32_octal (:8Ri32Octal
+i32_hex (:16Ri32Hex#
+i32_neg_zero (:0R
+i32NegZero
+	i64_octal	 (:63Ri64Octal-
+i64_min
+ (:-9223372036854775808Ri64Min,
+i64_max (:9223372036854775807Ri64Max-
+u64_max (:18446744073709551615Ru64Max4
+u64_hex_max (:18446744073709551615R	u64HexMax
+	u64_octal (:63Ru64Octal

@@ -280,6 +280,8 @@ if(BUILD_TESTING)
         defaults-nan
         defaults-float-overflow
         defaults-bytes-upper-hex
+        defaults-spellings
+        defaults-float-keywords
         packages-deep-101
         enum-alias-same-number
         json-names-distinct
@@ -316,6 +318,8 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/defaults-nan.pb.hpp
             ${codegen_validity_descriptor_dir}/defaults-float-overflow.pb.hpp
             ${codegen_validity_descriptor_dir}/defaults-bytes-upper-hex.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-spellings.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-float-keywords.pb.hpp
             ${codegen_validity_descriptor_dir}/packages-deep-101.pb.hpp
             ${codegen_validity_descriptor_dir}/enum-alias-same-number.pb.hpp
             ${codegen_validity_descriptor_dir}/json-names-distinct.pb.hpp
@@ -340,6 +344,65 @@ if(BUILD_TESTING)
             -DRUNTIME=$<TARGET_FILE:codegen_validity_runtime_test>
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_validity_dir}/test_validity.cmake)
+
+    # R1 / B3: the default-value pipeline family's second option set. The
+    # same two fixtures are generated with `--no-has-fields`; the driver
+    # compares source and descriptor headers byte for byte for that set too.
+    set(codegen_validity_nohas_fixtures
+        defaults-spellings
+        defaults-float-keywords)
+    foreach(name ${codegen_validity_nohas_fixtures})
+        add_custom_command(
+            OUTPUT ${codegen_validity_descriptor_dir}/${name}-nohas.pb.hpp
+            COMMAND ${CMAKE_COMMAND}
+                -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+                -DINPUT=${codegen_validity_data_dir}/${name}.pbs
+                -DOUTPUT=${codegen_validity_descriptor_dir}/${name}-nohas.pb.hpp
+                -DOPTIONS=--no-has-fields
+                -P ${codegen_validity_dir}/generate_header.cmake
+            DEPENDS
+                easypb_codegen
+                ${codegen_validity_data_dir}/${name}.pbs
+                ${codegen_validity_dir}/generate_header.cmake
+            VERBATIM)
+    endforeach()
+    add_custom_target(codegen_validity_nohas_generated
+        DEPENDS
+            ${codegen_validity_descriptor_dir}/defaults-spellings-nohas.pb.hpp
+            ${codegen_validity_descriptor_dir}/defaults-float-keywords-nohas.pb.hpp)
+
+    # P3 for the default family: every header the lane accepts must be
+    # formally well-formed C++11, not merely accepted by the host compiler.
+    # The source header is byte-identical to the descriptor header (the
+    # driver asserts it), so one compile per fixture and option set covers
+    # both input paths.
+    set(codegen_validity_pedantic_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-validity-pedantic)
+    file(MAKE_DIRECTORY ${codegen_validity_pedantic_dir})
+    set(codegen_validity_pedantic_sources)
+    foreach(header
+            defaults-spellings
+            defaults-spellings-nohas
+            defaults-float-keywords
+            defaults-float-keywords-nohas)
+        set(source ${codegen_validity_pedantic_dir}/compile-${header}.cpp)
+        file(WRITE ${source} "#include \"${header}.pb.hpp\"\n")
+        list(APPEND codegen_validity_pedantic_sources ${source})
+    endforeach()
+    add_library(codegen_validity_pedantic_check STATIC
+        ${codegen_validity_pedantic_sources})
+    add_dependencies(codegen_validity_pedantic_check
+        codegen_validity_generated codegen_validity_nohas_generated)
+    set_target_properties(codegen_validity_pedantic_check PROPERTIES
+        CXX_STANDARD 11
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF)
+    target_include_directories(codegen_validity_pedantic_check PRIVATE
+        ${easypb_test_include_dir} ${codegen_validity_descriptor_dir})
+    target_compile_options(codegen_validity_pedantic_check PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-pedantic-errors>)
+    add_dependencies(codegen_validity_runtime_test
+        codegen_validity_pedantic_check)
 
     # Plan 5 follow-up S2 (W-08, W-09): the emitter's name layer. The lane
     # generates every fixture through BOTH input paths, checks that every

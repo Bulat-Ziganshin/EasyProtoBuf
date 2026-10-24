@@ -178,19 +178,6 @@ bool parse_unsigned_with_optional_plus(const std::string& text, std::uint64_t ma
 
 } // namespace
 
-bool is_float_text(const std::string& text)
-{
-    std::size_t start = 0;
-    if (!text.empty() && (text[0] == '+' || text[0] == '-')) start = 1;
-    const std::string body = text.substr(start);
-    if (body == "inf" || body == "nan") return true;
-    if (body.empty()) return false;
-    char* end = 0;
-    errno = 0;
-    (void)std::strtod(text.c_str(), &end);
-    return end != text.c_str() && *end == '\0' && errno != ERANGE;
-}
-
 namespace {
 
 // protobuf's SimpleFtoa/SimpleDtoa keep at least two exponent digits but drop
@@ -229,32 +216,95 @@ bool is_ascii_whitespace(char c)
            c == '\v' || c == '\f';
 }
 
-// W-04's second predicate: a full parse whose value is a finite subnormal.
-// glibc reports ERANGE for every subnormal result, the canonical shortest
-// decimal included, so `is_float_text` is false for the canonical text too and
-// the validator would reject its own normalization without this distinction.
-// (The MSVC CRT reports the opposite - errno stays clear, which is the
-// disagreement that used to split the two input paths.) The first-character
-// gate keeps a non-canonical spelling outside the predicate for the same
-// reason the adapter's normalizer does: a leading `+` (W-40) and a leading
-// space (W-03) are refused by validate_default, so the predicate must not
-// quietly accept a spelling the validator rejects.
-bool is_subnormal_float_text(const std::string& text)
+char ascii_lower(char c)
 {
-    if (text.empty()) return false;
-    const char first = text[0];
-    if (!(first == '-' || first == '.' ||
-          (first >= '0' && first <= '9'))) {
-        return false;
+    return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+std::string ascii_lowercase(const std::string& text)
+{
+    std::string lowered(text);
+    for (std::size_t i = 0; i < lowered.size(); ++i) {
+        lowered[i] = ascii_lower(lowered[i]);
     }
-    char* end = 0;
-    errno = 0;
-    const double parsed = std::strtod(text.c_str(), &end);
-    return end != text.c_str() && *end == '\0' &&
-           std::fpclassify(parsed) == FP_SUBNORMAL;
+    return lowered;
+}
+
+// CR-02: the reference compiler accepts `INF`, `Infinity` and `NAN` because
+// `io::NoLocaleStrtod` is case-insensitive, and it accepts the C99
+// `nan(payload)` shape. The canonicalizer spells every one of them `inf`,
+// `-inf` or `nan`; the payload never reaches generated C++.
+bool is_infinity_spelling(const std::string& body)
+{
+    const std::string lowered = ascii_lowercase(body);
+    return lowered == "inf" || lowered == "infinity";
+}
+
+bool is_quiet_nan_spelling(const std::string& body)
+{
+    const std::string lowered = ascii_lowercase(body);
+    if (lowered == "nan") return true;
+    return lowered.size() >= 5 && lowered.compare(0, 4, "nan(") == 0 &&
+           lowered[lowered.size() - 1] == ')';
+}
+
+// The decimal spelling of a uint64 without std::to_string, which the legacy
+// profile (GCC 4.7) does not have.
+std::string u64_to_decimal(std::uint64_t value)
+{
+    char buffer[20];
+    char* end = buffer + sizeof(buffer);
+    char* begin = end;
+    do {
+        *--begin = static_cast<char>('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+    return std::string(begin, end);
+}
+
+// The one formatting body: the text overload, the value overload and the
+// parser's INTEGER-token branch all reach it.
+std::string format_canonical_float(double value, bool single_precision)
+{
+    // W-04: overflow is not a refusal. `strtod` returns +-infinity and sets
+    // ERANGE; protoc stores exactly `inf` / `-inf` and keeps going.
+    if (std::isinf(value)) return std::signbit(value) ? "-inf" : "inf";
+    if (std::isnan(value)) return "nan";
+
+    if (single_precision) {
+        const float narrowed = static_cast<float>(value);
+        std::string formatted =
+            format_float(narrowed, std::numeric_limits<float>::digits10);
+        char* parsed_end = 0;
+        const float round_trip =
+            static_cast<float>(std::strtod(formatted.c_str(), &parsed_end));
+        if (parsed_end == formatted.c_str() || *parsed_end != '\0' ||
+            round_trip != narrowed) {
+            formatted =
+                format_float(narrowed, std::numeric_limits<float>::digits10 + 3);
+        }
+        return formatted;
+    }
+
+    std::string formatted =
+        format_float(value, std::numeric_limits<double>::digits10);
+    char* parsed_end = 0;
+    const double round_trip = std::strtod(formatted.c_str(), &parsed_end);
+    if (parsed_end == formatted.c_str() || *parsed_end != '\0' ||
+        round_trip != value) {
+        formatted =
+            format_float(value, std::numeric_limits<double>::digits10 + 2);
+    }
+    return formatted;
 }
 
 } // namespace
+
+bool can_normalize_default_text(const std::string& text)
+{
+    if (text.empty()) return false;
+    return text[0] != '+' && !is_ascii_whitespace(text[0]);
+}
 
 bool canonical_float_default(const std::string& text, bool single_precision,
                              std::string& result)
@@ -264,11 +314,11 @@ bool canonical_float_default(const std::string& text, bool single_precision,
     std::size_t start = 0;
     if (text[0] == '+' || text[0] == '-') start = 1;
     const std::string body = text.substr(start);
-    if (body == "inf") {
-        result = (!text.empty() && text[0] == '-') ? "-inf" : "inf";
+    if (is_infinity_spelling(body)) {
+        result = text[0] == '-' ? "-inf" : "inf";
         return true;
     }
-    if (body == "nan") {
+    if (is_quiet_nan_spelling(body)) {
         result = "nan";
         return true;
     }
@@ -277,44 +327,80 @@ bool canonical_float_default(const std::string& text, bool single_precision,
     errno = 0;
     const double parsed = std::strtod(text.c_str(), &end);
     if (end == text.c_str() || *end != '\0') return false;
+    return canonical_float_default(parsed, single_precision, result);
+}
 
-    // W-04: overflow is not a refusal. `strtod` returns +-infinity and sets
-    // ERANGE; protoc stores exactly `inf` / `-inf` and keeps going.
-    if (std::isinf(parsed)) {
-        result = std::signbit(parsed) ? "-inf" : "inf";
+bool canonical_float_default(double value, bool single_precision,
+                             std::string& result)
+{
+    result = format_canonical_float(value, single_precision);
+    return true;
+}
+
+bool is_canonical_float_default(const std::string& text,
+                                bool single_precision)
+{
+    std::string canonical;
+    return canonical_float_default(text, single_precision, canonical) &&
+           canonical == text;
+}
+
+bool parse_integral_default_literal(const std::string& text, bool& negative,
+                                    std::uint64_t& magnitude)
+{
+    negative = false;
+    std::size_t start = 0;
+    if (!text.empty() && text[0] == '-') {
+        negative = true;
+        start = 1;
+    }
+    if (start == text.size()) return false;
+    return parse_unsigned_integer(text.substr(start), magnitude);
+}
+
+bool canonical_integral_default(const std::string& text, std::string& result)
+{
+    bool negative = false;
+    std::uint64_t magnitude = 0;
+    if (!parse_integral_default_literal(text, negative, magnitude)) {
+        return false;
+    }
+    std::string canonical;
+    if (negative && magnitude != 0) canonical.push_back('-');
+    canonical += u64_to_decimal(magnitude);
+    result.swap(canonical);
+    return true;
+}
+
+bool integer_token_as_double(const std::string& text, double& result)
+{
+    // A leading sign is part of the stored token, not of the magnitude.
+    bool negative = false;
+    std::string body = text;
+    if (!body.empty() && (body[0] == '-' || body[0] == '+')) {
+        negative = body[0] == '-';
+        body.erase(0, 1);
+    }
+    if (body.empty()) return false;
+
+    std::uint64_t magnitude = 0;
+    if (parse_unsigned_integer(body, magnitude)) {
+        const double magnitude_as_double = static_cast<double>(magnitude);
+        result = negative ? -magnitude_as_double : magnitude_as_double;
         return true;
     }
-    if (std::isnan(parsed)) {
-        result = "nan";
-        return true;
-    }
 
-    if (single_precision) {
-        const float value = static_cast<float>(parsed);
-        std::string formatted =
-            format_float(value, std::numeric_limits<float>::digits10);
-        char* parsed_end = 0;
-        const float round_trip =
-            static_cast<float>(std::strtod(formatted.c_str(), &parsed_end));
-        if (parsed_end == formatted.c_str() || *parsed_end != '\0' ||
-            round_trip != value) {
-            formatted =
-                format_float(value, std::numeric_limits<float>::digits10 + 3);
-        }
-        result.swap(formatted);
-        return true;
-    }
+    // protoc's ConsumeNumber (`parser.cc:231-255`): after an integer parse
+    // failure, an octal/hex token is "Integer out of range", while a decimal
+    // token can still be a floating value (`18446744073709551616` becomes
+    // 1.8446744073709552e+19).
+    if (body[0] == '0') return false;
 
-    std::string formatted =
-        format_float(parsed, std::numeric_limits<double>::digits10);
-    char* parsed_end = 0;
-    const double round_trip = std::strtod(formatted.c_str(), &parsed_end);
-    if (parsed_end == formatted.c_str() || *parsed_end != '\0' ||
-        round_trip != parsed) {
-        formatted =
-            format_float(parsed, std::numeric_limits<double>::digits10 + 2);
-    }
-    result.swap(formatted);
+    char* end = 0;
+    errno = 0;
+    const double parsed = std::strtod(body.c_str(), &end);
+    if (end == body.c_str() || *end != '\0') return false;
+    result = negative ? -parsed : parsed;
     return true;
 }
 
@@ -2440,12 +2526,15 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
                                default_location(),
                                field_path, error);
             }
-            // W-04: the strict predicate still refuses an ERANGE text that
-            // bypassed the adapter (a hand-built SchemaFile in a unit test),
-            // but a canonical finite subnormal also reports ERANGE on this
-            // CRT. The second predicate is exactly that case and accepts it.
-            if (!is_float_text(value) &&
-                !is_subnormal_float_text(value)) {
+            // W-04: the validator accepts exactly the canonical form the
+            // adapter and the source parser store. The old pair of predicates
+            // (`is_float_text` plus a subnormal exception) asked a different
+            // question - "would strtod parse this?" - and so accepted the
+            // spellings CR-02 is about; the canonicalizer now owns the answer,
+            // including the finite-subnormal case that reports ERANGE on
+            // glibc.
+            if (!is_canonical_float_default(
+                    value, field.type == FieldDescriptorProto::TYPE_FLOAT)) {
                 return fail_at(file, "invalid floating-point default",
                                default_location(),
                                field_path, error);

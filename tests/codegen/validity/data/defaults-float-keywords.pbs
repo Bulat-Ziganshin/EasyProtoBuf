@@ -1,0 +1,10 @@
+
+Ü
+defaults-float-keywords.proto"²
+FloatKeywordSpellings
+f_upper_inf (:INF
+
+f_infinity (:Infinity&
+d_negative_infinity (:	-Infinity
+f_upper_nan (:NAN
+d_nan_payload (:nan(0x1)bproto2

@@ -13,12 +13,15 @@
 // here are the values both paths produce.
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 
 #include "defaults-backslash.pb.hpp"
 #include "defaults-bytes-upper-hex.pb.hpp"
+#include "defaults-float-keywords.pb.hpp"
 #include "defaults-float-overflow.pb.hpp"
 #include "defaults-inf.pb.hpp"
 #include "defaults-nan.pb.hpp"
@@ -26,6 +29,7 @@
 #include "defaults-nul.pb.hpp"
 #include "defaults-quote-byte.pb.hpp"
 #include "defaults-quote.pb.hpp"
+#include "defaults-spellings.pb.hpp"
 #include "defaults-trigraph.pb.hpp"
 #include "empty-syntax-descriptor.pb.hpp"
 #include "enum-alias-same-number.pb.hpp"
@@ -129,6 +133,47 @@ int main()
         report("neg underflow", value.negative_underflow == 0 &&
                                    std::signbit(value.negative_underflow));
         report("subnormal", std::fpclassify(value.subnormal) == FP_SUBNORMAL);
+    }
+    // R1 / CR-01 and CR-17: the numeric default spelling family. An integer
+    // token on a float field is read with the octal/hex parser (so `010` is
+    // eight, not ten), and an integral spelling is stored as the decimal
+    // value protoc stores. The descriptor twin is protoc's own encoding of
+    // the same source, so the byte-identical headers prove the values match
+    // protoc's `--descriptor_set_out`.
+    {
+        DefaultSpellings value;
+        report("f octal", value.f_octal == 8.0f);
+        report("d octal", value.d_octal == 8.0);
+        report("f hex", value.f_hex == 16.0f);
+        report("d hex", value.d_hex == 16.0);
+        report("f -octal", value.f_neg_octal == -8.0f);
+        report("i32 octal", value.i32_octal == 8);
+        report("i32 hex", value.i32_hex == 16);
+        report("i32 -0", value.i32_neg_zero == 0);
+        report("i64 octal", value.i64_octal == 63);
+        report("i64 min", value.i64_min ==
+                              std::numeric_limits<std::int64_t>::min());
+        report("i64 max", value.i64_max ==
+                              std::numeric_limits<std::int64_t>::max());
+        report("u64 max", value.u64_max ==
+                              std::numeric_limits<std::uint64_t>::max());
+        report("u64 hexmax", value.u64_hex_max ==
+                                 std::numeric_limits<std::uint64_t>::max());
+        report("u64 octal", value.u64_octal == 63);
+    }
+    // CR-02: the descriptor-only spellings protoc accepts (`INF`, `Infinity`,
+    // `NAN`, `nan(payload)`) reach the header as numeric_limits calls, so the
+    // member holds the value and the header compiles.
+    {
+        FloatKeywordSpellings value;
+        report("INF", std::isinf(value.f_upper_inf) &&
+                          value.f_upper_inf > 0);
+        report("Infinity", std::isinf(value.f_infinity) &&
+                               value.f_infinity > 0);
+        report("d -Infinity", std::isinf(value.d_negative_infinity) &&
+                                  value.d_negative_infinity < 0);
+        report("NAN", std::isnan(value.f_upper_nan));
+        report("nan(payload)", std::isnan(value.d_nan_payload));
     }
     // W-39: the uppercase escape decodes to the letter A.
     {
