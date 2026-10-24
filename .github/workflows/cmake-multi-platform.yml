@@ -358,13 +358,26 @@ jobs:
     # Cache the apt archives of the pinned compilers. Outside it: the stock
     # compilers are preinstalled and docker reinstalls from its own image by
     # design. Bump apt-v1 when the pinned package set changes.
+    #
+    # apt keeps its lock and partial/ as root-only in the archives directory,
+    # and the cache action runs as the runner user. The archives therefore
+    # live in a workspace directory owned by the runner, and the cached path
+    # is narrowed to *.deb; a workspace-relative path also keeps the archive
+    # free of "../" members, which GNU tar strips on extraction.
+    - name: Prepare the apt archive directory
+      if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true'
+      run: |
+        archives="$GITHUB_WORKSPACE/.apt-archives"
+        mkdir -p "$archives"
+        echo "Dir::Cache::Archives \"$archives\";" | sudo tee /etc/apt/apt.conf.d/99easypb-archives
+
     - name: Restore cached apt packages
       id: apt-cache
       if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true'
       uses: actions/cache/restore@v5
       with:
         key: ${{ env.APT_CACHE_PREFIX }}-${{ runner.os }}-${{ runner.arch }}-${{ matrix.cpp_compiler }}
-        path: /var/cache/apt/archives
+        path: ${{ github.workspace }}/.apt-archives/*.deb
 
     - name: Install Linux compiler and standard library if needed
       if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true'
@@ -372,18 +385,23 @@ jobs:
         packages='${{ steps.apt-need.outputs.packages }}'
         echo 'APT::Keep-Downloaded-Packages "true";' | sudo tee /etc/apt/apt.conf.d/99easypb-keep-debs
         sudo apt-get update
-        # --no-download installs from the local archives; fall back to the
-        # network fetch when a resolved version is missing from them.
         # Matrix package names are fixed by this workflow, so intentional word splitting is appropriate here.
-        sudo apt-get install -y --no-download $packages \
-          || sudo apt-get install -y $packages
+        if [ '${{ steps.apt-cache.outputs.cache-hit }}' = 'true' ]; then
+          # The archives were restored, so the packages come from them. When a
+          # resolved version is missing (the mirror moved), the fallback fetches
+          # only the missing debs and reuses the restored ones.
+          sudo apt-get install -y --no-download $packages \
+            || sudo apt-get install -y $packages
+        else
+          sudo apt-get install -y $packages
+        fi
 
     - name: Save cached apt packages
       if: runner.os == 'Linux' && steps.apt-need.outputs.needed == 'true' && steps.apt-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v5
       with:
         key: ${{ steps.apt-cache.outputs.cache-primary-key }}
-        path: /var/cache/apt/archives
+        path: ${{ github.workspace }}/.apt-archives/*.deb
 
     - name: Show toolchain and platform
       run: |
