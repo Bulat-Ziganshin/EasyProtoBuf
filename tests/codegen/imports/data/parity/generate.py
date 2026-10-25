@@ -253,6 +253,28 @@ SOURCE_CASES = [
                 'import "s-import-cycle-left.proto";\n'
                 'message Root { int32 a = 1; }\n',
                 "DIAGNOSTIC_IMPORT_CYCLE"),
+
+    # --- Cross-path acceptance (B8, root R6), source origin ----------------
+    # CR-21: protoc accepts a method endpoint naming a synthetic map entry, and
+    # so does this parser/linker (the ownership rule is a field rule). CR-22: a
+    # custom `json_name` shaped like the extension spelling is refused by both;
+    # the accept column is the valid custom name beside it.
+    source_case(
+        "s-map-entry-type-method-accept",
+        'syntax = "proto3";\npackage s;\n'
+        'message M { map<int32, string> items = 1; }\n'
+        'service S { rpc Call (.s.M.ItemsEntry) returns (M); }\n',
+        "accept"),
+    source_case(
+        "s-invalid-json-name-accept",
+        'syntax = "proto3";\npackage s;\n'
+        'message Root { int32 a = 1 [json_name = "customName"]; }\n',
+        "accept"),
+    source_case(
+        "s-invalid-json-name-reject",
+        'syntax = "proto3";\npackage s;\n'
+        'message Root { int32 a = 1 [json_name = "[foo]"]; }\n',
+        "DIAGNOSTIC_INVALID_JSON_NAME"),
 ]
 
 
@@ -723,6 +745,49 @@ EXTRA_CASES = [
             '    field { name: "items" number: 1 label: LABEL_REPEATED '
             'type: TYPE_MESSAGE type_name: ".p.Other.ItemsEntry" }\n  }\n'),
         "accept"),
+
+    # --- Cross-path acceptance (B8, root R6) -------------------------------
+    # CR-21: a method endpoint naming a synthetic map entry. protoc's
+    # ownership rule is a FIELD rule (`ValidateMapEntry` is reached only from
+    # `ValidateFieldOptions`), so a method endpoint names an ordinary message
+    # type and the reference compiler accepts the shape on both paths. The
+    # field control beside it (`d-map-entry-type-reject`) stays refused by
+    # both, which is what keeps the rule narrow.
+    descriptor_case(
+        "d-map-entry-type-method-accept",
+        root_set(
+            '  message_type {\n    name: "MapHolder"\n'
+            '    nested_type {\n      name: "ItemsEntry"\n'
+            '      options { map_entry: true }\n'
+            '      field { name: "key" number: 1 label: LABEL_OPTIONAL '
+            'type: TYPE_INT32 }\n'
+            '      field { name: "value" number: 2 label: LABEL_OPTIONAL '
+            'type: TYPE_STRING }\n    }\n'
+            '    field { name: "items" number: 1 label: LABEL_REPEATED '
+            'type: TYPE_MESSAGE type_name: ".p.MapHolder.ItemsEntry" }\n  }\n'
+            '  service {\n    name: "S"\n'
+            '    method { name: "Call" input_type: '
+            '".p.MapHolder.ItemsEntry" output_type: ".p.MapHolder" }\n  }\n'),
+        "accept"),
+
+    # CR-22: a custom `json_name` shaped like the extension spelling. protoc
+    # refuses it in both syntaxes (`JsonNameLooksLikeExtension`,
+    # descriptor.cc:6519-6531), and the accept column is the valid custom name
+    # beside it - the rule must not refuse every custom name.
+    descriptor_case(
+        "d-invalid-json-name-accept",
+        file_block("root.proto",
+                   '  message_type {\n    name: "M"\n'
+                   '    field { name: "a" number: 1 label: LABEL_OPTIONAL '
+                   'type: TYPE_INT32 json_name: "customName" }\n  }\n'),
+        "accept"),
+    descriptor_case(
+        "d-invalid-json-name-reject",
+        file_block("root.proto",
+                   '  message_type {\n    name: "M"\n'
+                   '    field { name: "a" number: 1 label: LABEL_OPTIONAL '
+                   'type: TYPE_INT32 json_name: "[foo]" }\n  }\n'),
+        "DIAGNOSTIC_INVALID_JSON_NAME"),
 
     # --- Measured shapes with NO row (their verdict cannot be a row) ------
     descriptor_probe_case(

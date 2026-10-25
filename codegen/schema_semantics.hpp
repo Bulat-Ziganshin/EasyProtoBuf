@@ -226,10 +226,12 @@ bool validate_enum_value_numbers(SchemaFile& file, Diagnostic& error);
 // behaviour. Two custom `json_name` values that collide are an error in both
 // syntaxes; a custom name that collides with a default one follows the same
 // proto2-warning/proto3-error split. A pair of two non-custom names is
-// reported by the first pass only. Runs in both linking modes on the
-// descriptor alone, before resolution and indexing, like the enum-number
-// sweep beside it; a proto2 warning is stored on the file and printed after a
-// successful link.
+// reported by the first pass only. A CUSTOM name shaped like the extension
+// spelling (`[...]`) is refused with DIAGNOSTIC_INVALID_JSON_NAME in both
+// syntaxes, exactly as protoc's `JsonNameLooksLikeExtension` does (CR-22).
+// Runs in both linking modes on the descriptor alone, before resolution and
+// indexing, like the enum-number sweep beside it; a proto2 warning is stored
+// on the file and printed after a successful link.
 bool validate_json_names(SchemaFile& file, Diagnostic& error);
 
 // Validates every extension range the file's messages declare, top-level and

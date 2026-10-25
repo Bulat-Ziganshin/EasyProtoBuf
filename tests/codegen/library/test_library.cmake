@@ -12,7 +12,11 @@
 #      default (W-47), while still accepting an external type with no default
 #      and an external enum with a valid identifier default;
 #   4. complete mode refuses the thin set's unresolved type (the --target
-#      control), and the source path refuses the same shape.
+#      control), and the source path refuses the same shape;
+#   5. P7 (W-68, CR-08): the thin, complete-closure and source headers of one
+#      schema are byte-identical, and the external enum member they declare is
+#      zero-initialized. The build compiles thin_probe.cpp against the
+#      thin-mode header and runs it as `codegen.library.thin`.
 #
 # The W-11 header is also compiled by the build: the emit mode writes it in a
 # custom command, because cl.exe started from a test script outside the Visual
@@ -173,3 +177,42 @@ if(FULL_BUILD)
         ${CODEGEN} -I "${DATA_DIR}"
         "${DATA_DIR}/w47-source-default.proto")
 endif()
+
+# --- P7 (W-68, CR-08): thin == full == source --------------------------------
+#
+# The same schema reaches the generator three ways: a thin single-file
+# descriptor (`protoc` without `--include_imports`), the complete closure, and
+# source. P7 requires the three headers to be byte-identical, and the runtime
+# probe the build compiles from the thin header (thin_probe.cpp) reads the
+# external enum's zero default instead of an indeterminate member.
+
+file(REMOVE_RECURSE "${WORK_DIR}/p7-thin" "${WORK_DIR}/p7-full" "${WORK_DIR}/p7-src")
+run_ok(p7_thin_out p7_thin_err
+    ${CODEGEN} --descriptor-set --out-dir "${WORK_DIR}/p7-thin"
+    "${DATA_DIR}/p7-thin.pbs")
+run_ok(p7_full_out p7_full_err
+    ${CODEGEN} --descriptor-set --target b.proto --out-dir "${WORK_DIR}/p7-full"
+    "${DATA_DIR}/p7-full.pbs")
+file(READ "${WORK_DIR}/p7-thin/b.pb.hpp" p7_thin_header)
+file(READ "${WORK_DIR}/p7-full/b.pb.hpp" p7_full_header)
+if(NOT p7_thin_header STREQUAL p7_full_header)
+    message(FATAL_ERROR
+        "P7: the thin compatibility header differs from the complete closure's")
+endif()
+require_contains(p7_thin_header
+    "::q::E e = static_cast<::q::E>(0);"
+    "P7: the external enum member must be zero-initialized, not left indeterminate")
+require_contains(p7_thin_err "not declared in the linked set"
+    "The compatibility warning for the external enum")
+
+if(FULL_BUILD)
+    run_ok(p7_src_out p7_src_err
+        ${CODEGEN} -I "${DATA_DIR}/p7-ext" --out-dir "${WORK_DIR}/p7-src"
+        "${DATA_DIR}/p7-ext/b.proto")
+    file(READ "${WORK_DIR}/p7-src/b.pb.hpp" p7_src_header)
+    if(NOT p7_thin_header STREQUAL p7_src_header)
+        message(FATAL_ERROR
+            "P7: the thin compatibility header differs from the source header")
+    endif()
+endif()
+

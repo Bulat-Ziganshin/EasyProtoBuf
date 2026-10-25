@@ -818,6 +818,41 @@ if(BUILD_TESTING)
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_library_dir}/test_library.cmake)
 
+    # P7 (W-68, CR-08): the thin-mode header is compiled by the build so a
+    # runtime probe can read it. The probe's include directory holds the
+    # compatibility header for `b.proto` (from the thin set) and the dependency
+    # header the header contract asks the caller to generate (`a.proto`, from
+    # the complete closure). The driver script above generates the same three
+    # spellings and compares them byte for byte.
+    set(codegen_library_p7_dir
+        ${codegen_library_generated_dir}/p7-thin)
+    add_custom_command(
+        OUTPUT
+            ${codegen_library_p7_dir}/b.pb.hpp
+            ${codegen_library_p7_dir}/a.pb.hpp
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${codegen_library_p7_dir}
+        COMMAND $<TARGET_FILE:easypb_codegen>
+            --descriptor-set --out-dir ${codegen_library_p7_dir}
+            ${codegen_library_data_dir}/p7-thin.pbs
+        COMMAND $<TARGET_FILE:easypb_codegen>
+            --descriptor-set --target a.proto --out-dir ${codegen_library_p7_dir}
+            ${codegen_library_data_dir}/p7-full.pbs
+        DEPENDS
+            easypb_codegen
+            ${codegen_library_data_dir}/p7-thin.pbs
+            ${codegen_library_data_dir}/p7-full.pbs
+        VERBATIM)
+    add_custom_target(codegen_library_p7_generated
+        DEPENDS ${codegen_library_p7_dir}/b.pb.hpp
+                ${codegen_library_p7_dir}/a.pb.hpp)
+
+    add_executable(codegen_library_thin_probe
+        ${codegen_library_dir}/thin_probe.cpp)
+    add_dependencies(codegen_library_thin_probe codegen_library_p7_generated)
+    target_include_directories(codegen_library_thin_probe PRIVATE
+        ${easypb_test_include_dir} ${codegen_library_p7_dir})
+    add_test(NAME codegen.library.thin COMMAND codegen_library_thin_probe)
+
     set(codegen_packages_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/packages)
     set(codegen_packages_data_dir ${codegen_packages_dir}/data)

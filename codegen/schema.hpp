@@ -214,7 +214,18 @@ enum DiagnosticCode
     // parser does not model message options at all (B1 gap G2), so this is the
     // descriptor-origin half of the rule; the field-less MessageSet protoc
     // accepts is accepted here too.
-    DIAGNOSTIC_MESSAGE_SET_WITH_FIELDS
+    DIAGNOSTIC_MESSAGE_SET_WITH_FIELDS,
+    // Step B8 (root R6, CR-22): a CUSTOM `json_name` is shaped like the
+    // extension spelling - it starts with '[' and ends with ']'. protoc refuses
+    // it while it builds the file ("The custom JSON name of field \"a\"
+    // (\"[foo]\") is invalid: JSON names may not start with '[' and end with
+    // ']'.", descriptor.cc's `CheckFieldJsonNameUniqueness`, :6519-6531,
+    // through `JsonNameLooksLikeExtension`) because the bracket spelling is
+    // reserved for extensions. The rule is a NAME rule, not a
+    // duplicate-symbol one, and it applies to both syntaxes. Both frontends
+    // answer it: the parser writes the option into the descriptor, and the
+    // check rides the reference-free `validate_json_names` sweep.
+    DIAGNOSTIC_INVALID_JSON_NAME
 };
 
 struct Diagnostic

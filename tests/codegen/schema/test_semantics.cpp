@@ -1774,6 +1774,102 @@ void test_rule_map_entry_ownership_requires_the_marker()
         file.file.message_type[0].nested_type[0]));
 }
 
+// B8 (CR-21): the method-endpoint matrix. protoc 30.1 measures four shapes for
+// an `rpc` endpoint: a message is accepted, a synthetic map entry is accepted
+// (the ownership rule is a FIELD rule - `ValidateMapEntry` is reached only from
+// `ValidateFieldOptions`), an enum and a oneof are refused as "not a message
+// type". The descriptor door is the one that carries all four, so this test
+// pins the verdict per kind.
+void test_rule_method_endpoint_kinds()
+{
+    struct Row
+    {
+        const char* endpoint;
+        bool accepted;
+    };
+    const Row rows[] = {
+        { "M", true },             // a message
+        { "M.ItemsEntry", true },  // a synthetic map entry (CR-21)
+        { "E", false },            // an enum
+        { "M.pick", false },       // a oneof
+    };
+    const std::size_t count = sizeof(rows) / sizeof(rows[0]);
+    for (std::size_t i = 0; i < count; ++i) {
+        easypb_schema::SchemaFile file;
+        file.file.package = file.strings.save("p");
+        file.file.has_package = true;
+
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        EnumValueDescriptorProto zero;
+        zero.name = file.strings.save("ZERO");
+        zero.has_name = true;
+        zero.number = 0;
+        zero.has_number = true;
+        enumeration.value.push_back(zero);
+        file.file.enum_type.push_back(enumeration);
+
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        OneofDescriptorProto oneof;
+        oneof.name = file.strings.save("pick");
+        oneof.has_name = true;
+        message.oneof_decl.push_back(oneof);
+        // A oneof with no member is refused by its own rule before the method
+        // is resolved, so the matrix carries a real member.
+        FieldDescriptorProto member =
+            make_scalar_field(file, "choice", 2, FieldDescriptorProto::TYPE_INT32);
+        member.oneof_index = 0;
+        member.has_oneof_index = true;
+        message.field.push_back(member);
+        // The owning map field and its synthetic entry: together they are the
+        // shape the ownership rule recognises.
+        DescriptorProto entry;
+        entry.name = file.strings.save("ItemsEntry");
+        entry.has_name = true;
+        entry.options.has_map_entry = true;
+        entry.options.map_entry = true;
+        entry.has_options = true;
+        entry.field.push_back(
+            make_scalar_field(file, "key", 1, FieldDescriptorProto::TYPE_INT32));
+        entry.field.push_back(make_scalar_field(file, "value", 2,
+                                                FieldDescriptorProto::TYPE_INT32));
+        message.nested_type.push_back(entry);
+        message.field.push_back(
+            make_named_field(file, "items", 1, ".p.M.ItemsEntry", true));
+        file.file.message_type.push_back(message);
+
+        ServiceDescriptorProto service;
+        service.name = file.strings.save("S");
+        service.has_name = true;
+        MethodDescriptorProto method;
+        method.name = file.strings.save("Call");
+        method.has_name = true;
+        method.input_type = file.strings.save(rows[i].endpoint);
+        method.has_input_type = true;
+        method.output_type = file.strings.save("M");
+        method.has_output_type = true;
+        service.method.push_back(method);
+        file.file.service.push_back(service);
+
+        easypb_schema::SymbolIndex symbols;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::index_file(file, symbols, error));
+        std::set<const easypb_schema::SchemaFile*> visible;
+        visible.insert(&file);
+        const bool accepted = easypb_schema::resolve_file(
+            file, symbols, visible, true, error);
+        CHECK(accepted == rows[i].accepted);
+        if (!rows[i].accepted) {
+            CHECK(error.code == easypb_schema::DIAGNOSTIC_NOT_A_TYPE);
+            CHECK(error.message.find("method \".p.S.Call\" input type") !=
+                  std::string::npos);
+        }
+    }
+}
+
 // W-59: the two resolve_field_type out-parameters are caller-initialized and
 // the call sets the one that describes its outcome. One case per `true` path.
 void test_rule_resolve_field_type_out_parameters()
@@ -2432,6 +2528,7 @@ int main()
     test_rule_enum_value_numbers_directly();
     test_rule_symbol_names_directly();
     test_rule_map_entry_ownership_requires_the_marker();
+    test_rule_method_endpoint_kinds();
     test_rule_resolve_field_type_out_parameters();
     test_rule_message_map_entries_directly();
     test_rule_message_symbol_names_directly();

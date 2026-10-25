@@ -187,6 +187,19 @@ encoder.
   one plain message - refused by **both** sides, plus the two accept controls
   that keep the collision rule narrow (differently named entries; the same
   entry name in two different messages).
+* **Cross-path acceptance (step `B8`, root `R6`).** `CR-21`: a method endpoint
+  naming a synthetic map entry. protoc's ownership rule is a *field* rule
+  (`ValidateMapEntry` is reached only from `ValidateFieldOptions`), so the
+  reference compiler accepts the shape - measured on both paths - and the field
+  control `d-map-entry-type-reject` stays refused by both. The rows are
+  `s-map-entry-type-method-accept`, `d-map-entry-type-method-accept` and, for
+  the name rule, `s-invalid-json-name-accept` / `-reject` and
+  `d-invalid-json-name-accept` / `-reject`. `CR-22`: a custom `json_name`
+  shaped like the extension spelling (`"[foo]"`) is refused by `protoc` in
+  both syntaxes (`JsonNameLooksLikeExtension`, `descriptor.cc:6519-6531`); the
+  lane's refusal names the new `DIAGNOSTIC_INVALID_JSON_NAME`, whose accept
+  columns are the valid custom name beside it. Every row is a `pair`: the
+  `protoc` cell is re-derived by `generate.py`, not asserted.
 
 **`r28`'s `PROTOC` line was a decode.** The round measured its shapes with
 `protoc --proto_path=... --decode=...`, which answers `0` for any set the

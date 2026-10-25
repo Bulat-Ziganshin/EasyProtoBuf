@@ -1,0 +1,15 @@
+syntax = "proto3";
+package q;
+
+// CR-08's external definition: the first value IS the zero value, so the
+// emitter may spell the implicit default without reading this file (P7).
+enum E
+{
+    Z = 0;
+    ONE = 1;
+}
+
+message Ext
+{
+    int32 v = 1;
+}

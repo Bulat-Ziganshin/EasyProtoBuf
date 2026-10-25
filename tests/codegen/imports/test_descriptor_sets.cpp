@@ -123,6 +123,14 @@ std::string wire_message_field(int field, const std::string& payload)
 
 // --- hand-built containers -------------------------------------------------
 
+// A varint-valued descriptor field (numbers, labels, kinds, indexes).
+std::string wire_uint_field(int field, std::uint64_t value)
+{
+    std::string out = wire_tag(field, 0);
+    wire_varint(out, value);
+    return out;
+}
+
 // A FileDescriptorProto with only a logical name: the smallest named file the
 // adapter accepts, enough for the duplicate-name rows.
 std::string named_file(const char* logical_name)
@@ -157,6 +165,46 @@ std::string mixed_unnamed_file_set()
     std::string set = wire_message_field(1, named);
     set += wire_message_field(1, unnamed);
     return set;
+}
+
+// `package p; message M { repeated int32 f = 1; }` spelled with the presence
+// bits a hand-encoded copy may write differently from protoc's own encoding.
+// The loader's identity test must read the effective content, not these bits
+// (CR-24, W-36).
+struct SemanticSpelling
+{
+    SemanticSpelling()
+        : explicit_proto2(false), write_json_name(true),
+          write_empty_options(false), write_packed_false(false),
+          package("p"), field_number(1) {}
+
+    bool explicit_proto2;    // protoc omits `syntax` for a proto2 file
+    bool write_json_name;    // protoc always writes the derived name
+    bool write_empty_options; // an empty FieldOptions message
+    bool write_packed_false;  // `packed = false`, the proto2 default
+    const char* package;
+    int field_number;
+};
+
+std::string semantic_file(const SemanticSpelling& spelling)
+{
+    std::string field = wire_text_field(1, "f");
+    field += wire_uint_field(3, static_cast<std::uint64_t>(spelling.field_number));
+    field += wire_uint_field(4, 3); // LABEL_REPEATED
+    field += wire_uint_field(5, 5); // TYPE_INT32
+    if (spelling.write_empty_options) {
+        field += wire_message_field(8, std::string());
+    } else if (spelling.write_packed_false) {
+        field += wire_message_field(8, wire_uint_field(2, 0));
+    }
+    if (spelling.write_json_name) field += wire_text_field(10, "f");
+    std::string message = wire_text_field(1, "M");
+    message += wire_message_field(2, field);
+    std::string file = wire_text_field(1, "semantic-merge.proto");
+    file += wire_text_field(2, spelling.package);
+    file += wire_message_field(4, message);
+    if (spelling.explicit_proto2) file += wire_text_field(12, "proto2");
+    return wire_message_field(1, file);
 }
 
 const FieldDescriptorProto* find_field(const easypb_schema::SchemaFile& file,
@@ -731,6 +779,62 @@ void test_loader_merges_duplicate_names_across_containers(
     std::remove(conflicting.c_str());
 }
 
+// CR-24, the semantic half of W-36: the identity test reads the content the
+// linker reads, not the presence bits a hand-encoded copy may spell
+// differently. protoc 30.1 merges every pair below (measured 2026-10-25 with
+// `--descriptor_set_in=<a>;<b> --descriptor_set_out=out.pbs
+// semantic-merge.proto`: exit 0 for the absent-vs-explicit `syntax = "proto2"`
+// pair and for the derived-vs-omitted `json_name` pair), and a real difference
+// is still refused.
+void test_loader_merges_semantically_equal_copies()
+{
+    const std::string base = "cr24-protoc-spelling.pbs";
+    const std::string variant = "cr24-variant.pbs";
+    SemanticSpelling protoc_like;
+    CHECK(write_binary_file(base, semantic_file(protoc_like)));
+
+    // One variant per non-identity presence bit the merge used to refuse.
+    SemanticSpelling spellings[4];
+    spellings[0].explicit_proto2 = true;
+    spellings[1].write_json_name = false;
+    spellings[2].write_packed_false = true;
+    spellings[3].write_empty_options = true;
+
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    for (std::size_t i = 0; i < 4; ++i) {
+        CHECK(write_binary_file(variant, semantic_file(spellings[i])));
+        std::vector<std::string> inputs;
+        inputs.push_back(base);
+        inputs.push_back(variant);
+        CHECK(easypb_schema::load_descriptor_sets(inputs, set, error));
+        CHECK(set.files().size() == 1);
+        CHECK(set.find_file("semantic-merge.proto") != 0);
+    }
+
+    // The two differences the linker does read stay refusals: a different
+    // package and a different field number are two different files.
+    SemanticSpelling different_package;
+    different_package.package = "q";
+    SemanticSpelling different_number;
+    different_number.field_number = 2;
+    for (std::size_t i = 0; i < 2; ++i) {
+        const SemanticSpelling& spelling =
+            i == 0 ? different_package : different_number;
+        CHECK(write_binary_file(variant, semantic_file(spelling)));
+        std::vector<std::string> inputs;
+        inputs.push_back(base);
+        inputs.push_back(variant);
+        CHECK(!easypb_schema::load_descriptor_sets(inputs, set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+        CHECK(error.message.find("\"semantic-merge.proto\"") !=
+              std::string::npos);
+        CHECK(set.files().empty());
+    }
+    std::remove(base.c_str());
+    std::remove(variant.c_str());
+}
+
 // D2, the custom half: `(easypb.cpp).type` strings are interned like every
 // other string, so generation from the loaded copy equals generation from a
 // fresh ingestion of the same bytes. The fixture also carries a dependency
@@ -852,6 +956,7 @@ int main(int argc, char** argv)
     test_loader_single_anonymous_file_is_not_addressable();
     test_loader_rejects_duplicate_names_within_one_container();
     test_loader_merges_duplicate_names_across_containers(fixture_dir);
+    test_loader_merges_semantically_equal_copies();
     test_loader_custom_type_strings_survive_the_container(fixture_dir);
 
     if (failures != 0) {

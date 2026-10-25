@@ -1,0 +1,13 @@
+syntax = "proto3";
+package p;
+
+import "a.proto";
+
+// The compatibility-mode shape of CR-08: `q.E` comes from another file, and
+// the thin set does not carry that file's descriptor.
+message M
+{
+    q.E e = 1;
+    q.Ext ext = 2;
+    int32 i = 3;
+}

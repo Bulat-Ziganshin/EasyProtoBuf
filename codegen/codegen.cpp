@@ -774,11 +774,30 @@ std::string integral_default_str(const FieldDescriptorProto& field)
 }
 
 
+// " = static_cast<Type>(0)". The spelling names no enumerator, so it is the
+// one initializer the emitter can write for an enum it cannot see - and, for a
+// zero first value, the one it writes for a visible enum declared in another
+// file, so the two agreement rules below hold (CR-08, P7).
+std::string zero_enum_default(const FieldDescriptorProto& field)
+{
+    return myformat(" = static_cast<{0}>(0)",
+                    cpp_qualified_type_str(field.type_name));
+}
+
+
 // Either " = default_field_value" or empty string.  Enum fields use their
 // declared first value as the implicit protobuf default; integer zero cannot
 // initialize an enum in standard C++ and may not name a declared value.
+//
+// `local` holds the enums the generated file itself declares. An enum declared
+// in another visible file is spelled through its zero value whenever that
+// value is the declared first one: the thin-descriptor compatibility mode
+// cannot see the definition at all, and the complete closure must not spell
+// the same schema differently (W-68, P7). A non-zero first value keeps the
+// enumerator's name, because zero is then not the protobuf default.
 std::string default_value_str(const FieldDescriptorProto& field,
                               const EnumByProtoName& enums,
+                              const EnumByProtoName& local,
                               const GenerationContext& context)
 {
     if (is_repeated(field)) {
@@ -787,19 +806,22 @@ std::string default_value_str(const FieldDescriptorProto& field,
 
     if (field.type == FieldDescriptorProto::TYPE_ENUM) {
         const std::string proto_name = view_text(field.type_name);
+        const bool explicit_default =
+            field.has_default_value && ! context.options.no_default_values;
         const auto found = enums.find(proto_name);
 
         // Descriptor sets may reference imported enums that are not present in
-        // the selected file.  Preserve the historical explicit-default output,
-        // but an implicit value cannot be inferred without that descriptor.
+        // the selected file. The explicit default is kept verbatim (W-47); the
+        // implicit one becomes the zero value, so the member is never left
+        // indeterminate in compatibility mode (CR-08).
         if (found == enums.end()) {
-            return field.has_default_value && ! context.options.no_default_values
+            return explicit_default
                 ? myformat(" = {0}{1}{2}",
                            cpp_qualified_type_str(field.type_name),
                            CPP_TYPE_DELIMITER,
                            easypb_codegen::cpp_identifier(
                                view_text(field.default_value)))
-                : "";
+                : zero_enum_default(field);
         }
 
         const EnumDescriptorProto& enum_type = *found->second;
@@ -808,17 +830,28 @@ std::string default_value_str(const FieldDescriptorProto& field,
                 myformat("Enum type '{0}' must contain at least one value", proto_name));
         }
 
-        const str_view value = field.has_default_value && ! context.options.no_default_values
-            ? field.default_value
-            : enum_type.value.front().name;
-        // C++11 permits qualifying an unscoped enumerator through its enum
-        // type. This prevents an enumerator in a nearer scope from shadowing
-        // the intended value. The enumerator is spelled the way the emitter
-        // declares it, so a value named after a keyword is escaped here too.
+        if (explicit_default) {
+            // C++11 permits qualifying an unscoped enumerator through its enum
+            // type. This prevents an enumerator in a nearer scope from shadowing
+            // the intended value. The enumerator is spelled the way the emitter
+            // declares it, so a value named after a keyword is escaped here too.
+            return myformat(" = {0}{1}{2}",
+                            cpp_qualified_type_str(field.type_name),
+                            CPP_TYPE_DELIMITER,
+                            easypb_codegen::cpp_identifier(
+                                view_text(field.default_value)));
+        }
+
+        if (local.find(proto_name) == local.end() &&
+            enum_type.value.front().number == 0) {
+            return zero_enum_default(field);
+        }
+
         return myformat(" = {0}{1}{2}",
                         cpp_qualified_type_str(field.type_name),
                         CPP_TYPE_DELIMITER,
-                        easypb_codegen::cpp_identifier(view_text(value)));
+                        easypb_codegen::cpp_identifier(
+                            view_text(enum_type.value.front().name)));
     }
 
     if (field.has_default_value  &&  ! context.options.no_default_values) {
@@ -1501,6 +1534,7 @@ void check_file_scope_names(const FileDescriptorProto& file,
 std::string generate_message(MessageInfo& info,
                              const std::string& indent,
                              const EnumByProtoName& enum_index,
+                             const EnumByProtoName& local_enum_index,
                              std::string& encoders,
                              std::string& decoders,
                              const GenerationContext& context)
@@ -1520,7 +1554,8 @@ std::string generate_message(MessageInfo& info,
         }
         for (auto* child: dependency_safe_order(info.children)) {
             nested_defs += generate_message(
-                *child, child_indent, enum_index, encoders, decoders, context);
+                *child, child_indent, enum_index, local_enum_index, encoders,
+                decoders, context);
         }
     }
 
@@ -1539,7 +1574,8 @@ std::string generate_message(MessageInfo& info,
         auto cpptype_str = cpp_type_as_str(field, map_type, context);
         field_defs += myformat("{0}    {1} {2}{3};\n",
                                indent, cpptype_str, field_member_name(field),
-                               default_value_str(field, enum_index, context));
+                               default_value_str(field, enum_index,
+                                                 local_enum_index, context));
 
         if (hasfield_enabled(field, context)) {
             has_field_defs += myformat("{0}    bool {1} = false;\n",
@@ -1750,7 +1786,8 @@ void index_message_enums_of(const DescriptorProto& message,
 // Index every enum of one file (top-level and nested) by its absolute
 // Protobuf name, so `default_value_str` finds imported owners exactly the way
 // it finds local ones. Imported definitions are complete by construction, and
-// nothing here infers a value from zero or from an enum's name.
+// the emitter still spells a zero first value as the definition-independent
+// `static_cast<Type>(0)` so the thin and complete inputs agree (P7).
 void index_file_enums(const FileDescriptorProto& file, EnumByProtoName& index)
 {
     const std::string prefix =
@@ -1823,8 +1860,9 @@ std::string easypb_codegen::generate_header(
     // enum's first declared value initializes a field the same way a local
     // one does. Duplicate absolute names cannot reach here: conflicting
     // declarations were refused by the linker before publish.
-    EnumByProtoName enum_index;
-    index_file_enums(file, enum_index);
+    EnumByProtoName local_enum_index;
+    index_file_enums(file, local_enum_index);
+    EnumByProtoName enum_index = local_enum_index;
     const std::map<const easypb_schema::SchemaFile*,
                    std::set<const easypb_schema::SchemaFile*> >::const_iterator
         visible = schema.visible_files.find(&target);
@@ -1851,7 +1889,8 @@ std::string easypb_codegen::generate_header(
     }
     // Top-level messages are ordered by the same dependency rule as nested siblings.
     for (auto* root: dependency_safe_order(roots)) {
-        class_defs += generate_message(*root, "", enum_index, encoders, decoders, context);
+        class_defs += generate_message(*root, "", enum_index, local_enum_index,
+                                       encoders, decoders, context);
     }
 
     // One buffer instead of the chain of temporaries the '+' operators built:

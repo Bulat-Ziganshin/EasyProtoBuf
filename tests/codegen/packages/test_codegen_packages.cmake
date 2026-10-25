@@ -53,6 +53,7 @@ endfunction()
 set(names_pbs "${DATA_DIR}/names.pbs")
 set(names_proto "${DATA_DIR}/names.proto")
 set(external_pbs "${DATA_DIR}/external.pbs")
+set(other_pbs "${DATA_DIR}/other.pbs")
 set(invalid_std_pbs "${DATA_DIR}/invalid-std.pbs")
 set(invalid_std_proto "${DATA_DIR}/invalid-std.proto")
 set(shadow_pbs "${DATA_DIR}/shadow.pbs")
@@ -87,11 +88,34 @@ endif()
 run_ok(external_out external_err ${CODEGEN} --descriptor-set "${external_pbs}")
 require_contains("${external_out}" "::other::State state = ::other::State::READY;" "Explicit imported enum default")
 require_contains("${external_out}" "::other::External item;" "Absolute imported message type")
-require_contains("${external_out}" "::other::State implicit_state;" "Implicit imported enum has no guessed initializer")
+# CR-08/P7: the compatibility mode cannot see `other.State`'s declaration, so
+# the implicit default is the definition-independent zero cast rather than an
+# indeterminate member (`::other::State implicit_state;` used to be emitted).
+require_contains("${external_out}" "::other::State implicit_state = static_cast<::other::State>(0);" "Implicit imported enum is zero-initialized")
+require_not_contains("${external_out}" "::other::State implicit_state;"
+    "The implicit imported enum must carry an initializer")
 run_ok(external_no_defaults_out external_no_defaults_err
     ${CODEGEN} --descriptor-set --no-default-values "${external_pbs}")
 require_not_contains("${external_no_defaults_out}" "state = ::other::State::READY"
     "--no-default-values suppresses imported enum default")
+
+# --- P7 exception (CR-08): an external enum with a NON-ZERO first value ------
+#
+# `other.State` declares `READY = 7`, and the thin set carries no definition, so
+# the compatibility header cannot name that value: it zero-initializes the
+# member while the complete link spells `::other::State::READY`. This is the one
+# P7 shape the two modes cannot agree on (property-catalogue P7, E11), and it is
+# an executable xfail: the spellings MUST differ while the thin set carries no
+# definition. If they ever agree, the assertion fails and the exception has to
+# be re-decided (for example by teaching the thin mode to find its dependency's
+# first value).
+run_ok(complete_out complete_err
+    ${CODEGEN} --descriptor-set --target external.proto
+    "${external_pbs}" "${other_pbs}")
+require_contains("${complete_out}" "::other::State implicit_state = ::other::State::READY;"
+    "P7 E11: the complete link spells the imported enum's first value")
+require_contains("${external_out}" "::other::State implicit_state = static_cast<::other::State>(0);"
+    "P7 E11: the compatibility mode can only write the zero value")
 
 run_ok(shadow_out shadow_err ${CODEGEN} --descriptor-set "${shadow_pbs}")
 require_contains("${shadow_out}" "namespace std {" "Nested std namespace is legal")

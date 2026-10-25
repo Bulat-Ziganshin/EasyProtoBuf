@@ -20,6 +20,14 @@ that links `easypb_codegen_core` can create without the CLI. The lane links
 only the core (which brings `easypb_schema`), so it is parser-free and runs in
 the lite profile.
 
+Step `B8` added the `P7` family test to the same lane, because the
+compatibility mode is the lane's subject: the thin, complete-closure and source
+headers of one schema must be byte-identical (W-68), and the external enum
+member they declare must be zero-initialized (CR-08). The thin header is
+generated at build time so `thin_probe.cpp` compiles and runs against it
+(`codegen.library.thin`); the script compares the three spellings
+(`codegen.library`).
+
 ## The two halves
 
 1. `test_library.cpp` — the C++ API suite: default-constructed options,
@@ -28,8 +36,8 @@ the lite profile.
    `--emit-options-default <path>` mode writes the `W-11` header for the
    build-time compile check.
 2. `test_library.cmake` — the CLI half: the `W-47` refusals and controls, the
-   `W-47` source-path control, and the library-vs-CLI byte identity for the
-   same descriptor set.
+   `W-47` source-path control, the library-vs-CLI byte identity for the same
+   descriptor set, and the `P7` thin/full/source triple.
 
 The `W-11` header is compiled by the build, not by the test script: `cl.exe`
 started outside the Visual Studio environment cannot find its own standard
@@ -47,6 +55,8 @@ comparison extends that compile to the CLI's header.
 | `data/w47-external-enum-1a.pbs` | `W-47`: an external enum with default `1A` (crafted) |
 | `data/w47-source-default.proto` | `W-47` source half: an unresolved type with a default |
 | `data/w48-wire.proto` / `.pbs` | `W-48` wire control; its hand-built twin clears both bits |
+| `data/p7-ext/a.proto`, `b.proto` / `p7-thin.pbs`, `p7-full.pbs` | `P7`/CR-08: a proto3 external enum; thin (no `--include_imports`) and complete closure |
+| `thin_probe.cpp` | `P7`/CR-08 runtime probe: placement-new over `0xAB` reads the enum's zero default |
 
 `w47-external-enum-1a.pbs` carries no dependency edge on purpose: the
 `--target` control must reach type resolution (`unresolved type .dep.E`), not

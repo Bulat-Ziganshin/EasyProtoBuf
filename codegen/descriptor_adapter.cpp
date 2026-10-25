@@ -247,12 +247,17 @@ bool fail(const std::string& label, const std::string& message,
 //
 // `W-36` makes two containers that carry the same logical file a merge instead
 // of a blanket refusal. "The same file" is decided over the modeled content:
-// every field descriptor.pb.hpp declares, with the presence flags that change
-// what the linker reads (an absent label is OPTIONAL, an absent kind is
-// resolved by protoc's default). The file's `name` and `package` are compared
-// by value; their presence bits are normalized at ingest (W-48) and are not
-// modeled identity. Strings compare by value, so the comparison is independent
-// of which pool owns them.
+// every field descriptor.pb.hpp declares. Where the ABSENCE of a field has a
+// defined meaning for the linker, presence is content too (an absent kind is
+// refused by W-10, an absent label is read as OPTIONAL, an absent oneof index
+// means "not in a oneof"). Where absence is just the protobuf default, the
+// comparison uses the effective value instead of the presence bit, so a
+// re-encoded set and its source stay one file (CR-24): absent/`"proto2"`
+// syntax, `packed = false` beside an absent option, an empty option message
+// beside an absent one, and a derived `json_name` beside a written one. The
+// file's `name` and `package` are compared by value; their presence bits are
+// normalized at ingest (W-48) and are not modeled identity. Strings compare by
+// value, so the comparison is independent of which pool owns them.
 //
 // The walk must grow with the model: a field added to descriptor.pb.hpp and
 // not compared here would make two different files look identical. The
@@ -260,13 +265,29 @@ bool fail(const std::string& label, const std::string& message,
 
 bool same_descriptor(const CppFieldOptions& left, const CppFieldOptions& right)
 {
-    return left.type == right.type && left.has_type == right.has_type;
+    // An absent `(easypb.cpp).type` and an empty one are the same request.
+    return left.type == right.type;
 }
 
 bool same_descriptor(const FieldOptions& left, const FieldOptions& right)
 {
-    return left.packed == right.packed && left.has_packed == right.has_packed &&
-           same_descriptor(left.cpp, right.cpp) && left.has_cpp == right.has_cpp;
+    // `packed` is read as a bool, so unset and explicit false agree; the same
+    // holds for the whole option message being absent.
+    return (left.has_packed ? left.packed : false) ==
+               (right.has_packed ? right.packed : false) &&
+           same_descriptor(left.cpp, right.cpp);
+}
+
+// The effective JSON name: the written one when the descriptor carries it, the
+// derived name when it does not. A written name equal to the derived one is the
+// same value either way, so only a custom spelling changes the answer. protoc
+// writes `json_name` for every field of a descriptor set it produced; a
+// hand-encoded copy may omit the field, and that copy still names the same JSON
+// member (CR-24).
+std::string effective_json_name(const FieldDescriptorProto& field)
+{
+    const std::string derived = to_json_name(view_text(field.name));
+    return field.has_json_name ? view_text(field.json_name) : derived;
 }
 
 bool same_descriptor(const FieldDescriptorProto& left,
@@ -277,7 +298,7 @@ bool same_descriptor(const FieldDescriptorProto& left,
            left.type_name == right.type_name &&
            left.default_value == right.default_value &&
            left.oneof_index == right.oneof_index &&
-           left.json_name == right.json_name &&
+           effective_json_name(left) == effective_json_name(right) &&
            same_descriptor(left.options, right.options) &&
            left.has_name == right.has_name &&
            left.has_number == right.has_number &&
@@ -285,18 +306,20 @@ bool same_descriptor(const FieldDescriptorProto& left,
            left.has_type == right.has_type &&
            left.has_type_name == right.has_type_name &&
            left.has_default_value == right.has_default_value &&
-           left.has_options == right.has_options &&
-           left.has_oneof_index == right.has_oneof_index &&
-           left.has_json_name == right.has_json_name;
+           left.has_oneof_index == right.has_oneof_index;
 }
 
 bool same_descriptor(const MessageOptions& left, const MessageOptions& right)
 {
-    return left.map_entry == right.map_entry &&
-           left.message_set_wire_format == right.message_set_wire_format &&
-           left.has_map_entry == right.has_map_entry &&
-           left.has_message_set_wire_format ==
-               right.has_message_set_wire_format;
+    // Both options are read as bools: unset is false.
+    return (left.has_map_entry ? left.map_entry : false) ==
+               (right.has_map_entry ? right.map_entry : false) &&
+           (left.has_message_set_wire_format
+                ? left.message_set_wire_format
+                : false) ==
+               (right.has_message_set_wire_format
+                    ? right.message_set_wire_format
+                    : false);
 }
 
 bool same_descriptor(const DescriptorProto_ExtensionRange& left,
@@ -333,15 +356,15 @@ bool same_descriptor(const EnumValueDescriptorProto& left,
 
 bool same_descriptor(const EnumOptions& left, const EnumOptions& right)
 {
-    return left.allow_alias == right.allow_alias &&
-           left.has_allow_alias == right.has_allow_alias;
+    // `allow_alias` is read as a bool: unset is false.
+    return (left.has_allow_alias ? left.allow_alias : false) ==
+           (right.has_allow_alias ? right.allow_alias : false);
 }
 
 bool same_descriptor(const EnumDescriptorProto& left,
                      const EnumDescriptorProto& right)
 {
     if (left.name != right.name || left.has_name != right.has_name ||
-        left.has_options != right.has_options ||
         !same_descriptor(left.options, right.options) ||
         left.value.size() != right.value.size() ||
         left.reserved_range.size() != right.reserved_range.size() ||
@@ -371,7 +394,6 @@ bool same_descriptor(const OneofDescriptorProto& left,
 bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right)
 {
     if (left.name != right.name || left.has_name != right.has_name ||
-        left.has_options != right.has_options ||
         left.extension_count != right.extension_count ||
         !same_descriptor(left.options, right.options) ||
         left.field.size() != right.field.size() ||
@@ -435,18 +457,32 @@ bool same_descriptor(const ServiceDescriptorProto& left,
 
 } // namespace
 
+// The syntax class the linker reads, compared by classification: an absent
+// string, an empty one and an explicit `"proto2"` are one proto2 file to
+// protoc, so they are one file here too (CR-24). An unsupported class keeps the
+// deciding spelling in the comparison, because two different unsupported
+// spellings are two different files - both are then refused by A25, not merged.
+bool same_file_syntax(const FileDescriptorProto& left,
+                      const FileDescriptorProto& right)
+{
+    const FileSyntax left_class = classify_file_syntax(left);
+    const FileSyntax right_class = classify_file_syntax(right);
+    if (left_class != right_class) return false;
+    if (left_class != FILE_SYNTAX_UNSUPPORTED) return true;
+    return left.edition == right.edition && left.syntax == right.syntax;
+}
+
 bool same_descriptor_file(const FileDescriptorProto& left,
                           const FileDescriptorProto& right)
 {
     // The presence bits of the file's name and package are not part of the
     // modeled identity (W-48): the strings themselves are compared below, and
     // ingest normalizes the bits, so a stored copy and an incoming copy of one
-    // file must not look different here. Every other presence bit still
-    // decides, because it changes what the linker reads.
+    // file must not look different here. `syntax`/`edition` are compared by
+    // class (CR-24); every other presence bit still decides, because it
+    // changes what the linker reads.
     if (left.name != right.name || left.package != right.package ||
-        left.syntax != right.syntax || left.edition != right.edition ||
-        left.has_syntax != right.has_syntax ||
-        left.has_edition != right.has_edition ||
+        !same_file_syntax(left, right) ||
         left.dependency.size() != right.dependency.size() ||
         left.public_dependency != right.public_dependency ||
         left.weak_dependency != right.weak_dependency ||

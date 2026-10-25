@@ -998,11 +998,14 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
     if (!entry_message->options.has_map_entry || !entry_message->options.map_entry) {
         return false;
     }
-    // A method endpoint resolves with no field context; nothing can own the
-    // entry there, so it stays foreign. The rule itself takes references and
-    // therefore cannot express the absence.
+    // A method endpoint resolves with no field context. Nothing can own the
+    // entry there, and protoc's ownership rule is a FIELD rule: `ValidateMapEntry`
+    // is reached only from `ValidateFieldOptions`, so a method endpoint naming a
+    // synthetic entry is an ordinary message type to the reference compiler
+    // (measured: `map_entry_method.pbs` is accepted by libprotoc 30.1). Only a
+    // field that does not own the entry is foreign (CR-21).
     if (context.field == 0 || context.owner == 0 || context.field_path == 0) {
-        return true;
+        return false;
     }
     return !internal::owns_map_entry(*context.owner, *context.field_path,
                                       *context.field, entry, *entry_message);
@@ -3485,9 +3488,11 @@ bool validate_nested_types(SchemaFile& file, const SymbolIndex& symbols,
 // (deferred), compatibility tolerates only an absolute name (a descriptor
 // carries no kind for a method endpoint, so the absolute spelling is the one
 // fact that says the file meant an external message), and complete linking
-// refuses. A map entry, a non-type declaration and an invisible declaration
-// are fatal in every mode: no import can turn them into a message, and an
-// invisible declared type is the undeclared-dependency shape protoc refuses.
+// refuses. A non-type declaration and an invisible declaration are fatal in
+// every mode: no import can turn them into a message, and an invisible declared
+// type is the undeclared-dependency shape protoc refuses. A synthetic map entry
+// is NOT fatal here: the ownership rule is a field rule, so a method endpoint
+// names an ordinary message type (CR-21).
 bool resolve_method_type(SchemaFile& file, const SymbolIndex& symbols,
                          const std::set<const SchemaFile*>& visible_files,
                          const UnresolvedPolicy& unresolved_policy,
@@ -3851,6 +3856,23 @@ bool validate_message_json_names(SchemaFile& file,
             view_text(field.json_name) != default_name;
         const std::string effective =
             custom ? view_text(field.json_name) : default_name;
+        // protoc's `JsonNameLooksLikeExtension`: the bracket spelling is the
+        // extension form, so a CUSTOM name cannot use it (CR-22). Only a custom
+        // name can reach this rule: a default name comes from a field name and
+        // therefore starts with an identifier character.
+        if (custom && effective.size() >= 2 && effective[0] == '[' &&
+            effective[effective.size() - 1] == ']') {
+            const DescriptorPath field_path =
+                message_field_path(message_path, static_cast<int>(i));
+            return fail_at_code(
+                file,
+                "The custom JSON name of field \"" + view_text(field.name) +
+                    "\" (\"" + effective +
+                    "\") is invalid: JSON names may not start with '[' and "
+                    "end with ']'",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_JSON_NAME, error);
+        }
         const std::pair<std::map<std::string, std::size_t>::iterator, bool>
             inserted = effective_by_name.insert(
                 std::map<std::string, std::size_t>::value_type(effective, i));

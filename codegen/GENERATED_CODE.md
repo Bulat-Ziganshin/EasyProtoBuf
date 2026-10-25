@@ -30,7 +30,7 @@ Every generated header starts with its provenance line - `// Source: <logical na
 
 Two compiler-support imports are special-cased: `easypb/options.proto` and `google/protobuf/descriptor.proto` produce no dependency include while they are only option metadata. The exception ends — and the include appears — when a field names a declaration that file owns, or when the import is public, because a re-export must stay usable for the including translation unit. These files always stay in the linked set, so a missing one is still a link error.
 
-The thin single-file descriptor compatibility mode keeps the external-declaration tolerance, but not a different include contract: it emits the same includes as the complete link, and its header is byte-identical to the header the complete closure produces for the same schema. The tolerance covers the external type, not a default its declared kind decides: a message field with a default is refused, and an enum default must be an identifier.
+The thin single-file descriptor compatibility mode keeps the external-declaration tolerance, but not a different include contract: it emits the same includes as the complete link, and its header is byte-identical to the header the complete closure produces for the same schema. The tolerance covers the external type, not a default its declared kind decides: a message field with a default is refused, and an explicit enum default must be an identifier. An implicit enum default cannot be read from a thin set, so it is the definition-independent zero spelling (`static_cast<EnumType>(0)`); the complete link uses the same spelling for an enum declared in another file whenever that enum's first value is zero, which is what keeps the two headers identical. A cross-file enum whose first value is not zero is the one shape the modes spell differently: the complete link writes `EnumType::FIRST_VALUE`, the thin header can only write the zero value. See [Enums](#enums).
 
 ## Nested messages and declaration ordering
 
@@ -67,7 +67,9 @@ Top-level enums are emitted before messages, while nested enums are emitted in t
 
 Singular fields using an enum declared in the selected file are initialized to their explicit schema default when present, or to the enum's first declared value otherwise. Their initializers use `EnumType::VALUE` qualification, which is valid for unscoped enums in C++11 and prevents nearer enumerators from shadowing the intended value.
 
-For an imported enum whose definition is absent from the descriptor set, Codegen preserves an explicit default when available but cannot infer the first declared value. Without an explicit default, it emits no initializer for that field. `--no-default-values` also removes an explicit imported-enum default.
+An enum declared in another file is spelled by its value, not by its definition, whenever the two agree: an implicit default whose first declared value is zero is emitted as `static_cast<EnumType>(0)`, so the header does not depend on whether the descriptor set carries that file. A non-zero first value keeps `EnumType::FIRST_VALUE` in a complete link.
+
+For an enum whose definition is absent from the descriptor set, Codegen preserves an explicit default when available. Without an explicit default it emits `static_cast<EnumType>(0)`: the definition-independent initializer, so a default-initialized message never carries an indeterminate enumerator, and the compatibility-mode header stays byte-identical to the complete closure's. `--no-default-values` also removes an explicit imported-enum default.
 
 ## Presence, required fields, and defaults
 

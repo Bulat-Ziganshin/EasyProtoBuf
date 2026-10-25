@@ -1,0 +1,4 @@
+syntax = "proto3";
+package s;
+message M { map<int32, string> items = 1; }
+service S { rpc Call (.s.M.ItemsEntry) returns (M); }

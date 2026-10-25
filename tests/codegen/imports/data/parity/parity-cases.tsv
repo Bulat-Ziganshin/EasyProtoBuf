@@ -19,6 +19,9 @@ s-missing-import-accept	source	accept	accept	pair
 s-missing-import-reject	source	reject	DIAGNOSTIC_MISSING_IMPORT	pair	
 s-import-cycle-accept	source	accept	accept	pair	
 s-import-cycle-reject	source	reject	DIAGNOSTIC_IMPORT_CYCLE	pair	
+s-map-entry-type-method-accept	source	accept	accept	pair	
+s-invalid-json-name-accept	source	accept	accept	pair	
+s-invalid-json-name-reject	source	reject	DIAGNOSTIC_INVALID_JSON_NAME	pair	
 d-generic-not-raised	descriptor	accept	accept	none	no counterpart refusal exists: value 0 is not a parity code, it is the bucket for the loader/CLI classes. The row is the negative one - a protoc-accepted graph must never come back DIAGNOSTIC_GENERIC
 d-unsupported-syntax-accept	descriptor	accept	accept	pair	
 d-unsupported-syntax-reject	descriptor	reject	DIAGNOSTIC_UNSUPPORTED_SYNTAX	pair	
@@ -106,3 +109,6 @@ d-duplicate-symbol-entries-collision-reject	descriptor	reject	DIAGNOSTIC_DUPLICA
 d-duplicate-symbol-entry-and-plain-reject	descriptor	reject	DIAGNOSTIC_DUPLICATE_SYMBOL	pair	
 d-duplicate-symbol-distinct-entries-accept	descriptor	accept	accept	pair	
 d-duplicate-symbol-scoped-entries-accept	descriptor	accept	accept	pair	
+d-map-entry-type-method-accept	descriptor	accept	accept	pair	
+d-invalid-json-name-accept	descriptor	accept	accept	pair	
+d-invalid-json-name-reject	descriptor	reject	DIAGNOSTIC_INVALID_JSON_NAME	pair	

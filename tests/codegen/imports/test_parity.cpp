@@ -156,6 +156,8 @@ const CodeName kCodeNames[] = {
      easypb_schema::DIAGNOSTIC_INVALID_SYMBOL_NAME},
     {"DIAGNOSTIC_INVALID_FIELD_TYPE",
      easypb_schema::DIAGNOSTIC_INVALID_FIELD_TYPE},
+    {"DIAGNOSTIC_INVALID_JSON_NAME",
+     easypb_schema::DIAGNOSTIC_INVALID_JSON_NAME},
 };
 
 const std::size_t kCodeNameCount = sizeof(kCodeNames) / sizeof(kCodeNames[0]);
@@ -274,7 +276,7 @@ void check_table(const std::vector<Row>& rows)
     // One entry per `DiagnosticCode` value (fix round r17 moved 17 -> 19, the
     // plan-5 follow-up's S1 moved 20 -> 21), so a value appended to the enum
     // cannot be missing from the name table the tsv rows are resolved through.
-    CHECK(kCodeNameCount == 21);
+    CHECK(kCodeNameCount == 22);
     CHECK(!rows.empty());
 
     std::set<std::string> names;

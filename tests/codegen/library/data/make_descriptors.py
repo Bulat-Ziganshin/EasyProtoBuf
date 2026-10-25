@@ -46,14 +46,20 @@ DESCRIPTOR_DIRS = [
     os.path.join(REPO, "tests", "codegen", "parser", "differential", "corpus"),
 ]
 
-# (descriptor-set stem, source stem). The two differ only for the enum
-# control, whose output is named for its role and whose source names the
-# shape it declares.
+# (descriptor-set stem, source stem, extra protoc flags). The two stems differ
+# only for the enum control, whose output is named for its role and whose source
+# names the shape it declares. The P7 pair is the CR-08 thin/full triple: the
+# `.proto` root compiled WITHOUT `--include_imports` (the thin compatibility
+# set) and WITH it (the complete closure the header must equal).
+P7_EXT = os.path.join(HERE, "p7-ext")
 PROTOC_SOURCES = (
-    ("options-default", "options-default"),
-    ("w47-external", "w47-external"),
-    ("w47-external-enum-default", "w47-external-enum"),
-    ("w48-wire", "w48-wire"),
+    ("options-default", "options-default", ()),
+    ("w47-external", "w47-external", ()),
+    ("w47-external-enum-default", "w47-external-enum", ()),
+    ("w48-wire", "w48-wire", ()),
+    ("p7-thin", "b", ("--proto_path=" + P7_EXT,)),
+    ("p7-full", "b",
+     ("--proto_path=" + P7_EXT, "--include_imports")),
 )
 
 
@@ -129,10 +135,13 @@ def main():
         write(os.path.join(HERE, stem + ".pbs"),
               encode_textproto(protoc, descriptor_dir, text))
 
-    for stem, source in PROTOC_SOURCES:
+    for stem, source, flags in PROTOC_SOURCES:
         target = os.path.join(HERE, stem + ".pbs")
-        run([protoc, "--proto_path=" + HERE, "--descriptor_set_out=" + target,
-             source + ".proto"])
+        command = [protoc, "--proto_path=" + HERE,
+                   "--descriptor_set_out=" + target]
+        command.extend(flags)
+        command.append(source + ".proto")
+        run(command)
         print("wrote %s (%d bytes)" % (os.path.basename(target),
                                        os.path.getsize(target)))
     return 0
