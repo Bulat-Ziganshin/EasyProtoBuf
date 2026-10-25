@@ -137,7 +137,7 @@ jobs:
         started=$SECONDS
         python3 tests/codegen/parser/differential/run.py \
           --protoc "$PWD/$PROTOC" \
-          --compare build/harness-ci/parser_differential_compare
+          --compare build/harness-ci/tests/parser_differential_compare
         echo "parser differential: $((SECONDS - started))s"
 
     - name: Mass P1/P2 discovery
