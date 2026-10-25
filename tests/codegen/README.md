@@ -25,7 +25,8 @@ Lane | What it proves | Properties | CRs / exceptions | Notes
 One fixture may prove several properties, and one test may cover several CRs;
 the row names the IDs the lane's tests carry, while the lane `README.md` and
 the test names remain the detailed explanation. The 16 lane names are fixed;
-a non-lane directory such as a future `tests/codegen/harness/` gets no row.
+the differential harness in `tests/codegen/harness/` gets no lane row and is
+excluded from the CR scan because it names CRs in its own code and README.
 
 The map must name every property `P1`–`P9`, every exception `E1`–`E14` and
 every CR `CR-01`–`CR-48` (the CR may also be named by a test source). The
@@ -42,11 +43,12 @@ python tests/codegen/check_coverage.py
 The validator checks that the 16 lane directories exist, that `COVERAGE.md`
 has exactly one row per lane and no unknown lane, that P1–P9 and E1–E14 are
 listed, that every CR-01–CR-48 is named by the table or a source file under
-`tests/codegen/`, and that the retired per-fixture manifest (`cases.tsv`,
-`cases-ignore.tsv`, `check_cases.py`) is gone. It prints
-`lane: properties; CR count` per lane and exits nonzero with the missing IDs
-listed. CI runs it in the `coverage` job of
-`.github/workflows/cmake-multi-platform.yml`; B17 runs it locally.
+`tests/codegen/` (the harness directory is excluded), and that the retired
+per-fixture manifest (`cases.tsv`, `cases-ignore.tsv`, `check_cases.py`) is
+gone. It prints `lane: properties; CR count` per lane and exits nonzero with
+the missing IDs listed. CI runs it in the `coverage` job of
+`.github/workflows/cmake-multi-platform.yml`; B17 runs it locally, and the
+`extended-harness` workflow runs the differential harness itself.
 
 ## Adding a test
 

@@ -1,0 +1,23 @@
+{
+  "cr": "CR-35",
+  "exception": null,
+  "id": "CR-35",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/review/emitter-names/chain12k.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "note": "B11: the product accepts the 12 000-message chain; protoc 30.1 still crashes on it, so the one remaining crash is the oracle's. The no-crash property is executable in codegen.limits (dependency-chain) [logical name: c12000.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "n/a",
+  "p3_applicable": false,
+  "p3_note": "generator stress fixture, not a compile fixture: 12 000 by-value messages produce a 9.5 MB / 384 009-line header; tests/codegen/limits/test_limits.cmake declares that header not compiled and P8 owns the chain walk. B15 measured the boundary: a 6 000-message chain compiles under g++ 15.2 in 178 s, while 12 000 crashes cc1plus with STATUS_STACK_OVERFLOW (0xC00000FD) and does not finish under Clang 3.3.",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": "R9",
+  "schema": 1,
+  "source": "review",
+  "target": "c12000.proto",
+  "timeout_s": 60.0
+}

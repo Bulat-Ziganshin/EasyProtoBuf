@@ -1,0 +1,4 @@
+message M {
+enum E { A = 0; B = 1; }
+oneof o { E e = 2 [default = B]; }
+}

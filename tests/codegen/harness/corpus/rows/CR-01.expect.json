@@ -1,0 +1,24 @@
+{
+  "cr": "CR-01",
+  "exception": null,
+  "id": "CR-01",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/verify"
+  ],
+  "input": "tests/codegen/harness/corpus/review/verify/float-octal.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "float/double default spelled 010 [logical name: float-octal.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "divergent",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R1",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

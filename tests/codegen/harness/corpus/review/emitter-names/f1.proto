@@ -1,0 +1,5 @@
+syntax = "proto3";
+message M {
+  enum E { has_foo = 0; }
+  int32 foo = 1;
+}

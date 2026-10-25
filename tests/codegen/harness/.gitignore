@@ -1,0 +1,14 @@
+# Transient harness output. The tracked corpus lives in `corpus/`.
+/runs/
+/generated/
+/__pycache__/
+*.pyc
+/pilot-findings.md
+/summary.json
+/discovery-summary.json
+/p3-summary.json
+/p7-summary.json
+/handbuilt-summary.json
+/shrink-summary.json
+/p3-*.json
+/p7-*.json

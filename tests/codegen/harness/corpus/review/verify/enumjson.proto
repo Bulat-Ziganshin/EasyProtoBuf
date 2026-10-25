@@ -1,0 +1,1 @@
+syntax="proto2"; package p; enum E { A = 0 [json_name = "aName"]; }

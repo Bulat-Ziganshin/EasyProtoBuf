@@ -1,0 +1,3 @@
+message M {
+oneof o { string a = 5 [default = "x"]; }
+}

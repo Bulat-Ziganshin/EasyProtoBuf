@@ -1,0 +1,4 @@
+message Defaults31
+{
+optional int32 i32 = 1000 [default = 0x7fffffff];
+}

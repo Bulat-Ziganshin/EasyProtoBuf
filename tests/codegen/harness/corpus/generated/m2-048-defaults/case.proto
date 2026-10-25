@@ -1,0 +1,4 @@
+message Defaults48
+{
+optional uint32 u32 = 536870911 [default = 0777];
+}

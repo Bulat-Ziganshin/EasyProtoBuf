@@ -1,0 +1,3 @@
+syntax="proto2";
+package p;
+message M { optional string a = 1 [default = "xy"]; }

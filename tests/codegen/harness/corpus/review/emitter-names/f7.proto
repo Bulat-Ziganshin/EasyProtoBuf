@@ -1,0 +1,2 @@
+syntax = "proto3";
+message easypb { int32 a = 1; }

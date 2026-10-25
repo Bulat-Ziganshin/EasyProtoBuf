@@ -1,0 +1,4 @@
+message Defaults50
+{
+optional int32 i32 = 2 [default = -0777];
+}

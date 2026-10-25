@@ -1,0 +1,40 @@
+{
+  "cr": null,
+  "exception": null,
+  "generated": {
+    "case": "m2-171-r5",
+    "classification": "known-root",
+    "mechanism": "r5-leading-semicolon",
+    "root_hint": "R5",
+    "seed": 1
+  },
+  "id": "m2-171-r5",
+  "include_roots": [
+    "tests/codegen/harness/corpus/generated/m2-171-r5"
+  ],
+  "input": "tests/codegen/harness/corpus/generated/m2-171-r5/case.proto",
+  "kind": "source",
+  "mandatory": true,
+  "minimized": {
+    "duration_s": 0.15,
+    "evaluations": 3,
+    "raw_kept": false,
+    "shrunk_at": "2026-10-25T00:13:54+03:00",
+    "size_after": 21,
+    "size_before": 21,
+    "tool": "shrink.py",
+    "verified": true
+  },
+  "note": "M2 discovery seed 1, r5-leading-semicolon: leading empty statement before syntax",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": "R5",
+  "schema": 1,
+  "source": "generated",
+  "target": null,
+  "timeout_s": 10.0
+}

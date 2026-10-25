@@ -1,0 +1,3 @@
+message M {
+optional bytes s = 2 [default = "\400"];
+}

@@ -1,0 +1,2 @@
+/* outer /* inner */
+syntax="proto3"; message M { int32 a = 1; }

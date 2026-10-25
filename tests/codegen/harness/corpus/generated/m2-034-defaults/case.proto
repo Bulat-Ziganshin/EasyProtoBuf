@@ -1,0 +1,4 @@
+message Defaults34
+{
+optional int64 i64 = 6 [default = 010];
+}

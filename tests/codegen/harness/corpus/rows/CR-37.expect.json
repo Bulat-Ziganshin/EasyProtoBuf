@@ -1,0 +1,22 @@
+{
+  "cr": "CR-37",
+  "exception": null,
+  "id": "CR-37",
+  "include_roots": [],
+  "input": null,
+  "kind": "not-comparable",
+  "mandatory": true,
+  "note": "--print-descriptor read failures; CLI diagnostic property (P4/P9)",
+  "p1_expect": "n/a",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": "--print-descriptor read failures; CLI diagnostic property (P4/P9)",
+  "root": "R8",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

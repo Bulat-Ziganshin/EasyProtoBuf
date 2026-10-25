@@ -1,0 +1,24 @@
+{
+  "cr": "CR-27",
+  "exception": null,
+  "id": "CR-27",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/verify"
+  ],
+  "input": "tests/codegen/harness/corpus/review/verify/enumjson.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "json_name on an enum value is ignored [logical name: enumjson.proto]",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R5",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

@@ -1,0 +1,21 @@
+{
+  "cr": "CR-24",
+  "exception": null,
+  "id": "CR-24",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/review/schema-descriptor/merge_b_semantic.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "note": "single-container invocation; the merge defect needs the CLI container pair [logical name: merge_src.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": "R6",
+  "schema": 1,
+  "source": "review",
+  "target": "merge_src.proto",
+  "timeout_s": 10.0
+}

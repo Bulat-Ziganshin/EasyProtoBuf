@@ -1,0 +1,4 @@
+message Defaults37
+{
+optional int32 i32 = 5 [default = 0x7fffffff];
+}

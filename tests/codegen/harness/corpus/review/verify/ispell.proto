@@ -1,0 +1,1 @@
+syntax="proto2"; package p; message M { optional int32 a = 1 [default = 0x10]; optional int32 b = 2 [default = 010]; optional int32 c = 3 [default = -0]; }

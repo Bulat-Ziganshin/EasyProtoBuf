@@ -1,0 +1,4 @@
+message Defaults43
+{
+optional int32 i32 = 18 [default = -0777];
+}

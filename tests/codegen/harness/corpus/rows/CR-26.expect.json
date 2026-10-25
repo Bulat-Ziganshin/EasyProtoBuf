@@ -1,0 +1,24 @@
+{
+  "cr": "CR-26",
+  "exception": null,
+  "id": "CR-26",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/verify"
+  ],
+  "input": "tests/codegen/harness/corpus/review/verify/alias.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "allow_alias without shared numbers is accepted [logical name: alias.proto]",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R5",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

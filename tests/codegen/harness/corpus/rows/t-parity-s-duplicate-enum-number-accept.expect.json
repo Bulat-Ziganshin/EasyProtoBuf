@@ -1,0 +1,24 @@
+{
+  "cr": null,
+  "exception": null,
+  "id": "t-parity-s-duplicate-enum-number-accept",
+  "include_roots": [
+    "tests/codegen/imports/data/parity/source"
+  ],
+  "input": "tests/codegen/imports/data/parity/source/s-duplicate-enum-number-accept.proto",
+  "kind": "source",
+  "mandatory": false,
+  "note": "declared protoc verdict: accept",
+  "p1_expect": "parity",
+  "p2_expect": "parity",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "test",
+  "target": null,
+  "timeout_s": 10.0
+}

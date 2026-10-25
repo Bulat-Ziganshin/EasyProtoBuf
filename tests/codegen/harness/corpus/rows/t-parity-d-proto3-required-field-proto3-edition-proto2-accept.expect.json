@@ -1,0 +1,21 @@
+{
+  "cr": null,
+  "exception": null,
+  "id": "t-parity-d-proto3-required-field-proto3-edition-proto2-accept",
+  "include_roots": [],
+  "input": "tests/codegen/imports/data/parity/set/d-proto3-required-field-proto3-edition-proto2-accept.pbs",
+  "kind": "descriptor",
+  "mandatory": false,
+  "note": "declared protoc verdict: accept",
+  "p1_expect": "parity",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "test",
+  "target": "root.proto",
+  "timeout_s": 10.0
+}

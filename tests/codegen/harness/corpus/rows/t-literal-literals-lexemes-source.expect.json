@@ -1,0 +1,24 @@
+{
+  "cr": null,
+  "exception": null,
+  "id": "t-literal-literals-lexemes-source",
+  "include_roots": [
+    "tests/codegen/validity/data"
+  ],
+  "input": "tests/codegen/validity/data/literals-lexemes.proto",
+  "kind": "source",
+  "mandatory": false,
+  "note": "R2 lexer/literal family: source path - leading-zero lexeme table (0x10, 010, 077, 00, 0, 0.5, 0e5)",
+  "p1_expect": "parity",
+  "p2_expect": "parity",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "test",
+  "target": null,
+  "timeout_s": 10.0
+}

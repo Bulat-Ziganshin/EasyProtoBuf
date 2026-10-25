@@ -1,0 +1,24 @@
+{
+  "cr": "CR-19",
+  "exception": null,
+  "id": "CR-19",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/parser-loader"
+  ],
+  "input": "tests/codegen/harness/corpus/review/parser-loader/aggregate-nul.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "NUL inside an aggregate option is swallowed [logical name: aggregate-nul.proto]",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R2",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}
