@@ -6,6 +6,11 @@ source text and as a `.pbs` descriptor set. This script writes the descriptor
 halves and is the only way they are produced, so a fixture can never drift
 away from the shape it claims to have.
 
+The mechanics - the protoc lookup, the `descriptor.proto` lookup, the
+text-format encoder, the writer and the `--check` gate - live in
+`tests/codegen/common/descriptor_fixtures.py`. This script is the lane's set
+of exceptions to the helper's defaults.
+
 Two shapes come from protoc:
 
 - the paired fixtures (`defaults-*.proto`) are compiled with
@@ -20,52 +25,42 @@ Two shapes come from protoc:
 
 A crafted `.pbs` wins over the `.proto` of the same stem: the raw spelling is
 the point of `defaults-float-overflow`, `defaults-bytes-upper-hex`,
-`plus-int-descriptor` and their siblings, so the second loop must not replace
-it with protoc's canonical form. The source-only fixtures in
-`SOURCE_ONLY_FIXTURES` are skipped entirely.
+`plus-int-descriptor` and their siblings, so the helper must not replace it
+with protoc's canonical form. The source-only fixtures in
+`SOURCE_ONLY_FIXTURES` are reported and never compiled.
 
 ONE crafted shape needs one byte that protoc's text format will not carry:
 `field-type-unknown` declares `type: 99`, and the text format answers
-"Unknown enumeration value of \"99\" for field \"type\"". The script therefore
-encodes that fixture TWICE - once with `type: TYPE_INT32` and once with
-`type: TYPE_SINT32`, both one-byte varints - asserts that the two encodings
-differ in exactly one byte, and writes 99 into that byte. The result is
-protoc's own encoding of the same descriptor with the unknown kind.
+"Unknown enumeration value of \"99\" for field \"type\"". `patched_kind_bytes`
+therefore encodes that fixture TWICE - once with `type: TYPE_INT32` and once
+with `type: TYPE_SINT32`, both one-byte varints - asserts that the two
+encodings differ in exactly one byte, and writes 99 into that byte. The result
+is protoc's own encoding of the same descriptor with the unknown kind.
 
 Usage:
 
-    python tests/codegen/validity/data/make_descriptors.py [--protoc PATH]
+    python tests/codegen/validity/data/make_descriptors.py [--protoc PATH] [--check]
 
-The script needs protoc (30.1 is the oracle this project measures against)
-and google/protobuf/descriptor.proto. The latter is looked up in this order:
-
-    1. $EASYPB_DESCRIPTOR_PROTO (a directory holding google/protobuf/descriptor.proto)
-    2. build/protobuf-30.1-src/protobuf-30.1/src (the repo-local scratch copy)
-    3. tests/codegen/parser/differential/corpus (the flat copy the repository
-       already tracks for the differential lane)
-
-Nothing here is needed to RUN the lane: the `.pbs` files are committed, and
-the lane itself never calls protoc.
+`--check` rebuilds every fixture in memory and compares it with the committed
+file instead of writing it.
 """
 
-import argparse
-import io
 import os
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
-DEFAULT_PROTOC = r"C:\Base\Tools\BIN\protoc.exe"
-DESCRIPTOR_DIRS = [
-    os.path.join(REPO, "build", "protobuf-30.1-src", "protobuf-30.1", "src"),
-    os.path.join(REPO, "tests", "codegen", "parser", "differential", "corpus"),
-]
+# `tests/codegen`, so `common.descriptor_fixtures` is importable from anywhere.
+sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
+# Do not leave an untracked `common/__pycache__` in the repository.
+sys.dont_write_bytecode = True
+
+from common.descriptor_fixtures import (build_fixtures,
+                                        encode_textproto, fail, parse_args)
 
 # The source-only fixtures: protoc refuses most of them, and a generated `.pbs`
 # would either fail the script or add an unintended descriptor twin. The
 # validity lane drives these from the `.proto` directly (W-15, W-40, W-41, B7).
-SOURCE_ONLY_FIXTURES = {
+SOURCE_ONLY_FIXTURES = (
     "bom",
     "bom-control",
     "empty-syntax",
@@ -88,7 +83,7 @@ SOURCE_ONLY_FIXTURES = {
     "plus-float-default",
     "plus-inf-nan",
     "plus-int-default",
-}
+)
 
 # The one fixture whose text protoc will not parse, and the two legal type
 # values it is encoded with instead (both are one-byte varints, so the two
@@ -96,55 +91,6 @@ SOURCE_ONLY_FIXTURES = {
 PATCHED_TYPE_FIXTURE = "field-type-unknown"
 PATCHED_TYPE_VALUE = 99
 PATCHED_TYPE_PROBES = ("TYPE_INT32", "TYPE_SINT32")
-
-
-def fail(message):
-    sys.stderr.write(message + "\n")
-    raise SystemExit(1)
-
-
-def find_protoc(explicit):
-    if explicit:
-        return explicit
-    from_env = os.environ.get("EASYPB_PROTOC")
-    if from_env:
-        return from_env
-    if os.path.exists(DEFAULT_PROTOC):
-        return DEFAULT_PROTOC
-    return "protoc"
-
-
-def find_descriptor_dir():
-    from_env = os.environ.get("EASYPB_DESCRIPTOR_PROTO")
-    if from_env:
-        if os.path.exists(os.path.join(from_env, "google", "protobuf",
-                                       "descriptor.proto")):
-            return from_env
-        fail("EASYPB_DESCRIPTOR_PROTO=%s holds no google/protobuf/descriptor.proto"
-             % from_env)
-    for candidate in DESCRIPTOR_DIRS:
-        if os.path.exists(os.path.join(candidate, "google", "protobuf",
-                                       "descriptor.proto")):
-            return candidate
-        if os.path.exists(os.path.join(candidate, "descriptor.proto")):
-            return candidate
-    fail("no google/protobuf/descriptor.proto found; set "
-         "EASYPB_DESCRIPTOR_PROTO to the directory that holds it")
-
-
-def run(command, stdin_bytes=None):
-    result = subprocess.run(command, input=stdin_bytes, capture_output=True)
-    if result.returncode != 0:
-        fail("command failed (%d): %s\n%s"
-             % (result.returncode, " ".join(command),
-                result.stderr.decode("utf-8", "replace")))
-    return result.stdout
-
-
-def encode_textproto(protoc, descriptor_dir, text):
-    return run([protoc, "--encode=google.protobuf.FileDescriptorSet",
-                "--proto_path=" + descriptor_dir,
-                "google/protobuf/descriptor.proto"], text)
 
 
 def patched_kind_bytes(protoc, descriptor_dir, text):
@@ -178,48 +124,14 @@ def patched_kind_bytes(protoc, descriptor_dir, text):
     return bytes(patched)
 
 
-def write(path, data):
-    with io.open(path, "wb") as handle:
-        handle.write(data)
-    print("wrote %s (%d bytes)" % (os.path.basename(path), len(data)))
+PATCHES = {PATCHED_TYPE_FIXTURE: patched_kind_bytes}
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--protoc", default="", help="the protoc executable")
-    args = parser.parse_args()
-
-    protoc = find_protoc(args.protoc)
-    descriptor_dir = find_descriptor_dir()
-
-    for name in sorted(os.listdir(HERE)):
-        if not name.endswith(".txtpb"):
-            continue
-        stem = name[:-len(".txtpb")]
-        with io.open(os.path.join(HERE, name), "rb") as handle:
-            text = handle.read()
-        if stem == PATCHED_TYPE_FIXTURE:
-            data = patched_kind_bytes(protoc, descriptor_dir, text)
-        else:
-            data = encode_textproto(protoc, descriptor_dir, text)
-        write(os.path.join(HERE, stem + ".pbs"), data)
-
-    for name in sorted(os.listdir(HERE)):
-        if not name.endswith(".proto"):
-            continue
-        stem = name[:-len(".proto")]
-        if stem in SOURCE_ONLY_FIXTURES:
-            print("skipped %s.proto (source-only)" % stem)
-            continue
-        target = os.path.join(HERE, stem + ".pbs")
-        if os.path.exists(os.path.join(HERE, stem + ".txtpb")):
-            print("kept crafted %s" % os.path.basename(target))
-            continue
-        run([protoc, "--proto_path=" + HERE, "--descriptor_set_out=" + target,
-             os.path.basename(name)])
-        print("wrote %s (%d bytes)" % (os.path.basename(target),
-                                       os.path.getsize(target)))
-    return 0
+    args = parse_args(__doc__.split("\n")[0])
+    return build_fixtures(HERE, source_only=SOURCE_ONLY_FIXTURES,
+                          patches=PATCHES, check=args.check,
+                          protoc=args.protoc)
 
 
 if __name__ == "__main__":

@@ -111,13 +111,17 @@ Those five `.pbs` files are encoded from the `.txtpb` beside each one with
 ## Rebuilding the fixtures
 
 ```sh
-python tests/codegen/names/data/make_descriptors.py [--protoc PATH]
+python tests/codegen/names/data/make_descriptors.py [--protoc PATH] [--check]
 ```
 
-The script needs `protoc` (30.1 is the oracle this project measures against)
-and writes the `.pbs` files with `--descriptor_set_out`, or with `--encode`
-for the five crafted ones. Running the lane never needs `protoc`: the `.pbs`
-files are committed.
+The script has no fixture table: it compiles every `.proto` here and encodes
+every `.txtpb`, and the shared mechanics - the protoc lookup, the
+`descriptor.proto` lookup, the text-format encoder and the writer - live in
+`tests/codegen/common/descriptor_fixtures.py`. It writes the `.pbs` files with
+`--descriptor_set_out`, or with `--encode` for the five crafted ones; a
+`.txtpb` wins over the `.proto` of the same stem. `--check` rebuilds every
+fixture in memory and fails on any byte that differs from the committed file.
+Running the lane never needs `protoc`: the `.pbs` files are committed.
 
 ## The lanes it joins
 

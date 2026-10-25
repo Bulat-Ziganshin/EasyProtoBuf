@@ -220,13 +220,13 @@ compile covers both paths.
 ## Rebuilding the fixtures
 
 ```sh
-python tests/codegen/validity/data/make_descriptors.py [--protoc PATH]
+python tests/codegen/validity/data/make_descriptors.py [--protoc PATH] [--check]
 ```
 
-The script needs `protoc` (30.1 is the oracle this project measures against)
-and `google/protobuf/descriptor.proto`; it looks the latter up in
-`$EASYPB_DESCRIPTOR_PROTO`, then in `build/protobuf-30.1-src/protobuf-30.1/src`,
-then in the flat copy the repository already tracks for the differential lane.
+The source-only list, the patched fixture and the patch itself are in that
+script; the protoc lookup, the `descriptor.proto` lookup, the text-format
+encoder and the writer are shared with the other descriptor lanes in
+`tests/codegen/common/descriptor_fixtures.py`.
 
 The crafted fixtures come from `.txtpb` with
 `--encode=google.protobuf.FileDescriptorSet`. A `.txtpb` wins over the
@@ -250,6 +250,9 @@ with `type: TYPE_INT32` and once with `type: TYPE_SINT32`, both one-byte
 varints - asserts that the two encodings differ in exactly one byte, and
 writes 99 into that byte. The result is protoc's own encoding of the same
 descriptor with the unknown kind.
+
+`--check` rebuilds every fixture in memory and fails on any byte that differs
+from the committed file.
 
 Running the lane never needs `protoc`: the `.pbs` files are committed.
 

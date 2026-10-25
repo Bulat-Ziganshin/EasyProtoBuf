@@ -142,13 +142,17 @@ is exactly the shape `--out-dir` receives on Windows.
 ## Rebuilding the fixtures
 
 ```sh
-python tests/codegen/limits/data/make_descriptors.py [--protoc PATH]
+python tests/codegen/limits/data/make_descriptors.py [--protoc PATH] [--check]
 ```
 
-The script needs `protoc` (30.1 is the oracle this project measures against)
-and writes the `.proto` and `.pbs` files: a 31-level schema and a 32-level
-schema are not writable by hand, and the pair is the whole point of the lane.
-The same script writes the 12 000-message dependency chain and its `.pbs`.
+The fixture table and the generated source text are in that script; the protoc
+lookup, the `descriptor.proto` lookup, the text-format encoder and the writer
+are shared with the other descriptor lanes in
+`tests/codegen/common/descriptor_fixtures.py`. It writes the `.proto` and
+`.pbs` files: a 31-level schema and a 32-level schema are not writable by hand,
+and the pair is the whole point of the lane. The same script writes the
+12 000-message dependency chain and its `.pbs`. `--check` regenerates both
+halves in memory and fails on any byte that differs from the committed file.
 
 Running the lane never needs `protoc`: the fixtures are committed.
 

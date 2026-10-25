@@ -139,15 +139,16 @@ complete closure produces.
 ## Rebuilding the fixtures
 
 ```sh
-python tests/codegen/parity/data/make_descriptors.py [--protoc PATH]
+python tests/codegen/parity/data/make_descriptors.py [--protoc PATH] [--check]
 ```
 
-The script needs `protoc` (30.1 is the oracle this project measures against)
-and `google/protobuf/descriptor.proto`; it looks the latter up in
-`$EASYPB_DESCRIPTOR_PROTO`, then in `build/protobuf-30.1-src/protobuf-30.1/src`,
-then in the flat copy the repository already tracks for the differential lane.
-It writes the accepted `.pbs` files with `--descriptor_set_out` and the crafted
-ones with `--encode=google.protobuf.FileDescriptorSet`.
+The fixture table is in that script; the protoc lookup, the
+`descriptor.proto` lookup, the text-format encoder and the writer are shared
+with the other descriptor lanes in
+`tests/codegen/common/descriptor_fixtures.py`. It writes the accepted `.pbs`
+files with `--descriptor_set_out` and the crafted ones with
+`--encode=google.protobuf.FileDescriptorSet`. `--check` rebuilds every fixture
+in memory and fails on any byte that differs from the committed file.
 
 Running the lane never needs `protoc`: the `.pbs` files are committed.
 

@@ -10,6 +10,7 @@ tests/codegen/
   COVERAGE.md         one row per lane: purpose, properties, CRs/exceptions
   check_coverage.py   the coverage gate (pure Python, no protoc, no network)
   README.md           this page
+  common/             shared `.pbs` fixture builder for five lanes
   <lane>/             fixtures, driver, README; no per-fixture manifest
 ```
 
@@ -51,7 +52,9 @@ listed. CI runs it in the `coverage` job of
 
 1. Put the fixture in the lane's `data/` directory and rebuild the `.pbs`
    with the lane's `make_descriptors.py` when one exists; never hand-edit a
-   binary fixture.
+   binary fixture. The five descriptor lanes share their encoder in
+   `common/descriptor_fixtures.py`, and `--check` proves that the committed
+   `.pbs` files are exactly what the generator produces.
 2. Follow the lane `README.md`: most lanes require both input paths, a
    compiled header and a refusal transcript.
 3. If the test adds a property, exception or CR the lane did not carry, add

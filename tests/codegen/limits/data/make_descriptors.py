@@ -7,7 +7,12 @@ so a fixture can never drift away from the shape it claims to have: a 31-level
 schema and a 32-level schema are not writable by hand, and the pair is the
 whole point of the lane.
 
-Three shapes are produced:
+The mechanics - the protoc lookup, the `descriptor.proto` lookup, the
+text-format encoder, the writer and the `--check` gate - live in
+`tests/codegen/common/descriptor_fixtures.py`; this script is the lane's table
+of generated fixtures.
+
+Four shapes are produced:
 
 - `nesting-31.proto` / `nesting-31.pbs` - 31 levels of nested messages, the
   deepest schema the reference compiler accepts. The `.pbs` is protoc's own
@@ -30,33 +35,26 @@ Three shapes are produced:
 
 Usage:
 
-    python tests/codegen/limits/data/make_descriptors.py [--protoc PATH]
+    python tests/codegen/limits/data/make_descriptors.py [--protoc PATH] [--check]
 
-The script needs protoc (30.1 is the oracle this project measures against)
-and google/protobuf/descriptor.proto. The latter is looked up in this order:
-
-    1. $EASYPB_DESCRIPTOR_PROTO (a directory holding google/protobuf/descriptor.proto)
-    2. build/protobuf-30.1-src/protobuf-30.1/src (the repo-local scratch copy)
-    3. tests/codegen/parser/differential/corpus (the flat copy the repository
-       already tracks for the differential lane)
+`--check` regenerates every `.proto` and `.pbs` in memory and compares it with
+the committed file instead of writing it.
 
 Nothing here is needed to RUN the lane: the fixtures are committed, and the
 lane itself never calls protoc.
 """
 
-import argparse
-import io
 import os
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
-DEFAULT_PROTOC = r"C:\Base\Tools\BIN\protoc.exe"
-DESCRIPTOR_DIRS = [
-    os.path.join(REPO, "build", "protobuf-30.1-src", "protobuf-30.1", "src"),
-    os.path.join(REPO, "tests", "codegen", "parser", "differential", "corpus"),
-]
+# `tests/codegen`, so `common.descriptor_fixtures` is importable from anywhere.
+sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
+# Do not leave an untracked `common/__pycache__` in the repository.
+sys.dont_write_bytecode = True
+
+from common.descriptor_fixtures import (Fixture, build_fixtures,
+                                        parse_args)
 
 # The two nesting depths the lane drives. 31 is the deepest schema the
 # reference compiler accepts; 32 is the first one it refuses.
@@ -75,56 +73,7 @@ DEEP_NAME_COMPONENTS = 101
 CHAIN_LENGTH = 12000
 
 
-def fail(message):
-    sys.stderr.write(message + "\n")
-    raise SystemExit(1)
-
-
-def find_protoc(explicit):
-    if explicit:
-        return explicit
-    from_env = os.environ.get("EASYPB_PROTOC")
-    if from_env:
-        return from_env
-    if os.path.exists(DEFAULT_PROTOC):
-        return DEFAULT_PROTOC
-    return "protoc"
-
-
-def find_descriptor_dir():
-    from_env = os.environ.get("EASYPB_DESCRIPTOR_PROTO")
-    if from_env:
-        if os.path.exists(os.path.join(from_env, "google", "protobuf",
-                                       "descriptor.proto")):
-            return from_env
-        fail("EASYPB_DESCRIPTOR_PROTO=%s holds no google/protobuf/descriptor.proto"
-             % from_env)
-    for candidate in DESCRIPTOR_DIRS:
-        if os.path.exists(os.path.join(candidate, "google", "protobuf",
-                                       "descriptor.proto")):
-            return candidate
-        if os.path.exists(os.path.join(candidate, "descriptor.proto")):
-            return candidate
-    fail("no google/protobuf/descriptor.proto found; set "
-         "EASYPB_DESCRIPTOR_PROTO to the directory that holds it")
-
-
-def run(command, stdin_bytes=None):
-    result = subprocess.run(command, input=stdin_bytes, capture_output=True)
-    if result.returncode != 0:
-        fail("command failed (%d): %s\n%s"
-             % (result.returncode, " ".join(command),
-                 result.stderr.decode("utf-8", "replace")))
-    return result.stdout
-
-
-def encode_textproto(protoc, descriptor_dir, text):
-    return run([protoc, "--encode=google.protobuf.FileDescriptorSet",
-                "--proto_path=" + descriptor_dir,
-                "google/protobuf/descriptor.proto"], text)
-
-
-def source_text(depth, name):
+def source_text(depth):
     """The `.proto` source of a chain of `depth` nested messages."""
     lines = ['syntax = "proto2";', ""]
     for level in range(depth):
@@ -178,53 +127,28 @@ def chain_source_text(length):
     return "\n".join(lines) + "\n"
 
 
-def write(path, data):
-    with io.open(path, "wb") as handle:
-        handle.write(data)
-    print("wrote %s (%d bytes)" % (os.path.basename(path), len(data)))
+FIXTURES = (
+    # The accepted shape: protoc builds the descriptor itself.
+    Fixture.compile("nesting-31",
+                    source_text=source_text(ACCEPTED_DEPTH).encode("utf-8")),
+    # The refused shape: protoc cannot build it, so the text format does.
+    Fixture.craft("nesting-32",
+                  source_text=source_text(REFUSED_DEPTH).encode("utf-8"),
+                  text=textproto(REFUSED_DEPTH, "nesting-32.proto")
+                  .encode("utf-8")),
+    # The deep name: a logical name with more components than the limit.
+    Fixture.craft("deep-name",
+                  text=deep_name_textproto().encode("utf-8")),
+    # The dependency chain: protoc accepts it, so it builds the `.pbs` itself.
+    Fixture.compile("dependency-chain",
+                    source_text=chain_source_text(CHAIN_LENGTH)
+                    .encode("utf-8")),
+)
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--protoc", default="", help="the protoc executable")
-    args = parser.parse_args()
-
-    protoc = find_protoc(args.protoc)
-    descriptor_dir = find_descriptor_dir()
-
-    # The accepted shape: protoc builds the descriptor itself.
-    accepted_source = source_text(ACCEPTED_DEPTH, "nesting-31.proto")
-    write(os.path.join(HERE, "nesting-31.proto"),
-          accepted_source.encode("utf-8"))
-    run([protoc, "--proto_path=" + HERE,
-         "--descriptor_set_out=" + os.path.join(HERE, "nesting-31.pbs"),
-         "nesting-31.proto"])
-    print("wrote nesting-31.pbs (%d bytes)"
-          % os.path.getsize(os.path.join(HERE, "nesting-31.pbs")))
-
-    # The refused shape: protoc cannot build it, so the text format does.
-    refused_source = source_text(REFUSED_DEPTH, "nesting-32.proto")
-    write(os.path.join(HERE, "nesting-32.proto"), refused_source.encode("utf-8"))
-    write(os.path.join(HERE, "nesting-32.pbs"),
-          encode_textproto(protoc, descriptor_dir,
-                           textproto(REFUSED_DEPTH, "nesting-32.proto")
-                           .encode("utf-8")))
-
-    # The deep name: a logical name with more components than the limit.
-    write(os.path.join(HERE, "deep-name.pbs"),
-          encode_textproto(protoc, descriptor_dir,
-                           deep_name_textproto().encode("utf-8")))
-
-    # The dependency chain: protoc accepts it, so it builds the `.pbs` itself.
-    chain_name = "dependency-chain.proto"
-    write(os.path.join(HERE, chain_name),
-          chain_source_text(CHAIN_LENGTH).encode("utf-8"))
-    run([protoc, "--proto_path=" + HERE,
-         "--descriptor_set_out=" + os.path.join(HERE, "dependency-chain.pbs"),
-         chain_name])
-    print("wrote dependency-chain.pbs (%d bytes)"
-          % os.path.getsize(os.path.join(HERE, "dependency-chain.pbs")))
-    return 0
+    args = parse_args(__doc__.split("\n")[0])
+    return build_fixtures(HERE, FIXTURES, check=args.check, protoc=args.protoc)
 
 
 if __name__ == "__main__":
