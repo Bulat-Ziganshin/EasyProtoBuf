@@ -1,0 +1,10 @@
+syntax = "proto2";
+
+// `feature_support` is a singular message-typed option. protoc also accepts a
+// dotted sub-field assignment (and this fixture is protoc-valid); the
+// validation-only table has no nested option model, so the name is refused as
+// unknown. Use the aggregate spelling `feature_support = { ... }` instead.
+message M {
+  optional int32 x = 1
+      [feature_support.edition_introduced = EDITION_PROTO2];
+}

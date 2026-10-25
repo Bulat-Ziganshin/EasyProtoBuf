@@ -1,0 +1,5 @@
+syntax = "proto3";
+
+// A singular option may be set once per scope.
+option java_package = "com.example.first";
+option java_package = "com.example.second";

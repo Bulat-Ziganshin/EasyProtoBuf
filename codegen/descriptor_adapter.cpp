@@ -299,6 +299,12 @@ bool same_descriptor(const FieldDescriptorProto& left,
            left.default_value == right.default_value &&
            left.oneof_index == right.oneof_index &&
            effective_json_name(left) == effective_json_name(right) &&
+           // D1-A: an explicit `optional` in proto3 is presence, so a copy
+           // that carries the flag and one that does not are two different
+           // definitions of the field, exactly like a differing label. Unset
+           // and an explicit false are the same value.
+           (left.has_proto3_optional ? left.proto3_optional : false) ==
+               (right.has_proto3_optional ? right.proto3_optional : false) &&
            same_descriptor(left.options, right.options) &&
            left.has_name == right.has_name &&
            left.has_number == right.has_number &&

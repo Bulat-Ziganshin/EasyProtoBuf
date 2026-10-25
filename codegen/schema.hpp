@@ -346,6 +346,14 @@ struct FieldSource
     SourceLocation type_location;
     SourceLocation default_location;
     SourceLocation packed_location;
+    // D2-A: the source carried `lazy`/`unverified_lazy` in this field's option
+    // list. The rule needs the resolved kind, so the shared field pass owns the
+    // refusal; a descriptor-origin file carries no provenance and no such
+    // source option.
+    SourceLocation lazy_location;
+    bool has_lazy;
+
+    FieldSource() : has_lazy(false) {}
 };
 
 struct ImportEdge

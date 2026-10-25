@@ -190,6 +190,12 @@ SOURCE_CASES = [
                 'syntax = "proto3";\npackage s;\n'
                 'message Root { required int32 a = 1; }\n',
                 "DIAGNOSTIC_PROTO3_REQUIRED_FIELD"),
+    # D1-A: the source parser synthesizes the same `proto3_optional` flag and
+    # synthetic oneof protoc writes, so the accepted row also covers the print
+    # and header identity the B12 gate compares.
+    source_case("s-proto3-optional-accept",
+                'syntax = "proto3";\npackage s;\n'
+                'message Root { optional int32 a = 1; }\n', "accept"),
     source_case("s-proto3-explicit-default-accept",
                 'syntax = "proto2";\npackage s;\n'
                 'message Root { optional int32 a = 1 [default = 5]; }\n',

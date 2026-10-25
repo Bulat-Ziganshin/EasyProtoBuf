@@ -1,0 +1,16 @@
+syntax = "proto2";
+
+package options.demo;
+
+// `message_set_wire_format` is legal only on a message and is the shape protoc
+// accepts beside an extension range.
+message MessageSet {
+  option message_set_wire_format = true;
+  option deprecated = true;
+  extensions 4 to max;
+}
+
+message Plain {
+  option no_standard_descriptor_accessor = true;
+  optional int32 value = 1;
+}

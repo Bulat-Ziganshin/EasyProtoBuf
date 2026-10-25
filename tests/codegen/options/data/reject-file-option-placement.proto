@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+// A file-only option inside a message is not a field of `MessageOptions`.
+message M {
+  option java_package = "com.example.misplaced";
+}

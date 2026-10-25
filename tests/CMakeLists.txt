@@ -1009,6 +1009,15 @@ if(BUILD_TESTING)
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/parser/test_codegen_modes.cmake)
 
+    # D2-A black-box lane: known-option validation on the source path. The
+    # driver returns early when the parser is not part of this build.
+    add_test(NAME codegen.options
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/codegen/options/data
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/options/test_options.cmake)
+
     # Self-recursive std::vector<T> is already part of Codegen's practical
     # compiler/library baseline: descriptor.pb.hpp itself contains
     # std::vector<DescriptorProto> nested_type. Compile the generated repeated

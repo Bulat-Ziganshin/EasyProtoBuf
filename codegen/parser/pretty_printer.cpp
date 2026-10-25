@@ -107,6 +107,12 @@ void print_message(const DescriptorProto& descriptor, std::ostream& output, unsi
         if (field.has_oneof_index) {
             output << " [oneof_index=" << field.oneof_index << ']';
         }
+        // D1-A: the presence flag is part of what a descriptor dump must show.
+        // Both frontends decode or synthesize it, so the source and `.pbs`
+        // prints carry the same marker.
+        if (field.has_proto3_optional && field.proto3_optional) {
+            output << " [proto3_optional=true]";
+        }
         output << '\n';
     }
     for (std::size_t i = 0; i < descriptor.enum_type.size(); ++i) {

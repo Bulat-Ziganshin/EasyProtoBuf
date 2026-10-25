@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+// `idempotency_level` is a `MethodOptions` field, not a `ServiceOptions` one.
+service S {
+  option idempotency_level = NO_SIDE_EFFECTS;
+  rpc Call (Request) returns (Request);
+}
+
+message Request {
+  optional int32 value = 1;
+}

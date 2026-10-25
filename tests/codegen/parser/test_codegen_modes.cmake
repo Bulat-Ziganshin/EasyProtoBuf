@@ -384,6 +384,69 @@ if(FULL_BUILD)
             "The source and descriptor printed trees disagree:\nsource:\n${service_source_body}\ndescriptor:\n${service_descriptor_body}")
     endif()
 
+    # D1-A: proto3 `optional` fills the presence gap the B1 inventory found.
+    # The source parser synthesizes the same flag and synthetic oneofs protoc
+    # writes, so the printed trees agree after the input-spelling line, and
+    # the two paths still generate one header byte for byte.
+    foreach(optional_name proto3-optional proto3-optional-collision)
+        run_ok(optional_src_print optional_src_err
+            ${CODEGEN} --print-descriptor ${DATA_DIR}/${optional_name}.proto)
+        run_ok(optional_pbs_print optional_pbs_err
+            ${CODEGEN} --descriptor-set --print-descriptor
+            ${DATA_DIR}/${optional_name}.pbs)
+        string(FIND "${optional_src_print}" "\n" optional_src_newline)
+        math(EXPR optional_src_body_start "${optional_src_newline} + 1")
+        string(SUBSTRING "${optional_src_print}" ${optional_src_body_start} -1
+            optional_src_body)
+        string(FIND "${optional_pbs_print}" "\n" optional_pbs_newline)
+        math(EXPR optional_pbs_body_start "${optional_pbs_newline} + 1")
+        string(SUBSTRING "${optional_pbs_print}" ${optional_pbs_body_start} -1
+            optional_pbs_body)
+        if(NOT optional_src_body STREQUAL optional_pbs_body)
+            message(FATAL_ERROR
+                "${optional_name}: source and descriptor prints disagree:\nsource:\n${optional_src_body}\ndescriptor:\n${optional_pbs_body}")
+        endif()
+        string(FIND "${optional_pbs_body}" "[proto3_optional=true]"
+            optional_marker)
+        if(optional_marker EQUAL -1)
+            message(FATAL_ERROR
+                "${optional_name}: the print lacks the proto3_optional marker:\n${optional_pbs_body}")
+        endif()
+
+        run_ok(optional_src_out optional_src_out_err
+            ${CODEGEN} -I ${DATA_DIR} ${DATA_DIR}/${optional_name}.proto)
+        run_ok(optional_pbs_out optional_pbs_out_err
+            ${CODEGEN} --descriptor-set ${DATA_DIR}/${optional_name}.pbs)
+        normalize_generated("${optional_src_out}" optional_src_header)
+        normalize_generated("${optional_pbs_out}" optional_pbs_header)
+        if(NOT optional_src_header STREQUAL optional_pbs_header)
+            message(FATAL_ERROR
+                "${optional_name}: headers differ apart from // Source:")
+        endif()
+    endforeach()
+
+    # The collision fixture must name the grown declarations; the negative
+    # fixture is the shape protoc refuses, and codegen refuses it for the same
+    # reason (a synthetic oneof is a symbol in the message scope).
+    run_ok(optional_collision_print optional_collision_err
+        ${CODEGEN} --print-descriptor
+        ${DATA_DIR}/proto3-optional-collision.proto)
+    if(NOT optional_collision_print MATCHES "oneof\\[1\\] XX_a")
+        message(FATAL_ERROR
+            "The two-collision synthetic name is not XX_a:\n${optional_collision_print}")
+    endif()
+    if(NOT optional_collision_print MATCHES "oneof\\[2\\] X_b")
+        message(FATAL_ERROR
+            "The real-oneof collision name is not X_b:\n${optional_collision_print}")
+    endif()
+    run_fail(optional_nested_out optional_nested_err
+        ${CODEGEN} -I ${DATA_DIR}
+        ${DATA_DIR}/proto3-optional-nested-collision.proto)
+    if(NOT optional_nested_err MATCHES "_a")
+        message(FATAL_ERROR
+            "The nested-name collision diagnostic does not name _a: ${optional_nested_err}")
+    endif()
+
     run_ok(bench_out bench_err ${CODEGEN} --benchmark-parser --benchmark-ms 100
         ${proto2} ${DATA_DIR}/benchmark-second.proto)
     if(NOT bench_out MATCHES "Files: 2")

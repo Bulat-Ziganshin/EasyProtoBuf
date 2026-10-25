@@ -1,0 +1,14 @@
+syntax = "proto2";
+
+// `UNVERIFIED` is the state for a range whose extensions are not declared. A
+// non-empty `declaration` list makes the pair invalid, as protoc measures it.
+message M {
+  extensions 100 to 199 [
+    declaration = {
+      number: 100,
+      full_name: ".options.demo.first",
+      type: "int32"
+    },
+    verification = UNVERIFIED
+  ];
+}

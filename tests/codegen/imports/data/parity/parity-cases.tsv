@@ -4,6 +4,7 @@ s-unsupported-syntax-reject	source	reject	DIAGNOSTIC_UNSUPPORTED_SYNTAX	pair
 s-unsupported-syntax-editions-inverse	source	accept	DIAGNOSTIC_UNSUPPORTED_SYNTAX	inverse	protoc 30.1 accepts this shape; this project refuses it by A25 because the model carries no editions semantics - a recorded capability boundary whose owner is plan 5
 s-proto3-required-field-accept	source	accept	accept	pair	
 s-proto3-required-field-reject	source	reject	DIAGNOSTIC_PROTO3_REQUIRED_FIELD	pair	
+s-proto3-optional-accept	source	accept	accept	pair	
 s-proto3-explicit-default-accept	source	accept	accept	pair	
 s-proto3-explicit-default-reject	source	reject	DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT	pair	
 s-duplicate-enum-number-accept	source	accept	accept	pair	

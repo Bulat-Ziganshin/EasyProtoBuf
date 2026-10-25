@@ -1,0 +1,6 @@
+syntax = "proto2";
+
+// The bracket list is a field owner: a file option is unknown there.
+message M {
+  optional int32 x = 1 [java_package = "com.example.misplaced"];
+}

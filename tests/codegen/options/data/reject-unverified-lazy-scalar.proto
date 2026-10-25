@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+// `unverified_lazy` follows the same message-only rule as `lazy`.
+message M {
+  int32 x = 1 [unverified_lazy = true];
+}

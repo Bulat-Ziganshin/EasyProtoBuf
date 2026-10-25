@@ -1,0 +1,36 @@
+syntax = "proto2";
+
+package options.demo;
+
+// Custom options are defined by extensions this frontend does not resolve, so
+// their names stay opaque and their values are only parsed. The parenthesized
+// first name part may be followed by ordinary parts and further parenthesized
+// ones.
+option (vendor.file).tail = true;
+
+enum CustomEnum {
+  option (vendor.enum) = true;
+  ZERO = 0 [(vendor.enum_value).leaf = 1];
+}
+
+message CustomMessage {
+  option (vendor.message) = { name: "message" };
+
+  optional int32 value = 1 [
+    (vendor.field).leaf = 1,
+    (vendor.field).(.absolute.part) = "text"
+  ];
+
+  oneof choice {
+    option (vendor.oneof) = true;
+    int32 number = 2 [(vendor.oneof_field) = 3];
+  }
+}
+
+service CustomService {
+  option (vendor.service) = true;
+
+  rpc Call (CustomMessage) returns (CustomMessage) {
+    option (vendor.method) = { id: 7 };
+  }
+}

@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package options.demo;
+
+option java_package = "com.example.options";
+option java_outer_classname = "OptionsDemo";
+option java_multiple_files = true;
+option java_string_check_utf8 = false;
+option optimize_for = LITE_RUNTIME;
+option go_package = "example.com/options";
+option cc_enable_arenas = true;
+option objc_class_prefix = "OPT";
+option csharp_namespace = "Example.Options";
+option deprecated = false;
+
+message FileScope {
+  int32 value = 1;
+}

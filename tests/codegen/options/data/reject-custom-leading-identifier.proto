@@ -1,0 +1,5 @@
+syntax = "proto3";
+
+// A custom option begins with a parenthesized name part; a leading ordinary
+// identifier is an unknown standard option, as protoc measures it.
+option file_scope.(vendor.file) = true;

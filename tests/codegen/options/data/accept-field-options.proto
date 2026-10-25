@@ -1,0 +1,27 @@
+syntax = "proto2";
+
+package options.demo;
+
+message FieldScope {
+  message Inner {
+    optional int32 value = 1;
+  }
+
+  optional int64 js_id = 1 [jstype = JS_STRING];
+  optional Inner lazy_inner = 2 [lazy = true];
+  optional Inner unverified_inner = 3 [unverified_lazy = true];
+  optional string cord_text = 4 [ctype = CORD];
+  optional bytes piece = 5 [ctype = STRING_PIECE];
+  optional int32 weak_int = 6 [weak = true];
+  repeated int32 packed_values = 7 [packed = true];
+  repeated int32 unpacked_values = 8 [packed = false];
+  optional int32 redacted = 9 [debug_redact = true];
+  optional int32 source_only = 10 [retention = RETENTION_SOURCE];
+  optional int32 file_target = 11 [targets = TARGET_TYPE_FILE];
+  optional int32 two_targets = 12
+      [targets = TARGET_TYPE_FILE, targets = TARGET_TYPE_MESSAGE];
+  optional int32 support = 13
+      [feature_support = { edition_introduced: EDITION_PROTO2 }];
+  optional int32 defaults = 14
+      [edition_defaults = { edition: EDITION_PROTO3, value: "5" }];
+}

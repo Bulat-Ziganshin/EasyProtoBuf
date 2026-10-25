@@ -1,0 +1,19 @@
+// D1-A: the synthetic name grows an `X` per collision. `_a` and `X_a` are
+// taken by fields, `_b` is a real oneof, so the two synthetic declarations are
+// `XX_a` and `X_b`. `proto3-optional-collision.pbs` is protoc 30.1's own
+// descriptor of this file.
+syntax = "proto3";
+
+package optional.demo;
+
+message Collisions {
+  int32 _a = 1;
+  int32 X_a = 2;
+
+  oneof _b {
+    int32 b1 = 3;
+  }
+
+  optional int32 a = 4;
+  optional int32 b = 5;
+}

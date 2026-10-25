@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+// A named type resolves to an enum here, so the parser cannot decide `lazy`;
+// the shared semantic pass answers with the resolved kind.
+enum State {
+  STATE_UNKNOWN = 0;
+}
+
+message M {
+  State state = 1 [lazy = true];
+}

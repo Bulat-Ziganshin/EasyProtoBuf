@@ -1,0 +1,22 @@
+syntax = "proto2";
+
+package options.demo;
+
+message Request {
+  optional int32 value = 1;
+}
+
+message Reply {
+  optional int32 value = 1;
+}
+
+// `deprecated` is the one known `ServiceOptions` field; a method adds
+// `deprecated` and the `IdempotencyLevel` enum.
+service Api {
+  option deprecated = true;
+
+  rpc Unary (Request) returns (Reply) {
+    option deprecated = false;
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}

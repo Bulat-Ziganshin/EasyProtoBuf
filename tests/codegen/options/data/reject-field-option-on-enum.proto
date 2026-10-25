@@ -1,0 +1,7 @@
+syntax = "proto2";
+
+// `packed` belongs to `FieldOptions`; it is not a field of `EnumOptions`.
+enum E {
+  option packed = true;
+  A = 0;
+}

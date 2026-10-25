@@ -1,0 +1,23 @@
+// D1-A: proto3 `optional` carries explicit presence. `protoc` models it as
+// `proto3_optional = true` plus one synthetic one-field oneof per optional
+// field, appended after every real oneof and named from the field name with a
+// leading `_` and an `X` per collision. `proto3-optional.pbs` is `protoc`
+// 30.1's own descriptor of this file, so `--print-descriptor` and the
+// generated header must agree byte for byte across the two input paths.
+syntax = "proto3";
+
+package optional.demo;
+
+message OptionalFields {
+  optional int32 a = 1;
+  int32 implicit = 2;
+  optional string b = 3;
+
+  oneof real {
+    int32 c = 4;
+    string d = 5;
+  }
+
+  optional int32 e = 6;
+  map<string, int32> by_name = 7;
+}

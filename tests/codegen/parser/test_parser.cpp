@@ -5,6 +5,8 @@
 
 #include "proto_parser.hpp"
 
+#include "known_options.hpp"
+
 namespace {
 
 int failures = 0;
@@ -955,32 +957,39 @@ void test_buffer_api_owns_result_strings()
 }
 
 
-void test_full_custom_option_name_parts_are_consumed()
+// D2-A: a custom option is written with a parenthesized first name part. The
+// extension that defines it lives in an import this frontend does not resolve,
+// so the value stays opaque and is only balanced - but the name grammar is still
+// checked, and a leading unparenthesized part is an unknown standard option
+// (`Option "file_scope" unknown`, measured with protoc 30.1 on 2026-10-25).
+// Every owner kind is exercised, so a name part is consumed at file, message,
+// field, oneof, enum, enum-value, service, method and extension-range scope.
+void test_custom_option_name_parts_are_consumed()
 {
     const char* proto2_source =
         "syntax = \"proto2\";\n"
-        "option file_scope.(vendor.file).(.absolute.path) = true;\n"
+        "option (vendor.file).(.absolute.path) = true;\n"
         "option (legacy.option).leaf = true;\n"
         "enum E {\n"
-        "  option enum_scope.(vendor.enum) = true;\n"
+        "  option (vendor.enum) = true;\n"
         "  option allow_alias = true;\n"
-        "  ZERO = 0 [value_scope.(vendor.value) = 1];\n"
+        "  ZERO = 0 [(vendor.value).leaf = 1];\n"
         "  ALIAS = 0;\n"
         "}\n"
         "message M {\n"
-        "  option (.vendor.message).leaf = 1;\n"
-        "  extensions 100 to 199 [range_scope.(vendor.range) = true];\n"
+        "  option (vendor.message).leaf = 1;\n"
+        "  extensions 100 to 199 [(vendor.range).leaf = true];\n"
         "  repeated int32 values = 1 "
-        "      [field_scope.(vendor.field).(.nested.extension) = 7, packed = true];\n"
+        "      [(vendor.field).(.nested.extension) = 7, packed = true];\n"
         "  oneof choice {\n"
-        "    option oneof_scope.(vendor.oneof) = true;\n"
-        "    string text = 2 [oneof_field_scope.(vendor.field) = true];\n"
+        "    option (vendor.oneof) = true;\n"
+        "    string text = 2 [(vendor.oneof_field).leaf = true];\n"
         "  }\n"
         "}\n"
         "service S {\n"
-        "  option service_scope.(vendor.service) = true;\n"
+        "  option (vendor.service) = true;\n"
         "  rpc R(M) returns (M) {\n"
-        "    option method_scope.(vendor.method) = true;\n"
+        "    option (vendor.method) = true;\n"
         "  }\n"
         "}\n";
 
@@ -1004,7 +1013,7 @@ void test_full_custom_option_name_parts_are_consumed()
 
     const char* proto3_source =
         "syntax = \"proto3\";\n"
-        "option proto3_scope.(vendor.file).tail = true;\n"
+        "option (vendor.file).tail = true;\n"
         "message P {\n"
         "  repeated int32 values = 1 "
         "      [(vendor.field).(.vendor.inner) = 1, packed = false];\n"
@@ -1025,6 +1034,16 @@ void test_full_custom_option_name_parts_are_consumed()
     CHECK(proto3_values && proto3_values->has_options);
     CHECK(proto3_values && proto3_values->options.has_packed);
     CHECK(proto3_values && !proto3_values->options.packed);
+
+    easypb_proto::ParsedProto leading;
+    easypb_proto::Diagnostic leading_error;
+    CHECK(!easypb_proto::parse_proto(
+        "custom-leading-identifier.proto",
+        "syntax = \"proto2\";\n"
+        "option file_scope.(vendor.file) = true;\n",
+        leading, leading_error));
+    CHECK(leading_error.message.find("unknown") != std::string::npos);
+    CHECK(leading_error.message.find("file_scope") != std::string::npos);
 }
 
 void test_easypb_cpp_field_options_are_retained()
@@ -1817,10 +1836,13 @@ void test_statement_and_option_grammar_table()
         "syntax=\"proto2\"; enum E { A = 0; }", parsed, error));
 
     // CR-27 invalid: `json_name` is a field option, not an enum-value option.
+    // D2-A moved the refusal into the shared table, which reports an unknown
+    // name for the owner.
     CHECK(!easypb_proto::parse_proto("enum-json-name.proto",
         "syntax=\"proto2\"; enum E { A = 0 [json_name = \"aName\"]; }",
         parsed, error));
-    CHECK(error.message.find("field-only options") != std::string::npos);
+    CHECK(error.message.find("json_name") != std::string::npos);
+    CHECK(error.message.find("unknown") != std::string::npos);
 
     // CR-28 valid: a negative ordinary option value keeps its sign, and a
     // plain field option is unaffected.
@@ -1889,6 +1911,216 @@ void test_json_name_option_is_retained()
     CHECK(map && text(map->json_name) == "alpha");
 }
 
+// D1-A: `protoc` gives a proto3 `optional` field explicit presence by
+// synthesizing a one-field oneof (`GenerateSyntheticOneofs`, parser.cc:745-780):
+// the candidate starts as the field name, gains one leading `_` unless it has
+// one, and grows an `X` per collision with any field or oneof name; synthetic
+// declarations come after every real oneof. The parser must produce the same
+// model, because `--print-descriptor` and the descriptor path must agree.
+void test_proto3_optional_synthetic_oneofs()
+{
+    // Plain: `a` -> `_a`, field claims index 0.
+    easypb_proto::ParsedProto plain;
+    easypb_proto::Diagnostic plain_error;
+    CHECK(easypb_proto::parse_proto("opt-plain.proto",
+        "syntax = \"proto3\";\n"
+        "package p;\n"
+        "message M { optional int32 a = 1; }\n", plain, plain_error));
+    CHECK(plain.file.message_type.size() == 1);
+    if (!plain.file.message_type.empty()) {
+        const DescriptorProto& message = plain.file.message_type[0];
+        CHECK(message.oneof_decl.size() == 1);
+        if (message.oneof_decl.size() == 1) {
+            CHECK(text(message.oneof_decl[0].name) == "_a");
+        }
+        CHECK(message.field.size() == 1);
+        if (message.field.size() == 1) {
+            CHECK(message.field[0].has_proto3_optional);
+            CHECK(message.field[0].proto3_optional);
+            CHECK(message.field[0].has_oneof_index);
+            CHECK(message.field[0].oneof_index == 0);
+        }
+    }
+
+    // A field already named `_a` pushes the candidate to `X_a`.
+    easypb_proto::ParsedProto collision;
+    easypb_proto::Diagnostic collision_error;
+    CHECK(easypb_proto::parse_proto("opt-field-underscore.proto",
+        "syntax = \"proto3\";\n"
+        "message M { int32 _a = 1; optional int32 a = 2; }\n",
+        collision, collision_error));
+    if (!collision.file.message_type.empty()) {
+        const DescriptorProto& message = collision.file.message_type[0];
+        CHECK(message.oneof_decl.size() == 1);
+        if (message.oneof_decl.size() == 1) {
+            CHECK(text(message.oneof_decl[0].name) == "X_a");
+        }
+        const FieldDescriptorProto* a = find_field(message, "a");
+        CHECK(a != 0);
+        CHECK(a && a->oneof_index == 0 && a->has_oneof_index);
+    }
+
+    // The optional field itself may be named `_a`; its candidate is its own
+    // name, so it collides with the field and grows one `X` (measured with
+    // protoc 30.1: `optional int32 _a = 1;` declares `X_a`).
+    easypb_proto::ParsedProto underscored;
+    easypb_proto::Diagnostic underscored_error;
+    CHECK(easypb_proto::parse_proto("opt-underscored-field.proto",
+        "syntax = \"proto3\";\n"
+        "message M { optional int32 _a = 1; }\n",
+        underscored, underscored_error));
+    if (!underscored.file.message_type.empty()) {
+        const DescriptorProto& message = underscored.file.message_type[0];
+        CHECK(message.oneof_decl.size() == 1);
+        if (message.oneof_decl.size() == 1) {
+            CHECK(text(message.oneof_decl[0].name) == "X_a");
+        }
+        const FieldDescriptorProto* field = find_field(message, "_a");
+        CHECK(field != 0 && field->oneof_index == 0);
+    }
+
+    // A real oneof named `_a` is a collision too, and stays first.
+    easypb_proto::ParsedProto real;
+    easypb_proto::Diagnostic real_error;
+    CHECK(easypb_proto::parse_proto("opt-real-oneof.proto",
+        "syntax = \"proto3\";\n"
+        "message M { oneof _a { int32 b = 1; } optional int32 a = 2; }\n",
+        real, real_error));
+    if (!real.file.message_type.empty()) {
+        const DescriptorProto& message = real.file.message_type[0];
+        CHECK(message.oneof_decl.size() == 2);
+        if (message.oneof_decl.size() == 2) {
+            CHECK(text(message.oneof_decl[0].name) == "_a");
+            CHECK(text(message.oneof_decl[1].name) == "X_a");
+        }
+        const FieldDescriptorProto* a = find_field(message, "a");
+        CHECK(a != 0 && a->oneof_index == 1 && a->has_oneof_index);
+    }
+
+    // Two collisions grow two `X`s: `_a` taken, `X_a` taken -> `XX_a`.
+    easypb_proto::ParsedProto two;
+    easypb_proto::Diagnostic two_error;
+    CHECK(easypb_proto::parse_proto("opt-two-collisions.proto",
+        "syntax = \"proto3\";\n"
+        "message M { int32 _a = 1; int32 X_a = 2; optional int32 a = 3; }\n",
+        two, two_error));
+    if (!two.file.message_type.empty()) {
+        const DescriptorProto& message = two.file.message_type[0];
+        CHECK(message.oneof_decl.size() == 1);
+        if (message.oneof_decl.size() == 1) {
+            CHECK(text(message.oneof_decl[0].name) == "XX_a");
+        }
+    }
+
+    // Synthetic oneofs are appended after every real oneof, whatever the
+    // declaration order of the optional fields: real, `_a`, `_c`.
+    easypb_proto::ParsedProto order;
+    easypb_proto::Diagnostic order_error;
+    CHECK(easypb_proto::parse_proto("opt-order.proto",
+        "syntax = \"proto3\";\n"
+        "message M { optional int32 a = 1; oneof real { int32 b = 2; } "
+        "optional int32 c = 3; }\n", order, order_error));
+    if (!order.file.message_type.empty()) {
+        const DescriptorProto& message = order.file.message_type[0];
+        CHECK(message.oneof_decl.size() == 3);
+        if (message.oneof_decl.size() == 3) {
+            CHECK(text(message.oneof_decl[0].name) == "real");
+            CHECK(text(message.oneof_decl[1].name) == "_a");
+            CHECK(text(message.oneof_decl[2].name) == "_c");
+        }
+        const FieldDescriptorProto* a = find_field(message, "a");
+        const FieldDescriptorProto* c = find_field(message, "c");
+        CHECK(a != 0 && a->oneof_index == 1);
+        CHECK(c != 0 && c->oneof_index == 2);
+    }
+
+    // Proto2 is unaffected: no flag and no synthetic declaration.
+    easypb_proto::ParsedProto proto2;
+    easypb_proto::Diagnostic proto2_error;
+    CHECK(easypb_proto::parse_proto("opt-proto2.proto",
+        "syntax = \"proto2\";\n"
+        "message M { optional int32 a = 1; }\n", proto2, proto2_error));
+    if (!proto2.file.message_type.empty()) {
+        const DescriptorProto& message = proto2.file.message_type[0];
+        CHECK(message.oneof_decl.empty());
+        CHECK(message.field.size() == 1);
+        if (message.field.size() == 1) {
+            CHECK(!message.field[0].has_proto3_optional);
+            CHECK(!message.field[0].has_oneof_index);
+        }
+    }
+
+    // An absent label, a repeated label and a map field never get presence.
+    easypb_proto::ParsedProto implicit;
+    easypb_proto::Diagnostic implicit_error;
+    CHECK(easypb_proto::parse_proto("opt-implicit.proto",
+        "syntax = \"proto3\";\n"
+        "message M { int32 a = 1; repeated int32 r = 2; "
+        "map<string, int32> m = 3; }\n", implicit, implicit_error));
+    if (!implicit.file.message_type.empty()) {
+        const DescriptorProto& message = implicit.file.message_type[0];
+        CHECK(message.oneof_decl.empty());
+        for (std::size_t i = 0; i < message.field.size(); ++i) {
+            CHECK(!message.field[i].has_proto3_optional);
+            CHECK(!message.field[i].has_oneof_index);
+        }
+    }
+
+    // A nested message whose name collides with the synthetic declaration is
+    // refused: protoc answers `"_a" is already defined in "p.M"` (measured
+    // 2026-10-25), because a oneof is a symbol in the message scope.
+    easypb_proto::ParsedProto nested;
+    easypb_proto::Diagnostic nested_error;
+    CHECK(!easypb_proto::parse_proto("opt-nested-collision.proto",
+        "syntax = \"proto3\";\n"
+        "package p;\n"
+        "message M { message _a { int32 x = 1; } optional int32 a = 2; }\n",
+        nested, nested_error));
+    CHECK(nested_error.message.find("_a") != std::string::npos);
+    CHECK(nested_error.message.find("collision") != std::string::npos);
+
+    // Nested messages synthesize their own declarations independently.
+    easypb_proto::ParsedProto nested_ok;
+    easypb_proto::Diagnostic nested_ok_error;
+    CHECK(easypb_proto::parse_proto("opt-nested.proto",
+        "syntax = \"proto3\";\n"
+        "message Outer { message Inner { optional int32 b = 1; } "
+        "optional int32 a = 2; }\n", nested_ok, nested_ok_error));
+    if (!nested_ok.file.message_type.empty()) {
+        const DescriptorProto& outer = nested_ok.file.message_type[0];
+        CHECK(outer.oneof_decl.size() == 1);
+        if (outer.oneof_decl.size() == 1) {
+            CHECK(text(outer.oneof_decl[0].name) == "_a");
+        }
+        CHECK(outer.nested_type.size() == 1);
+        if (outer.nested_type.size() == 1) {
+            CHECK(outer.nested_type[0].oneof_decl.size() == 1);
+            if (outer.nested_type[0].oneof_decl.size() == 1) {
+                CHECK(text(outer.nested_type[0].oneof_decl[0].name) == "_b");
+            }
+        }
+    }
+}
+
+// D1-A: wire field 17 decodes as a bool beside the oneof index protoc writes
+// for the synthetic declaration.
+void test_decode_proto3_optional()
+{
+    // field 1 name "x"; field 9 oneof_index 0; field 17 proto3_optional true.
+    const char encoded[] = {
+        '\x0a', '\x01', 'x',
+        '\x48', '\x00',
+        '\x88', '\x01', '\x01',
+    };
+    FieldDescriptorProto field;
+    decode(easypb::Decoder(encoded, sizeof(encoded)), field);
+    CHECK(field.has_name && text(field.name) == "x");
+    CHECK(field.has_oneof_index && field.oneof_index == 0);
+    CHECK(field.has_proto3_optional);
+    CHECK(field.proto3_optional);
+}
+
+
 void test_decode_oneof_index()
 {
     const char encoded[] = { '\x0a', '\x01', 'x', '\x48', '\x00' };
@@ -1896,6 +2128,323 @@ void test_decode_oneof_index()
     decode(easypb::Decoder(encoded, sizeof(encoded)), field);
     CHECK(field.has_name && text(field.name) == "x");
     CHECK(field.has_oneof_index && field.oneof_index == 0);
+}
+
+// D2-A: one source snippet per owner kind, so the family test can drive every
+// row of the known-option table through the grammar. `name`/`value` are the
+// option under test; the surrounding declaration is minimal and valid.
+std::string option_owner_source(easypb_proto::OptionOwnerKind owner,
+                                const std::string& name,
+                                const std::string& value)
+{
+    const std::string option = name + " = " + value;
+    switch (owner) {
+        case easypb_proto::OPTION_OWNER_FILE:
+            return "syntax = \"proto2\";\n" + std::string("option ") + option +
+                   ";\nmessage Root { optional int32 x = 1; }\n";
+        case easypb_proto::OPTION_OWNER_MESSAGE:
+            return "syntax = \"proto2\";\n"
+                   "message Root { option " + option + "; optional int32 x = 1; }\n";
+        case easypb_proto::OPTION_OWNER_FIELD: {
+            // The field kind that makes the row's own legality rule true:
+            // `jstype` needs a 64-bit integer, `lazy` a message, `packed` a
+            // repeated primitive.
+            std::string declaration = "optional int32 x = 1";
+            if (name == "jstype") declaration = "optional int64 x = 1";
+            else if (name == "lazy" || name == "unverified_lazy") {
+                declaration = "optional Inner x = 1";
+            } else if (name == "packed") declaration = "repeated int32 x = 1";
+            return "syntax = \"proto2\";\n"
+                   "message Inner { optional int32 y = 1; }\n"
+                   "message Root { " + declaration + " [" + option + "]; }\n";
+        }
+        case easypb_proto::OPTION_OWNER_ONEOF:
+            return "syntax = \"proto2\";\n"
+                   "message Root { oneof one { option " + option +
+                   "; int32 x = 1; } }\n";
+        case easypb_proto::OPTION_OWNER_ENUM: {
+            // `allow_alias = true` is only legal beside a shared number
+            // (CR-26), so it gets the aliased shape and every other enum
+            // option keeps distinct numbers.
+            const std::string values =
+                name == "allow_alias" ? "A = 0; B = 0; " : "A = 0; B = 1; ";
+            return "syntax = \"proto2\";\n"
+                   "enum Root { option " + option + "; " + values + "}\n";
+        }
+        case easypb_proto::OPTION_OWNER_ENUM_VALUE:
+            return "syntax = \"proto2\";\n"
+                   "enum Root { A = 0 [" + option + "]; }\n";
+        case easypb_proto::OPTION_OWNER_SERVICE:
+            return "syntax = \"proto2\";\n"
+                   "service Root { option " + option + "; }\n";
+        case easypb_proto::OPTION_OWNER_METHOD:
+            return "syntax = \"proto2\";\n"
+                   "message Root { }\n"
+                   "service S { rpc R (Root) returns (Root) { option " + option +
+                   "; } }\n";
+        case easypb_proto::OPTION_OWNER_EXTENSION_RANGE:
+            return "syntax = \"proto2\";\n"
+                   "message Root { extensions 100 to 199 [" + option + "]; }\n";
+    }
+    return std::string();
+}
+
+std::string wrong_option_value(easypb_proto::OptionConstantKind kind)
+{
+    switch (kind) {
+        case easypb_proto::OPTION_CONSTANT_STRING: return "1";
+        case easypb_proto::OPTION_CONSTANT_BOOL: return "\"x\"";
+        case easypb_proto::OPTION_CONSTANT_IDENTIFIER: return "1";
+        case easypb_proto::OPTION_CONSTANT_AGGREGATE: return "1";
+        default: return "1";
+    }
+}
+
+// D2-A: every row of the closed table is exercised in three directions - the
+// accepted value kind, a wrong value kind, and an illegal placement - and the
+// row counts pin the table to `descriptor.proto` 30.1's 47 known fields.
+void test_known_option_table_covers_47_rows()
+{
+    using namespace easypb_proto;
+    CHECK(known_option_count() == 47);
+
+    std::size_t per_owner[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    for (std::size_t i = 0; i < known_option_count(); ++i) {
+        ++per_owner[known_option_at(i).owner];
+    }
+    CHECK(per_owner[OPTION_OWNER_EXTENSION_RANGE] == 2);
+    CHECK(per_owner[OPTION_OWNER_FILE] == 19);
+    CHECK(per_owner[OPTION_OWNER_MESSAGE] == 5);
+    CHECK(per_owner[OPTION_OWNER_FIELD] == 12);
+    CHECK(per_owner[OPTION_OWNER_ONEOF] == 0);
+    CHECK(per_owner[OPTION_OWNER_ENUM] == 3);
+    CHECK(per_owner[OPTION_OWNER_ENUM_VALUE] == 3);
+    CHECK(per_owner[OPTION_OWNER_SERVICE] == 1);
+    CHECK(per_owner[OPTION_OWNER_METHOD] == 2);
+
+    const OptionOwnerKind owners[] = {
+        OPTION_OWNER_FILE,
+        OPTION_OWNER_MESSAGE,
+        OPTION_OWNER_FIELD,
+        OPTION_OWNER_ONEOF,
+        OPTION_OWNER_ENUM,
+        OPTION_OWNER_ENUM_VALUE,
+        OPTION_OWNER_SERVICE,
+        OPTION_OWNER_METHOD,
+        OPTION_OWNER_EXTENSION_RANGE,
+    };
+
+    for (std::size_t i = 0; i < known_option_count(); ++i) {
+        const KnownOption& option = known_option_at(i);
+        const std::string name(option.name);
+
+        // The accepted value kind. `map_entry` is the one row the reference
+        // compiler refuses in source text whatever the value.
+        std::string accepted = "\"x\"";
+        if (option.value_kind == OPTION_CONSTANT_BOOL) accepted = "true";
+        else if (option.value_kind == OPTION_CONSTANT_IDENTIFIER) {
+            const char* first = known_option_first_enum_value(option);
+            CHECK(first != 0);
+            accepted = first == 0 ? std::string() : std::string(first);
+        } else if (option.value_kind == OPTION_CONSTANT_AGGREGATE) {
+            accepted = "{ }";
+        }
+
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        const bool ok = easypb_proto::parse_proto(
+            "known-option.proto",
+            option_owner_source(option.owner, name, accepted), parsed, error);
+        if (option.refuse_reason != 0) {
+            CHECK(!ok);
+            CHECK(error.message.find(option.refuse_reason) != std::string::npos);
+        } else if (!ok) {
+            std::cerr << name << " (owner " << option.owner
+                      << ") was refused: " << error.message << '\n';
+            CHECK(ok);
+        }
+
+        // A wrong value kind is refused, except for the always-refused row.
+        if (option.refuse_reason == 0) {
+            easypb_proto::ParsedProto wrong;
+            easypb_proto::Diagnostic wrong_error;
+            CHECK(!easypb_proto::parse_proto(
+                "known-option-wrong.proto",
+                option_owner_source(option.owner, name,
+                                    wrong_option_value(option.value_kind)),
+                wrong, wrong_error));
+        }
+
+        // The same name under an owner whose `*Options` message has no such
+        // field is an unknown option. `oneof` has no known fields at all, so
+        // a placement always exists for a row owned elsewhere.
+        OptionOwnerKind other = OPTION_OWNER_ONEOF;
+        if (option.owner == OPTION_OWNER_ONEOF) other = OPTION_OWNER_FILE;
+        if (find_known_option(other, name) != 0) continue;
+        easypb_proto::ParsedProto misplaced;
+        easypb_proto::Diagnostic misplaced_error;
+        CHECK(!easypb_proto::parse_proto(
+            "known-option-placement.proto",
+            option_owner_source(other, name, accepted), misplaced,
+            misplaced_error));
+        CHECK(misplaced_error.message.find("unknown") != std::string::npos);
+    }
+}
+
+// D2-A: the measured G2 examples are refusals on the source path, their legal
+// counterparts are accepted, an unknown unparenthesized name is refused, and
+// a parenthesized custom option stays opaque.
+void test_known_option_measured_cases()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    // The five measured refusals (protoc 30.1, rc 1; codegen used to accept).
+    CHECK(!easypb_proto::parse_proto("g2-java.proto",
+        "syntax = \"proto3\";\noption java_package = 7;\n", parsed, error));
+    CHECK(!easypb_proto::parse_proto("g2-optimize.proto",
+        "syntax = \"proto3\";\noption optimize_for = 7;\n", parsed, error));
+    CHECK(!easypb_proto::parse_proto("g2-jstype.proto",
+        "syntax = \"proto3\";\n"
+        "message M { int32 x = 1 [jstype = JS_STRING]; }\n", parsed, error));
+    CHECK(!easypb_proto::parse_proto("g2-lazy.proto",
+        "syntax = \"proto3\";\n"
+        "message M { int32 x = 1 [lazy = true]; }\n", parsed, error));
+    CHECK(!easypb_proto::parse_proto("g2-unverified.proto",
+        "syntax = \"proto3\";\n"
+        "message M { int32 x = 1 [unverified_lazy = true]; }\n", parsed, error));
+
+    // The legal counterparts.
+    CHECK(easypb_proto::parse_proto("g2-java-ok.proto",
+        "syntax = \"proto3\";\noption java_package = \"x\";\n", parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-optimize-ok.proto",
+        "syntax = \"proto3\";\noption optimize_for = SPEED;\n", parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-jstype-ok.proto",
+        "syntax = \"proto3\";\n"
+        "message M { int64 x = 1 [jstype = JS_STRING]; }\n", parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-lazy-ok.proto",
+        "syntax = \"proto3\";\n"
+        "message N { int32 y = 1; }\n"
+        "message M { N x = 1 [lazy = true]; }\n", parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-packed-ok.proto",
+        "syntax = \"proto3\";\n"
+        "message M { repeated int32 x = 1 [packed = true]; }\n", parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-alias-ok.proto",
+        "syntax = \"proto2\";\n"
+        "enum E { option allow_alias = true; A = 1; B = 1; }\n", parsed, error));
+
+    // An unknown unparenthesized name is refused with the option name in the
+    // diagnostic; a parenthesized custom option is opaque and accepted.
+    easypb_proto::ParsedProto unknown;
+    easypb_proto::Diagnostic unknown_error;
+    CHECK(!easypb_proto::parse_proto("g2-unknown.proto",
+        "syntax = \"proto3\";\noption foo = 1;\n", unknown, unknown_error));
+    CHECK(unknown_error.message.find("foo") != std::string::npos);
+    CHECK(unknown_error.message.find("unknown") != std::string::npos);
+    CHECK(easypb_proto::parse_proto("g2-custom.proto",
+        "syntax = \"proto3\";\noption (foo) = 1;\n", parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-custom-aggregate.proto",
+        "syntax = \"proto3\";\noption (foo) = { a: 1 };\n", parsed, error));
+
+    // Duplicate, placement, enum-value and owner mismatches.
+    CHECK(!easypb_proto::parse_proto("g2-dup.proto",
+        "syntax = \"proto3\";\n"
+        "option java_package = \"a\";\noption java_package = \"b\";\n",
+        parsed, error));
+    CHECK(!easypb_proto::parse_proto("g2-misplaced.proto",
+        "syntax = \"proto3\";\n"
+        "message M { option java_package = \"x\"; }\n", parsed, error));
+    CHECK(!easypb_proto::parse_proto("g2-oneof.proto",
+        "syntax = \"proto3\";\n"
+        "message M { oneof o { option deprecated = true; int32 a = 1; } }\n",
+        parsed, error));
+    CHECK(!easypb_proto::parse_proto("g2-enum-value.proto",
+        "syntax = \"proto2\";\n"
+        "enum E { A = 1 [jstype = JS_STRING]; }\n", parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-enum-value-ok.proto",
+        "syntax = \"proto2\";\n"
+        "enum E { A = 1 [deprecated = true]; }\n", parsed, error));
+    CHECK(!easypb_proto::parse_proto("g2-map-entry.proto",
+        "syntax = \"proto3\";\nmessage M { option map_entry = true; }\n",
+        parsed, error));
+    CHECK(!easypb_proto::parse_proto("g2-optimize-value.proto",
+        "syntax = \"proto3\";\noption optimize_for = FOO;\n", parsed, error));
+
+    // Owner-specific accept controls.
+    CHECK(easypb_proto::parse_proto("g2-service.proto",
+        "syntax = \"proto3\";\nservice S { option deprecated = true; }\n",
+        parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-method.proto",
+        "syntax = \"proto3\";\n"
+        "message M { }\n"
+        "service S { rpc R (M) returns (M) { "
+        "option idempotency_level = NO_SIDE_EFFECTS; } }\n", parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-ext-range.proto",
+        "syntax = \"proto2\";\n"
+        "message M { extensions 100 to 199 [verification = UNVERIFIED]; }\n",
+        parsed, error));
+    CHECK(easypb_proto::parse_proto("g2-ext-declaration.proto",
+        "syntax = \"proto2\";\n"
+        "message M { extensions 100 to 199 "
+        "[declaration = { number: 100, full_name: \".p.M.f\", type: \"int32\" }]; }\n",
+        parsed, error));
+    // The pair, not either value alone, is invalid: a non-empty declaration
+    // list forbids `verification = UNVERIFIED` (measured with protoc 30.1).
+    CHECK(!easypb_proto::parse_proto("g2-ext-unverified.proto",
+        "syntax = \"proto2\";\n"
+        "message M { extensions 100 to 199 "
+        "[declaration = { number: 100, full_name: \".p.M.f\", type: \"int32\" }, "
+        "verification = UNVERIFIED]; }\n", parsed, error));
+    CHECK(error.message.find("UNVERIFIED") != std::string::npos);
+}
+
+// D2-A: the value-dependent field rules. `jstype` is 64-bit-only; `lazy` and
+// `unverified_lazy` are message-only (a named enum is decided after
+// resolution); `ctype` and `weak` have no caretaker rule in protoc 30.1
+// (measured 2026-10-25: both are accepted on an int32 field), so this project
+// does not invent one.
+void test_known_option_field_kind_rules()
+{
+    const char* accepted[] = {
+        "message M { int64 x = 1 [jstype = JS_STRING]; }",
+        "message M { uint64 x = 1 [jstype = JS_STRING]; }",
+        "message M { sint64 x = 1 [jstype = JS_NUMBER]; }",
+        "message M { fixed64 x = 1 [jstype = JS_NORMAL]; }",
+        "message M { sfixed64 x = 1 [jstype = JS_STRING]; }",
+        "message M { int32 x = 1 [ctype = CORD]; }",
+        "message M { int32 x = 1 [weak = true]; }",
+        "message M { repeated int32 x = 1 [packed = true]; }",
+        "message N { int32 y = 1; } message M { N x = 1 [lazy = true]; }",
+        "message N { int32 y = 1; } message M { N x = 1 [unverified_lazy = true]; }",
+    };
+    for (std::size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        const bool ok = easypb_proto::parse_proto(
+            "option-field-kind.proto",
+            std::string("syntax = \"proto3\";\n") + accepted[i], parsed, error);
+        if (!ok) std::cerr << accepted[i] << ": " << error.message << '\n';
+        CHECK(ok);
+    }
+
+    const char* refused[] = {
+        "message M { int32 x = 1 [jstype = JS_STRING]; }",
+        "message M { string x = 1 [jstype = JS_STRING]; }",
+        "message M { repeated int32 x = 1 [packed = true]; } "
+        "message P { int32 y = 1 [packed = true]; }",
+        "message M { repeated string x = 1 [packed = true]; }",
+        "enum E { A = 0; } message M { E x = 1 [lazy = true]; }",
+        "enum E { A = 0; } message M { E x = 1 [unverified_lazy = true]; }",
+    };
+    for (std::size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        const bool ok = easypb_proto::parse_proto(
+            "option-field-kind-bad.proto",
+            std::string("syntax = \"proto3\";\n") + refused[i], parsed, error);
+        if (ok) std::cerr << "accepted: " << refused[i] << '\n';
+        CHECK(!ok);
+    }
 }
 
 } // namespace
@@ -1937,7 +2486,7 @@ int main()
     test_rejects_an_empty_oneof_body();
     test_records_allow_alias_in_the_model();
     test_buffer_api_owns_result_strings();
-    test_full_custom_option_name_parts_are_consumed();
+    test_custom_option_name_parts_are_consumed();
     test_easypb_cpp_field_options_are_retained();
     test_malformed_custom_option_name_parts_are_rejected();
     test_service_rpc_syntax_is_consumed();
@@ -1960,6 +2509,11 @@ int main()
     test_unresolved_default_is_deferred_not_rejected();
     test_unresolved_warnings_are_per_field();
     test_parsed_metadata_survives_source_destruction();
+    test_proto3_optional_synthetic_oneofs();
+    test_decode_proto3_optional();
+    test_known_option_table_covers_47_rows();
+    test_known_option_measured_cases();
+    test_known_option_field_kind_rules();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

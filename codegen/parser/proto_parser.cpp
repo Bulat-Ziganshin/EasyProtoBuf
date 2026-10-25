@@ -1,4 +1,6 @@
 #include "proto_parser.hpp"
+
+#include "known_options.hpp"
 #include "schema_semantics.hpp"
 
 #include <algorithm>
@@ -71,6 +73,8 @@
  *      (schema_semantics.hpp/.cpp, shared with the future linker)
  *   source positions and deferred output         -> FieldSource,
  *                                                    declaration_locations
+ *   proto3 `optional` presence and oneofs (D1-A)  -> synthesize_proto3_oneofs()
+ *   known-option name/kind/placement (D2-A)       -> known_options.hpp/.cpp
  *
  * The parser intentionally constructs FileDescriptorProto directly rather
  * than building an intermediate AST.  Each parse_* method consumes one
@@ -644,10 +648,23 @@ struct FieldOptionState
     std::string cpp_type;
     bool has_json_name;
     std::string json_name;
+    // D2-A: `lazy`/`unverified_lazy` are legal only on a message field. The
+    // kind of a named type is unknown until linking, so the parser records the
+    // option and the shared field pass decides with the resolved kind.
+    bool has_lazy;
+    SourceLocation lazy_location;
+    // D2-A: the extension-range pair `declaration` + `verification` is
+    // validated together after the list closes. protoc refuses `UNVERIFIED`
+    // beside any declaration (descriptor.cc, `ValidateExtensionRangeOptions`).
+    bool has_declaration;
+    bool has_verification;
+    std::string verification;
+    SourceLocation verification_location;
 
     FieldOptionState()
         : has_default(false), has_packed(false), packed(false),
-          has_cpp_type(false), has_json_name(false) {}
+          has_cpp_type(false), has_json_name(false), has_lazy(false),
+          has_declaration(false), has_verification(false) {}
 };
 
 // Source provenance captured while parsing one field. The caller records it
@@ -662,8 +679,10 @@ struct FieldProvenance
     SourceLocation default_location;
     bool has_packed;
     SourceLocation packed_location;
+    bool has_lazy;
+    SourceLocation lazy_location;
 
-    FieldProvenance() : has_default(false), has_packed(false) {}
+    FieldProvenance() : has_default(false), has_packed(false), has_lazy(false) {}
 };
 
 struct NumberRange
@@ -741,7 +760,8 @@ public:
             //             Enum / Extend / Service
             if (accept_keyword("package")) parse_package();
             else if (accept_keyword("import")) parse_import();
-            else if (accept_keyword("option")) parse_option_statement();
+            else if (accept_keyword("option"))
+                parse_option_statement(OPTION_OWNER_FILE, file_option_names_);
             else if (accept_keyword("message")) {
                 const SourceLocation name_location = current_.location;
                 const DescriptorPath path = easypb_schema::file_message_path(
@@ -783,6 +803,10 @@ private:
     bool seen_package_;
     bool defer_type_resolution_;
     easypb_schema::FileSyntax syntax_;
+    // D2-A: file-scope options already seen, for protoc's
+    // `Option "x" was already set.` rule. Every nested scope keeps its own
+    // set beside its parse loop.
+    std::set<std::string> file_option_names_;
 
     void advance()
     {
@@ -1076,27 +1100,79 @@ private:
         return value;
     }
 
-    // OptionStatement <- "option" OptionName "=" Constant ";"
-    // The trimmed descriptor model does not retain general options, so this
-    // method validates and consumes them without storing them.
-    void parse_option_statement()
+    // D2-A: the parsed Constant shape as the known-option table sees it.
+    static OptionConstantKind option_constant_kind(Constant::Kind kind)
     {
-        (void)option_name();
+        switch (kind) {
+            case Constant::STRING_VALUE: return OPTION_CONSTANT_STRING;
+            case Constant::INTEGER_VALUE: return OPTION_CONSTANT_INTEGER;
+            case Constant::FLOAT_VALUE: return OPTION_CONSTANT_FLOAT;
+            case Constant::BOOL_VALUE: return OPTION_CONSTANT_BOOL;
+            case Constant::IDENTIFIER_VALUE: return OPTION_CONSTANT_IDENTIFIER;
+            case Constant::AGGREGATE_VALUE: return OPTION_CONSTANT_AGGREGATE;
+        }
+        return OPTION_CONSTANT_IDENTIFIER;
+    }
+
+    // One door for the option table. A parenthesized (custom) name stays
+    // opaque: its definition is an extension in an import this frontend does
+    // not resolve, and D2-A deliberately does not implement typed custom
+    // options (`OPTIONS.md`, "Schema option validation"). Every other name
+    // must be a known field of the owner's `*Options` message, must be set
+    // once unless the field is repeated, and must carry the field's value
+    // kind plus the value-dependent kind rules.
+    void validate_option(OptionOwnerKind owner, const std::string& name,
+                         const Constant& value, const SourceLocation& where,
+                         const OptionFieldKind& field,
+                         std::set<std::string>& seen)
+    {
+        if (!name.empty() && name[0] == '(') return;
+
+        const KnownOption* option = find_known_option(owner, name);
+        if (option == 0) {
+            // protoc's sentence is `Option "foo" unknown. Ensure that your
+            // proto definition file imports the proto which defines the
+            // option.`; the verdict is the contract (E1/A3), so the text names
+            // the option and the hint.
+            throw ParseFailure(where,
+                "Option \"" + name + "\" unknown; a known option may need the "
+                "import that defines it");
+        }
+        if (!option->repeated && !seen.insert(name).second) {
+            throw ParseFailure(where,
+                "Option \"" + name + "\" was already set");
+        }
+        const std::string reason = known_option_value_error(
+            *option, option_constant_kind(value.kind), value.text, field);
+        if (!reason.empty()) throw ParseFailure(value.location, reason);
+    }
+
+    // OptionStatement <- "option" OptionName "=" Constant ";"
+    // The trimmed descriptor model does not retain general options; the
+    // statement is validated against the known-option table and discarded.
+    void parse_option_statement(OptionOwnerKind owner,
+                                std::set<std::string>& seen)
+    {
+        const SourceLocation option_location = current_.location;
+        const std::string name = option_name();
         expect_symbol('=');
-        (void)constant(false);
+        const Constant value = constant(false);
         expect_symbol(';');
+        validate_option(owner, name, value, option_location, OptionFieldKind(),
+                        seen);
     }
 
     // RpcBody <- "{" (EmptyStatement / OptionStatement)* "}"
     // RPC metadata is intentionally not retained by the trimmed descriptor.
     void parse_rpc_body()
     {
+        std::set<std::string> option_names;
         expect_symbol('{');
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated rpc body");
             if (accept_symbol(';')) continue;
             if (accept_keyword("option")) {
-                parse_option_statement();
+                parse_option_statement(OPTION_OWNER_METHOD, option_names);
                 continue;
             }
             fail("expected option or ';' in rpc body");
@@ -1163,11 +1239,12 @@ private:
         out_.file.service.push_back(std::move(service));
         out_.declaration_locations[path] = name_location;
         expect_symbol('{');
+        std::set<std::string> option_names;
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated service body");
             if (accept_symbol(';')) continue;
             if (accept_keyword("option")) {
-                parse_option_statement();
+                parse_option_statement(OPTION_OWNER_SERVICE, option_names);
                 continue;
             }
             if (accept_keyword("rpc")) {
@@ -1184,13 +1261,18 @@ private:
     }
 
     // FieldOptions <- "[" FieldOption ("," FieldOption)* "]"
-    // Standard options used by Codegen plus the EasyProtoBuf C++ type option
-    // are retained in the trimmed descriptor. Other options are still parsed
-    // as OptionName "=" Constant and then ignored.
-    FieldOptionState field_options()
+    // The list belongs to the declaration the caller names: a field, an enum
+    // value or an extension range. `default` and `json_name` are parser-level
+    // pseudo-options with their own storage; `(easypb.cpp).*` is
+    // EasyProtoBuf's custom option; every other name goes through the
+    // known-option table (D2-A), which owns the name, the value kind and the
+    // field-kind rules.
+    FieldOptionState field_options(OptionOwnerKind owner,
+                                   const OptionFieldKind& field_kind)
     {
         FieldOptionState state;
         if (!accept_symbol('[')) return state;
+        std::set<std::string> seen;
         do {
             const SourceLocation option_location = current_.location;
             const std::string name = option_name();
@@ -1198,11 +1280,11 @@ private:
             // A field `default` is the one place where a leading `+` is
             // parsed and then refused by `apply_default` (W-40, exception E1).
             Constant value = constant(name == "default");
-            if (name == "default") {
+            if (name == "default" && owner == OPTION_OWNER_FIELD) {
                 if (state.has_default) throw ParseFailure(option_location, "duplicate default field option");
                 state.has_default = true;
                 state.default_value = std::move(value);
-            } else if (name == "packed") {
+            } else if (name == "packed" && owner == OPTION_OWNER_FIELD) {
                 if (state.has_packed) throw ParseFailure(option_location, "duplicate packed field option");
                 if (value.kind != Constant::BOOL_VALUE) {
                     throw ParseFailure(value.location, "packed option must be true or false");
@@ -1210,7 +1292,7 @@ private:
                 state.has_packed = true;
                 state.packed = value.text == "true";
                 state.packed_location = value.location;
-            } else if (name == "json_name") {
+            } else if (name == "json_name" && owner == OPTION_OWNER_FIELD) {
                 // W-43: protoc routes `json_name` to `ParseJsonName`
                 // (`parser.cc:1363-1386`), which requires a string and
                 // refuses a second assignment. The value is retained in the
@@ -1247,6 +1329,22 @@ private:
             } else if (name.compare(0, 13, "(easypb.cpp).") == 0) {
                 throw ParseFailure(option_location,
                     "unknown EasyProtoBuf C++ field option " + name);
+            } else {
+                validate_option(owner, name, value, option_location,
+                                field_kind, seen);
+                if (name == "lazy" || name == "unverified_lazy") {
+                    state.has_lazy = true;
+                    state.lazy_location = option_location;
+                }
+                if (owner == OPTION_OWNER_EXTENSION_RANGE) {
+                    if (name == "declaration") {
+                        state.has_declaration = true;
+                    } else if (name == "verification") {
+                        state.has_verification = true;
+                        state.verification = value.text;
+                        state.verification_location = option_location;
+                    }
+                }
             }
         } while (accept_symbol(','));
         expect_symbol(']');
@@ -1458,6 +1556,12 @@ private:
         else source.default_location = easypb_schema::unknown_location();
         if (provenance.has_packed) source.packed_location = provenance.packed_location;
         else source.packed_location = easypb_schema::unknown_location();
+        if (provenance.has_lazy) {
+            source.has_lazy = true;
+            source.lazy_location = provenance.lazy_location;
+        } else {
+            source.lazy_location = easypb_schema::unknown_location();
+        }
         out_.declaration_locations[source.path] = provenance.name_location;
         out_.field_sources.push_back(std::move(source));
     }
@@ -1486,10 +1590,14 @@ private:
 
         // Label? (absent for OneofField and permitted to be absent in proto3).
         bool label_seen = false;
+        bool explicit_optional = false;
         if (is_keyword("optional") || is_keyword("required") || is_keyword("repeated")) {
             if (oneof_field) fail("oneof fields must not have optional, required, or repeated labels");
             label_seen = true;
-            if (accept_keyword("optional")) field.label = FieldDescriptorProto::LABEL_OPTIONAL;
+            if (accept_keyword("optional")) {
+                field.label = FieldDescriptorProto::LABEL_OPTIONAL;
+                explicit_optional = true;
+            }
             else if (accept_keyword("required")) field.label = FieldDescriptorProto::LABEL_REQUIRED;
             else {
                 accept_keyword("repeated");
@@ -1509,6 +1617,14 @@ private:
             fail("required fields are not allowed in proto3",
                  easypb_schema::DIAGNOSTIC_PROTO3_REQUIRED_FIELD);
         }
+        // D1-A: in proto3 only an explicit `optional` label carries presence.
+        // An absent label is an ordinary implicit field and must stay without
+        // the flag; proto2 never sets it (`ParseMessageField`,
+        // parser.cc:944-955).
+        if (syntax_ == easypb_schema::FILE_SYNTAX_PROTO3 && explicit_optional) {
+            field.proto3_optional = true;
+            field.has_proto3_optional = true;
+        }
 
         // TypeName Identifier "=" FieldNumber FieldOptions? ";"
         const SourceLocation type_location = current_.location;
@@ -1524,7 +1640,17 @@ private:
         field.number = positive_field_number();
         field.has_number = true;
 
-        const FieldOptionState options = field_options();
+        // D2-A: the field options are validated against the table once the
+        // field's declared kind is known, so `jstype` and `lazy` can be
+        // decided without a second parse.
+        OptionFieldKind field_kind;
+        field_kind.has_type = field.has_type;
+        field_kind.type = field.type;
+        field_kind.named = field.has_type_name;
+        field_kind.repeated =
+            field.label == FieldDescriptorProto::LABEL_REPEATED;
+        const FieldOptionState options = field_options(OPTION_OWNER_FIELD,
+                                                       field_kind);
         expect_symbol(';');
 
         if (oneof_field) {
@@ -1559,6 +1685,10 @@ private:
             if (options.has_packed) {
                 provenance->packed_location = options.packed_location;
             }
+            provenance->has_lazy = options.has_lazy;
+            if (options.has_lazy) {
+                provenance->lazy_location = options.lazy_location;
+            }
         }
         return field;
     }
@@ -1588,7 +1718,15 @@ private:
         const std::string field_name = identifier();
         expect_symbol('=');
         const std::int32_t number = positive_field_number();
-        const FieldOptionState options = field_options();
+        // A map field is a repeated synthetic-entry message: repeated, a named
+        // message kind, so `jstype` is refused and `lazy` is legal.
+        OptionFieldKind field_kind;
+        field_kind.has_type = true;
+        field_kind.type = FieldDescriptorProto::TYPE_MESSAGE;
+        field_kind.named = true;
+        field_kind.repeated = true;
+        const FieldOptionState options = field_options(OPTION_OWNER_FIELD,
+                                                       field_kind);
         expect_symbol(';');
         if (options.has_default || options.has_packed) {
             // Point at the offending option value, not at the key type.
@@ -1712,6 +1850,70 @@ private:
         }
     }
 
+    // D1-A: one synthetic one-field oneof per proto3 `optional` field, named
+    // and ordered exactly as `protoc`'s `GenerateSyntheticOneofs`
+    // (`parser.cc:745-780`) names and orders them:
+    //   1. the collision set is every field name and every oneof name;
+    //   2. the candidate starts as the field name and gains one leading `_`
+    //      unless it already starts with one; a field whose own name is the
+    //      candidate collides and is resolved by step 3;
+    //   3. while the candidate collides, prepend one `X` (`X_a`, `XX_a`, ...);
+    //   4. the field claims the declaration, which is appended after every
+    //      real oneof because the whole message body has been parsed.
+    // The declaration location is the field's name: that is where a reader
+    // looks for the presence declaration, and it keeps diagnostics inside the
+    // message rather than at the closing brace.
+    void synthesize_proto3_oneofs(DescriptorProto& message,
+                                  const DescriptorPath& message_path)
+    {
+        std::set<std::string> names;
+        for (std::size_t i = 0; i < message.field.size(); ++i) {
+            names.insert(view_text(message.field[i].name));
+        }
+        for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
+            names.insert(view_text(message.oneof_decl[i].name));
+        }
+
+        for (std::size_t i = 0; i < message.field.size(); ++i) {
+            FieldDescriptorProto& field = message.field[i];
+            if (!field.has_proto3_optional || !field.proto3_optional) continue;
+            // A field inside a real oneof cannot carry a label, so it can
+            // never reach this point with the flag; the guard keeps the
+            // invariant local instead of relying on that refusal.
+            if (field.has_oneof_index) continue;
+
+            std::string oneof_name = view_text(field.name);
+            if (oneof_name.empty() || oneof_name[0] != '_') {
+                oneof_name.insert(0, 1, '_');
+            }
+            while (names.count(oneof_name) != 0) {
+                oneof_name.insert(0, 1, 'X');
+            }
+            names.insert(oneof_name);
+
+            field.oneof_index =
+                static_cast<std::int32_t>(message.oneof_decl.size());
+            field.has_oneof_index = true;
+
+            OneofDescriptorProto declaration;
+            declaration.name = out_.strings.save(oneof_name);
+            declaration.has_name = true;
+            const std::int32_t index =
+                static_cast<std::int32_t>(message.oneof_decl.size());
+            message.oneof_decl.push_back(std::move(declaration));
+
+            const DescriptorPath field_path =
+                easypb_schema::message_field_path(message_path,
+                                                  static_cast<int>(i));
+            const std::map<DescriptorPath, SourceLocation>::const_iterator
+                located = out_.declaration_locations.find(field_path);
+            if (located != out_.declaration_locations.end()) {
+                out_.declaration_locations[easypb_schema::message_oneof_path(
+                    message_path, index)] = located->second;
+            }
+        }
+    }
+
     // Message <- "message" Identifier "{" MessageElement* "}"
     // The caller has consumed "message".  This method owns MessageElement
     // dispatch and validates reserved/extension constraints before returning.
@@ -1749,6 +1951,7 @@ private:
         std::vector<NumberRange> reserved_ranges;
         std::set<std::string> reserved_names;
         std::vector<NumberRange> extension_ranges;
+        std::set<std::string> option_names;
         expect_symbol('{');
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated message body");
@@ -1779,13 +1982,15 @@ private:
                 advance();
                 parse_map(message, message_path, map_location);              // MapField
             }
-            else if (accept_keyword("option")) parse_option_statement();                          // OptionStatement
+            else if (accept_keyword("option"))
+                parse_option_statement(OPTION_OWNER_MESSAGE, option_names);                          // OptionStatement
             else if (accept_keyword("reserved")) parse_reserved(false, reserved_ranges, reserved_names); // ReservedMessage
             else if (accept_keyword("extensions")) parse_extensions(extension_ranges);            // Extensions
             else if (accept_keyword("extend")) parse_extend();                               // Extend
             else if (is_keyword("service")) fail("service declarations are not allowed inside messages");
             else push_field(message, message_path, false, 0);                                    // Field
         }
+        synthesize_proto3_oneofs(message, message_path);
         validate_message_constraints(message, message_path, name_location,
                                     reserved_ranges, reserved_names,
                                     extension_ranges);
@@ -1815,6 +2020,7 @@ private:
         out_.declaration_locations[easypb_schema::message_oneof_path(
             message_path, index)] = name_location;
         expect_symbol('{');
+        std::set<std::string> option_names;
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated oneof body");
 
@@ -1822,7 +2028,8 @@ private:
             // OneofField.  MapField is recognized explicitly to produce a
             // more useful diagnostic than the generic field parser would.
             if (accept_symbol(';')) continue;
-            if (accept_keyword("option")) parse_option_statement();
+            if (accept_keyword("option"))
+                parse_option_statement(OPTION_OWNER_ONEOF, option_names);
             else if (is_keyword("map") && next_is_symbol('<')) {
                 fail("map fields are not allowed in oneof");
             } else {
@@ -1856,6 +2063,7 @@ private:
         std::vector<SourceLocation> number_locations;
         std::vector<NumberRange> reserved_ranges;
         std::set<std::string> reserved_names;
+        std::set<std::string> option_names;
 
         expect_symbol('{');
         while (!accept_symbol('}')) {
@@ -1870,6 +2078,9 @@ private:
                 expect_symbol('=');
                 const Constant value = constant(false);
                 expect_symbol(';');
+                validate_option(OPTION_OWNER_ENUM, option, value,
+                                option_location, OptionFieldKind(),
+                                option_names);
                 if (option == "allow_alias") {
                     if (value.kind != Constant::BOOL_VALUE) {
                         throw ParseFailure(value.location, "allow_alias must be true or false");
@@ -1919,7 +2130,8 @@ private:
                 }
             }
             if (current_.kind == TOKEN_SYMBOL && current_.symbol == '[') {
-                const FieldOptionState ignored = field_options();
+                const FieldOptionState ignored =
+                    field_options(OPTION_OWNER_ENUM_VALUE, OptionFieldKind());
                 // CR-27: protoc special-cases `json_name` only in
                 // `ParseFieldOptions` (`parser.cc:1210-1214`); an enum value's
                 // options go through `ParseOption`, where the name is unknown.
@@ -2080,7 +2292,16 @@ private:
             add_range(ranges, range, "extension");
             if (!accept_symbol(',')) break;
         }
-        if (current_.kind == TOKEN_SYMBOL && current_.symbol == '[') (void)field_options();
+        if (current_.kind == TOKEN_SYMBOL && current_.symbol == '[') {
+            const FieldOptionState options =
+                field_options(OPTION_OWNER_EXTENSION_RANGE, OptionFieldKind());
+            if (options.has_declaration && options.has_verification &&
+                options.verification == "UNVERIFIED") {
+                throw ParseFailure(options.verification_location,
+                    "cannot mark the extension range as UNVERIFIED when it has "
+                    "extensions declared");
+            }
+        }
         expect_symbol(';');
     }
 

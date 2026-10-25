@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+// `jstype` is a `FieldOptions` field; an enum value carries `EnumValueOptions`.
+enum E {
+  A = 0 [jstype = JS_STRING];
+}

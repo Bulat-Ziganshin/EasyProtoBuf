@@ -1,0 +1,6 @@
+syntax = "proto2";
+
+// `verification` is an `ExtensionRangeOptions` field; a message cannot set it.
+message M {
+  option verification = UNVERIFIED;
+}

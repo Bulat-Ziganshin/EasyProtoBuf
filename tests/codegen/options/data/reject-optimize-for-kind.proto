@@ -1,0 +1,4 @@
+syntax = "proto3";
+
+// `optimize_for` takes an `OptimizeMode` enumerator, not an integer.
+option optimize_for = 7;

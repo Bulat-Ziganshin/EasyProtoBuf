@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+// `OneofOptions` has no known fields once custom options stay opaque.
+message M {
+  oneof choice {
+    option deprecated = true;
+    int32 x = 1;
+  }
+}

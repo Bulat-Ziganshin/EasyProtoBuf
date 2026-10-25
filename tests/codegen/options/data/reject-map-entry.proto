@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+// `map_entry` is synthesized by the `map<...>` spelling and refused in source
+// text whatever its value; protoc's sentence is the table's refusal reason.
+message M {
+  option map_entry = true;
+}

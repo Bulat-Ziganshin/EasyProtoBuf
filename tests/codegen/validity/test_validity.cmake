@@ -505,11 +505,13 @@ if(FULL_BUILD)
     require_contains(grammar_alias_false_alias_err "no effect"
         "CR-26 the allow_alias-false-with-alias refusal")
 
-    # CR-27: `json_name` is not an enum-value option.
+    # CR-27: `json_name` is not an enum-value option. Since B12 the shared
+    # known-option table owns the refusal: the name is not a field of
+    # `EnumValueOptions`, so it is refused as unknown (D2-A).
     run_fail(grammar_enum_json_out grammar_enum_json_err
         ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/grammar-enum-json-name.proto")
     require_empty(grammar_enum_json_out "The enum-json_name stdout")
-    require_contains(grammar_enum_json_err "field-only options"
+    require_contains(grammar_enum_json_err "json_name"
         "CR-27 the enum-value json_name refusal")
 
     # CR-28: an ordinary option takes no leading `+`, on the file, field and

@@ -1,0 +1,4 @@
+syntax = "proto3";
+
+// The name is not a field of `FileOptions`.
+option java_packages = "com.example.unknown";

@@ -1,0 +1,4 @@
+syntax = "proto3";
+
+// `deprecated` is a bool field of `FileOptions`.
+option deprecated = 1;

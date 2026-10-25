@@ -176,12 +176,13 @@ struct SemanticSpelling
     SemanticSpelling()
         : explicit_proto2(false), write_json_name(true),
           write_empty_options(false), write_packed_false(false),
-          package("p"), field_number(1) {}
+          proto3_optional(false), package("p"), field_number(1) {}
 
     bool explicit_proto2;    // protoc omits `syntax` for a proto2 file
     bool write_json_name;    // protoc always writes the derived name
     bool write_empty_options; // an empty FieldOptions message
     bool write_packed_false;  // `packed = false`, the proto2 default
+    bool proto3_optional;     // D1-A presence flag (wire field 17)
     const char* package;
     int field_number;
 };
@@ -198,6 +199,10 @@ std::string semantic_file(const SemanticSpelling& spelling)
         field += wire_message_field(8, wire_uint_field(2, 0));
     }
     if (spelling.write_json_name) field += wire_text_field(10, "f");
+    // D1-A: the presence flag is modeled content, so a copy that carries it
+    // and one that does not are two different definitions (see the identity
+    // test below).
+    if (spelling.proto3_optional) field += wire_uint_field(17, 1);
     std::string message = wire_text_field(1, "M");
     message += wire_message_field(2, field);
     std::string file = wire_text_field(1, "semantic-merge.proto");
@@ -818,9 +823,14 @@ void test_loader_merges_semantically_equal_copies()
     different_package.package = "q";
     SemanticSpelling different_number;
     different_number.field_number = 2;
-    for (std::size_t i = 0; i < 2; ++i) {
+    // D1-A: `proto3_optional` is presence, so the two copies describe
+    // different fields and must not merge.
+    SemanticSpelling different_presence;
+    different_presence.proto3_optional = true;
+    for (std::size_t i = 0; i < 3; ++i) {
         const SemanticSpelling& spelling =
-            i == 0 ? different_package : different_number;
+            i == 0 ? different_package
+                   : (i == 1 ? different_number : different_presence);
         CHECK(write_binary_file(variant, semantic_file(spelling)));
         std::vector<std::string> inputs;
         inputs.push_back(base);

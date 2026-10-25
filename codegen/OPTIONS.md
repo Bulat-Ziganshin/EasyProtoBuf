@@ -98,6 +98,44 @@ Two bounds apply to the output side. An output name must be a logical path, so a
 
 The two options cannot be used together. Without either override, Codegen follows the field's schema option where present and the normal proto2/proto3 default behavior otherwise.
 
+## Schema option validation
+
+On the `.proto` path the parser validates standard options against a closed
+table for the pinned reference compiler, `protoc` 30.1: the nine `*Options`
+messages of `descriptor.proto` and their 47 known fields, excluding
+`uninterpreted_option` and the nine editions `features` fields. Validation
+covers the owner (file, message, field, oneof, enum, enum value, service,
+method, extension range), the value kind, a second assignment of a singular
+option, and the value-dependent rules protoc applies: `jstype` only on 64-bit
+integers, `lazy`/`unverified_lazy` only on message fields (a named type is
+checked after linking), `packed` only on repeated primitive or enum fields,
+`map_entry` refused in source text, `allow_alias` only on enums,
+`optimize_for` only on its enumerators, `message_set_wire_format` only on
+messages, and `verification = UNVERIFIED` refused beside a non-empty extension
+`declaration` list. An unknown unparenthesized name, an option in the wrong
+owner, and a wrong value kind are refusals; the value itself is discarded.
+
+This is validation, not feature support: no Java/C#/Go option changes the
+generated C++. Only `default`, `json_name`, `packed` and `(easypb.cpp).type`
+keep storage and behavior. The descriptor path trusts a protoc-written
+`FileDescriptorSet` and does not gain an options model in this stage.
+
+A parenthesized custom option is deliberately opaque. Its defining extension
+lives in an import this frontend does not link, so the name grammar and the
+balanced value are checked while the name and value stay untyped; an unresolved
+`(vendor.option)` is therefore accepted where protoc would refuse it. This is
+the owner decision D2-A (2026-10-25), recorded as P1 exception E13 in
+`build/verification/property-catalogue.md` and pinned by the
+`codegen.options` lane. `(easypb.cpp).type` is the one custom name with
+product semantics and keeps its existing handling; other `(easypb.cpp).*`
+spellings are refused.
+
+A dotted sub-field assignment on a singular message-typed option
+(`[feature_support.edition_introduced = ...]`) is also outside the
+validation-only table: it is refused as an unknown name, while protoc accepts
+it. This stricter boundary is P1 exception E14 and is pinned by the same lane;
+the aggregate spelling `[feature_support = { ... }]` is the supported form.
+
 ## C++ type options
 
 `-s, --string-type arg (=::std::string)` selects the C++ type for all string and bytes fields. For decode-only messages, `std::string_view` or another non-owning view may be used when the decoded object never outlives the input buffer.

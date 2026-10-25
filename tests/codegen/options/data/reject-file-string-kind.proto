@@ -1,0 +1,4 @@
+syntax = "proto3";
+
+// `java_package` is a string field: an integer is the wrong value kind.
+option java_package = 7;

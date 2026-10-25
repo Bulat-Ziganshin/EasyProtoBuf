@@ -1,0 +1,13 @@
+syntax = "proto2";
+
+package options.demo;
+
+enum Aliased {
+  option allow_alias = true;
+  option deprecated = false;
+  option deprecated_legacy_json_field_conflicts = false;
+
+  ZERO = 0;
+  ALIAS = 0 [deprecated = true, debug_redact = true];
+  ONE = 1 [feature_support = { edition_introduced: EDITION_PROTO2 }];
+}

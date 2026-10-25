@@ -1,0 +1,4 @@
+syntax = "proto3";
+
+// `OptimizeMode` has no `TURBO` enumerator.
+option optimize_for = TURBO;

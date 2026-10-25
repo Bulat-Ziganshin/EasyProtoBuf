@@ -3361,6 +3361,21 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
                            field_path, error);
         }
     }
+    // D2-A: `lazy`/`unverified_lazy` are legal only on a message field
+    // (`ValidateFieldOptions`, descriptor.cc:7968-7974). A scalar is refused
+    // by the parser already; a named type's kind is unknown until resolution,
+    // so the parser records the option and this pass answers with the kind the
+    // linker resolved. A descriptor-origin file has no provenance and this
+    // model decodes neither option, so only source text reaches the rule.
+    if (!unknown) {
+        const FieldSource* source = find_field_source(file, field_path);
+        if (source != 0 && source->has_lazy && field.has_type &&
+            field.type != FieldDescriptorProto::TYPE_MESSAGE) {
+            return fail_at(
+                file, "[lazy = true] can only be specified for submessage fields",
+                source->lazy_location, field_path, error);
+        }
+    }
     if (field.has_oneof_index &&
         (field.oneof_index < 0 ||
          static_cast<std::size_t>(field.oneof_index) >= message.oneof_decl.size())) {

@@ -147,6 +147,12 @@ struct FieldDescriptorProto
     FieldOptions options;
     int32_t oneof_index = 0;
     str_view json_name;
+    // Wire field 17: this field was written with an explicit `optional` label
+    // in a proto3 file, so it has explicit presence. protoc models that as
+    // this flag plus a synthetic one-field oneof the field claims
+    // (`parser.cc:745-780`); the source parser synthesizes the same pair
+    // (D1-A), so both frontends describe one logical file identically.
+    bool proto3_optional = false;
 
     bool has_name = false;
     bool has_number = false;
@@ -157,6 +163,7 @@ struct FieldDescriptorProto
     bool has_options = false;
     bool has_oneof_index = false;
     bool has_json_name = false;
+    bool has_proto3_optional = false;
 };
 
 
@@ -427,6 +434,8 @@ inline void decode(easypb::Decoder pb, FieldDescriptorProto &x)
             case 8: pb.get_message(&x.options,      &x.has_options); break;
             case 9: pb.get_int32 (&x.oneof_index,   &x.has_oneof_index); break;
             case 10: pb.get_string(&x.json_name,    &x.has_json_name); break;
+            case 17: pb.get_bool  (&x.proto3_optional,
+                                   &x.has_proto3_optional); break;
             default: pb.skip_field();
         }
     }

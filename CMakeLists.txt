@@ -142,7 +142,9 @@ target_include_directories(easypb_header_output PUBLIC include codegen)
 target_link_libraries(easypb_header_output PUBLIC easypb_file_io easypb_schema)
 
 if(EASYPB_CODEGEN_WITH_PROTO_PARSER)
-    add_library(easypb_proto_parser STATIC codegen/parser/proto_parser.cpp)
+    add_library(easypb_proto_parser STATIC
+        codegen/parser/known_options.cpp
+        codegen/parser/proto_parser.cpp)
     target_include_directories(easypb_proto_parser
         PUBLIC include codegen codegen/parser)
     target_link_libraries(easypb_proto_parser PUBLIC easypb_schema)

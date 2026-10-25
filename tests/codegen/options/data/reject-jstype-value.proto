@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+// `JSType` has no `JS_TEXT` enumerator.
+message M {
+  int64 x = 1 [jstype = JS_TEXT];
+}

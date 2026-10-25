@@ -1,0 +1,15 @@
+// D1-A: a nested message named `_a` collides with the synthetic oneof of
+// `optional int32 a`. protoc 30.1 refuses the file ("_a" is already defined in
+// "optional.demo.Collision"), and so does this parser: a synthetic oneof is a
+// symbol in the message scope exactly like a real one.
+syntax = "proto3";
+
+package optional.demo;
+
+message Collision {
+  message _a {
+    int32 x = 1;
+  }
+
+  optional int32 a = 2;
+}

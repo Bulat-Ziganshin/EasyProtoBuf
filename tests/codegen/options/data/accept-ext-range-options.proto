@@ -1,0 +1,26 @@
+syntax = "proto2";
+
+package options.demo;
+
+// Both known `ExtensionRangeOptions` fields, in the two shapes protoc accepts:
+// the repeated aggregate `declaration` list, and the `VerificationState` enum
+// on a range without declarations. The `UNVERIFIED` state is not compatible
+// with a non-empty `declaration` list; the parser refuses that pair.
+message Extensible {
+  extensions 100 to 199 [
+    declaration = {
+      number: 100,
+      full_name: ".options.demo.first",
+      type: "int32"
+    },
+    declaration = {
+      number: 101,
+      full_name: ".options.demo.second",
+      type: "string"
+    }
+  ];
+}
+
+message Checked {
+  extensions 200 to 299 [verification = UNVERIFIED];
+}
