@@ -119,6 +119,37 @@ void print_message(const DescriptorProto& descriptor, std::ostream& output, unsi
     output << "}\n";
 }
 
+// CR-48: a service is a declaration the model stores and the linker
+// validates, so `--print-descriptor` has to show it. A method is printed as
+// its name, its endpoints and the streaming markers the model decoded; a
+// unary method prints no marker, and a streaming one prints the flag that is
+// set, which is the same information protoc's descriptor carries.
+void print_service(const ServiceDescriptorProto& descriptor, std::ostream& output,
+                   unsigned level)
+{
+    indent(output, level);
+    output << "service " << view_text(descriptor.name) << " {\n";
+    for (std::size_t i = 0; i < descriptor.method.size(); ++i) {
+        const MethodDescriptorProto& method = descriptor.method[i];
+        indent(output, level + 1);
+        output << "rpc " << view_text(method.name) << " ("
+               << view_text(method.input_type) << ") returns ("
+               << view_text(method.output_type) << ')';
+        if (method.client_streaming || method.server_streaming) {
+            output << " [";
+            if (method.client_streaming) output << "client_streaming=true";
+            if (method.client_streaming && method.server_streaming) {
+                output << ", ";
+            }
+            if (method.server_streaming) output << "server_streaming=true";
+            output << ']';
+        }
+        output << '\n';
+    }
+    indent(output, level);
+    output << "}\n";
+}
+
 } // namespace
 
 
@@ -136,6 +167,9 @@ void print_descriptor(const FileDescriptorProto& file, std::ostream& output)
     }
     for (std::size_t i = 0; i < file.message_type.size(); ++i) {
         print_message(file.message_type[i], output, 0);
+    }
+    for (std::size_t i = 0; i < file.service.size(); ++i) {
+        print_service(file.service[i], output, 0);
     }
 }
 

@@ -699,6 +699,86 @@ void test_rejects_empty_enums()
           std::string::npos);
 }
 
+void test_post_body_refusals_point_inside_the_declaration()
+{
+    // CR-42: the rules below are answered after the closing brace has been
+    // consumed, so `current_` used to name the token after the declaration
+    // (a duplicate enum number in a four-line message was reported at 5:1).
+    // The table is the position snapshot: the empty-enum rule points at the
+    // enum name, the two value rules at the value's number (protoc's own
+    // columns), and the field rules at the field name. Every position is
+    // inside the declaration it is about.
+    struct Case
+    {
+        const char* name;
+        const char* source;
+        std::size_t line;
+        std::size_t column;
+        const char* fragment;
+    };
+    static const Case cases[] = {
+        {"empty-enum-position.proto",
+         "syntax=\"proto2\";\n"
+         "message M {\n"
+         "  enum E {\n"
+         "  }\n"
+         "}\n",
+         3, 8, "at least one value"},
+        {"first-enum-value-position.proto",
+         "syntax=\"proto3\";\n"
+         "message M {\n"
+         "  enum E {\n"
+         "    A = 1;\n"
+         "  }\n"
+         "}\n",
+         4, 9, "first proto3 enum value must be zero"},
+        {"duplicate-enum-number-position.proto",
+         "syntax=\"proto2\";\n"
+         "message M {\n"
+         "  enum E { A = 0; B = 0; }\n"
+         "}\n",
+         3, 23, "duplicate enum number"},
+        {"reserved-field-number-position.proto",
+         "syntax=\"proto2\";\n"
+         "message M {\n"
+         "  reserved 5;\n"
+         "  optional int32 x = 5;\n"
+         "}\n",
+         4, 18, "field number is reserved"},
+        {"reserved-field-name-position.proto",
+         "syntax=\"proto2\";\n"
+         "message M {\n"
+         "  reserved \"x\";\n"
+         "  optional int32 x = 7;\n"
+         "}\n",
+         4, 18, "field name is reserved"},
+        {"extension-range-field-position.proto",
+         "syntax=\"proto2\";\n"
+         "message M {\n"
+         "  extensions 100 to 200;\n"
+         "  optional int32 x = 150;\n"
+         "}\n",
+         4, 18, "inside an extension range"},
+        {"reserved-extension-overlap-position.proto",
+         "syntax=\"proto2\";\n"
+         "message M {\n"
+         "  extensions 100 to 199;\n"
+         "  reserved 150 to 250;\n"
+         "}\n",
+         3, 14, "overlap"}
+    };
+
+    for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        CHECK(!easypb_proto::parse_proto(cases[i].name, cases[i].source,
+                                        parsed, error));
+        CHECK(error.message.find(cases[i].fragment) != std::string::npos);
+        CHECK(error.location.line == cases[i].line);
+        CHECK(error.location.column == cases[i].column);
+    }
+}
+
 void test_source_refusals_carry_their_descriptor_codes()
 {
     easypb_proto::ParsedProto parsed;
@@ -1852,6 +1932,7 @@ int main()
     test_rejects_enum_scope_name_collisions();
     test_rejects_invalid_enum_defaults();
     test_rejects_empty_enums();
+    test_post_body_refusals_point_inside_the_declaration();
     test_rejects_duplicate_oneof_names();
     test_rejects_an_empty_oneof_body();
     test_records_allow_alias_in_the_model();

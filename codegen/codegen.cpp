@@ -1204,39 +1204,15 @@ void resolve_message_dependencies(MessageInfo& info,
 }
 
 
-// DFS used for general self/mutual dependency detection. A back edge
-// reconstructs the cycle in C++ names so the error explains why by-value
-// generation is impossible.
-void detect_dependency_cycles_visit(MessageInfo& info,
-                                    std::map<MessageInfo*, GraphColor>& color,
-                                    std::vector<MessageInfo*>& stack)
-{
-    color[&info] = GraphColor::OnStack;
-    stack.push_back(&info);
-
-    for (auto* dependency: info.dependencies) {
-        if (color[dependency] == GraphColor::Unvisited) {
-            detect_dependency_cycles_visit(*dependency, color, stack);
-        } else if (color[dependency] == GraphColor::OnStack) {
-            std::string path;
-            std::size_t start = 0;
-            while (start < stack.size() && stack[start] != dependency) ++start;
-            for (std::size_t i = start; i < stack.size(); ++i) {
-                if (! path.empty()) path += " -> ";
-                path += stack[i]->cpp_absolute_name;
-            }
-            if (! path.empty()) path += " -> ";
-            path += dependency->cpp_absolute_name;
-            throw std::runtime_error("recursive message value dependency: " + path);
-        }
-    }
-
-    stack.pop_back();
-    color[&info] = GraphColor::Finished;
-}
-
-
 // Reject every by-value cycle before any generated text is returned to main().
+//
+// A back edge reconstructs the cycle in C++ names so the error explains why
+// by-value generation is impossible. The walk keeps its own stack instead of
+// calling itself: the graph depth is schema-controlled (a chain of N messages
+// has N edges), and the recursive form overflowed the process stack on a
+// 12 000-message chain (CR-35). Each frame is one node plus the index of the
+// next dependency to examine - what a recursive call keeps in its loop
+// variable and program counter.
 void detect_dependency_cycles(std::vector<MessageInfo>& roots)
 {
     std::map<MessageInfo*, GraphColor> color;
@@ -1244,10 +1220,48 @@ void detect_dependency_cycles(std::vector<MessageInfo>& roots)
     for (auto& root: roots) collect_message_infos(root, all_messages);
     for (auto* message: all_messages) color[message] = GraphColor::Unvisited;
 
-    std::vector<MessageInfo*> stack;
+    struct Frame
+    {
+        MessageInfo* message;
+        std::size_t next;
+    };
+
+    // The DFS path itself, in visit order; a cycle report is its suffix from
+    // the repeated node.
+    std::vector<Frame> stack;
     for (auto* message: all_messages) {
-        if (color[message] == GraphColor::Unvisited) {
-            detect_dependency_cycles_visit(*message, color, stack);
+        if (color[message] != GraphColor::Unvisited) continue;
+
+        color[message] = GraphColor::OnStack;
+        stack.push_back(Frame{message, 0});
+        while (! stack.empty()) {
+            Frame& frame = stack.back();
+            if (frame.next >= frame.message->dependencies.size()) {
+                color[frame.message] = GraphColor::Finished;
+                stack.pop_back();
+                continue;
+            }
+
+            MessageInfo* dependency = frame.message->dependencies[frame.next++];
+            if (color[dependency] == GraphColor::Unvisited) {
+                color[dependency] = GraphColor::OnStack;
+                stack.push_back(Frame{dependency, 0});
+            } else if (color[dependency] == GraphColor::OnStack) {
+                std::string path;
+                std::size_t start = 0;
+                while (start < stack.size() &&
+                       stack[start].message != dependency) {
+                    ++start;
+                }
+                for (std::size_t i = start; i < stack.size(); ++i) {
+                    if (! path.empty()) path += " -> ";
+                    path += stack[i].message->cpp_absolute_name;
+                }
+                if (! path.empty()) path += " -> ";
+                path += dependency->cpp_absolute_name;
+                throw std::runtime_error(
+                    "recursive message value dependency: " + path);
+            }
         }
     }
 }
@@ -1295,56 +1309,68 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
     std::map<MessageInfo*, GraphColor> color;
     std::vector<MessageInfo*> result;
     result.reserve(units.size());
-    std::vector<MessageInfo*> stack;
     for (auto* unit: units) color[unit] = GraphColor::Unvisited;
 
-    struct Visitor {
-        static void visit(MessageInfo* unit,
-                          const std::vector<MessageInfo*>& units,
-                          const std::map<MessageInfo*, std::set<MessageInfo*> >& dependencies,
-                          std::map<MessageInfo*, GraphColor>& color,
-                          std::vector<MessageInfo*>& stack,
-                          std::vector<MessageInfo*>& result)
-        {
-            color[unit] = GraphColor::OnStack;
-            stack.push_back(unit);
-
-            // Walk dependencies in source order to keep unrelated output stable.
-            const std::map<MessageInfo*, std::set<MessageInfo*> >::const_iterator dep_it =
-                dependencies.find(unit);
-            if (dep_it != dependencies.end()) {
-                const std::set<MessageInfo*>& unit_deps = dep_it->second;
-                for (auto* candidate: units) {
-                    if (unit_deps.count(candidate) == 0) continue;
-                    if (color[candidate] == GraphColor::Unvisited) {
-                        visit(candidate, units, dependencies, color, stack, result);
-                    } else if (color[candidate] == GraphColor::OnStack) {
-                        // This is a cycle between lexical units (for example, two
-                        // root structs whose nested messages depend on each other).
-                        std::string path;
-                        std::size_t start = 0;
-                        while (start < stack.size() && stack[start] != candidate) ++start;
-                        for (std::size_t i = start; i < stack.size(); ++i) {
-                            if (! path.empty()) path += " -> ";
-                            path += stack[i]->cpp_absolute_name;
-                        }
-                        if (! path.empty()) path += " -> ";
-                        path += candidate->cpp_absolute_name;
-                        throw std::runtime_error(
-                            "recursive message value dependency: " + path);
-                    }
-                }
-            }
-
-            stack.pop_back();
-            color[unit] = GraphColor::Finished;
-            result.push_back(unit);  // dependencies were appended first
-        }
+    // The same explicit stack as the cycle walk (CR-35): a chain of lexical
+    // subtrees is as deep as its dependency chain, so a recursive visitor
+    // overflows on a schema the generator otherwise accepts. `next` is the
+    // index into `units`, which is walked in source order to keep unrelated
+    // output stable.
+    struct Frame
+    {
+        MessageInfo* unit;
+        const std::set<MessageInfo*>* unit_deps;
+        std::size_t next;
     };
 
+    std::vector<Frame> stack;
     for (auto* unit: units) {
-        if (color[unit] == GraphColor::Unvisited) {
-            Visitor::visit(unit, units, dependencies, color, stack, result);
+        if (color[unit] != GraphColor::Unvisited) continue;
+
+        color[unit] = GraphColor::OnStack;
+        const std::map<MessageInfo*, std::set<MessageInfo*> >::const_iterator
+            first = dependencies.find(unit);
+        stack.push_back(Frame{
+            unit, first == dependencies.end() ? 0 : &first->second, 0});
+        while (! stack.empty()) {
+            Frame& frame = stack.back();
+            if (frame.next >= units.size()) {
+                color[frame.unit] = GraphColor::Finished;
+                result.push_back(frame.unit);  // dependencies were appended first
+                stack.pop_back();
+                continue;
+            }
+
+            MessageInfo* candidate = units[frame.next++];
+            if (frame.unit_deps == 0 ||
+                frame.unit_deps->count(candidate) == 0) {
+                continue;
+            }
+            if (color[candidate] == GraphColor::Unvisited) {
+                color[candidate] = GraphColor::OnStack;
+                const std::map<MessageInfo*, std::set<MessageInfo*> >::
+                    const_iterator found = dependencies.find(candidate);
+                stack.push_back(Frame{
+                    candidate, found == dependencies.end() ? 0 : &found->second,
+                    0});
+            } else if (color[candidate] == GraphColor::OnStack) {
+                // This is a cycle between lexical units (for example, two
+                // root structs whose nested messages depend on each other).
+                std::string path;
+                std::size_t start = 0;
+                while (start < stack.size() &&
+                       stack[start].unit != candidate) {
+                    ++start;
+                }
+                for (std::size_t i = start; i < stack.size(); ++i) {
+                    if (! path.empty()) path += " -> ";
+                    path += stack[i].unit->cpp_absolute_name;
+                }
+                if (! path.empty()) path += " -> ";
+                path += candidate->cpp_absolute_name;
+                throw std::runtime_error(
+                    "recursive message value dependency: " + path);
+            }
         }
     }
     return result;

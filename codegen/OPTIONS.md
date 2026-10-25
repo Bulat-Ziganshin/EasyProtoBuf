@@ -122,7 +122,7 @@ codegen --descriptor-set --print-descriptor tutorial.pbs
 codegen --benchmark-parser [--benchmark-ms 500] a.proto b.proto
 ```
 
-`--print-descriptor` prints the parsed or decoded descriptor tree instead of generating C++. When an input cannot be read, the refusal appends the read layer's reason (`read access is denied`, `is a directory, not a schema file`, or the platform error) instead of a generic "cannot read file".
+`--print-descriptor` prints the parsed or decoded descriptor tree instead of generating C++. Messages, enums, services and their methods are printed; a method shows its endpoint types and, for a streaming method, its `client_streaming`/`server_streaming` markers. When an input cannot be read, the refusal appends the read layer's reason (`read access is denied`, `is a directory, not a schema file`, or the platform error) instead of a generic "cannot read file".
 
 `--benchmark-parser` reads all input files before timing, runs one unmeasured warm-up round, and then parses complete corpus rounds for at least 100 ms by default. `--benchmark-ms N` changes the minimum measured parser time; `N` must be at least 100 and the option is valid only with `--benchmark-parser`. A read failure prints the file and the same read reason and exits 1, like every other CLI failure; the benchmark mode has no special exit code.
 

@@ -76,6 +76,7 @@ compares the **bytes** on the wire and reads them back.
 | 31 levels of nested messages (accepted) | `data/nesting-31.proto` / `.pbs` | `W-01` |
 | 32 levels of nested messages (refused) | `data/nesting-32.proto` / `.pbs` | `W-01` |
 | a logical name with 101 components | `data/deep-name.pbs` | `W-32` |
+| 12 000 messages in a by-value dependency chain (accepted) | `data/dependency-chain.proto` / `.pbs` | `CR-35` |
 
 The two nesting depths are the reference compiler's own boundary: its
 `MaxMessageDeclarationNestingDepth()` is 32 (`descriptor.h:3045`) and it
@@ -94,6 +95,36 @@ is the input the path bound has to refuse.
 Nothing in the lane creates a deep directory tree: the deep name is refused
 at the mapping layer, before the publisher creates anything, and the driver
 asserts that the output root is still empty.
+
+## The dependency-chain depth (`CR-35`)
+
+The nesting limit bounds how deeply a message may be **declared**. A second,
+independent axis is how deeply messages may **depend** on each other: 12 000
+top-level messages, each holding the next one by value, has nesting depth 1
+and a dependency graph 12 000 edges deep. That is the shape the recursive
+cycle detector and topological sort used to walk with one C++ call frame per
+edge, so the process ended with `0xC00000FD` (STATUS_STACK_OVERFLOW) instead
+of a diagnostic - on both input paths.
+
+The driver generates the chain from the descriptor and, in a parser-on
+profile, from the source, and asserts three things:
+
+1. both runs exit 0 with empty stdout and stderr (`run_ok` treats the
+   overflow code as a failure, so a regression cannot pass silently);
+2. the descriptor path is deterministic: the same input twice produces one
+   header byte for byte;
+3. the source and descriptor headers agree byte for byte.
+
+The accepted header is **not compiled**: it is a 9.5 MB chain of 12 000
+struct definitions, and the claim is that the generator survives the walk.
+The chain is not a crash-only fixture either: the driver checks that both ends
+of the chain are in the header (the walk is dependency-first, so the last
+declaration comes first), and the byte-for-byte comparison with the source
+path proves the two frontends emit the same 12 000 declarations.
+
+The walk uses an explicit heap stack in both places, so the depth is bounded
+by memory rather than by the process stack. There is no documented depth
+bound to trip: an accepted schema stays accepted.
 
 ## The long-path prefix (`W-46`)
 
@@ -117,6 +148,7 @@ python tests/codegen/limits/data/make_descriptors.py [--protoc PATH]
 The script needs `protoc` (30.1 is the oracle this project measures against)
 and writes the `.proto` and `.pbs` files: a 31-level schema and a 32-level
 schema are not writable by hand, and the pair is the whole point of the lane.
+The same script writes the 12 000-message dependency chain and its `.pbs`.
 
 Running the lane never needs `protoc`: the fixtures are committed.
 

@@ -332,6 +332,58 @@ if(FULL_BUILD)
         message(FATAL_ERROR "Descriptor-set pretty-printer failed")
     endif()
 
+    # CR-48: services and methods are declarations the model stores and the
+    # linker validates, so the printed descriptor must show them; a streaming
+    # method must show the marker the model decoded. `service-rpc.proto`
+    # carries one unary and three streaming methods (client, server and bidi).
+    set(service_proto "${DATA_DIR}/service-rpc.proto")
+    set(service_pbs "${DATA_DIR}/service-rpc.pbs")
+    run_ok(service_print_out service_print_err
+        ${CODEGEN} --print-descriptor ${service_proto})
+    if(NOT service_print_out MATCHES "service Greeter")
+        message(FATAL_ERROR
+            "The printed descriptor omits the service: ${service_print_out}")
+    endif()
+    if(NOT service_print_out MATCHES
+            "rpc Unary \\(\\.rpc\\.test\\.Request\\) returns \\(\\.rpc\\.test\\.Reply\\)\n")
+        message(FATAL_ERROR
+            "The printed descriptor omits the unary method: ${service_print_out}")
+    endif()
+    if(NOT service_print_out MATCHES
+            "rpc ClientStream \\(\\.rpc\\.test\\.Request\\) returns \\(\\.rpc\\.test\\.Reply\\) \\[client_streaming=true\\]")
+        message(FATAL_ERROR
+            "The printed descriptor omits client_streaming: ${service_print_out}")
+    endif()
+    if(NOT service_print_out MATCHES
+            "rpc ServerStream \\(\\.rpc\\.test\\.Request\\) returns \\(\\.rpc\\.test\\.Reply\\) \\[server_streaming=true\\]")
+        message(FATAL_ERROR
+            "The printed descriptor omits server_streaming: ${service_print_out}")
+    endif()
+    if(NOT service_print_out MATCHES
+            "rpc Bidi \\(\\.rpc\\.test\\.Request\\) returns \\(\\.rpc\\.test\\.Reply\\) \\[client_streaming=true, server_streaming=true\\]")
+        message(FATAL_ERROR
+            "The printed descriptor omits the bidi streaming flags: ${service_print_out}")
+    endif()
+
+    run_ok(service_print_pbs_out service_print_pbs_err
+        ${CODEGEN} --descriptor-set --print-descriptor ${service_pbs})
+    # The `file` line spells the input as given, so the two paths differ there
+    # and nowhere else: everything after it is the canonical tree P2 requires
+    # them to share.
+    string(FIND "${service_print_out}" "\n" service_print_newline)
+    math(EXPR service_print_body_start "${service_print_newline} + 1")
+    string(SUBSTRING "${service_print_out}" ${service_print_body_start} -1
+        service_source_body)
+    string(FIND "${service_print_pbs_out}" "\n" service_print_pbs_newline)
+    math(EXPR service_print_pbs_body_start
+        "${service_print_pbs_newline} + 1")
+    string(SUBSTRING "${service_print_pbs_out}" ${service_print_pbs_body_start}
+        -1 service_descriptor_body)
+    if(NOT service_source_body STREQUAL service_descriptor_body)
+        message(FATAL_ERROR
+            "The source and descriptor printed trees disagree:\nsource:\n${service_source_body}\ndescriptor:\n${service_descriptor_body}")
+    endif()
+
     run_ok(bench_out bench_err ${CODEGEN} --benchmark-parser --benchmark-ms 100
         ${proto2} ${DATA_DIR}/benchmark-second.proto)
     if(NOT bench_out MATCHES "Files: 2")

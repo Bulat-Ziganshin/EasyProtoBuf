@@ -436,8 +436,17 @@ bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right)
 bool same_descriptor(const MethodDescriptorProto& left,
                      const MethodDescriptorProto& right)
 {
+    // CR-48: the two streaming flags are modeled content now, so two copies of
+    // one logical file that disagree about them are two different definitions.
+    // They are read as bools (unset is false), like every option flag: an
+    // absent `client_streaming` and a written `false` describe one method.
     return left.name == right.name && left.input_type == right.input_type &&
-           left.output_type == right.output_type && left.has_name == right.has_name &&
+           left.output_type == right.output_type &&
+           (left.has_client_streaming ? left.client_streaming : false) ==
+               (right.has_client_streaming ? right.client_streaming : false) &&
+           (left.has_server_streaming ? left.server_streaming : false) ==
+               (right.has_server_streaming ? right.server_streaming : false) &&
+           left.has_name == right.has_name &&
            left.has_input_type == right.has_input_type &&
            left.has_output_type == right.has_output_type;
 }

@@ -1106,11 +1106,13 @@ private:
     // Rpc <- "rpc" Identifier "(" "stream"? TypeName ")"
     //        "returns" "(" "stream"? TypeName ")" (RpcBody / ";")
     // The caller has consumed "rpc". Request/response names and method
-    // options are validated syntactically; the method's name and both endpoint
-    // type names are retained (S5/W-16), because protoc resolves the two
-    // endpoints like field type names and refuses a method whose type resolves
-    // nowhere or resolves to a non-message (`CrossLinkMethod`,
-    // descriptor.cc:7714-7757). Method options are still discarded.
+    // options are validated syntactically; the method's name, both endpoint
+    // type names and both streaming markers are retained (S5/W-16, CR-48),
+    // because protoc resolves the two endpoints like field type names and
+    // refuses a method whose type resolves nowhere or resolves to a
+    // non-message (`CrossLinkMethod`, descriptor.cc:7714-7757), and because a
+    // diagnostics mode must be able to describe the method it prints. Method
+    // options are still discarded.
     MethodDescriptorProto parse_rpc(SourceLocation* name_location)
     {
         *name_location = current_.location;
@@ -1119,14 +1121,16 @@ private:
         method.name = out_.strings.save(name);
         method.has_name = true;
         expect_symbol('(');
-        (void)accept_keyword("stream");
+        method.client_streaming = accept_keyword("stream");
+        method.has_client_streaming = true;
         const std::string input_type = full_identifier(true);
         method.input_type = out_.strings.save(input_type);
         method.has_input_type = true;
         expect_symbol(')');
         if (!accept_keyword("returns")) fail("expected 'returns' in rpc declaration");
         expect_symbol('(');
-        (void)accept_keyword("stream");
+        method.server_streaming = accept_keyword("stream");
+        method.has_server_streaming = true;
         const std::string output_type = full_identifier(true);
         method.output_type = out_.strings.save(output_type);
         method.has_output_type = true;
@@ -1736,6 +1740,7 @@ private:
             fail("Reached maximum recursion limit for nested messages.");
         }
 
+        const SourceLocation name_location = current_.location;
         const std::string name = identifier();
         DescriptorProto message;
         message.name = out_.strings.save(name);
@@ -1781,7 +1786,9 @@ private:
             else if (is_keyword("service")) fail("service declarations are not allowed inside messages");
             else push_field(message, message_path, false, 0);                                    // Field
         }
-        validate_message_constraints(message, reserved_ranges, reserved_names, extension_ranges);
+        validate_message_constraints(message, message_path, name_location,
+                                    reserved_ranges, reserved_names,
+                                    extension_ranges);
         return message;
     }
 
@@ -1831,6 +1838,12 @@ private:
     // value's declaration location.
     EnumDescriptorProto parse_enum(const DescriptorPath& enum_path)
     {
+        // CR-42: the post-body rules below used `current_`, which is the token
+        // after the closing brace by the time the body has been consumed. The
+        // enum's own name and every value's number are captured while they are
+        // in front of the cursor, so each refusal points inside the
+        // declaration - at the name, or at the value that breaks the rule.
+        const SourceLocation enum_name_location = current_.location;
         const std::string name = identifier();
         EnumDescriptorProto result;
         result.name = out_.strings.save(name);
@@ -1840,6 +1853,7 @@ private:
         SourceLocation allow_alias_location;
         std::set<std::string> value_names;
         std::vector<std::int32_t> numbers;
+        std::vector<SourceLocation> number_locations;
         std::vector<NumberRange> reserved_ranges;
         std::set<std::string> reserved_names;
 
@@ -1891,9 +1905,11 @@ private:
             EnumValueDescriptorProto value;
             value.name = out_.strings.save(value_name);
             value.has_name = true;
+            const SourceLocation number_location = current_.location;
             value.number = signed_enum_number();
             value.has_number = true;
             numbers.push_back(value.number);
+            number_locations.push_back(number_location);
             if (reserved_names.find(value_name) != reserved_names.end()) {
                 throw ParseFailure(value_location, "enum value name is reserved: " + value_name);
             }
@@ -1931,10 +1947,21 @@ private:
                 "has no effect. Please remove the declaration.");
         }
         bool has_duplicate_number = false;
+        std::size_t duplicate_number_index = numbers.size();
         {
-            std::set<std::int32_t> unique;
+            std::map<std::int32_t, std::size_t> first_by_number;
             for (std::size_t i = 0; i < numbers.size(); ++i) {
-                if (!unique.insert(numbers[i]).second) has_duplicate_number = true;
+                const std::pair<std::map<std::int32_t, std::size_t>::iterator,
+                                bool> inserted = first_by_number.insert(
+                    std::map<std::int32_t, std::size_t>::value_type(numbers[i], i));
+                if (! inserted.second) {
+                    has_duplicate_number = true;
+                    // protoc reports the first value that repeats a number, so
+                    // the diagnostic names the later declaration.
+                    if (duplicate_number_index == numbers.size()) {
+                        duplicate_number_index = i;
+                    }
+                }
             }
         }
         if (allow_alias && !has_duplicate_number) {
@@ -1945,7 +1972,7 @@ private:
         }
 
         if (result.value.empty()) {
-            throw ParseFailure(current_.location,
+            throw ParseFailure(enum_name_location,
                                "enum must contain at least one value",
                                easypb_schema::DIAGNOSTIC_EMPTY_ENUM);
         }
@@ -1968,11 +1995,12 @@ private:
 
         if (syntax_ == easypb_schema::FILE_SYNTAX_PROTO3 &&
             !result.value.empty() && result.value[0].number != 0) {
-            throw ParseFailure(current_.location, "the first proto3 enum value must be zero");
+            throw ParseFailure(number_locations[0],
+                               "the first proto3 enum value must be zero");
         }
         if (!allow_alias && has_duplicate_number) {
             throw ParseFailure(
-                current_.location,
+                number_locations[duplicate_number_index],
                 "duplicate enum number requires option allow_alias = true",
                 easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
         }
@@ -2058,7 +2086,17 @@ private:
 
     // Post-action for Message: checks relationships among parsed fields,
     // ReservedMessage declarations, and Extensions declarations.
+    //
+    // CR-42: this runs after the closing brace, so `current_` is the token
+    // after the declaration. The field rules below point at the field they are
+    // about: every field records its name position in the shared declaration
+    // table (the same entry the descriptor path uses), and that position is
+    // inside the message. `message_location` is the message name, the fallback
+    // for a field whose entry is somehow missing - still inside the
+    // declaration, never the token after the brace.
     void validate_message_constraints(const DescriptorProto& message,
+                                      const DescriptorPath& message_path,
+                                      const SourceLocation& message_location,
                                       const std::vector<NumberRange>& reserved_ranges,
                                       const std::set<std::string>& reserved_names,
                                       const std::vector<NumberRange>& extension_ranges)
@@ -2079,20 +2117,33 @@ private:
 
         for (std::size_t i = 0; i < message.field.size(); ++i) {
             const FieldDescriptorProto& field = message.field[i];
+            const std::map<DescriptorPath, SourceLocation>::const_iterator
+                located = out_.declaration_locations.find(
+                    easypb_schema::message_field_path(
+                        message_path, static_cast<int>(i)));
+            // Every field path is recorded while the field is parsed; the
+            // fallback keeps an incomplete table from producing an unlocated
+            // diagnostic and still names a position inside the message.
+            const SourceLocation field_location =
+                located == out_.declaration_locations.end()
+                    ? message_location : located->second;
             if (!reserved_names.empty()) {
                 const std::string name = view_text(field.name);
                 if (reserved_names.find(name) != reserved_names.end()) {
-                    fail("field name is reserved: " + name);
+                    throw ParseFailure(field_location,
+                        "field name is reserved: " + name);
                 }
             }
             for (std::size_t j = 0; j < reserved_ranges.size(); ++j) {
                 if (range_contains(reserved_ranges[j], field.number)) {
-                    fail("field number is reserved");
+                    throw ParseFailure(field_location,
+                        "field number is reserved");
                 }
             }
             for (std::size_t j = 0; j < extension_ranges.size(); ++j) {
                 if (range_contains(extension_ranges[j], field.number)) {
-                    fail("field number lies inside an extension range");
+                    throw ParseFailure(field_location,
+                        "field number lies inside an extension range");
                 }
             }
         }

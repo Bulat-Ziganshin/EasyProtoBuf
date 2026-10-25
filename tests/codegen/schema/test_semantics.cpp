@@ -1608,18 +1608,22 @@ void test_rule_default_validator_directly()
 void test_rule_enum_value_numbers_directly()
 {
     // validate_enum_value_numbers is public; these cases call it directly.
-    // An enum with no values is refused.
+    // An enum with no values is refused, at the enum's own declaration.
     {
         easypb_schema::SchemaFile file;
         EnumDescriptorProto enumeration;
         enumeration.name = file.strings.save("E");
         enumeration.has_name = true;
         file.file.enum_type.push_back(enumeration);
+        declare(file, easypb_schema::file_enum_path(0), 11);
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::validate_enum_value_numbers(file, error));
         CHECK(error.message.find("contains no values") != std::string::npos);
+        CHECK(error.location.line == 11);
+        CHECK(error.location.column == 1);
     }
-    // Two values may not share a number without allow_alias.
+    // CR-42: a repeated number is reported at the value that repeats it, not
+    // at the token after the declaration.
     {
         easypb_schema::SchemaFile file;
         EnumDescriptorProto enumeration;
@@ -1628,9 +1632,37 @@ void test_rule_enum_value_numbers_directly()
         add_enum_value(enumeration, file, "A", 1);
         add_enum_value(enumeration, file, "B", 1);
         file.file.enum_type.push_back(enumeration);
+        declare(file,
+                           easypb_schema::enum_value_path(
+                               easypb_schema::file_enum_path(0), 0), 21);
+        declare(file,
+                           easypb_schema::enum_value_path(
+                               easypb_schema::file_enum_path(0), 1), 22);
         easypb_schema::Diagnostic error;
         CHECK(!easypb_schema::validate_enum_value_numbers(file, error));
         CHECK(error.message.find("repeats number 1") != std::string::npos);
+        CHECK(error.location.line == 22);
+        CHECK(error.location.column == 1);
+    }
+    // CR-42: the proto3 first-value rule points at the first value.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.has_syntax = true;
+        file.file.syntax = file.strings.save("proto3");
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "A", 1);
+        file.file.enum_type.push_back(enumeration);
+        declare(file,
+                           easypb_schema::enum_value_path(
+                               easypb_schema::file_enum_path(0), 0), 31);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_enum_value_numbers(file, error));
+        CHECK(error.message.find("first proto3 enum value must be zero") !=
+              std::string::npos);
+        CHECK(error.location.line == 31);
+        CHECK(error.location.column == 1);
     }
     // ... unless the enum declares option allow_alias = true.
     {

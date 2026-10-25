@@ -22,6 +22,12 @@ Three shapes are produced:
   components. The name is what drives the depth of the output tree the
   publisher creates, so it is the input the path bound has to refuse.
 
+- `dependency-chain.proto` / `dependency-chain.pbs` - 12 000 top-level
+  messages, each holding the next one by value. The nesting depth is 1; the
+  dependency graph is 12 000 edges deep, which is the axis the recursive
+  cycle detector and topological sort used to overflow on (CR-35). The
+  `.pbs` is protoc's own encoding of the `.proto` beside it.
+
 Usage:
 
     python tests/codegen/limits/data/make_descriptors.py [--protoc PATH]
@@ -60,6 +66,13 @@ REFUSED_DEPTH = 32
 # The number of components a logical name may have (the limit the lane proves):
 # the name of `deep-name.pbs` carries one more than that.
 DEEP_NAME_COMPONENTS = 101
+
+# The dependency-chain length. 12 000 is the counter-example from the review:
+# the recursive cycle detector and topological sort ended the process with
+# STATUS_STACK_OVERFLOW (0xC00000FD) on this depth, while 6 000 messages
+# passed. The chain is top-level throughout, so it is the graph depth, not
+# the nesting depth, that the lane exercises.
+CHAIN_LENGTH = 12000
 
 
 def fail(message):
@@ -154,6 +167,17 @@ def deep_name_textproto():
             '}\n' % name)
 
 
+def chain_source_text(length):
+    """The `.proto` source of a by-value message chain."""
+    lines = ['syntax = "proto3";', ""]
+    for index in range(length):
+        if index + 1 < length:
+            lines.append("message M%d { M%d f = 1; }" % (index, index + 1))
+        else:
+            lines.append("message M%d { int32 f = 1; }" % index)
+    return "\n".join(lines) + "\n"
+
+
 def write(path, data):
     with io.open(path, "wb") as handle:
         handle.write(data)
@@ -190,6 +214,16 @@ def main():
     write(os.path.join(HERE, "deep-name.pbs"),
           encode_textproto(protoc, descriptor_dir,
                            deep_name_textproto().encode("utf-8")))
+
+    # The dependency chain: protoc accepts it, so it builds the `.pbs` itself.
+    chain_name = "dependency-chain.proto"
+    write(os.path.join(HERE, chain_name),
+          chain_source_text(CHAIN_LENGTH).encode("utf-8"))
+    run([protoc, "--proto_path=" + HERE,
+         "--descriptor_set_out=" + os.path.join(HERE, "dependency-chain.pbs"),
+         chain_name])
+    print("wrote dependency-chain.pbs (%d bytes)"
+          % os.path.getsize(os.path.join(HERE, "dependency-chain.pbs")))
     return 0
 
 

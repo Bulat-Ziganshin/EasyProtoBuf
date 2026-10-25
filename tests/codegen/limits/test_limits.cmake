@@ -199,6 +199,61 @@ if(FULL_BUILD)
         "The nesting refusal on the source path")
 endif()
 
+# --- the dependency-chain depth (CR-35) --------------------------------------
+#
+# 12 000 top-level messages, each holding the next one by value. The nesting
+# depth is 1; the dependency graph is 12 000 edges deep, which is what used to
+# end the process with STATUS_STACK_OVERFLOW (0xC00000FD) in the recursive
+# cycle detector and topological sort, on both input paths. `run_ok` fails on
+# that code, so a regression is a failed test rather than a silent crash. The
+# accepted header is not compiled: it is a 9.5 MB declaration chain, and the
+# claim under test is that the generator survives the walk, not that the
+# compiler does.
+set(chain dependency-chain)
+run_ok(chain_desc_out chain_desc_err
+    ${CODEGEN} --descriptor-set --out-dir "${WORK_DIR}/chain/descriptor"
+    "${DATA_DIR}/${chain}.pbs")
+require_empty(chain_desc_out "The chain descriptor stdout")
+require_empty(chain_desc_err "The chain descriptor stderr")
+file(READ "${WORK_DIR}/chain/descriptor/${chain}.pb.hpp" chain_desc_header)
+if(chain_desc_header STREQUAL "")
+    message(FATAL_ERROR "The chain descriptor path wrote an empty header")
+endif()
+# Both ends of the chain must be in the header: the walk is dependency-first,
+# so the last declaration comes first and the first comes last.
+string(FIND "${chain_desc_header}" "struct M11999" chain_last_pos)
+string(FIND "${chain_desc_header}" "struct M0" chain_first_pos)
+if(chain_first_pos EQUAL -1 OR chain_last_pos EQUAL -1)
+    message(FATAL_ERROR
+        "The chain header lacks a message at one end of the chain")
+endif()
+
+# Deterministic result: the same descriptor twice, two output roots, one
+# header byte for byte.
+run_ok(chain_desc2_out chain_desc2_err
+    ${CODEGEN} --descriptor-set --out-dir "${WORK_DIR}/chain/descriptor-2"
+    "${DATA_DIR}/${chain}.pbs")
+require_empty(chain_desc2_out "The second chain descriptor stdout")
+require_empty(chain_desc2_err "The second chain descriptor stderr")
+file(READ "${WORK_DIR}/chain/descriptor-2/${chain}.pb.hpp" chain_desc2_header)
+if(NOT chain_desc_header STREQUAL chain_desc2_header)
+    message(FATAL_ERROR
+        "CR-35: two runs of the chain produced different headers")
+endif()
+
+if(FULL_BUILD)
+    run_ok(chain_src_out chain_src_err
+        ${CODEGEN} -I "${DATA_DIR}" --out-dir "${WORK_DIR}/chain/source"
+        "${DATA_DIR}/${chain}.proto")
+    require_empty(chain_src_out "The chain source stdout")
+    require_empty(chain_src_err "The chain source stderr")
+    file(READ "${WORK_DIR}/chain/source/${chain}.pb.hpp" chain_src_header)
+    if(NOT chain_src_header STREQUAL chain_desc_header)
+        message(FATAL_ERROR
+            "CR-35: the source and descriptor chain headers disagree")
+    endif()
+endif()
+
 # --- the bounded output tree -------------------------------------------------
 #
 # A logical name with more components than the limit is refused at the

@@ -242,20 +242,28 @@ struct DescriptorProto
 
 
 // Single .proto method. The NAME is retained so the lexical name sweep can
-// check it (ledger `D-57`), and the input/output type names are retained so the
+// check it (ledger `D-57`), the input/output type names are retained so the
 // linker can resolve them (`W-16`): protoc's `CrossLinkMethod` refuses a name
 // that resolves nowhere and one that resolves to something other than a
 // message (`descriptor.cc:7714-7757`), and the source frontend used to discard
 // the whole method table, so neither shape could ever be refused there.
+//
+// CR-48: the two streaming flags are decoded too. They carry no generated-code
+// effect, but `--print-descriptor` is a diagnostics mode, and a service it
+// prints without its streaming markers would misdescribe the input.
 struct MethodDescriptorProto
 {
     str_view name;
     str_view input_type;   // field 2
     str_view output_type;  // field 3
+    bool client_streaming = false;  // field 5
+    bool server_streaming = false;  // field 6
 
     bool has_name = false;
     bool has_input_type = false;
     bool has_output_type = false;
+    bool has_client_streaming = false;
+    bool has_server_streaming = false;
 };
 
 
@@ -513,6 +521,8 @@ inline void decode(easypb::Decoder pb, MethodDescriptorProto &x)
             case 1: pb.get_string(&x.name, &x.has_name); break;
             case 2: pb.get_string(&x.input_type, &x.has_input_type); break;
             case 3: pb.get_string(&x.output_type, &x.has_output_type); break;
+            case 5: pb.get_bool(&x.client_streaming, &x.has_client_streaming); break;
+            case 6: pb.get_bool(&x.server_streaming, &x.has_server_streaming); break;
             default: pb.skip_field();
         }
     }

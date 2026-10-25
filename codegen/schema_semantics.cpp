@@ -3498,7 +3498,7 @@ bool resolve_method_type(SchemaFile& file, const SymbolIndex& symbols,
                          const UnresolvedPolicy& unresolved_policy,
                          bool link_types, const std::string& method_scope,
                          const char* endpoint, const DescriptorPath& type_path,
-                         const str_view& declared, Diagnostic& error)
+                         str_view& declared, Diagnostic& error)
 {
     if (!link_types) return true;
 
@@ -3522,6 +3522,14 @@ bool resolve_method_type(SchemaFile& file, const SymbolIndex& symbols,
                     "\", which is not a message type",
                 declaration_location(file, type_path), type_path,
                 DIAGNOSTIC_NOT_A_TYPE, error);
+        }
+        // CR-48: an endpoint is stored the way the field type is - the
+        // canonical absolute name the descriptor path carries. Without this,
+        // `--print-descriptor` would spell a source method's endpoint as
+        // written (`Request`) and a descriptor method's as `.pkg.Request`, so
+        // the two frontends would disagree on the canonical text (P2).
+        if (declared != resolved_name) {
+            declared = file.strings.save(resolved_name);
         }
         return true;
     }
@@ -3587,11 +3595,11 @@ bool resolve_services(SchemaFile& file, const SymbolIndex& symbols,
 {
     const std::string prefix = package_prefix(file);
     for (std::size_t i = 0; i < file.file.service.size(); ++i) {
-        const ServiceDescriptorProto& service = file.file.service[i];
+        ServiceDescriptorProto& service = file.file.service[i];
         const DescriptorPath service_path = file_service_path(static_cast<int>(i));
         const std::string service_scope = joined_name(prefix, service.name);
         for (std::size_t j = 0; j < service.method.size(); ++j) {
-            const MethodDescriptorProto& method = service.method[j];
+            MethodDescriptorProto& method = service.method[j];
             const DescriptorPath method_path =
                 service_method_path(service_path, static_cast<int>(j));
             const std::string method_scope =
