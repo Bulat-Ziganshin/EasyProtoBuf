@@ -1106,3 +1106,18 @@ jobs:
 
     - name: Run tests (full suite, including extended)
       run: ctest --test-dir build --build-config Release --no-tests=error --output-on-failure
+
+  #####################################################################################################################
+  # The lane coverage map: one row per lane, every CR/P/E named by a test.
+  # The validator is pure Python, so this job needs no compiler and no protoc.
+  #####################################################################################################################
+  coverage:
+    name: lane coverage map
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Validate the coverage map
+      run: python3 tests/codegen/check_coverage.py
