@@ -929,7 +929,7 @@ require_not_contains(w66_pbs_err "Exception:"
 # empty -I value             rc 0, the cwd joins the roots  rc 0, same
 # --out-dir //server         refusal, rc 1, nothing created rc 1, nothing created
 # --out-dir //server/share   refusal at the write, rc 1     rc 1, nothing created
-# trailing separator         CR-41: B10 owns the spelling   rc 1
+# trailing separator         refusal naming the spelling, rc 1  rc 1
 # closed stdout              rc 1, one diagnostic           no stdout path
 # denied directory           rc 1, the create's code        strerror(errno)
 #
@@ -1167,10 +1167,11 @@ if(WIN32)
     endif()
 endif()
 
-# B10 owns CR-41 (a trailing separator on an input file). This row records the
-# spelling and asserts the contract that must hold either way: a success is a
-# complete header, a refusal is empty stdout plus a diagnostic. B10 flips the
-# verdict from the first shape to the second and turns this into an assertion.
+# B10 closed CR-41 (a trailing separator on an input file): the B10 section
+# below asserts the exact refusal. This row keeps the contract that must hold
+# either way - a success is a complete header, a refusal is empty stdout plus
+# exactly one diagnostic - so the B9 record remains independent of the
+# verdict.
 if(FULL_BUILD)
     execute_process(
         COMMAND ${CODEGEN} cwd.proto/
@@ -1193,4 +1194,324 @@ if(FULL_BUILD)
     endif()
     message(STATUS
         "B9 trailing separator (CR-41, B10): rc=${b9_trailing_result}")
+endif()
+
+# --- B10: CLI paths and diagnostics (R8 part 2) -----------------------------
+#
+# CR-37 (the print mode names the read reason), CR-38 (.PBS inference is
+# case-insensitive), CR-39 (-I is a search-root option, not a code-generation
+# one), CR-40 (the component blocking an output path is named), CR-41 (a
+# trailing separator on an input is refused) and CR-47 (the benchmark exits 1
+# and prints the read reason). The CR-36 deep physical root is its own xfail:
+# `codegen.limits.deep_physical_root`.
+#
+# Row                         codegen                        protoc 30.1
+# print missing file          the reason, rc 1               ENOENT text, rc 1
+# print a directory           "is a directory", rc 1         "Input file is a directory.", rc 1
+# SET.PBS generation          descriptor header, rc 0        no extension inference
+# mixed SET.PBS + .proto      mixed-input refusal, rc 1      runs both inputs
+# print/benchmark -I          names -I as a search root      --decode accepts -I
+# out-dir file component      names the component, rc 1      generic ENOENT text
+# input "cwd.proto/"          refusal naming the spelling    "Could not make proto path relative", rc 1
+# benchmark read failure      reason, rc 1                   no benchmark mode
+#
+# The family splits like the root: each row is run on the frontend it can
+# address (source, descriptor container, or both utility modes).
+
+set(b10 "${WORK_DIR}/b10")
+file(MAKE_DIRECTORY "${b10}")
+file(WRITE "${b10}/cwd.proto"
+    "syntax = \"proto3\";\nmessage FromCwd { int32 a = 1; }\n")
+file(MAKE_DIRECTORY "${b10}/a-directory")
+
+# --- CR-37: the print mode appends the read reason --------------------------
+
+# The discriminating row is a directory: before the fix every failure was
+# "cannot read file". The missing-file row pins that the reason is still the
+# read layer's own sentence (a Win32 code on Windows, no code on POSIX). The
+# print mode needs the parser profile, so both rows are full-build only.
+if(FULL_BUILD)
+    run_fail(b10_print_missing_out b10_print_missing_err
+        ${CODEGEN} --print-descriptor "${b10}/missing.proto")
+    require_empty(b10_print_missing_out "CR-37 missing-file stdout")
+    require_contains(b10_print_missing_err
+        "${b10}/missing.proto: cannot read file"
+        "CR-37 the missing-file reason is the read layer's")
+    string(REGEX MATCHALL "\n" b10_print_missing_lines
+        "${b10_print_missing_err}")
+    list(LENGTH b10_print_missing_lines b10_print_missing_count)
+    if(NOT b10_print_missing_count EQUAL 1)
+        message(FATAL_ERROR
+            "CR-37 the print refusal must be one diagnostic line, got:\n${b10_print_missing_err}")
+    endif()
+
+    run_fail(b10_print_directory_out b10_print_directory_err
+        ${CODEGEN} --print-descriptor "${b10}/a-directory")
+    require_empty(b10_print_directory_out "CR-37 directory stdout")
+    require_contains(b10_print_directory_err
+        "${b10}/a-directory: is a directory, not a schema file"
+        "CR-37 the print mode names a directory as a directory")
+
+    # The same reason on the descriptor door of the print mode.
+    run_fail(b10_print_pbs_directory_out b10_print_pbs_directory_err
+        ${CODEGEN} --descriptor-set --print-descriptor "${b10}/a-directory")
+    require_empty(b10_print_pbs_directory_out
+        "CR-37 descriptor directory stdout")
+    require_contains(b10_print_pbs_directory_err
+        "${b10}/a-directory: is a directory, not a schema file"
+        "CR-37 the descriptor print names a directory")
+endif()
+
+# --- CR-38: the .pbs inference folds the suffix case ------------------------
+
+set(b10_upper "${b10}/UPPER.PBS")
+set(b10_mixed "${b10}/set.Pbs")
+configure_file("${FIXTURE_DIR}/legacy.protodevel.pbs"
+    "${b10_upper}" COPYONLY)
+configure_file("${FIXTURE_DIR}/legacy.protodevel.pbs"
+    "${b10_mixed}" COPYONLY)
+
+# The uppercase spelling without --descriptor-set is a descriptor set, so the
+# run generates the thin compatibility header instead of parsing the bytes as
+# source.
+run_ok(b10_upper_out b10_upper_err ${CODEGEN} "${b10_upper}")
+require_contains(b10_upper_out "Generated by EasyProtoBuf Codegen"
+    "CR-38 UPPER.PBS infers descriptor mode")
+require_empty(b10_upper_err "CR-38 UPPER.PBS stderr")
+
+run_ok(b10_mixed_case_out b10_mixed_case_err ${CODEGEN} "${b10_mixed}")
+require_contains(b10_mixed_case_out "Generated by EasyProtoBuf Codegen"
+    "CR-38 mixed-case .Pbs infers descriptor mode")
+
+# The inference also classifies the case variant as a descriptor input when
+# the same run carries a source file: the mixed-input refusal must fire.
+run_fail(b10_mixed_input_out b10_mixed_input_err
+    ${CODEGEN} "${b10_upper}" "${FIXTURE_DIR}/hasfield.proto")
+require_empty(b10_mixed_input_out "CR-38 mixed-input stdout")
+require_contains(b10_mixed_input_err "mixed implicit .pbs and source inputs"
+    "CR-38 UPPER.PBS counts as a descriptor input in the mixed check")
+
+# The explicit switch remains the control: no inference is involved.
+run_ok(b10_explicit_out b10_explicit_err
+    ${CODEGEN} --descriptor-set "${b10_upper}")
+require_contains(b10_explicit_out "Generated by EasyProtoBuf Codegen"
+    "CR-38 the explicit descriptor switch still works")
+
+if(FULL_BUILD)
+    # The print mode is where the pre-fix run reported a source parse error
+    # for the descriptor bytes; the decoded tree is the proof of the mode.
+    run_ok(b10_upper_print_out b10_upper_print_err
+        ${CODEGEN} --print-descriptor "${b10_upper}")
+    require_contains(b10_upper_print_out "file legacy.protodevel"
+        "CR-38 UPPER.PBS is decoded by the print mode")
+    require_empty(b10_upper_print_err "CR-38 UPPER.PBS print stderr")
+endif()
+
+# --- CR-39: -I is a search-root option, not a code-generation option --------
+
+if(FULL_BUILD)
+    foreach(b10_root_opt -I --proto_path)
+        string(MAKE_C_IDENTIFIER "${b10_root_opt}" b10_root_id)
+        run_fail(b10_root_${b10_root_id}_print_out
+            b10_root_${b10_root_id}_print_err
+            ${CODEGEN} --print-descriptor "${b10_root_opt}" "${b10}"
+                    "${b10}/cwd.proto")
+        require_empty(b10_root_${b10_root_id}_print_out
+            "CR-39 print ${b10_root_opt} stdout")
+        require_contains(b10_root_${b10_root_id}_print_err
+            "-I/--proto_path is a search-root option"
+            "CR-39 print mode names ${b10_root_opt} as a search root")
+        require_contains(b10_root_${b10_root_id}_print_err
+            "do not resolve imports"
+            "CR-39 print mode names the real reason")
+        require_not_contains(b10_root_${b10_root_id}_print_err
+            "code-generation options"
+            "CR-39 print mode does not call ${b10_root_opt} a generation option")
+
+        run_fail(b10_root_${b10_root_id}_bench_out
+            b10_root_${b10_root_id}_bench_err
+            ${CODEGEN} --benchmark-parser "${b10_root_opt}" "${b10}"
+                    "${b10}/cwd.proto")
+        require_empty(b10_root_${b10_root_id}_bench_out
+            "CR-39 benchmark ${b10_root_opt} stdout")
+        require_contains(b10_root_${b10_root_id}_bench_err
+            "search-root option"
+            "CR-39 benchmark mode names ${b10_root_opt} as a search root")
+        require_not_contains(b10_root_${b10_root_id}_bench_err
+            "code-generation options"
+            "CR-39 benchmark mode does not call ${b10_root_opt} a generation option")
+    endforeach()
+
+    # The control: a structural option still gets the generation-option
+    # sentence, so the split did not stop refusing it.
+    run_fail(b10_generation_option_out b10_generation_option_err
+        ${CODEGEN} --print-descriptor --no-class "${b10}/cwd.proto")
+    require_empty(b10_generation_option_out "CR-39 option control stdout")
+    require_contains(b10_generation_option_err
+        "code-generation options cannot be used"
+        "CR-39 a generation option keeps its own sentence")
+endif()
+
+# --- CR-40: the component that blocks the output path is named --------------
+
+# A regular file at the first component of the requested output root: the
+# diagnostic must name that file, not claim the requested path is one.
+set(b10_root_blocker "${b10}/root-blocker.bin")
+file(WRITE "${b10_root_blocker}" "I AM A FILE")
+run_fail(b10_root_blocker_out b10_root_blocker_err
+    ${CODEGEN} --descriptor-set
+            --out-dir "${b10_root_blocker}/a/b"
+            "${FIXTURE_DIR}/legacy.protodevel.pbs")
+require_empty(b10_root_blocker_out "CR-40 root blocker stdout")
+require_contains(b10_root_blocker_err
+    "${b10_root_blocker}: output path is an existing file, not a directory"
+    "CR-40 the blocking component is the diagnostic label")
+require_not_contains(b10_root_blocker_err
+    "${b10_root_blocker}/a/b: output path is an existing file"
+    "CR-40 the requested path is not called a file")
+
+# The control: when the requested root itself is the file, the caller's own
+# spelling stays the label (relative here, as typed).
+run_fail_in("${b10}" b10_direct_blocker_out b10_direct_blocker_err
+    ${CODEGEN} --descriptor-set --out-dir root-blocker.bin
+            "${FIXTURE_DIR}/legacy.protodevel.pbs")
+require_empty(b10_direct_blocker_out "CR-40 direct blocker stdout")
+require_contains(b10_direct_blocker_err
+    "root-blocker.bin: output path is an existing file, not a directory"
+    "CR-40 a direct blocker keeps the requested spelling")
+require_not_contains(b10_direct_blocker_err
+    "root-blocker.bin: root-blocker.bin: "
+    "CR-40 the direct blocker names the path once")
+
+# The publisher's second directory call: the output root exists, and a
+# component below it - the parent of the mapped header - is a file. The
+# descriptor path names api/x.proto, so the header lands at api/x.pb.hpp.
+set(b10_parent_out "${b10}/parent-block")
+file(MAKE_DIRECTORY "${b10_parent_out}")
+file(WRITE "${b10_parent_out}/api" "I AM A FILE")
+run_fail(b10_parent_blocker_out b10_parent_blocker_err
+    ${CODEGEN} --descriptor-set --target api/x.proto
+            --out-dir "${b10_parent_out}" "${FIXTURE_DIR}/casepair.pbs")
+require_empty(b10_parent_blocker_out "CR-40 parent blocker stdout")
+require_contains(b10_parent_blocker_err
+    "${b10_parent_out}/api: output path is an existing file, not a directory"
+    "CR-40 the blocking parent component is named")
+
+if(FULL_BUILD)
+    # The source half: the same blocker, reached through a source logical
+    # name and the publisher's parent creation.
+    set(b10_src_root "${b10}/src-root")
+    file(MAKE_DIRECTORY "${b10_src_root}/sub")
+    file(WRITE "${b10_src_root}/sub/probe.proto"
+        "syntax = \"proto3\";\nmessage Probe { int32 a = 1; }\n")
+    set(b10_src_out "${b10}/src-out")
+    file(MAKE_DIRECTORY "${b10_src_out}")
+    file(WRITE "${b10_src_out}/sub" "I AM A FILE")
+    run_fail(b10_src_blocker_out b10_src_blocker_err
+        ${CODEGEN} -I "${b10_src_root}" --out-dir "${b10_src_out}"
+                sub/probe.proto)
+    require_empty(b10_src_blocker_out "CR-40 source blocker stdout")
+    require_contains(b10_src_blocker_err
+        "${b10_src_out}/sub: output path is an existing file, not a directory"
+        "CR-40 the source path names the blocking component")
+endif()
+
+# --- CR-41: a trailing separator on an input is refused ---------------------
+
+# The refusal is at the command line, before any mode reads the spelling, so
+# every mode answers the same sentence: a success here would mean the OS
+# spelling was normalized back to the file.
+function(b10_require_trailing_refusal label workdir spelling)
+    execute_process(
+        COMMAND ${CODEGEN} ${ARGN}
+        WORKING_DIRECTORY "${workdir}"
+        RESULT_VARIABLE b10_result
+        OUTPUT_VARIABLE b10_out
+        ERROR_VARIABLE b10_err)
+    if(b10_result EQUAL 0)
+        message(FATAL_ERROR
+            "CR-41 ${label}: the trailing separator was accepted\nstdout:\n${b10_out}")
+    endif()
+    if(NOT "${b10_out}" STREQUAL "")
+        message(FATAL_ERROR
+            "CR-41 ${label}: a refusal must leave stdout empty, got:\n${b10_out}")
+    endif()
+    string(FIND "${b10_err}"
+        "${spelling}: input file name must not end with a path separator"
+        b10_position)
+    if(b10_position EQUAL -1)
+        message(FATAL_ERROR
+            "CR-41 ${label}: the diagnostic does not name the spelling and the rule:\n${b10_err}")
+    endif()
+    string(REGEX MATCHALL "\n" b10_lines "${b10_err}")
+    list(LENGTH b10_lines b10_count)
+    if(NOT b10_count EQUAL 1)
+        message(FATAL_ERROR
+            "CR-41 ${label}: expected one diagnostic line, got:\n${b10_err}")
+    endif()
+endfunction()
+
+b10_require_trailing_refusal("descriptor" "${b10}"
+    "${FIXTURE_DIR}/legacy.protodevel.pbs/"
+    --descriptor-set "${FIXTURE_DIR}/legacy.protodevel.pbs/")
+
+if(FULL_BUILD)
+    b10_require_trailing_refusal("source" "${b10}" "cwd.proto/"
+        cwd.proto/)
+    b10_require_trailing_refusal("print" "${b10}" "cwd.proto/"
+        --print-descriptor cwd.proto/)
+    b10_require_trailing_refusal("benchmark" "${b10}" "cwd.proto/"
+        --benchmark-parser cwd.proto/)
+
+    # A search root is a directory spelling; a trailing separator there is
+    # path syntax, not an input name, and stays accepted.
+    run_ok_in("${b10}" b10_root_trailing_out b10_root_trailing_err
+        ${CODEGEN} -I "${b10}/" cwd.proto)
+    require_contains(b10_root_trailing_out "struct FromCwd"
+        "CR-41 a trailing separator on -I is still a directory spelling")
+
+    if(WIN32)
+        b10_require_trailing_refusal("source backslash" "${b10}" "cwd.proto\\"
+            "cwd.proto\\")
+    endif()
+endif()
+
+# --- CR-47: the benchmark exits 1 and prints the read reason ----------------
+
+if(FULL_BUILD)
+    foreach(b10_bench_kind missing directory)
+        if(b10_bench_kind STREQUAL "missing")
+            set(b10_bench_input "${b10}/missing-benchmark.proto")
+            set(b10_bench_expected "cannot read file")
+        else()
+            set(b10_bench_input "${b10}/a-directory")
+            set(b10_bench_expected "is a directory, not a schema file")
+        endif()
+        execute_process(
+            COMMAND ${CODEGEN} --benchmark-parser "${b10_bench_input}"
+            RESULT_VARIABLE b10_bench_result
+            OUTPUT_VARIABLE b10_bench_out
+            ERROR_VARIABLE b10_bench_err)
+        # One exit code for every CLI failure: the benchmark used to answer 2.
+        if(NOT b10_bench_result EQUAL 1)
+            message(FATAL_ERROR
+                "CR-47 ${b10_bench_kind}: expected exit 1, got ${b10_bench_result}\nstderr:\n${b10_bench_err}")
+        endif()
+        if(NOT "${b10_bench_out}" STREQUAL "")
+            message(FATAL_ERROR
+                "CR-47 ${b10_bench_kind}: stdout must stay empty, got:\n${b10_bench_out}")
+        endif()
+        string(FIND "${b10_bench_err}" "${b10_bench_expected}"
+            b10_bench_position)
+        if(b10_bench_position EQUAL -1)
+            message(FATAL_ERROR
+                "CR-47 ${b10_bench_kind}: the read reason is missing:\n${b10_bench_err}")
+        endif()
+        string(REGEX MATCHALL "\n" b10_bench_lines "${b10_bench_err}")
+        list(LENGTH b10_bench_lines b10_bench_count)
+        if(NOT b10_bench_count EQUAL 1)
+            message(FATAL_ERROR
+                "CR-47 ${b10_bench_kind}: expected one diagnostic line, got:\n${b10_bench_err}")
+        endif()
+    endforeach()
 endif()

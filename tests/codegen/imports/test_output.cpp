@@ -375,6 +375,49 @@ void test_publisher_reports_a_file_as_out_dir(const std::string& work)
     CHECK(content == "I AM A FILE");
 }
 
+// CR-40: when a file sits in the MIDDLE of the requested output path, the
+// diagnostic names that component. The requested path does not exist, so
+// calling it "an existing file" sends the reader to remove the wrong entry.
+// The component travels separately from the reason: the reason has no path
+// (the action-entry rule) and the caller labels the diagnostic with the first
+// component that answered.
+void test_blocking_component_is_reported(const std::string& work)
+{
+    const std::string blocker = path_join(work, "component-blocker.bin");
+    CHECK(write_text_file(blocker, "I AM A FILE"));
+
+    std::string error;
+    std::string blocking;
+    CHECK(!easypb_file::make_directories(blocker + "/a/b", error, &blocking));
+    CHECK(error == "output path is an existing file, not a directory");
+    CHECK(blocking == easypb_file::lexical_absolute(blocker));
+
+    // The requested directory itself is the blocker: nothing above it is news
+    // to the caller, so the label stays the spelling the caller passed.
+    std::string direct_error;
+    std::string direct_blocking;
+    CHECK(!easypb_file::make_directories(blocker, direct_error,
+                                         &direct_blocking));
+    CHECK(direct_error == "output path is an existing file, not a directory");
+    CHECK(direct_blocking.empty());
+
+    // The publisher's second directory call: the output root exists and the
+    // parent of the mapped header is the file.
+    const std::string out = path_join(work, "component-out");
+    CHECK(make_directory(out));
+    const std::string parent_blocker = path_join(out, "api");
+    CHECK(write_text_file(parent_blocker, "I AM A FILE"));
+    std::vector<easypb_codegen::GeneratedFile> files;
+    files.push_back(generated("api/x.pb.hpp", "X"));
+    easypb_schema::Diagnostic publisher_error;
+    CHECK(!easypb_codegen::publish_headers(out, files, publisher_error));
+    CHECK(publisher_error.file ==
+          easypb_file::lexical_absolute(parent_blocker));
+    CHECK(publisher_error.message ==
+          "output path is an existing file, not a directory");
+    CHECK(!path_exists(path_join(out, "api/x.pb.hpp")));
+}
+
 void test_publisher_rejects_an_existing_directory_at_the_target(
     const std::string& work)
 {
@@ -891,6 +934,7 @@ int main()
     test_publisher_refuses_a_name_that_escapes_the_root(root);
     test_directory_creation_is_bounded(root);
     test_publisher_reports_a_file_as_out_dir(root);
+    test_blocking_component_is_reported(root);
     test_publisher_rejects_an_existing_directory_at_the_target(root);
     test_write_reports_a_directory_target(root);
 #ifdef _WIN32

@@ -73,7 +73,9 @@ FileStatus disk_file_status(const std::string& path, std::string& error);
 
 // Read an entire file as bytes. Returns false and stores a short reason
 // without the path in error on failure: the caller names the path it passed
-// (the action-entry rule below).
+// (the action-entry rule below). A directory at the spelling is reported as
+// "is a directory, not a schema file", because both platforms otherwise fold
+// it into a denial or a generic read error.
 bool read_disk_file(const std::string& path, std::string& contents,
                     std::string& error);
 
@@ -182,7 +184,15 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 // network spelling that names a server but no share (`//server`, `//`): such a
 // spelling has no directory below it and is never read as a directory under
 // the current drive.
-bool make_directories(const std::string& directory, std::string& error);
+//
+// `blocking_path`, when given, receives the lexical-absolute spelling of the
+// first existing non-directory that blocked the chain ("outfile.bin" when the
+// requested root is "outfile.bin/a/b"). It stays empty when the requested
+// directory itself is the blocker or when the failure is about the spelling
+// rather than a component, so a caller can keep naming the spelling it was
+// given. CR-40.
+bool make_directories(const std::string& directory, std::string& error,
+                      std::string* blocking_path = 0);
 
 // Write `contents` to `target`, creating or truncating it. The target keeps
 // either its previous content or the complete new content unless the process

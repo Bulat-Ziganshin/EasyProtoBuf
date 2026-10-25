@@ -670,6 +670,21 @@ if(BUILD_TESTING)
                 -P ${codegen_limits_dir}/test_limits.cmake)
     endif()
 
+    # CR-36 is accepted, not fixed: the 100-component bound belongs to the
+    # logical output name but is applied to the caller's physical --out-dir
+    # (triage register E7). This test asserts the current direction - a
+    # pre-existing 110-component root is refused - so it must FAIL when the
+    # bound moves to the mapping layer; the failure message names the decision
+    # that has to be re-evaluated. It is a separate ctest name because the
+    # accepted register cites it by name; `codegen.limits` above stays the
+    # property gate.
+    add_test(NAME codegen.limits.deep_physical_root
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${codegen_limits_data_dir}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-limits-deep-root
+            -P ${codegen_limits_dir}/test_deep_physical_root.cmake)
+
     # Plan 5 follow-up S5 (W-16, W-36, W-37, W-44, W-45, W-68): one rule,
     # two input paths. The lane drives every accepted fixture through BOTH
     # fronts and requires one header byte for byte, and requires every

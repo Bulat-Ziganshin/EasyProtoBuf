@@ -127,10 +127,15 @@ bool publish_headers(const std::string& out_dir,
 
     // The output directory itself is created when missing, and a file at that
     // spelling is the classic denied output root rather than a usable
-    // directory.
+    // directory. When a file sits in the middle of the path, the reason is
+    // about that component: label the diagnostic with the component that
+    // answered instead of claiming the requested path is a file (CR-40).
     std::string directory_error;
-    if (!easypb_file::make_directories(out_dir, directory_error)) {
-        error = make_error(out_dir, directory_error);
+    std::string blocking_path;
+    if (!easypb_file::make_directories(out_dir, directory_error,
+                                       &blocking_path)) {
+        error = make_error(blocking_path.empty() ? out_dir : blocking_path,
+                           directory_error);
         return false;
     }
 
@@ -172,11 +177,15 @@ bool publish_headers(const std::string& out_dir,
         const std::string parent = parent_of_absolute(target);
         if (!parent.empty()) {
             std::string parent_error;
-            if (!easypb_file::make_directories(parent, parent_error)) {
-                // The failure belongs to the parent directory the call was
-                // about, not to the header below it; the reason names no
-                // path, so the diagnostic supplies it once (W-29).
-                error = make_error(parent, parent_error);
+            std::string blocking_path;
+            if (!easypb_file::make_directories(parent, parent_error,
+                                               &blocking_path)) {
+                // The failure belongs to the component that answered, not to
+                // the header below it; the reason names no path, so the
+                // diagnostic supplies it once (W-29, CR-40).
+                error = make_error(
+                    blocking_path.empty() ? parent : blocking_path,
+                    parent_error);
                 return false;
             }
         }

@@ -393,6 +393,27 @@ FileStatus disk_file_status(const std::string& path, std::string& error)
 #endif
 }
 
+// A failed read of a directory is a directory, not a denied or unreadable
+// file: Windows answers ERROR_ACCESS_DENIED for CreateFileW on a directory
+// opened without FILE_FLAG_BACKUP_SEMANTICS, and POSIX opens it and fails the
+// read with EISDIR. The probe runs only after a read has failed, so the
+// success path pays nothing. This is what lets the utility modes report
+// "is a directory, not a schema file" instead of a shared "cannot read file"
+// (CR-37/CR-47).
+namespace {
+
+std::string read_failure_reason(const std::string& path,
+                                const std::string& reason)
+{
+    std::string status_error;
+    if (disk_file_status(path, status_error) == FILE_STATUS_DIRECTORY) {
+        return "is a directory, not a schema file";
+    }
+    return reason;
+}
+
+} // namespace
+
 bool read_disk_file(const std::string& path, std::string& contents,
                     std::string& error)
 {
@@ -416,7 +437,8 @@ bool read_disk_file(const std::string& path, std::string& contents,
                                 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (handle == INVALID_HANDLE_VALUE) {
         const DWORD code = GetLastError();
-        error = read_error_text(code, code == ERROR_ACCESS_DENIED);
+        error = read_failure_reason(
+            path, read_error_text(code, code == ERROR_ACCESS_DENIED));
         return false;
     }
     contents.clear();
@@ -425,7 +447,8 @@ bool read_disk_file(const std::string& path, std::string& contents,
         DWORD chunk = 0;
         if (!ReadFile(handle, buffer, sizeof(buffer), &chunk, 0)) {
             const DWORD code = GetLastError();
-            error = read_error_text(code, code == ERROR_ACCESS_DENIED);
+            error = read_failure_reason(
+                path, read_error_text(code, code == ERROR_ACCESS_DENIED));
             CloseHandle(handle);
             return false;
         }
@@ -442,14 +465,15 @@ bool read_disk_file(const std::string& path, std::string& contents,
     errno = 0;
     std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
     if (!input) {
-        error = read_error_text(static_cast<unsigned long>(errno),
-                                errno == EACCES);
+        error = read_failure_reason(
+            path, read_error_text(static_cast<unsigned long>(errno),
+                                  errno == EACCES));
         return false;
     }
     contents.assign(std::istreambuf_iterator<char>(input),
                     std::istreambuf_iterator<char>());
     if (!input.eof() && input.fail()) {
-        error = "cannot read file";
+        error = read_failure_reason(path, "cannot read file");
         return false;
     }
     return true;
@@ -891,7 +915,8 @@ bool create_directory_plain(const std::string& path, std::string& error)
 // applies, easypb_schema::max_logical_path_components), and the count is
 // taken before the first directory is created: a refused path leaves no tree
 // behind.
-bool make_directories_recursive(const std::string& absolute, std::string& error)
+bool make_directories_recursive(const std::string& absolute, std::string& error,
+                                std::string* blocking_path)
 {
     if (absolute.empty() || absolute == "/") return true;
 
@@ -923,16 +948,24 @@ bool make_directories_recursive(const std::string& absolute, std::string& error)
         if (!path.empty() && path[path.size() - 1] != '/') path.push_back('/');
         path.append(absolute, component_start, ends[i] - component_start);
         component_start = ends[i] + 1;
-        if (!create_directory_plain(path, error)) return false;
+        if (!create_directory_plain(path, error)) {
+            // The reason is about this component, not about the requested
+            // path: name the component that answered so the caller can label
+            // the diagnostic with it (CR-40).
+            if (blocking_path != 0) *blocking_path = path;
+            return false;
+        }
     }
     return true;
 }
 
 } // namespace
 
-bool make_directories(const std::string& directory, std::string& error)
+bool make_directories(const std::string& directory, std::string& error,
+                      std::string* blocking_path)
 {
     error.clear();
+    if (blocking_path != 0) blocking_path->clear();
     if (directory.empty()) {
         error = "cannot create an empty directory path";
         return false;
@@ -958,7 +991,16 @@ bool make_directories(const std::string& directory, std::string& error)
         return false;
     }
 #endif
-    return make_directories_recursive(absolute, error);
+    if (!make_directories_recursive(absolute, error, blocking_path)) {
+        // When the requested directory itself is the file, the caller's own
+        // spelling is the right label (and keeps a relative spelling
+        // relative). Only a component above it is news to the caller.
+        if (blocking_path != 0 && *blocking_path == absolute) {
+            blocking_path->clear();
+        }
+        return false;
+    }
+    return true;
 }
 
 // Write `contents` to `target`, creating or truncating it. The reference

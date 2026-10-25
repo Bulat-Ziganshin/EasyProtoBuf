@@ -20,11 +20,6 @@
 #include "generation_options.hpp"
 #include "header_output.hpp"
 #include "schema_linker.hpp"
-#include "utils.hpp"
-
-// W-55: the helper lives in easypb_codegen; this file is in the global
-// namespace, so it names the owner once.
-using easypb_codegen::ends_with;
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -132,13 +127,15 @@ bool collect_arguments(int argc, char** argv, std::vector<std::string>& argument
 // guard they are dead code, and a dead function is a warning in every build
 // of that profile (measured: the lite build of 2026-10-22).
 #if EASYPB_CODEGEN_WITH_PROTO_PARSER
-bool read_file(const std::string& filename, std::string& contents)
+bool read_file(const std::string& filename, std::string& contents,
+               std::string& error)
 {
     // The native read: wide on Windows, so a non-ASCII spelling and a path
     // beyond MAX_PATH stay addressable on the utility modes exactly as they
     // are on the generation path (S4/W-24). The embedded-NUL guard lives
-    // there too.
-    std::string error;
+    // there too. The reason is returned instead of being dropped: the print
+    // mode used to collapse a denial and a directory into "cannot read file"
+    // (CR-37).
     return easypb_file::read_disk_file(filename, contents, error);
 }
 
@@ -268,6 +265,40 @@ bool flush_stdout()
     report_schema_diagnostic(
         make_schema_diagnostic(std::string(), "cannot write to stdout"));
     return false;
+}
+
+// True for a spelling whose last byte is a path separator. On Windows both
+// separators are path syntax; on POSIX a backslash is an ordinary file-name
+// byte, so only '/' counts there.
+bool ends_with_path_separator(const std::string& path)
+{
+    if (path.empty()) return false;
+    const char last = path[path.size() - 1];
+    if (last == '/') return true;
+#ifdef _WIN32
+    if (last == '\\') return true;
+#endif
+    return false;
+}
+
+// The `.pbs` inference compares the suffix case-insensitively: Windows
+// filesystems are case-insensitive, so `SET.PBS` is a natural spelling of a
+// descriptor set. Only ASCII letters fold, and a non-ASCII byte can never
+// match an ASCII suffix byte. CR-38.
+bool has_pbs_suffix(const std::string& name)
+{
+    static const char suffix[] = ".pbs";
+    const std::size_t length = sizeof(suffix) - 1;
+    if (name.size() < length) return false;
+    const std::size_t offset = name.size() - length;
+    for (std::size_t i = 0; i < length; ++i) {
+        char actual = name[offset + i];
+        if (actual >= 'A' && actual <= 'Z') {
+            actual = static_cast<char>(actual - 'A' + 'a');
+        }
+        if (actual != suffix[i]) return false;
+    }
+    return true;
 }
 
 CommandLine parse_cmdline(const std::vector<std::string>& arguments)
@@ -428,6 +459,17 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     }
 
     command.filenames = parser.non_option_args();
+    // A trailing separator is never part of a file name the OS resolves as
+    // that file: `simple.proto/` names a directory entry that does not exist.
+    // `lexical_absolute` used to trim the separator, so the status query found
+    // the regular file and the run accepted a spelling the OS does not resolve
+    // as it (CR-41). Refuse the spelling as typed, before any mode reads it.
+    for (std::size_t i = 0; i < command.filenames.size(); ++i) {
+        if (ends_with_path_separator(command.filenames[i])) {
+            throw std::runtime_error(command.filenames[i] +
+                ": input file name must not end with a path separator");
+        }
+    }
     if (descriptor_set_option->is_set()) {
         command.input_format = INPUT_DESCRIPTOR_SET;
     }
@@ -495,8 +537,16 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         allow_self_recursive_containers_option->is_set() ||
         string_type_option->is_set() || repeated_type_option->is_set() ||
         map_type_option->is_set() ||
-        proto_path_option->is_set() || target_option->is_set() ||
-        out_dir_option->is_set();
+        target_option->is_set() || out_dir_option->is_set();
+    if (command.action != ACTION_GENERATE && proto_path_option->is_set()) {
+        // -I/--proto_path is a source-generation search root, not a
+        // code-generation option: the utility modes parse each file on its
+        // own and never resolve imports, so a root has nothing to search.
+        // Naming it as a generation option sent the reader to the wrong
+        // documentation (CR-39).
+        throw std::runtime_error(
+            "-I/--proto_path is a search-root option for .proto generation; descriptor print and parser benchmark modes do not resolve imports");
+    }
     if (command.action != ACTION_GENERATE && generation_option_set) {
         throw std::runtime_error(
             "code-generation options cannot be used with descriptor print or parser benchmark modes");
@@ -515,7 +565,7 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         bool any_pbs = false;
         bool any_source = false;
         for (std::size_t i = 0; i < command.filenames.size(); ++i) {
-            if (ends_with(command.filenames[i], ".pbs")) any_pbs = true;
+            if (has_pbs_suffix(command.filenames[i])) any_pbs = true;
             else any_source = true;
         }
         if (any_pbs && any_source) {
@@ -558,8 +608,9 @@ int run_print_descriptor(const CommandLine& command)
     for (std::size_t i = 0; i < command.filenames.size(); ++i) {
         const std::string& filename = command.filenames[i];
         std::string contents;
-        if (!read_file(filename, contents)) {
-            throw std::runtime_error(filename + ": cannot read file");
+        std::string read_error;
+        if (!read_file(filename, contents, read_error)) {
+            throw std::runtime_error(filename + ": " + read_error);
         }
 
         if (command.input_format == INPUT_DESCRIPTOR_SET) {

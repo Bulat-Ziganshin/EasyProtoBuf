@@ -81,11 +81,12 @@ std::string format_diagnostic(const Diagnostic& diagnostic)
     return result.str();
 }
 
-bool read_file(const std::string& path, std::string& contents)
+bool read_file(const std::string& path, std::string& contents,
+               std::string& error)
 {
     // The same native read the generation path uses: wide on Windows, so a
     // non-ASCII spelling and a long path stay readable here too (S4/W-24).
-    std::string error;
+    // The reason is returned, not reduced to a generic sentence (CR-47).
     return easypb_file::read_disk_file(path, contents, error);
 }
 
@@ -143,15 +144,18 @@ int run_parser_benchmark(const std::vector<std::string>& paths,
 {
     if (paths.empty()) {
         errors << "benchmark requires at least one .proto file\n";
-        return 2;
+        return 1;
     }
 
     std::vector<std::string> sources(paths.size());
     std::uint64_t bytes_per_round = 0;
     for (std::size_t i = 0; i < paths.size(); ++i) {
-        if (!read_file(paths[i], sources[i])) {
-            errors << paths[i] << ": cannot read file\n";
-            return 2;
+        std::string read_error;
+        if (!read_file(paths[i], sources[i], read_error)) {
+            // The CLI answers every failure with exit 1; the benchmark used
+            // to answer a read failure with exit 2 and no reason (CR-47).
+            errors << paths[i] << ": " << read_error << '\n';
+            return 1;
         }
         bytes_per_round += static_cast<std::uint64_t>(sources[i].size());
     }
