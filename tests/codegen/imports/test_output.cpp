@@ -44,6 +44,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <aclapi.h>
 #else
 #include <dirent.h>
 #include <sys/stat.h>
@@ -410,8 +411,127 @@ void test_write_reports_a_directory_target(const std::string& work)
     CHECK(path_is_directory(target));
 }
 
-// --- P6: containment --------------------------------------------------------
+#ifdef _WIN32
+// --- CR-31: the failed create's own code ------------------------------------
 //
+// The writer used to read GetLastError() after the directory probe, so the
+// probe's code (ERROR_FILE_NOT_FOUND, 2) replaced the create's
+// (ERROR_ACCESS_DENIED, 5). The injection makes the two differ: a fresh file in
+// a directory whose DACL denies creation. A volume that cannot store a DACL
+// (FAT/exFAT, some network shares) skips the row: the rule is about the writer,
+// not about the filesystem.
+bool apply_everyone_entry(const std::string& path, ACCESS_MODE access_mode,
+                          DWORD permissions, DWORD inheritance,
+                          SECURITY_INFORMATION security_information)
+{
+    std::vector<wchar_t> wide;
+    if (!easypb_file::wide_win32_path(path, wide) || wide.empty()) return false;
+    wide.push_back(L'\0');
+
+    BYTE everyone[SECURITY_MAX_SID_SIZE];
+    DWORD everyone_size = sizeof(everyone);
+    if (!CreateWellKnownSid(WinWorldSid, 0, everyone, &everyone_size)) {
+        return false;
+    }
+
+    EXPLICIT_ACCESS_W entry;
+    std::memset(&entry, 0, sizeof(entry));
+    entry.grfAccessPermissions = permissions;
+    entry.grfAccessMode = access_mode;
+    entry.grfInheritance = inheritance;
+    entry.Trustee.pMultipleTrustee = 0;
+    entry.Trustee.MultipleTrusteeOperation = NO_MULTIPLE_TRUSTEE;
+    entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entry.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    entry.Trustee.ptstrName = reinterpret_cast<LPWSTR>(everyone);
+
+    PACL acl = 0;
+    if (SetEntriesInAclW(1, &entry, 0, &acl) != ERROR_SUCCESS) return false;
+    const DWORD result = SetNamedSecurityInfoW(&wide[0], SE_FILE_OBJECT,
+                                               security_information, 0, 0, acl,
+                                               0);
+    LocalFree(acl);
+    return result == ERROR_SUCCESS;
+}
+
+bool deny_create_files(const std::string& path)
+{
+    // PROTECTED drops the inherited allowances, so the deny is the whole DACL;
+    // ownership still grants WRITE_DAC, which is what lets the caller restore
+    // access below.
+    return apply_everyone_entry(
+        path, DENY_ACCESS, FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY,
+        NO_INHERITANCE,
+        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION);
+}
+
+bool allow_full_access(const std::string& path)
+{
+    return apply_everyone_entry(path, GRANT_ACCESS, GENERIC_ALL,
+                                SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+                                DACL_SECURITY_INFORMATION |
+                                    UNPROTECTED_DACL_SECURITY_INFORMATION);
+}
+
+void test_write_reports_the_create_error_code(const std::string& work)
+{
+    const std::string dir = path_join(work, "denied-create");
+    CHECK(make_directory(dir));
+    if (!deny_create_files(dir)) {
+        std::cout
+            << "skip: the volume cannot store a DACL (denied-create)\n";
+        return;
+    }
+
+    const std::string target = path_join(dir, "new.pb.hpp");
+    std::string error;
+    const bool written = easypb_file::write_disk_file(target, "X", error);
+    allow_full_access(dir);
+
+    CHECK(!written);
+    CHECK(error == "cannot write file (Win32 error 5)");
+    CHECK(!path_exists(target));
+}
+
+// --- CR-32: a server-only network root creates nothing ----------------------
+//
+// "//server" names a server, not a directory; folding it into the rooted
+// "/server" made the pre-fix writer create a directory at the drive root and
+// fail only at the write. Nothing may be created, and the refusal names the
+// real cause. The server name carries the process id so a rerun never reads a
+// previous run's stray directory as its own.
+void test_server_only_network_root_is_refused(const std::string& work)
+{
+    std::ostringstream name;
+    name << "easycodegen-unc-" << process_id();
+    const std::string server = name.str();
+    const std::string absolute = easypb_file::lexical_absolute(work);
+    CHECK(!absolute.empty());
+    if (absolute.size() < 2) return;
+    const std::string stray = absolute.substr(0, 2) + "/" + server;
+    CHECK(!path_exists(stray));
+
+    std::string error;
+    CHECK(!easypb_file::make_directories("//" + server, error));
+    CHECK(error ==
+          "cannot create directory (a network path names a server but no share)");
+    CHECK(!path_exists(stray));
+
+    // The separator-only spelling and a trailing separator are the same shape.
+    CHECK(!easypb_file::make_directories("//", error));
+    CHECK(!easypb_file::make_directories("//" + server + "/", error));
+    CHECK(!path_exists(stray));
+
+    // A share root is a directory the network owns: the caller may name it,
+    // nothing below the server is created here, and the write is where a
+    // missing share fails.
+    error.clear();
+    CHECK(easypb_file::make_directories("//" + server + "/share", error));
+    CHECK(!path_exists(stray));
+}
+#endif
+
+// --- P6: containment --------------------------------------------------------
 // Removed with the plan-5 trim (`fbdcc0e`, 2026-10-11): protoc writes wherever
 // the mapped name
 // points, including one directory above the output root when a descriptor set
@@ -773,6 +893,10 @@ int main()
     test_publisher_reports_a_file_as_out_dir(root);
     test_publisher_rejects_an_existing_directory_at_the_target(root);
     test_write_reports_a_directory_target(root);
+#ifdef _WIN32
+    test_write_reports_the_create_error_code(root);
+    test_server_only_network_root_is_refused(root);
+#endif
     test_publisher_keeps_old_content_when_a_later_replace_fails(root);
     test_writer_shares_a_concurrent_reader(root);
     test_relative_output_uses_a_known_cwd(root);

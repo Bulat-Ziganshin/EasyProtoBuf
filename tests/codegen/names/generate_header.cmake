@@ -18,7 +18,11 @@ foreach(required_var CODEGEN INPUT OUTPUT)
 endforeach()
 
 set(extra_options)
-if(DEFINED OPTIONS AND NOT "${OPTIONS}" STREQUAL "")
+# `-` is the family table's "default option set", not an argument to pass
+# through: the parser used to drop a bare dash silently, so relying on it
+# worked by accident. It is not an argument (CR-34/B9).
+if(DEFINED OPTIONS AND NOT "${OPTIONS}" STREQUAL "" AND
+   NOT "${OPTIONS}" STREQUAL "-")
     separate_arguments(extra_options UNIX_COMMAND "${OPTIONS}")
 endif()
 

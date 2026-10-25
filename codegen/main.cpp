@@ -2,6 +2,7 @@
 #define EASYPB_CODEGEN_WITH_PROTO_PARSER 1
 #endif
 
+#include <csignal>
 #include <cstddef>
 #include <cstdio>
 #include <exception>
@@ -252,6 +253,23 @@ easypb_schema::Diagnostic make_schema_diagnostic(const std::string& file,
     return diagnostic;
 }
 
+// Every successful path ends here: stdout carries the whole result (the
+// generated header, the help text, the printed descriptor, the benchmark
+// report), so a lost write is a failure, not a success. A closed pipe, a full
+// disk or a quota error sets the stream state on the flush; the number of
+// bytes accepted is not an observable the stream exposes. Without this check
+// `codegen x.proto > x.pb.hpp` left a truncated header and exited 0 on every
+// one of those failures. There is no file to name in the diagnostic: the
+// stream is the target.
+bool flush_stdout()
+{
+    std::cout.flush();
+    if (std::cout) return true;
+    report_schema_diagnostic(
+        make_schema_diagnostic(std::string(), "cannot write to stdout"));
+    return false;
+}
+
 CommandLine parse_cmdline(const std::vector<std::string>& arguments)
 {
     using namespace popl;
@@ -290,7 +308,7 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     // are collected in argv order through count()/value(index); the option
     // parser does not collapse them, and the CLI never keeps only the last
     // occurrence.
-    auto proto_path_option = parser.add<Value<std::string> >(
+    auto proto_path_option = parser.add<EmptyValue<std::string> >(
         "I", "proto_path",
         "add a .proto search root (ordered, repeatable; empty list means the current directory)");
     auto target_option = parser.add<Value<std::string> >(
@@ -391,10 +409,22 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         command.exit_after_help = true;
         return command;
     }
-    if (help_option->count() || parser.non_option_args().empty()) {
+    if (help_option->count() || arguments.size() <= 1) {
         std::cout << usage_text() << '\n' << parser << '\n';
         command.exit_after_help = true;
         return command;
+    }
+    // A truly empty argv is help; options that name no input are an error.
+    // The reference compiler keeps the two apart: it prints help and exits 0
+    // only when no argument at all was given (command_line_interface.cc:
+    // 1806-1810) and answers "Missing input file." with a nonzero exit when a
+    // mode was selected but no input file named (1884-1888). Keying help on
+    // the positional list alone hid an empty file list behind a successful
+    // run, so a build script whose list expanded to nothing reported success
+    // and generated nothing. The sentence is the reference one; the
+    // "Exception: " prefix comes from the shared refusal path in main.
+    if (parser.non_option_args().empty()) {
+        throw std::runtime_error("Missing input file.");
     }
 
     command.filenames = parser.non_option_args();
@@ -403,12 +433,18 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     }
 
     for (std::size_t i = 0; i < proto_path_option->count(); ++i) {
+        // An explicitly empty value names the working directory, exactly as
+        // the reference compiler's --proto_path= does; the loader normalizes
+        // it (load_source_files: an empty root entry is "."). Every other
+        // string option still refuses an empty value in the parser.
         command.proto_paths.push_back(proto_path_option->value(i));
     }
     for (std::size_t i = 0; i < target_option->count(); ++i) {
         // An empty value cannot reach this loop: every Value<std::string>
         // refuses it in the parser, and the translation above turns that into
-        // the tool's sentence.
+        // the tool's sentence. The one exception is -I/--proto_path, whose
+        // EmptyValue keeps the empty spelling because it means the working
+        // directory; that option is read by the proto-path loop above.
         const std::string target = target_option->value(i);
         bool seen = false;
         for (std::size_t j = 0; j < command.targets.size(); ++j) {
@@ -701,6 +737,13 @@ int main(int argc, char** argv)
 {
 #ifdef _WIN32
     const ConsoleUtf8Output console_utf8;
+#else
+    // A write to a closed pipe raises SIGPIPE, whose default action kills the
+    // process before the stream state can report the failure. The contract is a
+    // reported failure with a nonzero exit (P5), so the signal is ignored here
+    // and the flush check below turns the failed write into the diagnostic.
+    // Windows reports ERROR_BROKEN_PIPE from the write instead.
+    std::signal(SIGPIPE, SIG_IGN);
 #endif
     try {
         std::vector<std::string> arguments;
@@ -710,20 +753,25 @@ int main(int argc, char** argv)
             return 1;
         }
         const CommandLine command = parse_cmdline(arguments);
-        if (command.exit_after_help) return 0;
+        if (command.exit_after_help) return flush_stdout() ? 0 : 1;
 
+        int status = 0;
 #if EASYPB_CODEGEN_WITH_PROTO_PARSER
         if (command.action == ACTION_BENCHMARK_PARSER) {
-            return easypb_proto::run_parser_benchmark(
+            status = easypb_proto::run_parser_benchmark(
                 command.filenames, command.benchmark_milliseconds,
                 std::cout, std::cerr);
-        }
-        if (command.action == ACTION_PRINT_DESCRIPTOR) {
-            return run_print_descriptor(command);
-        }
+        } else if (command.action == ACTION_PRINT_DESCRIPTOR) {
+            status = run_print_descriptor(command);
+        } else
 #endif
-
-        return run_generation(command);
+        {
+            status = run_generation(command);
+        }
+        // A failure has already reported itself; a success still has to prove
+        // that its stdout bytes reached the caller (CR-14).
+        if (status != 0) return status;
+        return flush_stdout() ? 0 : 1;
     }
     catch (const std::exception& error) {
         std::fprintf(stderr, "Exception: %s\n", error.what());

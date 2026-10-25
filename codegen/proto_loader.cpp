@@ -404,11 +404,12 @@ bool load_recursive(const std::string& logical,
 }
 
 // Turn one command-line root into a logical name plus its disk path. An
-// argument that names an existing file is used through search-root
-// mapping and must lie under a search root, exactly like the proto_path
-// requirement of the reference compiler; otherwise the argument is a
-// logical name resolved through the ordered roots. A denied access is a
-// failure in both shapes, never a fall-through to the other one.
+// argument that names an existing file is used through search-root mapping;
+// when no root contains it, the spelling is retried as a logical name, which
+// is what the reference compiler does with an argument it cannot map. An
+// argument that names no file is a logical name resolved through the ordered
+// roots. A denied access is a failure in both shapes, never a fall-through to
+// the other one.
 
 // The failure shared by every argument shape that lies under no search
 // root. The reference compiler reports the same state as "File does not
@@ -497,10 +498,37 @@ bool resolve_root(const std::string& argument, LoaderState& state,
         case MAP_FAILED:
             error = mapping_error;
             return false;
-        case MAP_OUTSIDE:
-            break;
+        case MAP_OUTSIDE: {
+            // The reference compiler's NO_MAPPING answer: a spelling that
+            // names an existing file under no search root is retried as a
+            // virtual (logical) name through the ordered roots before the run
+            // gives up (command_line_interface.cc:1721-1741). A stale copy in
+            // the working directory must not turn the file the roots name into
+            // a refusal, and the logical name stays the spelling, so the
+            // generated output name does too. A spelling that also fails the
+            // logical-name rules (an absolute path, a parent reference, a
+            // backslash) has no virtual reading and keeps the outside-roots
+            // diagnostic.
+            std::string reason;
+            if (easypb_schema::validate_logical_path(argument, reason)) {
+                std::string logical_disk;
+                std::string access_error;
+                if (resolve_logical(argument, state.search_roots, logical_disk,
+                                    &access_error)) {
+                    logical = argument;
+                    disk_path = logical_disk;
+                    return true;
+                }
+                if (!access_error.empty()) {
+                    return fail(error, argument,
+                                easypb_schema::unknown_location(),
+                                easypb_schema::DIAGNOSTIC_GENERIC,
+                                access_error);
+                }
+            }
+            return fail_outside_search_roots(argument, state, error);
         }
-        return fail_outside_search_roots(argument, state, error);
+        }
     }
     if (root_status == easypb_file::FILE_STATUS_DIRECTORY) {
         // protoc maps a directory argument like any other path and then

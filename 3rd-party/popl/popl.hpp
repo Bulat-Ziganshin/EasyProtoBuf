@@ -260,6 +260,26 @@ protected:
 
 
 
+/// Value option that accepts the explicitly empty value
+/**
+ * The one option shape where "" is a meaningful value: `-I/--proto_path`
+ * spells the working directory that way, exactly as the reference compiler's
+ * `--proto_path=` does. Every other string option keeps the non-empty-value
+ * refusal of the `Value<std::string>` specialization. The parser itself still
+ * decides where a value starts and ends; only the emptiness check is relaxed.
+ */
+template <class T>
+class EmptyValue : public Value<T>
+{
+public:
+    EmptyValue(const std::string& short_name, const std::string& long_name, const std::string& description);
+
+protected:
+    void parse(OptionName what_name, const char* value);
+};
+
+
+
 /// Value option with implicit default value
 /**
  * Value option with implicit default value
@@ -738,6 +758,29 @@ inline void Value<std::string>::parse(OptionName what_name, const char* value)
 }
 
 
+template <class T>
+inline EmptyValue<T>::EmptyValue(const std::string& short_name, const std::string& long_name, const std::string& description)
+    : Value<T>(short_name, long_name, description)
+{
+}
+
+
+template <class T>
+inline void EmptyValue<T>::parse(OptionName what_name, const char* value)
+{
+    Value<T>::parse(what_name, value);
+}
+
+
+template <>
+inline void EmptyValue<std::string>::parse(OptionName /*what_name*/, const char* value)
+{
+    /// Only the emptiness check differs from Value<std::string>::parse: the
+    /// position and the separators were decided by the caller already.
+    add_value(value != nullptr ? std::string(value) : std::string());
+}
+
+
 template <>
 inline void Value<bool>::parse(OptionName /*what_name*/, const char* value)
 {
@@ -1093,9 +1136,14 @@ inline void OptionParser::parse(int argc, const char* const argv[])
             else
                 unknown_options_.push_back(arg);
         }
-        else if (arg.find('-') == 0)
+        else if ((arg.size() > 1) && (arg[0] == '-'))
         {
-            /// short option arg
+            /// short option arg. A bare "-" (size 1) is not a short option
+            /// group: the loop below would visit nothing and the token used to
+            /// reach neither list, so a supplied input silently disappeared.
+            /// It is a positional spelling, exactly as the reference compiler
+            /// treats it, and the loader refuses it like any other unknown
+            /// input.
             std::string opt = arg.substr(1);
             bool unknown = false;
             for (size_t m = 0; m < opt.size(); ++m)

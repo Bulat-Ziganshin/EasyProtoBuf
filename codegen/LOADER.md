@@ -28,9 +28,14 @@ Every rule below is observable behavior, and each one has a counterpart in the r
 - **An existing file as an argument is a disk path; anything else is a logical name.** protoc maps a
   disk path to its virtual name with `DiskFileToVirtualFile` and treats an unresolvable argument as a
   virtual name instead.
-- **An input that lies under no root is an error.** protoc reports
-  `File does not reside within any path specified using --proto_path (or -I)`; the loader reports the
-  same situation as "lies outside all search roots".
+- **An input that names an existing file under no root is retried as a logical name.** This is the
+  reference compiler's `NO_MAPPING` answer: `VirtualFileToDiskFile` is tried before the run gives up
+  (`command_line_interface.cc:1721-1741`). A stale copy in the working directory therefore cannot
+  hide the file the roots name, and the logical name stays the spelling, so the output name does too.
+- **An input that lies under no root and is no logical name is an error.** protoc reports
+  `File does not reside within any path specified using --proto_path (or -I)` for the same state; the
+  loader reports it as "lies outside all search roots". A spelling with no virtual reading (absolute,
+  a parent reference, a backslash) never reaches the retry.
 - **The mapping is textual.** Prefix comparison is byte-wise and case-sensitive, with a component
   boundary, mirroring `ApplyMapping`. A root spelled differently does not contain the file, even where
   the filesystem would open it; no case folding, no file identity. Roots and arguments are normalized
@@ -200,8 +205,8 @@ dependency already marked by the other list.
 
 **In the graph:** an import that is absent on disk, even when no type references it; a cycle; a file
 under a search root whose remainder is not a valid logical name; a shadowed input; an argument that
-lies outside all search roots, names a directory, or is empty; a denied access while resolving or
-reading.
+lies outside all search roots (after the logical-name retry), names a directory, or is empty; a denied
+access while resolving or reading.
 
 Import failures carry their own `DiagnosticCode`: `DIAGNOSTIC_INVALID_IMPORT`,
 `DIAGNOSTIC_MISSING_IMPORT`, `DIAGNOSTIC_IMPORT_CYCLE`. They are distinct values, and a test asserts
@@ -230,9 +235,10 @@ path past the path cap — and neither can select a different file than the call
 - **Only the `-I dir` shape of a search root exists here.** `SourceLoaderOptions.proto_paths` holds
   disk directories, so the mapping is the empty-virtual-prefix form of `ApplyMapping`; protoc also
   accepts `--proto_path=VIRTUAL=DISK`, which pairs a virtual prefix with a disk directory. Nothing in
-  this API can express that form yet, and two CLI-level behaviours of the reference compiler are
-  likewise not represented: its refusal to run with no input files ("Missing input file.") and its
-  `--proto_path` alias parsing. All of that belongs to the CLI step, which owns argument spelling.
+  this API can express that form yet, and protoc's `--proto_path` alias parsing is not represented
+  either: argument spelling belongs to the CLI. The CLI does own the reference's no-input refusal
+  ("Missing input file.") and its empty-`-I` rule; both live in `main.cpp`/`OPTIONS.md`, and the
+  loader only sees the resulting root list.
 - **Codes, positions and context.** The loader reports its own `DiagnosticCode`, source positions, the
   searched roots, the selected root chain and an `-I (--proto_path)` hint. protoc reports a shorter
   file-plus-position message and no machine-readable code. The directory message above is the same

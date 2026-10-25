@@ -698,13 +698,18 @@ if(FULL_BUILD)
     require_contains(w23_i_dir_out "// Source: tiny.proto"
         "W-23 -I=DIR searches DIR")
     require_empty(w23_i_dir_err "W-23 -I=DIR stderr")
-endif()
 
-run_fail_in("${w23}" w23_i_empty_out w23_i_empty_err
-    ${CODEGEN} -I= tiny.proto)
-require_empty(w23_i_empty_out "W-23 -I= prints nothing on stdout")
-require_contains(w23_i_empty_err "-I requires a non-empty value"
-    "W-23 -I= is refused")
+    # B9/CR-33: -I/--proto_path is the one option whose explicit empty value is
+    # meaningful: it names the working directory, exactly as the reference
+    # compiler's --proto_path= does. The empty-value refusal stays for the
+    # options where the value is a name (`-s=`, `--out-dir=` above), and the B9
+    # family row proves an empty -I is used as a root rather than dropped.
+    run_ok_in("${w23}" w23_i_empty_out w23_i_empty_err
+        ${CODEGEN} -I= tiny.proto)
+    require_contains(w23_i_empty_out "// Source: tiny.proto"
+        "W-23 an empty -I value names the working directory (CR-33)")
+    require_empty(w23_i_empty_err "W-23 -I= stderr")
+endif()
 
 # The value position is not inspected: `--nope=` there is a directory name,
 # not an option (W-22). This is the regression for the deleted prescan.
@@ -902,3 +907,290 @@ require_contains(w66_pbs_err
     "W-66 the descriptor path prints the same line")
 require_not_contains(w66_pbs_err "Exception:"
     "W-66 the descriptor failure is a diagnostic")
+
+# --- B9: the CLI I/O contract (R8 part 1) -----------------------------------
+#
+# CR-14 (stdout write failure), CR-15 (options without input), CR-16 (input
+# outside every root), CR-31 (the create's Win32 code), CR-32 (server-only UNC
+# output root), CR-33 (empty -I value) and CR-34 (bare dash). The family is a
+# transcript matrix: exit code, stdout bytes, stderr bytes and a filesystem
+# snapshot per row. The protoc 30.1 counterpart is the oracle; it is recorded
+# next to every row. protoc has no stdout generation path and no --out-dir, so
+# those rows compare the verdict shape - complete output or clean refusal - not
+# a byte-identical transcript.
+#
+# Row                        codegen after B9               protoc 30.1
+# no argv                    usage on stdout, rc 0          help on stdout, rc 0
+# options, no input          one stderr line, rc 1, no dir  "Missing input file.", rc 1
+# bare "-"                   refusal naming "-", rc 1       rc 1, "-: No such file ..."
+# "f.proto -"                refusal naming "-", rc 1       rc 1, same
+# existing file out of roots rc 0, the rooted file's header rc 0, same file
+# absolute file out of roots refusal, rc 1                 rc 1, "reside within ..."
+# empty -I value             rc 0, the cwd joins the roots  rc 0, same
+# --out-dir //server         refusal, rc 1, nothing created rc 1, nothing created
+# --out-dir //server/share   refusal at the write, rc 1     rc 1, nothing created
+# trailing separator         CR-41: B10 owns the spelling   rc 1
+# closed stdout              rc 1, one diagnostic           no stdout path
+# denied directory           rc 1, the create's code        strerror(errno)
+#
+# The closed-stdout row cannot be staged through execute_process - it always
+# keeps the read end of its own pipe open - so it is its own test:
+# `codegen.imports.cli.broken-stdout` (tests/codegen/cli/test_broken_stdout.cpp).
+# The denied-directory row is `codegen.imports.output`, where the DACL injection
+# sits next to the writer (test_write_reports_the_create_error_code).
+
+set(b9 "${WORK_DIR}/b9")
+file(MAKE_DIRECTORY "${b9}")
+set(b9_source "${b9}/b9-source")
+file(MAKE_DIRECTORY "${b9_source}")
+file(WRITE "${b9_source}/cwd.proto"
+    "syntax = \"proto3\";\nmessage FromCwd { int32 a = 1; }\n")
+
+# One row of the "options but no input" family: nonzero exit, empty stdout, the
+# reference sentence on stderr and no cooked-up help text.
+function(b9_require_missing_input label)
+    execute_process(
+        COMMAND ${CODEGEN} ${ARGN}
+        WORKING_DIRECTORY "${b9}"
+        RESULT_VARIABLE b9_result
+        OUTPUT_VARIABLE b9_out
+        ERROR_VARIABLE b9_err)
+    if(b9_result EQUAL 0)
+        message(FATAL_ERROR
+            "B9 ${label}: a run without input exited 0\nstdout:\n${b9_out}")
+    endif()
+    if(NOT "${b9_out}" STREQUAL "")
+        message(FATAL_ERROR
+            "B9 ${label}: a refusal must leave stdout empty, got:\n${b9_out}")
+    endif()
+    string(FIND "${b9_err}" "Missing input file." b9_position)
+    if(b9_position EQUAL -1)
+        message(FATAL_ERROR
+            "B9 ${label}: stderr does not carry the reference refusal:\n${b9_err}")
+    endif()
+    string(FIND "${b9_err}" "Usage:" b9_usage)
+    if(NOT b9_usage EQUAL -1)
+        message(FATAL_ERROR
+            "B9 ${label}: a refusal must not print usage:\n${b9_err}")
+    endif()
+endfunction()
+
+# The truly empty argv is still help (protoc answers help plus 0 only then).
+run_ok_in("${b9}" b9_argv_out b9_argv_err ${CODEGEN})
+require_contains(b9_argv_out "Usage: codegen" "B9 no argv prints the usage text")
+require_empty(b9_argv_err "B9 no argv writes no diagnostic")
+
+b9_require_missing_input("--out-dir" --out-dir "${b9}/no-input-dir")
+b9_require_missing_input("--no-class" --no-class)
+b9_require_missing_input("--descriptor-set" --descriptor-set)
+b9_require_missing_input("--target" --target nope)
+b9_require_missing_input("-I" -I .)
+if(EXISTS "${b9}/no-input-dir")
+    message(FATAL_ERROR "B9 the refused run created its --out-dir")
+endif()
+
+# A bare "-" is a positional input, not a silent no-op: it reaches the input
+# layer and is refused there. Before the fix the parser dropped it from every
+# list, so `--descriptor-set -` printed the usage text and exited 0. The
+# descriptor spelling is the profile-independent row; the source spellings are
+# below.
+run_fail_in("${b9}" b9_dash_out b9_dash_err
+    ${CODEGEN} --descriptor-set -)
+require_empty(b9_dash_out "B9 a bare - must not print usage")
+require_contains(b9_dash_err "-: cannot read file"
+    "B9 a bare - is an input spelling the container reader refuses")
+
+if(FULL_BUILD)
+    run_fail_in("${b9}" b9_dash_source_out b9_dash_source_err
+        ${CODEGEN} -)
+    require_empty(b9_dash_source_out "B9 a bare - alone must not print usage")
+    require_contains(b9_dash_source_err "root \"-\" not found"
+        "B9 a bare - is an input spelling the loader refuses")
+
+    # The same token after a valid input: the run must fail naming it instead
+    # of dropping it and generating the first file only.
+    run_fail_in("${b9}" b9_dash_tail_out b9_dash_tail_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" hasfield.proto -)
+    require_empty(b9_dash_tail_out "B9 a dropped - would have printed a header")
+    require_contains(b9_dash_tail_err "root \"-\" not found"
+        "B9 the token after a valid input is named")
+
+    # Filesystem snapshot: nothing is published for a run the loader refused.
+    run_fail_in("${b9}" b9_dash_dir_out b9_dash_dir_err
+        ${CODEGEN} -I "${FIXTURE_DIR}" --out-dir "${b9}/dash-out"
+                hasfield.proto -)
+    require_empty(b9_dash_dir_out "B9 the refused publication prints nothing")
+    if(EXISTS "${b9}/dash-out")
+        file(GLOB b9_dash_files "${b9}/dash-out/*")
+        list(LENGTH b9_dash_files b9_dash_count)
+        if(NOT b9_dash_count EQUAL 0)
+            message(FATAL_ERROR
+                "B9 a refused run published ${b9_dash_files}")
+        endif()
+    endif()
+endif()
+
+if(FULL_BUILD)
+    # CR-16: an existing file that maps under no search root is retried as a
+    # logical name, so the file the roots name wins over a stale copy in the
+    # working directory. Its logical name stays the spelling, so the generated
+    # name does too (protoc measured: rc 0, header of roots/thing.proto).
+    set(b9_roots "${b9}/roots-case")
+    file(MAKE_DIRECTORY "${b9_roots}/roots")
+    file(WRITE "${b9_roots}/thing.proto"
+        "syntax = \"proto2\";\nmessage Rootless {}\n")
+    file(WRITE "${b9_roots}/roots/thing.proto"
+        "syntax = \"proto2\";\nmessage UnderRoot {}\n")
+
+    run_ok_in("${b9_roots}" b9_roots_out b9_roots_err
+        ${CODEGEN} -I roots --out-dir out thing.proto)
+    require_empty(b9_roots_out "B9 an out-of-root input publishes, not stdout")
+    require_empty(b9_roots_err "B9 an out-of-root input is not a warning")
+    if(NOT EXISTS "${b9_roots}/out/thing.pb.hpp")
+        message(FATAL_ERROR
+            "B9 the out-of-root input did not publish thing.pb.hpp")
+    endif()
+    file(READ "${b9_roots}/out/thing.pb.hpp" b9_roots_header)
+    require_contains(b9_roots_header "struct UnderRoot"
+        "B9 the logical-name retry selected the rooted file")
+    require_not_contains(b9_roots_header "Rootless"
+        "B9 the stale working-directory copy was not selected")
+
+    # P8: the same run repeated over the same root and output root produces the
+    # same bytes (the retry must not depend on a first-run side effect).
+    file(SHA256 "${b9_roots}/out/thing.pb.hpp" b9_roots_first)
+    run_ok_in("${b9_roots}" b9_repeat_out b9_repeat_err
+        ${CODEGEN} -I roots --out-dir out thing.proto)
+    require_empty(b9_repeat_out "B9 repeated run stdout")
+    file(SHA256 "${b9_roots}/out/thing.pb.hpp" b9_roots_second)
+    if(NOT b9_roots_first STREQUAL b9_roots_second)
+        message(FATAL_ERROR
+            "B9 repeated run changed the header: ${b9_roots_first} != ${b9_roots_second}")
+    endif()
+
+    # The control: only a valid logical name has that reading. An absolute
+    # spelling outside the roots keeps the outside-roots refusal (protoc:
+    # "File does not reside within any path specified using --proto_path").
+    run_fail_in("${b9_roots}" b9_abs_out b9_abs_err
+        ${CODEGEN} -I roots "${b9_roots}/thing.proto")
+    require_empty(b9_abs_out "B9 an absolute out-of-root input publishes nothing")
+    require_contains(b9_abs_err "outside all search roots"
+        "B9 an absolute out-of-root input keeps its refusal")
+endif()
+
+# CR-33: an explicitly empty -I value is the working directory. The row is
+# discriminating: main.proto lives under the named root and imports dep.proto,
+# which exists only in the working directory.
+set(b9_empty "${b9}/empty-proto-path")
+file(MAKE_DIRECTORY "${b9_empty}/root")
+file(WRITE "${b9_empty}/dep.proto"
+    "syntax = \"proto3\";\nmessage Dep { int32 a = 1; }\n")
+file(WRITE "${b9_empty}/root/main.proto"
+    "syntax = \"proto3\";\nimport \"dep.proto\";\nmessage Main { Dep d = 1; }\n")
+if(FULL_BUILD)
+    run_fail_in("${b9_empty}" b9_empty_control_out b9_empty_control_err
+        ${CODEGEN} -I root main.proto)
+    require_contains(b9_empty_control_err "missing import"
+        "B9 control: the named root alone does not hold dep.proto")
+
+    # The long inline, the short next-token and the short inline spellings all
+    # mean the same thing. protoc accepts the first two; its short inline form
+    # refuses the empty name, which the documented -I=VALUE rule here reads as
+    # the empty value (W-23).
+    run_ok_in("${b9_empty}" b9_empty_long_out b9_empty_long_err
+        ${CODEGEN} -I root --proto_path= main.proto)
+    require_contains(b9_empty_long_out "struct Main"
+        "B9 --proto_path= adds the working directory")
+
+    # The next-token form cannot go through run_ok_in: a CMake list cannot
+    # carry an empty element, so ${ARGN} would drop it and -I would swallow
+    # main.proto instead. execute_process takes its arguments verbatim.
+    execute_process(
+        COMMAND ${CODEGEN} -I root -I "" main.proto
+        WORKING_DIRECTORY "${b9_empty}"
+        RESULT_VARIABLE b9_empty_short_result
+        OUTPUT_VARIABLE b9_empty_short_out
+        ERROR_VARIABLE b9_empty_short_err)
+    if(NOT b9_empty_short_result EQUAL 0)
+        message(FATAL_ERROR
+            "B9 -I \"\" failed (${b9_empty_short_result}); if stderr says "
+            "'Missing input file.' the harness dropped the empty argument:\n"
+            "stdout:\n${b9_empty_short_out}\nstderr:\n${b9_empty_short_err}")
+    endif()
+    require_contains(b9_empty_short_out "struct Main"
+        "B9 an empty next-token -I value adds the working directory")
+    require_empty(b9_empty_short_err "B9 -I \"\" stderr")
+
+    run_ok_in("${b9_empty}" b9_empty_inline_out b9_empty_inline_err
+        ${CODEGEN} -I root -I= main.proto)
+    require_contains(b9_empty_inline_out "struct Main"
+        "B9 -I= adds the working directory")
+endif()
+
+# CR-32: a network spelling that names a server but no share is refused before
+# anything exists. The probe name is unique so a stale directory can never pass
+# for a created one, and a pre-existing one is a hard error, not a skip.
+if(WIN32)
+    set(b9_unc_server "easycodegen-b9-unc-probe")
+    string(SUBSTRING "${b9}" 0 2 b9_drive)
+    if(b9_drive MATCHES "^[A-Za-z]:$")
+        set(b9_stray "${b9_drive}/${b9_unc_server}")
+        if(EXISTS "${b9_stray}")
+            message(FATAL_ERROR
+                "B9 the drive-root probe path already exists: ${b9_stray}")
+        endif()
+    else()
+        set(b9_stray "")
+        message(STATUS
+            "B9: WORK_DIR is not drive-qualified; the drive-root snapshot is skipped")
+    endif()
+
+    run_fail_in("${b9}" b9_unc_out b9_unc_err
+        ${CODEGEN} --descriptor-set --out-dir "//${b9_unc_server}" ${single})
+    require_empty(b9_unc_out "B9 //server publishes nothing")
+    require_contains(b9_unc_err "names a server but no share"
+        "B9 //server names the real cause")
+    if(NOT b9_stray STREQUAL "" AND EXISTS "${b9_stray}")
+        message(FATAL_ERROR "B9 //server created ${b9_stray}")
+    endif()
+
+    # The share spelling is a real network path: it fails at the write, as
+    # protoc does, and still creates nothing under the drive root.
+    run_fail_in("${b9}" b9_unc_share_out b9_unc_share_err
+        ${CODEGEN} --descriptor-set --out-dir "//${b9_unc_server}/share" ${single})
+    require_empty(b9_unc_share_out "B9 //server/share publishes nothing")
+    if("${b9_unc_share_err}" STREQUAL "")
+        message(FATAL_ERROR "B9 //server/share failed without a diagnostic")
+    endif()
+    if(NOT b9_stray STREQUAL "" AND EXISTS "${b9_stray}")
+        message(FATAL_ERROR "B9 //server/share created ${b9_stray}")
+    endif()
+endif()
+
+# B10 owns CR-41 (a trailing separator on an input file). This row records the
+# spelling and asserts the contract that must hold either way: a success is a
+# complete header, a refusal is empty stdout plus a diagnostic. B10 flips the
+# verdict from the first shape to the second and turns this into an assertion.
+if(FULL_BUILD)
+    execute_process(
+        COMMAND ${CODEGEN} cwd.proto/
+        WORKING_DIRECTORY "${b9_source}"
+        RESULT_VARIABLE b9_trailing_result
+        OUTPUT_VARIABLE b9_trailing_out
+        ERROR_VARIABLE b9_trailing_err)
+    if(b9_trailing_result EQUAL 0)
+        require_contains(b9_trailing_out "Generated by EasyProtoBuf Codegen"
+            "B9 trailing separator: a success carries the whole header")
+    else()
+        require_empty(b9_trailing_out
+            "B9 trailing separator: a refusal leaves stdout empty")
+        string(REGEX MATCHALL "\n" b9_trailing_lines "${b9_trailing_err}")
+        list(LENGTH b9_trailing_lines b9_trailing_count)
+        if(NOT b9_trailing_count EQUAL 1)
+            message(FATAL_ERROR
+                "B9 trailing separator: expected one diagnostic line, got:\n${b9_trailing_err}")
+        endif()
+    endif()
+    message(STATUS
+        "B9 trailing separator (CR-41, B10): rc=${b9_trailing_result}")
+endif()

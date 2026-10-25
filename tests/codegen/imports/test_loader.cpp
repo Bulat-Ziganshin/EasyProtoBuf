@@ -689,6 +689,91 @@ void test_directory_argument_is_reported_as_directory()
     CHECK(logical_files.files().empty());
 }
 
+// Declared with the working-directory helpers below; this row moves the
+// working directory, and the helpers live where the other cwd-moving tests use
+// them.
+bool set_working_directory(const std::string& disk_path);
+std::string current_working_directory_text();
+
+void test_existing_file_outside_roots_is_retried_as_logical_name()
+{
+    // CR-16/B9: an argument that names an existing file under no search root
+    // is retried as a virtual (logical) name through the ordered roots,
+    // exactly like the reference compiler's NO_MAPPING fallback
+    // (command_line_interface.cc:1721-1741). A stale copy in the working
+    // directory must not turn the file the roots name into a refusal, and the
+    // logical name stays the spelling.
+    require_work_root();
+    const std::string dir = work_path("outside-root-retry");
+    const std::string rooted = join_arg(dir, "roots");
+    CHECK(make_dirs(dir));
+    CHECK(make_dirs(rooted));
+    CHECK(write_file(join_arg(dir, "thing.proto"),
+                     "syntax = \"proto2\";\nmessage Rootless {}\n"));
+    CHECK(write_file(join_arg(rooted, "thing.proto"),
+                     "syntax = \"proto2\";\nmessage UnderRoot {}\n"));
+
+    const std::string saved = current_working_directory_text();
+    CHECK(!saved.empty());
+
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back("roots");
+    std::vector<std::string> roots(1, "thing.proto");
+    easypb_schema::SchemaSet files;
+    easypb_schema::Diagnostic error;
+    CHECK(set_working_directory(dir));
+    const bool loaded =
+        easypb_proto::load_source_files(options, roots, files, error);
+    CHECK(set_working_directory(saved));
+    CHECK(loaded);
+    CHECK(files.files().size() == 1);
+    CHECK(files.targets().size() == 1);
+    if (files.files().size() == 1) {
+        const easypb_schema::SchemaFile& file = *files.files()[0];
+        CHECK(text(file.file.name) == "thing.proto");
+        CHECK(file.file.message_type.size() == 1);
+        if (file.file.message_type.size() == 1) {
+            CHECK(text(file.file.message_type[0].name) == "UnderRoot");
+        }
+    }
+
+    // Only a valid logical name has that reading. An absolute spelling outside
+    // the roots keeps the outside-roots refusal: an absolute path has no
+    // virtual form.
+    easypb_schema::SchemaSet absolute_files;
+    std::vector<std::string> absolute_roots(
+        1, easypb_file::lexical_absolute(join_arg(dir, "thing.proto")));
+    CHECK(set_working_directory(dir));
+    CHECK(!easypb_proto::load_source_files(options, absolute_roots,
+                                           absolute_files, error));
+    CHECK(set_working_directory(saved));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(error.message.find("outside all search roots") != std::string::npos);
+    CHECK(absolute_files.files().empty());
+
+    // A spelling that is no logical name either keeps its refusal. The leading
+    // "." names the same existing file and is exactly what the logical-path
+    // rules forbid.
+    easypb_schema::SchemaSet invalid_files;
+    std::vector<std::string> invalid_roots(1, "./thing.proto");
+    CHECK(set_working_directory(dir));
+    CHECK(!easypb_proto::load_source_files(options, invalid_roots,
+                                           invalid_files, error));
+    CHECK(set_working_directory(saved));
+    CHECK(invalid_files.files().empty());
+
+    // A spelling that names no file is still a missing logical name, not an
+    // outside-roots failure: the retry never invents a file.
+    easypb_schema::SchemaSet missing_files;
+    std::vector<std::string> missing_roots(1, "absent.proto");
+    CHECK(set_working_directory(dir));
+    CHECK(!easypb_proto::load_source_files(options, missing_roots,
+                                           missing_files, error));
+    CHECK(set_working_directory(saved));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
+    CHECK(missing_files.files().empty());
+}
+
 void test_empty_input_argument_is_rejected()
 {
     // An empty argument is invalid input, not a spelling to interpret:
@@ -2320,6 +2405,7 @@ int main(int argc, char** argv)
     test_shadowed_root_reports_error();
     test_disk_root_with_invalid_logical_name_fails();
     test_directory_argument_is_reported_as_directory();
+    test_existing_file_outside_roots_is_retried_as_logical_name();
     test_empty_input_argument_is_rejected();
     test_root_deduplication_and_repeated_input();
 #ifdef _WIN32

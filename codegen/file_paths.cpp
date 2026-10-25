@@ -474,6 +474,12 @@ std::string lexical_absolute(const std::string& path)
         prefix = rest.substr(0, 2);
         rest.erase(0, 2);
     } else if (rest.size() >= 2 && rest[0] == '/' && rest[1] == '/') {
+        // A UNC spelling is "//server/share" plus the part below the share; a
+        // server on its own ("//server", "//") is still a network spelling.
+        // Both keep their prefix. Folding the server-only form into the rooted
+        // "/server" made every later step read it as a directory under the
+        // current drive (measured: `--out-dir //localhost` created C:\localhost
+        // and only then failed with ERROR_BAD_NET_NAME).
         const std::size_t host_end = rest.find('/', 2);
         if (host_end != std::string::npos) {
             const std::size_t share_end = rest.find('/', host_end + 1);
@@ -484,6 +490,9 @@ std::string lexical_absolute(const std::string& path)
                 prefix = rest;
                 rest.clear();
             }
+        } else {
+            prefix = rest;
+            rest.clear();
         }
     }
     if (!rest.empty() && rest[0] != '/') rest = "/" + rest;
@@ -798,6 +807,33 @@ std::size_t root_prefix_length(const std::string& absolute)
     return 0;
 }
 
+#ifdef _WIN32
+// True for a network spelling that names a server but no share: "//server",
+// "//server/" and "//" (also with extra separators). Such a spelling has no
+// directory below it, so there is nothing to create, and it must never be
+// read as the rooted "/server" under the current drive: that is how
+// `--out-dir //localhost` used to create C:\localhost (CR-32).
+bool is_server_only_unc(const std::string& absolute)
+{
+    if (absolute.size() < 2 || absolute[0] != '/' || absolute[1] != '/')
+        return false;
+    bool server_seen = false;
+    std::size_t start = 2;
+    while (start < absolute.size()) {
+        while (start < absolute.size() && absolute[start] == '/') ++start;
+        if (start >= absolute.size()) break;
+        std::size_t end = absolute.find('/', start);
+        if (end == std::string::npos) end = absolute.size();
+        // The first component is the server; a second one is the share, and a
+        // share root is an addressable directory.
+        if (server_seen) return false;
+        server_seen = true;
+        start = end;
+    }
+    return true;
+}
+#endif
+
 // W-52: file-local by use. create_directory_plain's only caller is
 // make_directories_recursive, and that function's only caller is the public
 // make_directories, so both keep internal linkage instead of publishing two
@@ -911,6 +947,17 @@ bool make_directories(const std::string& directory, std::string& error)
                 "is unknown)";
         return false;
     }
+#ifdef _WIN32
+    // A server-only network spelling has no directory to create, and letting
+    // it through would create one under the current drive (CR-32). protoc's
+    // equivalent open fails with "No such file or directory"; this refuses the
+    // spelling before anything exists.
+    if (is_server_only_unc(absolute)) {
+        error = "cannot create directory (a network path names a server but "
+                "no share)";
+        return false;
+    }
+#endif
     return make_directories_recursive(absolute, error);
 }
 
@@ -946,13 +993,20 @@ bool write_disk_file(const std::string& target, const std::string& contents,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
     if (handle == INVALID_HANDLE_VALUE) {
+        // The create's code must be read before any other Win32 call: the
+        // directory probe below queries attributes and overwrites the
+        // thread's last-error value, which used to replace "access denied"
+        // with the probe's "not found" (measured: a denied create reported
+        // Win32 error 2 where the create said 5). The POSIX branch has always
+        // captured errno first.
+        const DWORD code = GetLastError();
         // A directory answers ERROR_ACCESS_DENIED on Windows; name the
         // condition instead of the generic code (W-29).
         if (write_target_is_directory(target)) {
             error = "cannot write file (the target is a directory)";
             return false;
         }
-        error = write_error_text(GetLastError());
+        error = write_error_text(code);
         return false;
     }
     std::size_t done = 0;

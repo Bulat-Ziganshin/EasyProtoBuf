@@ -178,7 +178,10 @@ bool wide_win32_path(const std::string& path, std::vector<wchar_t>& wide);
 // Create every missing directory on the way to `directory`; existing
 // directories are accepted. Returns false with a reason (without the path:
 // the caller names it) on failure, including a directory spelling that cannot
-// be made absolute because the working directory is unknown.
+// be made absolute because the working directory is unknown, and a Windows
+// network spelling that names a server but no share (`//server`, `//`): such a
+// spelling has no directory below it and is never read as a directory under
+// the current drive.
 bool make_directories(const std::string& directory, std::string& error);
 
 // Write `contents` to `target`, creating or truncating it. The target keeps

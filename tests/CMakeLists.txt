@@ -1121,6 +1121,21 @@ if(BUILD_TESTING)
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/cli/test_codegen_cli.cmake)
 
+    # B9/CR-14: the one CLI row CMake cannot stage. execute_process always
+    # keeps the read end of its output pipe open, so the write never fails;
+    # this helper owns the pipe, closes the read end and asserts the transcript
+    # (nonzero exit, one diagnostic, live-pipe control). Descriptor-set input,
+    # so it runs in the parser-free profile as well.
+    add_executable(codegen_cli_broken_stdout_test
+        codegen/cli/test_broken_stdout.cpp)
+    add_test(NAME codegen.imports.cli.broken-stdout
+        COMMAND codegen_cli_broken_stdout_test
+            $<TARGET_FILE:easypb_codegen>
+            ${CMAKE_CURRENT_SOURCE_DIR}/codegen/cli/data
+            ${CMAKE_CURRENT_BINARY_DIR}/codegen-cli-broken-stdout)
+    set_tests_properties(codegen.imports.cli.broken-stdout PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
     # Plan 5's output half, parser-free like the descriptor suite: the pure
     # logical mapping and the standalone publisher (P4-P10). P2's injected
     # failure is staged here, where a denied directory (POSIX) or a read-only
@@ -1129,6 +1144,11 @@ if(BUILD_TESTING)
     add_executable(codegen_imports_output_test codegen/imports/test_output.cpp)
     target_link_libraries(codegen_imports_output_test
         PRIVATE easypb_header_output easypb_codegen_core)
+    # B9/CR-31: the denied-create injection needs a DACL edit
+    # (SetEntriesInAclW/SetNamedSecurityInfoW live in advapi32).
+    if(WIN32)
+        target_link_libraries(codegen_imports_output_test PRIVATE advapi32)
+    endif()
     add_test(NAME codegen.imports.output COMMAND codegen_imports_output_test)
     set_tests_properties(codegen.imports.output PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
