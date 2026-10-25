@@ -44,12 +44,17 @@ def repo_root(start: os.PathLike[str] | str) -> pathlib.Path:
 
 
 def resolve_tool(value: os.PathLike[str] | str) -> pathlib.Path:
-    """Resolve a tool argument that may be an absolute path or a PATH name."""
+    """Resolve a tool argument that may be an absolute path or a PATH name.
+
+    An existing relative path is returned absolute: the runner changes the
+    child's working directory, and POSIX resolves the program name after that
+    change, so a relative spelling would stop naming the same binary.
+    """
     path = pathlib.Path(value)
     if path.is_file():
-        return path
+        return path.resolve()
     found = shutil.which(str(value))
-    return pathlib.Path(found) if found else path
+    return pathlib.Path(found).resolve() if found else path
 
 
 @dataclass

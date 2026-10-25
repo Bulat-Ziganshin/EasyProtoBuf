@@ -432,6 +432,8 @@ def summarise(results: list[dict], rows: list[dict], run_dir: pathlib.Path,
                      if (item.get("lite") or {}).get("status") == "identity"]
     setup_gaps = [item for item in results
                   if item["status"].startswith("skipped")]
+    harness_errors = [item for item in results
+                      if item["status"] == "harness-error"]
     not_compile = [item for item in results
                    if item["status"] == "not-a-compile-fixture"]
     summary = {
@@ -455,6 +457,10 @@ def summarise(results: list[dict], rows: list[dict], run_dir: pathlib.Path,
         "unexplained": len(unexplained),
         "unexplained_detail": unexplained,
         "known_detail": known,
+        "harness_errors": len(harness_errors),
+        "harness_errors_detail": [
+            {"id": item["id"], "error": item.get("error")}
+            for item in harness_errors],
         "lite": {
             "applicable_rows": len(lite_rows),
             "identity_rows": len(lite_identity),
@@ -605,6 +611,7 @@ def main() -> int:
     print("compile failures:    %d (known baseline %d, unexplained %d)" % (
         summary["compile_failures"], summary["known_baseline"],
         summary["unexplained"]))
+    print("harness errors:      %d" % summary["harness_errors"])
     print("lite:                %d rows, %d identical headers, %d failures" % (
         summary["lite"]["applicable_rows"], summary["lite"]["identity_rows"],
         summary["lite"]["compile_failures"]))
@@ -618,6 +625,17 @@ def main() -> int:
     for entry in summary["unexplained_detail"]:
         print("  UNEXPLAINED %s %s: %s" % (
             entry["id"], entry["profile"], entry["first_error"]))
+    for entry in summary["harness_errors_detail"]:
+        print("  HARNESS-ERROR %s: %s" % (entry["id"], entry["error"]))
+    if summary["harness_errors"]:
+        print("a harness error is a setup bug, not a P3 verdict", file=sys.stderr)
+        return 1
+    descriptor_rows = [row for row in selected if row["kind"] == "descriptor"]
+    if (lite_codegen is not None and descriptor_rows
+            and summary["lite"]["applicable_rows"] == 0):
+        print("the lite profile measured 0 of %d descriptor rows"
+              % len(descriptor_rows), file=sys.stderr)
+        return 1
     return 1 if summary["unexplained"] else 0
 
 
