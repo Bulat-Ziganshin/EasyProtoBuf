@@ -1,0 +1,4 @@
+message Defaults42
+{
+optional int64 i64 = 10 [default = 0x7FFFFFFFFFFFFFFF];
+}

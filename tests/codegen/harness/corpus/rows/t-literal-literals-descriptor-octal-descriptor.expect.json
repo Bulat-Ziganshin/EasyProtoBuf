@@ -1,0 +1,21 @@
+{
+  "cr": null,
+  "exception": null,
+  "id": "t-literal-literals-descriptor-octal-descriptor",
+  "include_roots": [],
+  "input": "tests/codegen/validity/data/literals-descriptor-octal.pbs",
+  "kind": "descriptor",
+  "mandatory": false,
+  "note": "R2 lexer/literal family: descriptor path - descriptor-carried 08/09/010.5: accepted by protoc's descriptor path",
+  "p1_expect": "parity",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "test",
+  "target": "literals-descriptor-octal.proto",
+  "timeout_s": 10.0
+}

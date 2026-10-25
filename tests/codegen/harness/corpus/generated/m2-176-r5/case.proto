@@ -1,0 +1,3 @@
+message M {
+oneof o { int32 a = 2 [default = 5]; }
+}

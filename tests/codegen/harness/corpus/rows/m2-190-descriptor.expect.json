@@ -1,0 +1,38 @@
+{
+  "cr": null,
+  "exception": null,
+  "generated": {
+    "case": "m2-190-descriptor",
+    "classification": "known-root",
+    "mechanism": "d-map-entry-method",
+    "root_hint": "R6",
+    "seed": 1
+  },
+  "id": "m2-190-descriptor",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/generated/m2-190-descriptor/case.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "minimized": {
+    "duration_s": 6.72,
+    "evaluations": 70,
+    "raw_kept": false,
+    "shrunk_at": "2026-10-25T00:14:05+03:00",
+    "size_after": 139,
+    "size_before": 139,
+    "tool": "shrink.py",
+    "verified": true
+  },
+  "note": "M2 discovery seed 1, d-map-entry-method: method endpoint names the synthetic map entry ScoresEntry",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": "R6",
+  "schema": 1,
+  "source": "generated",
+  "target": "mutant.proto",
+  "timeout_s": 10.0
+}

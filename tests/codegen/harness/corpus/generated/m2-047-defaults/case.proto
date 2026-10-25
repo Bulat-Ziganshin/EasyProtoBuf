@@ -1,0 +1,4 @@
+message Defaults47
+{
+optional int32 i32 = 15 [default = 010];
+}

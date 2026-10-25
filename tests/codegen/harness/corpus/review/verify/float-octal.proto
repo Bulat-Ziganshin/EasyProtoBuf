@@ -1,0 +1,6 @@
+syntax = "proto2";
+package p;
+message M {
+  optional float f = 1 [default = 010];
+  optional double d = 2 [default = 010];
+}

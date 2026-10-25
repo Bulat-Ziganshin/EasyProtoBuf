@@ -1,0 +1,3 @@
+message M {
+oneof o { bool a = 2 [default = true]; }
+}

@@ -1,0 +1,22 @@
+{
+  "cr": "CR-43",
+  "exception": null,
+  "id": "CR-43",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/review/emitter-names/localname.cpp",
+  "kind": "not-comparable",
+  "mandatory": true,
+  "note": "C++ unit fixture for cpp_local_name; needs a compile, not a schema verdict",
+  "p1_expect": "n/a",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": "C++ unit fixture for cpp_local_name; needs a compile, not a schema verdict",
+  "root": "R4",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

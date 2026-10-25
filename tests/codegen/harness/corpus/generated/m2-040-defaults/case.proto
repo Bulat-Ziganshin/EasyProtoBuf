@@ -1,0 +1,4 @@
+message Defaults40
+{
+optional int32 i32 = 10 [default = -0777];
+}

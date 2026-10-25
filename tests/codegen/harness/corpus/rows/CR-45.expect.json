@@ -1,0 +1,22 @@
+{
+  "cr": "CR-45",
+  "exception": null,
+  "id": "CR-45",
+  "include_roots": [],
+  "input": null,
+  "kind": "not-comparable",
+  "mandatory": true,
+  "note": "crafted present-but-empty package; P2-only and no tracked fixture exists",
+  "p1_expect": "n/a",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": "crafted present-but-empty package; P2-only and no tracked fixture exists",
+  "root": "R3",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

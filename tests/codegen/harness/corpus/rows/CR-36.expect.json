@@ -1,0 +1,22 @@
+{
+  "cr": "CR-36",
+  "exception": null,
+  "id": "CR-36",
+  "include_roots": [],
+  "input": null,
+  "kind": "not-comparable",
+  "mandatory": true,
+  "note": "110-component --out-dir; accepted P8 exception, not a schema verdict",
+  "p1_expect": "n/a",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": "110-component --out-dir; accepted P8 exception, not a schema verdict",
+  "root": "R8",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

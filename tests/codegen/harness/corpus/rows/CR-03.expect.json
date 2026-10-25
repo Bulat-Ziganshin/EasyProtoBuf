@@ -1,0 +1,24 @@
+{
+  "cr": "CR-03",
+  "exception": null,
+  "id": "CR-03",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/emitter-names"
+  ],
+  "input": "tests/codegen/harness/corpus/review/emitter-names/f1.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "enumerator vs presence-flag collision is a P3 defect [logical name: f1.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "parity",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R4",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

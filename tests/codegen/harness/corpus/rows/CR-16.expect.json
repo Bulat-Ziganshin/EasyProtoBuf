@@ -1,0 +1,24 @@
+{
+  "cr": "CR-16",
+  "exception": null,
+  "id": "CR-16",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/verify/lroots"
+  ],
+  "input": "tests/codegen/harness/corpus/review/verify/lroots/thing.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "the fixture itself resolves; the CR is about an input outside every root [logical name: thing.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "parity",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R8",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

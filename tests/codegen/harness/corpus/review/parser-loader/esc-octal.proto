@@ -1,0 +1,6 @@
+syntax = "proto2";
+package p;
+message M {
+  optional string s = 1 [default = "\777"];
+  optional bytes  b = 2 [default = "\400"];
+}

@@ -1,0 +1,4 @@
+message Defaults35
+{
+optional uint32 u32 = 13 [default = 0xFFFFFFFF];
+}

@@ -1,0 +1,4 @@
+message Defaults33
+{
+optional int32 i32 = 16 [default = 0x7fffffff];
+}

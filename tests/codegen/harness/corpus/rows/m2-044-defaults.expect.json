@@ -1,0 +1,40 @@
+{
+  "cr": null,
+  "exception": null,
+  "generated": {
+    "case": "m2-044-defaults",
+    "classification": "known-root",
+    "mechanism": "valid-defaults",
+    "root_hint": null,
+    "seed": 1
+  },
+  "id": "m2-044-defaults",
+  "include_roots": [
+    "tests/codegen/harness/corpus/generated/m2-044-defaults"
+  ],
+  "input": "tests/codegen/harness/corpus/generated/m2-044-defaults/case.proto",
+  "kind": "source",
+  "mandatory": true,
+  "minimized": {
+    "duration_s": 0.0,
+    "evaluations": 1,
+    "raw_kept": false,
+    "shrunk_at": "2026-10-25T00:13:50+03:00",
+    "size_after": 66,
+    "size_before": 66,
+    "tool": "shrink.py",
+    "verified": true
+  },
+  "note": "M2 discovery seed 1, valid-defaults: every scalar default spelling and boundary value",
+  "p1_expect": "parity",
+  "p2_expect": "divergent",
+  "properties": [
+    "P2"
+  ],
+  "reason": null,
+  "root": "R1",
+  "schema": 1,
+  "source": "generated",
+  "target": null,
+  "timeout_s": 10.0
+}

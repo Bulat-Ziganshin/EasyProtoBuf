@@ -1,0 +1,38 @@
+{
+  "cr": null,
+  "exception": "E12",
+  "generated": {
+    "case": "m2-192-descriptor",
+    "classification": "exception",
+    "mechanism": "d-duplicate-file",
+    "root_hint": "R6",
+    "seed": 1
+  },
+  "id": "m2-192-descriptor",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/generated/m2-192-descriptor/case.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "minimized": {
+    "duration_s": 20.99,
+    "evaluations": 345,
+    "raw_kept": false,
+    "shrunk_at": "2026-10-25T00:14:27+03:00",
+    "size_after": 834,
+    "size_before": 834,
+    "tool": "shrink.py",
+    "verified": true
+  },
+  "note": "M2 discovery seed 1, d-duplicate-file: the same FileDescriptorProto is stored twice. W-36/E12 (owner decision 2026-10-22): an in-container duplicate stays refused while the same copy across containers merges; the executable test is codegen.imports.descriptor (test_loader_rejects_duplicate_names_within_one_container)",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "generated",
+  "target": "mutant.proto",
+  "timeout_s": 10.0
+}

@@ -1,0 +1,4 @@
+message Defaults52
+{
+optional uint32 u32 = 100 [default = 0777];
+}

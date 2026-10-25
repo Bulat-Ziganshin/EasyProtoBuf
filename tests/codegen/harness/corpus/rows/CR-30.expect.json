@@ -1,0 +1,24 @@
+{
+  "cr": "CR-30",
+  "exception": null,
+  "id": "CR-30",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/verify"
+  ],
+  "input": "tests/codegen/harness/corpus/review/verify/nested-comment.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "nested block comments are accepted [logical name: nested-comment.proto]",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R2",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

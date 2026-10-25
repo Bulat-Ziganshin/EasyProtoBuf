@@ -1,0 +1,192 @@
+name: Extended harness
+
+# One job: the protoc oracle, the mass P1/P2 harness, the frozen corpus, P3 on
+# that corpus and P7.  No schedule and no nightly tier; the three-OS
+# `extended-tests` matrix in cmake-multi-platform.yml is unchanged.
+on:
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: "Generated cases; 1000 is the manual smoke run"
+        required: false
+        default: "10000"
+      seed:
+        description: "Harness seed; empty uses github.run_id"
+        required: false
+        default: ""
+  push:
+    branches: [ main ]
+    paths-ignore: [ "**.md" ]
+  pull_request:
+    branches-ignore: [ "noci-**" ]
+    paths-ignore: [ "**.md" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CTEST_OUTPUT_ON_FAILURE: "1"
+  HARNESS_DIR: build/codegen-harness
+  CODEGEN: build/harness-ci/codegen
+  LITE_CODEGEN: build/harness-lite/codegen
+  PROTOC: build/ci-tools/protoc-30.1/bin/protoc
+  GXX: g++
+  HARNESS_SEED: ${{ github.event.inputs.seed || github.run_id }}
+  HARNESS_CASES: ${{ github.event.inputs.cases || '10000' }}
+
+jobs:
+  extended-harness:
+    name: extended-harness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Show toolchain and platform
+      run: |
+        cmake --version
+        ninja --version
+        "$GXX" --version | head -1
+        python3 --version
+        uname -a
+        cat /etc/os-release
+        df -h "$GITHUB_WORKSPACE"
+
+    # The lock file owns the version, URL and digest; the same binary is then
+    # passed to CMake and to the harness.  A runner-provided protoc is never
+    # used.
+    - name: Install pinned protoc 30.1
+      run: |
+        lock=tests/codegen/harness/protoc.lock
+        version=$(python3 -c "import json; print(json.load(open('$lock'))['version'])")
+        url=$(python3 -c "import json; print(json.load(open('$lock'))['url'])")
+        sha256=$(python3 -c "import json; print(json.load(open('$lock'))['sha256'])")
+        archive_name=$(python3 -c "import json; print(json.load(open('$lock'))['archive'])")
+        expected_size=$(python3 -c "import json; print(json.load(open('$lock'))['size'])")
+
+        mkdir -p build/ci-tools
+        archive="build/ci-tools/$archive_name"
+        curl -fsSL --retry 3 --retry-delay 2 -o "$archive" "$url"
+        actual_size=$(stat -c %s "$archive")
+        if [ "$actual_size" != "$expected_size" ]; then
+          echo "protoc archive size $actual_size != $expected_size" >&2
+          exit 1
+        fi
+        printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c -
+        unzip -q -o "$archive" -d build/ci-tools/protoc-$version
+        chmod +x "$PROTOC"
+        "$PROTOC" --version
+        "$PROTOC" --version | grep -F "libprotoc $version"
+
+    - name: Copy the tracked harness to the build tree
+      run: |
+        mkdir -p "$HARNESS_DIR"
+        cp -a tests/codegen/harness/. "$HARNESS_DIR"/
+        test -f "$HARNESS_DIR/corpus/rows/CR-01.expect.json"
+        test ! -e "$HARNESS_DIR/runs"
+        test ! -e "$HARNESS_DIR/generated"
+
+    - name: Configure the full build (oracle options)
+      run: |
+        cmake -S . -B build/harness-ci -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTING=ON \
+          -DEASYPB_CODEGEN_WITH_PROTO_PARSER=ON \
+          -DEASYPB_BUILD_DIFFERENTIAL_TESTS=ON \
+          -DEASYPB_PROTOC="$PWD/$PROTOC" \
+          -DEASYPB_PYTHON="$(command -v python3)"
+
+    - name: Build the full tree
+      # Only the two binaries this job measures.  The full test suite has a
+      # pre-existing POSIX link gap in codegen_imports_loader_test that belongs
+      # to the import-loader review, not to this harness; BUILD_TESTING stays ON
+      # so the parity generator test is registered by CTest.
+      run: >
+        cmake --build build/harness-ci --target easypb_codegen
+        parser_differential_compare -j 4
+
+    - name: Configure and build the lite tree (P3)
+      run: |
+        cmake -S . -B build/harness-lite -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTING=OFF \
+          -DEASYPB_CODEGEN_WITH_PROTO_PARSER=OFF
+        cmake --build build/harness-lite --target easypb_codegen -j 4
+
+    - name: Record the measured binaries
+      run: |
+        sha256sum "$CODEGEN" "$LITE_CODEGEN" "$PROTOC"
+        "$PROTOC" --version
+        echo "harness seed: $HARNESS_SEED"
+        echo "harness cases: $HARNESS_CASES"
+
+    - name: Parity generator
+      run: |
+        started=$SECONDS
+        ctest --test-dir build/harness-ci \
+          -R 'codegen\.imports\.parity\.generator' --output-on-failure
+        echo "parity generator: $((SECONDS - started))s"
+
+    - name: Parser differential against protoc
+      run: |
+        started=$SECONDS
+        python3 tests/codegen/parser/differential/run.py \
+          --protoc "$PWD/$PROTOC" \
+          --compare build/harness-ci/tests/parser_differential_compare
+        echo "parser differential: $((SECONDS - started))s"
+
+    - name: Mass P1/P2 discovery
+      run: |
+        echo "harness seed: $HARNESS_SEED"
+        echo "harness cases: $HARNESS_CASES"
+        started=$SECONDS
+        python3 "$HARNESS_DIR/discover.py" \
+          --cases "$HARNESS_CASES" --seed "$HARNESS_SEED" \
+          --codegen "$CODEGEN" --protoc "$PWD/$PROTOC"
+        echo "mass harness: $((SECONDS - started))s"
+        du -sh "$HARNESS_DIR"
+        df -h "$GITHUB_WORKSPACE"
+
+    - name: Frozen corpus (P1/P2)
+      run: |
+        started=$SECONDS
+        python3 "$HARNESS_DIR/run.py" --cases 0 \
+          --codegen "$CODEGEN" --protoc "$PWD/$PROTOC"
+        echo "frozen corpus: $((SECONDS - started))s"
+
+    - name: P3 compile matrix on the frozen corpus
+      run: |
+        started=$SECONDS
+        python3 "$HARNESS_DIR/compile.py" --cases 0 --jobs 4 --gxx "$GXX" \
+          --codegen "$CODEGEN" --lite-codegen "$LITE_CODEGEN" \
+          --protoc "$PWD/$PROTOC"
+        echo "P3 corpus: $((SECONDS - started))s"
+        du -sh "$HARNESS_DIR"
+
+    - name: P7 thin vs full
+      run: |
+        started=$SECONDS
+        python3 "$HARNESS_DIR/thin.py" --codegen "$CODEGEN" --gxx "$GXX"
+        echo "P7: $((SECONDS - started))s"
+        du -sh build/harness-ci build/harness-lite "$HARNESS_DIR"
+        df -h "$GITHUB_WORKSPACE"
+
+    # Only the four summaries.  The per-case tree (~740 MB at 10 000 cases)
+    # stays on the runner and is never an artifact.
+    - name: Upload harness summaries
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: extended-harness-${{ github.run_id }}-${{ env.HARNESS_SEED }}
+        path: |
+          build/codegen-harness/discovery-summary.json
+          build/codegen-harness/summary.json
+          build/codegen-harness/p3-summary.json
+          build/codegen-harness/p7-summary.json
+        if-no-files-found: warn
+        retention-days: 14

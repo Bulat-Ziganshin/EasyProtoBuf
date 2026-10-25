@@ -1,0 +1,24 @@
+{
+  "cr": null,
+  "exception": null,
+  "id": "t-lane-names-keyword-message",
+  "include_roots": [
+    "tests/codegen/names/data"
+  ],
+  "input": "tests/codegen/names/data/keyword-message.proto",
+  "kind": "source",
+  "mandatory": false,
+  "note": "accepted control of the names lane",
+  "p1_expect": "parity",
+  "p2_expect": "parity",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "test",
+  "target": null,
+  "timeout_s": 10.0
+}

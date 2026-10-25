@@ -1,0 +1,24 @@
+{
+  "cr": "CR-42",
+  "exception": null,
+  "id": "CR-42",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/verify"
+  ],
+  "input": "tests/codegen/harness/corpus/review/verify/dupenum.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "both tools refuse the duplicate enum number; the CR is diagnostic position (P9) [logical name: dupenum.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R10",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

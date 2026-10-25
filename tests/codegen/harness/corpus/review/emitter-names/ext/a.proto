@@ -1,0 +1,3 @@
+syntax = "proto3";
+package q;
+enum E { Z = 0; ONE = 1; }

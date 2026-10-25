@@ -1,0 +1,21 @@
+{
+  "cr": null,
+  "exception": null,
+  "id": "t-lane-parity-descriptor-enum-reserved",
+  "include_roots": [],
+  "input": "tests/codegen/parity/data/enum-reserved.pbs",
+  "kind": "descriptor",
+  "mandatory": false,
+  "note": "cross-path parity lane fixture",
+  "p1_expect": "parity",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "test",
+  "target": "enum-reserved.proto",
+  "timeout_s": 10.0
+}

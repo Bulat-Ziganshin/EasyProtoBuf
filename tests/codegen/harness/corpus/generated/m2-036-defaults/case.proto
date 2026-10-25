@@ -1,0 +1,4 @@
+message Defaults36
+{
+optional int32 i32 = 18 [default = 0x1F];
+}

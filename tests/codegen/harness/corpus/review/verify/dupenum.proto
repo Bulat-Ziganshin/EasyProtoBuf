@@ -1,0 +1,5 @@
+syntax="proto2";
+package p;
+message M {
+  enum E { A = 0; B = 0; }
+}

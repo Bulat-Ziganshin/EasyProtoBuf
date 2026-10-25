@@ -1,0 +1,24 @@
+{
+  "cr": null,
+  "exception": null,
+  "id": "t-lane-imports-project-report",
+  "include_roots": [
+    "tests/codegen/imports/data/project"
+  ],
+  "input": "tests/codegen/imports/data/project/api/report.proto",
+  "kind": "source",
+  "mandatory": false,
+  "note": "multi-root import project",
+  "p1_expect": "parity",
+  "p2_expect": "parity",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "test",
+  "target": null,
+  "timeout_s": 10.0
+}

@@ -1,0 +1,21 @@
+{
+  "cr": "CR-07",
+  "exception": null,
+  "id": "CR-07",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/review/schema-descriptor/ext_high.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "note": "the extension-range upper bound is enforced on both paths (B5) [logical name: x.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "review",
+  "target": "x.proto",
+  "timeout_s": 10.0
+}

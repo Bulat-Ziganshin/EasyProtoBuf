@@ -1,0 +1,38 @@
+{
+  "cr": null,
+  "exception": null,
+  "generated": {
+    "case": "m2-191-descriptor",
+    "classification": "known-root",
+    "mechanism": "d-json-name-brackets",
+    "root_hint": "R6",
+    "seed": 1
+  },
+  "id": "m2-191-descriptor",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/generated/m2-191-descriptor/case.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "minimized": {
+    "duration_s": 1.13,
+    "evaluations": 24,
+    "raw_kept": false,
+    "shrunk_at": "2026-10-25T00:14:06+03:00",
+    "size_after": 43,
+    "size_before": 43,
+    "tool": "shrink.py",
+    "verified": true
+  },
+  "note": "M2 discovery seed 1, d-json-name-brackets: json_name is shaped like [alpha]",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": "R6",
+  "schema": 1,
+  "source": "generated",
+  "target": "mutant.proto",
+  "timeout_s": 10.0
+}

@@ -1,0 +1,7 @@
+syntax = "proto2";
+package p;
+message M {
+  optional string a = 1 [default = "\ud800"];
+  optional string b = 2 [default = "\ud83d\ude00"];
+  optional string c = 3 [default = "\U0000DC00"];
+}

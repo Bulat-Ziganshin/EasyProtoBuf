@@ -17,7 +17,9 @@ Checks:
   - every property P1..P9 and every exception E1..E14 appears in the table;
   - every CR-01..CR-48 appears in the table or in a source file under
     `tests/codegen/` (`.cmake`, `.cpp`, `.hpp`, `.py`, `.md`, `.tsv`); the
-    table itself is not counted as the second source;
+    table itself is not counted as the second source, and `tests/codegen/harness/`
+    is excluded because the differential harness mentions CR IDs in its own
+    code and README and must not mask lane coverage;
   - no per-fixture manifest from B13 (`cases.tsv`, `cases-ignore.tsv`,
     `check_cases.py`) remains anywhere under `tests/codegen/`.
 
@@ -31,6 +33,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COVERAGE = os.path.join(HERE, "COVERAGE.md")
+HARNESS = os.path.join(HERE, "harness")
 
 LANES = (
     "cli", "custom_types", "enums", "imports", "library", "limits", "maps",
@@ -101,7 +104,8 @@ def scan_sources():
     found = set()
     for root, dirs, files in os.walk(HERE):
         dirs[:] = sorted(name for name in dirs
-                         if name not in {".git", "__pycache__"})
+                         if name not in {".git", "__pycache__"}
+                         and os.path.join(root, name) != HARNESS)
         for name in files:
             path = os.path.join(root, name)
             if path == COVERAGE:

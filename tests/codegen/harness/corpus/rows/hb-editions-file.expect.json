@@ -1,0 +1,26 @@
+{
+  "cr": null,
+  "exception": "E8",
+  "handbuilt": {
+    "descriptor_path": "FileDescriptorProto.edition",
+    "detail": "the file declares edition 2023",
+    "shape": "hb-editions-file"
+  },
+  "id": "hb-editions-file",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/generated/hb-editions-file/hb-editions-file.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "note": "hand-built descriptor set, exception/E8: the file declares edition 2023",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "handbuilt",
+  "target": "root.proto",
+  "timeout_s": 10.0
+}

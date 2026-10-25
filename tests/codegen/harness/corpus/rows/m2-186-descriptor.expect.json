@@ -1,0 +1,38 @@
+{
+  "cr": null,
+  "exception": null,
+  "generated": {
+    "case": "m2-186-descriptor",
+    "classification": "known-root",
+    "mechanism": "d-message-set-with-fields",
+    "root_hint": "R3",
+    "seed": 1
+  },
+  "id": "m2-186-descriptor",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/generated/m2-186-descriptor/case.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "minimized": {
+    "duration_s": 0.94,
+    "evaluations": 20,
+    "raw_kept": false,
+    "shrunk_at": "2026-10-25T00:13:58+03:00",
+    "size_after": 34,
+    "size_before": 34,
+    "tool": "shrink.py",
+    "verified": true
+  },
+  "note": "M2 discovery seed 1, d-message-set-with-fields: message_set_wire_format = true on a message with fields",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": "R3",
+  "schema": 1,
+  "source": "generated",
+  "target": "mutant.proto",
+  "timeout_s": 10.0
+}

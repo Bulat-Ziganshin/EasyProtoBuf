@@ -1,0 +1,24 @@
+{
+  "cr": null,
+  "exception": null,
+  "id": "t-lane-parity-source-ext-ok",
+  "include_roots": [
+    "tests/codegen/parity/data"
+  ],
+  "input": "tests/codegen/parity/data/ext-ok.proto",
+  "kind": "source",
+  "mandatory": false,
+  "note": "cross-path parity lane fixture",
+  "p1_expect": "parity",
+  "p2_expect": "parity",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "test",
+  "target": null,
+  "timeout_s": 10.0
+}

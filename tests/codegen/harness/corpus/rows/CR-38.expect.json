@@ -1,0 +1,22 @@
+{
+  "cr": "CR-38",
+  "exception": null,
+  "id": "CR-38",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/review/cli-paths/UPPER.PBS",
+  "kind": "not-comparable",
+  "mandatory": true,
+  "note": "UPPER.PBS is source text, not a descriptor set; the CR is mode inference (P4)",
+  "p1_expect": "n/a",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": "UPPER.PBS is source text, not a descriptor set; the CR is mode inference (P4)",
+  "root": "R8",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

@@ -1,0 +1,26 @@
+{
+  "cr": null,
+  "exception": "E9",
+  "handbuilt": {
+    "descriptor_path": "FileDescriptorProto.public_dependency",
+    "detail": "public_dependency repeats index 0",
+    "shape": "hb-public-index-duplicate"
+  },
+  "id": "hb-public-index-duplicate",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/generated/hb-public-index-duplicate/hb-public-index-duplicate.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "note": "hand-built descriptor set, exception/E9: public_dependency repeats index 0",
+  "p1_expect": "divergent",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "handbuilt",
+  "target": "root.proto",
+  "timeout_s": 10.0
+}

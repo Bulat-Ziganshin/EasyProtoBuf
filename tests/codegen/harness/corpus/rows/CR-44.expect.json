@@ -1,0 +1,24 @@
+{
+  "cr": "CR-44",
+  "exception": null,
+  "id": "CR-44",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/emitter-names"
+  ],
+  "input": "tests/codegen/harness/corpus/review/emitter-names/f9.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "accepted row; the insertion-macro stem collision is a P3 defect [logical name: f9.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "parity",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R4",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

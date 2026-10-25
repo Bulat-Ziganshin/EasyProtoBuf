@@ -1,0 +1,24 @@
+{
+  "cr": "CR-04",
+  "exception": null,
+  "id": "CR-04",
+  "include_roots": [
+    "tests/codegen/harness/corpus/review/emitter-names"
+  ],
+  "input": "tests/codegen/harness/corpus/review/emitter-names/f4.proto",
+  "kind": "source",
+  "mandatory": true,
+  "note": "encode/decode missing from the file-scope check is a P3 defect [logical name: f4.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "parity",
+  "properties": [
+    "P1",
+    "P2"
+  ],
+  "reason": null,
+  "root": "R4",
+  "schema": 1,
+  "source": "review",
+  "target": null,
+  "timeout_s": 10.0
+}

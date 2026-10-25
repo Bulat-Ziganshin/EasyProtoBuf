@@ -1,0 +1,4 @@
+syntax="proto2";
+package p;
+option java_package = +7;
+message M { optional int32 a = 1; }

@@ -1,0 +1,21 @@
+{
+  "cr": "CR-10",
+  "exception": null,
+  "id": "CR-10",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/review/emitter-names/digit-field.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "note": "non-identifier field name is accepted by protoc too; P3 catches the C++ name [logical name: pbs-base.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": "R4",
+  "schema": 1,
+  "source": "review",
+  "target": "pbs-base.proto",
+  "timeout_s": 10.0
+}

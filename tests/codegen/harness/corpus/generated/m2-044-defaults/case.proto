@@ -1,0 +1,4 @@
+message Defaults44
+{
+optional int32 i32 = 102 [default = 0x1F];
+}

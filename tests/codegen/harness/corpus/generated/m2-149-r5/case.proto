@@ -1,0 +1,3 @@
+message M {
+enum E { A = 0 [json_name = "aName"]; }
+}

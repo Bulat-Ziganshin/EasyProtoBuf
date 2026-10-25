@@ -1,0 +1,4 @@
+message Defaults51
+{
+optional int64 i64 = 1000 [default = -0777];
+}

@@ -1,0 +1,21 @@
+{
+  "cr": "CR-06",
+  "exception": null,
+  "id": "CR-06",
+  "include_roots": [],
+  "input": "tests/codegen/harness/corpus/review/schema-descriptor/res_dup_name.pbs",
+  "kind": "descriptor",
+  "mandatory": true,
+  "note": "reserved names/ranges are modelled and validated on both paths (B5) [logical name: x.proto]",
+  "p1_expect": "parity",
+  "p2_expect": "n/a",
+  "properties": [
+    "P1"
+  ],
+  "reason": null,
+  "root": null,
+  "schema": 1,
+  "source": "review",
+  "target": "x.proto",
+  "timeout_s": 10.0
+}
