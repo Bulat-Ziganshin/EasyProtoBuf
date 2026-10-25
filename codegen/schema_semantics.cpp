@@ -2975,8 +2975,8 @@ bool validate_field_declared_shape(SchemaFile& file, FieldDescriptorProto& field
     // D-55 (fix round r25): a repeated field may not carry a default, which
     // protoc refuses while it builds a descriptor ("Repeated fields can't
     // have default values.", descriptor.cc:6652-6655) and our parser
-    // refuses as source text ("default value is not allowed on repeated or
-    // oneof fields", proto_parser.cpp:1196). Reference-free and asked in
+    // refuses as source text ("default value is not allowed on repeated
+    // fields", proto_parser.cpp). Reference-free and asked in
     // BOTH modes: no resolution can turn a repeated field into a singular
     // one. It is asked BEFORE the proto3 block below, because protoc
     // reports this shape first - the repeated-default check lives in the

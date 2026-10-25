@@ -293,7 +293,8 @@ if(BUILD_TESTING)
         leading-space-control
         literals-escapes
         literals-lexemes
-        literals-descriptor-octal)
+        literals-descriptor-octal
+        grammar-table)
 
     foreach(name ${codegen_validity_fixtures})
         add_custom_command(
@@ -334,7 +335,8 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/leading-space-control.pb.hpp
             ${codegen_validity_descriptor_dir}/literals-escapes.pb.hpp
             ${codegen_validity_descriptor_dir}/literals-lexemes.pb.hpp
-            ${codegen_validity_descriptor_dir}/literals-descriptor-octal.pb.hpp)
+            ${codegen_validity_descriptor_dir}/literals-descriptor-octal.pb.hpp
+            ${codegen_validity_descriptor_dir}/grammar-table.pb.hpp)
 
     add_executable(codegen_validity_runtime_test
         ${codegen_validity_dir}/validity_runtime.cpp)
@@ -390,7 +392,8 @@ if(BUILD_TESTING)
             defaults-spellings
             defaults-spellings-nohas
             defaults-float-keywords
-            defaults-float-keywords-nohas)
+            defaults-float-keywords-nohas
+            grammar-table)
         set(source ${codegen_validity_pedantic_dir}/compile-${header}.cpp)
         file(WRITE ${source} "#include \"${header}.pb.hpp\"\n")
         list(APPEND codegen_validity_pedantic_sources ${source})

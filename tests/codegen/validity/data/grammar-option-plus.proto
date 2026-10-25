@@ -1,0 +1,10 @@
+// CR-28: an ordinary option takes no leading `+`; protoc's `ParseOption`
+// consumes `-` only. The custom option is refused at the value, before the
+// unknown-option question would be asked.
+syntax = "proto2";
+
+message M {
+  optional int32 a = 1;
+}
+
+option (my.opt) = +7;

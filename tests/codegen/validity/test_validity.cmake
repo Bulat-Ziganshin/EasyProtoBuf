@@ -138,7 +138,8 @@ set(paired_fixtures
     plus-controls
     leading-space-control
     literals-escapes
-    literals-lexemes)
+    literals-lexemes
+    grammar-table)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -423,6 +424,106 @@ if(FULL_BUILD)
     require_contains(aggregate_err "0x00" "The escaped NUL in the diagnostic")
 endif()
 
+# --- CR-11/20/26/27/28: the statement and option grammar family ---------------
+#
+# Matrix: rule x input path (source, .pbs). `grammar-table` is a paired fixture
+# with one accepted spelling per rule: the empty statement after `syntax`, the
+# oneof member's explicit default, `allow_alias = true` with a shared number,
+# an enum value without field options, and an ordinary option without a leading
+# `+`. protoc writes the `.pbs`, and the paired loop above compares the two
+# headers byte for byte.
+#
+# The invalid spellings are source-only where protoc's grammar refuses to write
+# a descriptor at all (CR-20's leading `;`, CR-27's enum-value `json_name`, and
+# CR-28's leading `+`). CR-26 is the interesting one: its two rules live in
+# protoc's parser (`ValidateEnum`, parser.cc:520-575), so a descriptor that
+# carries the same options is accepted by protoc's descriptor path. The two
+# crafted `*-descriptor.pbs` companions pin that verdict (codegen must accept
+# them too), and the third (`false` with a shared number) is refused by the
+# ordinary duplicate-number rule on both descriptor paths.
+run_ok(grammar_out grammar_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/grammar-table.pbs")
+require_empty(grammar_err "The grammar-table stderr")
+require_contains(grammar_out "::int32_t a = 7;"
+    "CR-11 the oneof member keeps its explicit default")
+require_contains(grammar_out "A = 0" "CR-26 the alias first value")
+require_contains(grammar_out "B = 0" "CR-26 the alias second value")
+
+foreach(name grammar-allow-alias-useless-descriptor
+             grammar-allow-alias-false-descriptor)
+    run_ok(grammar_desc_out grammar_desc_err
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${name}.pbs")
+    require_empty(grammar_desc_err
+        "The ${name} descriptor stderr (protoc accepts this shape)")
+endforeach()
+
+run_fail(grammar_desc_false_out grammar_desc_false_err
+    ${CODEGEN} --descriptor-set
+    "${DATA_DIR}/grammar-allow-alias-false-aliased-descriptor.pbs")
+require_empty(grammar_desc_false_out
+    "The false-with-alias descriptor stdout")
+require_contains(grammar_desc_false_err "repeats number"
+    "CR-26 the false-with-alias descriptor refusal")
+
+if(FULL_BUILD)
+    run_ok(grammar_src_out grammar_src_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/grammar-table.proto")
+    require_empty(grammar_src_err "The grammar-table source stderr")
+    require_identical_headers(grammar_out grammar_src_out
+        "The source and descriptor paths disagree for grammar-table")
+
+    # CR-20: `syntax` must be the first token.
+    run_fail(grammar_semi_out grammar_semi_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/grammar-leading-semicolon.proto")
+    require_empty(grammar_semi_out "The leading-semicolon stdout")
+    require_contains(grammar_semi_err "first statement"
+        "CR-20 the leading-semicolon refusal")
+
+    # CR-11: the repeated-field half of the default rule stays.
+    run_fail(grammar_repeated_out grammar_repeated_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/grammar-repeated-default.proto")
+    require_empty(grammar_repeated_out "The repeated-default stdout")
+    require_contains(grammar_repeated_err "repeated"
+        "CR-11 the repeated-default refusal")
+
+    # CR-26: both use shapes are refused by the parser.
+    run_fail(grammar_alias_out grammar_alias_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/grammar-allow-alias-useless.proto")
+    require_empty(grammar_alias_out "The useless-allow_alias stdout")
+    require_contains(grammar_alias_err "no enum values share field numbers"
+        "CR-26 the useless-allow_alias refusal")
+    run_fail(grammar_alias_false_out grammar_alias_false_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/grammar-allow-alias-false.proto")
+    require_empty(grammar_alias_false_out "The allow_alias-false stdout")
+    require_contains(grammar_alias_false_err "no effect"
+        "CR-26 the allow_alias-false refusal")
+    run_fail(grammar_alias_false_alias_out grammar_alias_false_alias_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/grammar-allow-alias-false-aliased.proto")
+    require_empty(grammar_alias_false_alias_out
+        "The allow_alias-false-with-alias stdout")
+    require_contains(grammar_alias_false_alias_err "no effect"
+        "CR-26 the allow_alias-false-with-alias refusal")
+
+    # CR-27: `json_name` is not an enum-value option.
+    run_fail(grammar_enum_json_out grammar_enum_json_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/grammar-enum-json-name.proto")
+    require_empty(grammar_enum_json_out "The enum-json_name stdout")
+    require_contains(grammar_enum_json_err "field-only options"
+        "CR-27 the enum-value json_name refusal")
+
+    # CR-28: an ordinary option takes no leading `+`, on the file, field and
+    # enum-option paths alike.
+    foreach(name grammar-option-plus grammar-option-plus-known
+                 grammar-field-option-plus)
+        run_fail(grammar_plus_out grammar_plus_err
+            ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
+        require_empty(grammar_plus_out "The ${name} stdout")
+        require_contains(grammar_plus_err "Expected option value"
+            "CR-28 the ${name} refusal")
+    endforeach()
+endif()
+
 # Descriptor-only accepted shapes: the absent/empty syntax of a descriptor is
 # proto2 (W-15), and a negative descriptor default keeps the accepted control
 # beside the W-40 refusals.
@@ -643,12 +744,22 @@ require_empty(enum_diff_desc_out "The enum-diff descriptor stdout")
 require_contains(enum_diff_desc_err "same name as" "The enum-diff descriptor refusal")
 
 if(FULL_BUILD)
-    foreach(name enum-name-collision-case enum-name-collision-prefix enum-alias-diff-number)
+    foreach(name enum-name-collision-case enum-name-collision-prefix)
         run_fail(enum_src_out enum_src_err
             ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
         require_empty(enum_src_out "The ${name} source stdout")
         require_contains(enum_src_err "same name as" "The ${name} source refusal")
     endforeach()
+    # `enum-alias-diff-number` writes `allow_alias = true` without a shared
+    # number, so B7's CR-26 rule refuses the source before the folded-name
+    # sweep can run - exactly the order protoc's parser uses (`ValidateEnum`
+    # runs before the descriptor builder). The descriptor half above keeps the
+    # folded-name refusal.
+    run_fail(enum_diff_src_out enum_diff_src_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/enum-alias-diff-number.proto")
+    require_empty(enum_diff_src_out "The enum-diff source stdout")
+    require_contains(enum_diff_src_err "no enum values share field numbers"
+        "The enum-diff source refusal")
 endif()
 
 # W-43: the default, custom, and custom-vs-default proto3 collisions are

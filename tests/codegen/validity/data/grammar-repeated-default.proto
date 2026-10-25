@@ -1,0 +1,6 @@
+// CR-11: the repeated-field refusal stays after the oneof half was dropped.
+syntax = "proto2";
+
+message M {
+  repeated int32 a = 1 [default = 7];
+}

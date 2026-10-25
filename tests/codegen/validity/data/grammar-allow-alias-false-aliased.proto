@@ -1,0 +1,11 @@
+// CR-26: explicit `false` is refused by protoc's parser before the alias is
+// considered. The descriptor twin
+// (`grammar-allow-alias-false-aliased-descriptor.pbs`) is refused by the
+// duplicate-number rule on the descriptor path, as protoc refuses it.
+syntax = "proto2";
+
+enum E {
+  A = 0;
+  B = 0;
+  option allow_alias = false;
+}

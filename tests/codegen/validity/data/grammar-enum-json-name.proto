@@ -1,0 +1,9 @@
+// CR-27: `json_name` is special-cased for fields only; an enum value's
+// options go through the generic option parser, where the name is unknown.
+// The shape cannot travel in a descriptor (EnumValueOptions has no
+// `json_name`), so there is no `.pbs` twin.
+syntax = "proto2";
+
+enum E {
+  A = 0 [json_name = "aName"];
+}

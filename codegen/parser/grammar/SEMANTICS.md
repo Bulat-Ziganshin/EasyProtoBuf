@@ -32,8 +32,9 @@ The grammar uses the intended lexical and syntactic forms directly:
 [`../proto_parser.cpp`](../proto_parser.cpp) additionally enforces the following:
 
 - omitted syntax means proto2;
-- a syntax declaration must precede every non-empty statement and decode to
-  exactly `proto2` or `proto3`;
+- a syntax declaration is recognized only as the first token (comments and a
+  BOM are skipped by the lexer); a leading empty statement closes that window,
+  and the value must decode to exactly `proto2` or `proto3`;
 - at most one package declaration is accepted;
 - proto2 ordinary fields require `optional`, `required`, or `repeated`;
 - proto3 rejects `required`, explicit defaults, extension ranges, and extend
@@ -48,7 +49,12 @@ The grammar uses the intended lexical and syntactic forms directly:
 - field numbers are 1..536870911, excluding 19000..19999;
 - every enum contains at least one value, and enum values fit signed 32 bits;
 - the first value of a proto3 enum is zero;
-- duplicate enum numbers require `option allow_alias = true`;
+- duplicate enum numbers require `option allow_alias = true`; the option itself
+  follows `protoc`'s source rules: an explicit `allow_alias = false` is an
+  error, and `true` requires at least one pair of values that share a number
+  (both are source-text rules; a descriptor carrying either option shape is
+  accepted, as `protoc`'s descriptor path accepts it);
+- enum values accept no field-only options, including `json_name`;
 - package scope uses one name table for top-level messages, enums, services,
   and enum values; each message scope likewise shares names between fields, nested
   messages, nested enums, oneofs, and enum values;
@@ -64,6 +70,11 @@ The grammar uses the intended lexical and syntactic forms directly:
   stored as an explicit descriptor option;
 - defaults are checked against the resolved field type and integer width, and
   enum defaults must name a value declared by the resolved enum;
+- a oneof member may carry an explicit default, as `protoc` accepts it; only a
+  repeated field refuses one;
+- an ordinary option value has no unary plus: `-` is accepted as a sign, while
+  `+` is a grammar error (a field `default` keeps the type-specific W-40
+  refusal instead);
 - float and double defaults are stored in the canonical textual form used by
   `protoc`, while string and bytes defaults follow descriptor.proto rules;
 - Unicode escapes follow `protoc`: a UTF-16 head+trail pair assembles into one

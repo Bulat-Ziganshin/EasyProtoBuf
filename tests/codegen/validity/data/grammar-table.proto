@@ -1,0 +1,29 @@
+// B7: one accepted spelling per source-grammar rule (CR-11, CR-20, CR-26,
+// CR-27, CR-28). The empty statement after `syntax` is legal, the leading one
+// is not (grammar-leading-semicolon.proto); the oneof member carries an
+// explicit default; `allow_alias = true` has a shared number; the enum value
+// has no field option; the ordinary option has no leading `+`.
+syntax = "proto2";
+
+;
+
+package grammar;
+
+message M {
+  oneof choice {
+    int32 a = 1 [default = 7];
+  }
+  repeated int32 r = 2;
+}
+
+enum Alias {
+  option allow_alias = true;
+  A = 0;
+  B = 0;
+}
+
+enum Plain {
+  C = 0;
+}
+
+option java_package = "grammar";

@@ -1,0 +1,9 @@
+// CR-28: the same rule on a known file option. `java_package` is a string
+// option, but the refusal is syntactic and happens before any type check.
+syntax = "proto2";
+
+message M {
+  optional int32 a = 1;
+}
+
+option java_package = +7;

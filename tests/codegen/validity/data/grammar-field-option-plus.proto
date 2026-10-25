@@ -1,0 +1,7 @@
+// CR-28: a field option is an ordinary option too; `packed` takes no leading
+// `+`. The accepted control is `[packed = true]` in grammar-table.proto.
+syntax = "proto2";
+
+message M {
+  repeated int32 a = 1 [packed = +true];
+}

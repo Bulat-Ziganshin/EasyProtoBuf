@@ -4,7 +4,7 @@
 # on the decoded syntax value, numeric ranges, symbol tables, or descriptor
 # types are listed in SEMANTICS.md.
 
-ProtoFile             <- EmptyStatement* SyntaxStatement? TopLevel* !.
+ProtoFile             <- SyntaxStatement? TopLevel* !.
 SyntaxStatement       <- K_SYNTAX "=" StringSequence ";"
 
 TopLevel              <- EmptyStatement / Package / Import / OptionStatement /

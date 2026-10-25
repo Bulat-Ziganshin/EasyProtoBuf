@@ -1,0 +1,15 @@
+# CR-26: `allow_alias = true` with no shared number. protoc's parser refuses
+# the source (`ValidateEnum`, parser.cc:561-572), but its descriptor path
+# accepts the same option, so the bytes are protoc's own text-format encoding
+# of the shape the source cannot produce. codegen must accept it too: the rule
+# is a source-text rule, not a descriptor rule.
+file {
+  name: "grammar-allow-alias-useless-descriptor.proto"
+  syntax: "proto2"
+  enum_type {
+    name: "E"
+    value { name: "A" number: 0 }
+    value { name: "B" number: 1 }
+    options { allow_alias: true }
+  }
+}

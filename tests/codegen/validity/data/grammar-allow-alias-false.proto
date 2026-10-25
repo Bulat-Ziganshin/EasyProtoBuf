@@ -1,0 +1,11 @@
+// CR-26: an explicit `allow_alias = false` has no effect even without a
+// shared number. The descriptor twin
+// (`grammar-allow-alias-false-descriptor.pbs`) is accepted by protoc's
+// descriptor path and by codegen.
+syntax = "proto2";
+
+enum E {
+  A = 0;
+  B = 1;
+  option allow_alias = false;
+}

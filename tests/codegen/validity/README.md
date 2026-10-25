@@ -80,6 +80,14 @@ and the lane proves the fix in the three ways the session briefs name.
 | `08` in a float default, `09` in an option, `08` in an enum | `.proto` only | `CR-18` |
 | a nested block comment | `.proto` only | `CR-30` |
 | a raw NUL in an aggregate option | `.proto` only | `CR-19` |
+| the accepted statement/option grammar table | `.proto` + `.pbs` | `CR-11`/`20`/`26`/`27`/`28` |
+| a leading `;` before `syntax` (refused) | `.proto` only | `CR-20` |
+| a repeated field with a default (refused) | `.proto` only | `CR-11` |
+| `allow_alias = true` without a shared number (refused) | `.proto` + crafted `.pbs` | `CR-26` |
+| `allow_alias = false` without a shared number (refused) | `.proto` + crafted `.pbs` | `CR-26` |
+| `allow_alias = false` with a shared number (refused) | `.proto` + crafted `.pbs` | `CR-26` |
+| `json_name` on an enum value (refused) | `.proto` only | `CR-27` |
+| a leading `+` on ordinary options (refused) | `.proto` only | `CR-28` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted
@@ -172,6 +180,43 @@ the same token rule, and the runtime checker reads the enumerator as 8.
 The lite profile skips the source halves of every row above; the descriptor
 halves still run.
 
+## The statement and option family (B7)
+
+`grammar-table` is the family test for the source frontend's statement and
+option grammar (`R5`: `CR-11`, `CR-20`, `CR-26`, `CR-27`, `CR-28`). It carries
+one accepted spelling per rule, and the paired loop compares the source header
+with protoc's own `.pbs` byte for byte:
+
+- `CR-11` — a oneof member with an explicit default (the repeated-field
+  refusal is the invalid twin, `grammar-repeated-default`);
+- `CR-20` — an empty statement after `syntax` is legal; a leading one is not;
+- `CR-26` — `allow_alias = true` with a shared number;
+- `CR-27` — an enum value without field options;
+- `CR-28` — an ordinary option value without a leading `+`.
+
+The invalid spellings are `grammar-leading-semicolon`, `grammar-repeated-default`,
+`grammar-allow-alias-useless`, `grammar-allow-alias-false`,
+`grammar-allow-alias-false-aliased`, `grammar-enum-json-name`,
+`grammar-option-plus`, `grammar-option-plus-known` and
+`grammar-field-option-plus`. All nine are source-only: protoc refuses the text,
+so it cannot write a descriptor for them (an enum value's `EnumValueOptions` has
+no `json_name` field at all).
+
+`CR-26` has a descriptor half because its two rules live in protoc's *parser*
+(`ValidateEnum`, `parser.cc:520-575`), not in its descriptor builder. A
+descriptor carrying `allow_alias = true` without a shared number, or an
+explicit `false`, is therefore accepted by `protoc --descriptor_set_in`, and
+the crafted `grammar-allow-alias-*-descriptor.pbs` companions pin that verdict:
+codegen accepts the first two and refuses the third by the ordinary
+duplicate-number rule, exactly as protoc's descriptor path does. The crafted
+bytes come from protoc's own text-format encoder because source text cannot
+produce the shape.
+
+The family's accepted headers are compiled by
+`codegen_validity_pedantic_check` under `-std=c++11 -pedantic-errors` (the
+`grammar-table` descriptor header); the source header is byte-identical, so the
+compile covers both paths.
+
 ## Rebuilding the fixtures
 
 ```sh
@@ -187,9 +232,14 @@ The crafted fixtures come from `.txtpb` with
 `--encode=google.protobuf.FileDescriptorSet`. A `.txtpb` wins over the
 `.proto` of the same stem, because the raw spelling is the point. The
 source-only fixtures (`bom`, `bom-control`, `empty-syntax`,
-`json-name-map-collision`, `literals-aggregate-nul`, `literals-nested-comment`,
-`literals-octal-08`, `literals-octal-09`, `literals-octal-enum`,
-`plus-int-default`, `plus-enum-value`, `plus-float-default`, `plus-inf-nan`)
+`grammar-allow-alias-false`, `grammar-allow-alias-false-aliased`,
+`grammar-allow-alias-useless`, `grammar-enum-json-name`,
+`grammar-field-option-plus`, `grammar-leading-semicolon`,
+`grammar-option-plus`, `grammar-option-plus-known`,
+`grammar-repeated-default`, `json-name-map-collision`,
+`literals-aggregate-nul`, `literals-nested-comment`, `literals-octal-08`,
+`literals-octal-09`, `literals-octal-enum`, `plus-int-default`,
+`plus-enum-value`, `plus-float-default`, `plus-inf-nan`)
 are skipped: protoc refuses most of them,
 and a generated `.pbs` would add an unintended twin.
 

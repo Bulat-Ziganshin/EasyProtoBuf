@@ -1,0 +1,11 @@
+// CR-26: `allow_alias = true` is unnecessary when no two values share a
+// number. The rule lives in protoc's parser (`ValidateEnum`), so the
+// descriptor twin (`grammar-allow-alias-useless-descriptor.pbs`) is accepted
+// by protoc and by codegen.
+syntax = "proto2";
+
+enum E {
+  option allow_alias = true;
+  A = 0;
+  B = 1;
+}

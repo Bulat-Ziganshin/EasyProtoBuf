@@ -677,10 +677,11 @@ void test_rejects_invalid_enum_defaults()
 
 // D-32 (fix round r16): the source half of the empty-enum rule. The parser
 // refuses the shape as text, which is why the descriptor-origin half is what
-// the linker owns; the option-only body is still an empty list, and that row is
-// the parity control for the descriptor-origin `allow_alias` case - protoc
-// refuses an empty enum that writes the option as well, so the option is not a
-// licence on either origin.
+// the linker owns. A body that writes `allow_alias = true` and no value is
+// refused by protoc's parser first ("declares support for enum aliases but no
+// enum values share field numbers", `ValidateEnum`, parser.cc:561-572), so the
+// source verdict is the same refusal for the option's own reason; the empty
+// descriptor-origin enum keeps the linker's empty-value rule.
 void test_rejects_empty_enums()
 {
     easypb_proto::ParsedProto parsed;
@@ -694,7 +695,8 @@ void test_rejects_empty_enums()
     CHECK(!easypb_proto::parse_proto("empty-enum-alias.proto",
         "syntax=\"proto2\"; enum E { option allow_alias = true; }",
         option_only, option_error));
-    CHECK(option_error.message.find("at least one value") != std::string::npos);
+    CHECK(option_error.message.find("no enum values share field numbers") !=
+          std::string::npos);
 }
 
 void test_source_refusals_carry_their_descriptor_codes()
@@ -804,11 +806,14 @@ void test_rejects_an_empty_oneof_body()
 // D-28 (fix round r13): the parser RECORDS `option allow_alias` in the
 // descriptor it emits, because the linker validates descriptor-origin enums for
 // repeated numbers and cannot tell an intentional alias from that defect
-// without it. The three states matter and are asserted separately: absent (the
-// parser's own duplicate-number refusal is the only guard), present and true
-// (an alias the linker must accept - the end-to-end fixture is
+// without it. The present-and-true state is asserted here (an alias the linker
+// must accept - the end-to-end fixture is
 // `tests/codegen/enums/data/enum_codegen.proto`, whose `STARTED = 1` and
-// `ACTIVE = 1` sit under the option), and present and false (not a licence).
+// `ACTIVE = 1` sit under the option). The absent state keeps the parser's own
+// duplicate-number refusal as the only guard. Explicit `false` is not a licence
+// and is refused as source text (CR-26, `protoc`'s `ValidateEnum`), so the
+// parser no longer produces that state; the descriptor path still can, and the
+// validity lane carries it.
 void test_records_allow_alias_in_the_model()
 {
     easypb_proto::ParsedProto aliased;
@@ -835,14 +840,10 @@ void test_records_allow_alias_in_the_model()
 
     easypb_proto::ParsedProto explicit_false;
     easypb_proto::Diagnostic false_error;
-    CHECK(easypb_proto::parse_proto("false.proto",
+    CHECK(!easypb_proto::parse_proto("false.proto",
         "syntax=\"proto2\"; enum E { option allow_alias = false; A = 1; B = 2; }",
         explicit_false, false_error));
-    CHECK(explicit_false.file.enum_type.size() == 1);
-    if (explicit_false.file.enum_type.size() == 1) {
-        CHECK(explicit_false.file.enum_type[0].options.has_allow_alias);
-        CHECK(!explicit_false.file.enum_type[0].options.allow_alias);
-    }
+    CHECK(false_error.message.find("no effect") != std::string::npos);
 }
 
 
@@ -1654,6 +1655,123 @@ void test_leading_plus_is_refused()
 }
 
 // W-43: the source option is retained and its shape is checked by the parser.
+// CR-11/20/26/27/28 (B7): the statement and option grammar table. One valid
+// and one invalid spelling per rule, all against protoc 30.1. The acceptance
+// controls prove the refusal is the rule and not a blanket ban; the refusal
+// rows assert the verdict (the words are the parser's own).
+void test_statement_and_option_grammar_table()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    // CR-11 valid: a oneof member carries an explicit default, like any other
+    // optional field. The descriptor path accepts the same shape.
+    CHECK(easypb_proto::parse_proto("oneof-default.proto",
+        "syntax=\"proto2\"; message M { oneof choice { int32 a = 1 [default = 7]; } }",
+        parsed, error));
+    const FieldDescriptorProto* oneof_int =
+        find_field(parsed.file.message_type[0], "a");
+    CHECK(oneof_int != 0);
+    CHECK(oneof_int && oneof_int->has_oneof_index && oneof_int->oneof_index == 0);
+    CHECK(oneof_int && oneof_int->has_default_value &&
+          text(oneof_int->default_value) == "7");
+    CHECK(easypb_proto::parse_proto("oneof-default-string.proto",
+        "syntax=\"proto2\"; message M { oneof choice { string s = 1 [default = \"x\"]; } }",
+        parsed, error));
+    CHECK(find_field(parsed.file.message_type[0], "s") != 0);
+
+    // CR-11 invalid: the repeated refusal stays.
+    CHECK(!easypb_proto::parse_proto("repeated-default.proto",
+        "syntax=\"proto2\"; message M { repeated int32 a = 1 [default = 7]; }",
+        parsed, error));
+    CHECK(error.message.find("repeated") != std::string::npos);
+
+    // CR-20 valid: empty statements after `syntax` stay legal, and a leading
+    // empty statement is legal when no syntax declaration follows it (protoc
+    // defaults the file to proto2).
+    CHECK(easypb_proto::parse_proto("empty-after-syntax.proto",
+        "syntax=\"proto2\"; ; message M { optional int32 a = 1; }",
+        parsed, error));
+    CHECK(easypb_proto::parse_proto("leading-semicolon-message.proto",
+        "; message M { optional int32 a = 1; }", parsed, error));
+    CHECK(easypb_proto::parse_proto("syntax-after-comment.proto",
+        "// leading comment\nsyntax=\"proto2\"; message M { optional int32 a = 1; }",
+        parsed, error));
+
+    // CR-20 invalid: `syntax` is recognized only as the first token.
+    CHECK(!easypb_proto::parse_proto("leading-semicolon-syntax.proto",
+        "; syntax=\"proto2\"; message M { optional int32 a = 1; }",
+        parsed, error));
+    CHECK(error.message.find("first statement") != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("two-semicolons-syntax.proto",
+        ";; syntax=\"proto2\"; message M { optional int32 a = 1; }",
+        parsed, error));
+    CHECK(error.message.find("first statement") != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("syntax-after-package.proto",
+        "syntax=\"proto2\"; package p; syntax=\"proto2\";", parsed, error));
+    CHECK(error.message.find("first statement") != std::string::npos);
+
+    // CR-26 valid: `true` licenses a shared number.
+    CHECK(easypb_proto::parse_proto("allow-alias-valid.proto",
+        "syntax=\"proto2\"; enum E { option allow_alias = true; A = 0; B = 0; }",
+        parsed, error));
+
+    // CR-26 invalid: `true` without an alias is unnecessary, and an explicit
+    // `false` has no effect (with or without an alias).
+    CHECK(!easypb_proto::parse_proto("allow-alias-useless.proto",
+        "syntax=\"proto2\"; enum E { option allow_alias = true; A = 0; B = 1; }",
+        parsed, error));
+    CHECK(error.message.find("no enum values share field numbers") !=
+          std::string::npos);
+    CHECK(!easypb_proto::parse_proto("allow-alias-false.proto",
+        "syntax=\"proto2\"; enum E { A = 0; B = 1; option allow_alias = false; }",
+        parsed, error));
+    CHECK(error.message.find("no effect") != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("allow-alias-false-with-alias.proto",
+        "syntax=\"proto2\"; enum E { A = 0; B = 0; option allow_alias = false; }",
+        parsed, error));
+    CHECK(error.message.find("no effect") != std::string::npos);
+
+    // CR-27 valid: an ordinary enum value has no options.
+    CHECK(easypb_proto::parse_proto("enum-control.proto",
+        "syntax=\"proto2\"; enum E { A = 0; }", parsed, error));
+
+    // CR-27 invalid: `json_name` is a field option, not an enum-value option.
+    CHECK(!easypb_proto::parse_proto("enum-json-name.proto",
+        "syntax=\"proto2\"; enum E { A = 0 [json_name = \"aName\"]; }",
+        parsed, error));
+    CHECK(error.message.find("field-only options") != std::string::npos);
+
+    // CR-28 valid: a negative ordinary option value keeps its sign, and a
+    // plain field option is unaffected.
+    CHECK(easypb_proto::parse_proto("option-minus.proto",
+        "syntax=\"proto2\"; message M { optional int32 a = 1; } "
+        "option (my.opt) = -7;", parsed, error));
+    CHECK(easypb_proto::parse_proto("field-option-control.proto",
+        "syntax=\"proto2\"; message M { repeated int32 a = 1 [packed = true]; }",
+        parsed, error));
+
+    // CR-28 invalid: every ordinary option refuses a leading `+`. The field
+    // `default` is the one exception (E1/W-40), checked by
+    // test_leading_plus_is_refused.
+    CHECK(!easypb_proto::parse_proto("option-plus-custom.proto",
+        "syntax=\"proto2\"; message M { optional int32 a = 1; } "
+        "option (my.opt) = +7;", parsed, error));
+    CHECK(error.message.find("Expected option value") != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("option-plus-known.proto",
+        "syntax=\"proto2\"; message M { optional int32 a = 1; } "
+        "option java_package = +7;", parsed, error));
+    CHECK(error.message.find("Expected option value") != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("field-option-plus.proto",
+        "syntax=\"proto2\"; message M { repeated int32 a = 1 [packed = +true]; }",
+        parsed, error));
+    CHECK(error.message.find("Expected option value") != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("enum-option-plus.proto",
+        "syntax=\"proto2\"; enum E { option allow_alias = +true; A = 0; }",
+        parsed, error));
+    CHECK(error.message.find("Expected option value") != std::string::npos);
+}
+
 void test_json_name_option_is_retained()
 {
     easypb_proto::ParsedProto parsed;
@@ -1712,6 +1830,7 @@ int main()
     test_float_defaults_are_canonicalized();
     test_bytes_upper_hex_escape_is_decoded();
     test_leading_plus_is_refused();
+    test_statement_and_option_grammar_table();
     test_json_name_option_is_retained();
     test_rejects_proto3_required();
     test_rejects_invalid_field_numbers();

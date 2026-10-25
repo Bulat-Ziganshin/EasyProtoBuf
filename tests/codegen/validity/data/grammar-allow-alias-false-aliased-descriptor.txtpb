@@ -1,0 +1,14 @@
+# CR-26: explicit `allow_alias = false` with a shared number. The source is
+# refused by the parser's no-op rule; the descriptor path has no such rule, so
+# this shape is refused by the ordinary duplicate-number rule - exactly as
+# protoc's descriptor path refuses it.
+file {
+  name: "grammar-allow-alias-false-aliased-descriptor.proto"
+  syntax: "proto2"
+  enum_type {
+    name: "E"
+    value { name: "A" number: 0 }
+    value { name: "B" number: 0 }
+    options { allow_alias: false }
+  }
+}

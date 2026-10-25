@@ -691,7 +691,7 @@ public:
     Parser(const std::string& file_name, const char* source, std::size_t source_size,
            ParsedProto& result, const ParseOptions& options)
         : file_name_(file_name), lexer_(source, source_size), out_(result),
-          seen_syntax_(false), seen_package_(false), seen_statement_(false),
+          seen_syntax_(false), seen_package_(false),
           defer_type_resolution_(options.defer_type_resolution),
           syntax_(easypb_schema::FILE_SYNTAX_PROTO2)
     {
@@ -699,7 +699,11 @@ public:
         next_ = lexer_.next();
     }
 
-    // ProtoFile <- EmptyStatement* SyntaxStatement? TopLevel* !.
+    // ProtoFile <- SyntaxStatement? TopLevel* !.
+    // `syntax` is recognized only when it is the first token, as protoc's
+    // `ParseProtoFile` does (`parser.cc:600-612` tests `LookingAt("syntax")`
+    // before its statement loop). A leading empty statement therefore accepts
+    // no following `syntax` declaration; empty statements after it stay legal.
     // Dispatches TopLevel alternatives and then runs the shared semantic
     // passes (easypb_schema::index_file for both modes, plus
     // easypb_schema::resolve_file for validation).
@@ -710,19 +714,28 @@ public:
         out_.physical_name = file_name_;
         out_.from_descriptor_set = false;
 
+        bool syntax_window_open = true;
         while (current_.kind != TOKEN_END) {
-            // EmptyStatement
-            if (accept_symbol(';')) continue;
-
-            // SyntaxStatement is special: unlike TopLevel, it may occur only
-            // once and only before every non-empty top-level statement.
-            if (is_keyword("syntax")) {
-                if (seen_statement_ || seen_syntax_) fail("syntax declaration must be the first statement");
-                parse_syntax();
-                seen_syntax_ = true;
+            // EmptyStatement. Consuming one closes the syntax window: protoc
+            // only looks for `syntax` before any statement token.
+            if (accept_symbol(';')) {
+                syntax_window_open = false;
                 continue;
             }
-            seen_statement_ = true;
+
+            // SyntaxStatement is special: unlike TopLevel, it may occur only
+            // once, before every other token (comments and a BOM are skipped
+            // by the lexer, so they do not close the window).
+            if (is_keyword("syntax")) {
+                if (!syntax_window_open || seen_syntax_) {
+                    fail("syntax declaration must be the first statement");
+                }
+                parse_syntax();
+                seen_syntax_ = true;
+                syntax_window_open = false;
+                continue;
+            }
+            syntax_window_open = false;
 
             // TopLevel <- Package / Import / OptionStatement / Message /
             //             Enum / Extend / Service
@@ -768,7 +781,6 @@ private:
     Token next_;
     bool seen_syntax_;
     bool seen_package_;
-    bool seen_statement_;
     bool defer_type_resolution_;
     easypb_schema::FileSyntax syntax_;
 
@@ -994,7 +1006,13 @@ private:
 
     // Constant <- StringSequence / SignedFloat / SignedInteger /
     //             BoolLiteral / FullIdentifier / AggregateValue
-    Constant constant()
+    // CR-28: only a field `default` may keep a leading `+` here; it is refused
+    // by `apply_default` with the type-specific W-40 message (exception E1).
+    // An ordinary option is parsed by protoc's `ParseOption`, which consumes
+    // `-` only (`parser.cc:1508`); a leading `+` is a symbol token and reaches
+    // "Expected option value." there. Parsing it here would accept the spelling
+    // and then discard the value, so the refusal belongs at this shared site.
+    Constant constant(bool allow_leading_plus)
     {
         Constant value;
         value.location = current_.location;
@@ -1008,6 +1026,9 @@ private:
         // SignedInteger and SignedFloat share an optional leading Sign.
         std::string sign;
         if (current_.kind == TOKEN_SYMBOL && (current_.symbol == '+' || current_.symbol == '-')) {
+            if (current_.symbol == '+' && !allow_leading_plus) {
+                throw ParseFailure(current_.location, "Expected option value.");
+            }
             sign.assign(1, current_.symbol);
             advance();
         }
@@ -1062,7 +1083,7 @@ private:
     {
         (void)option_name();
         expect_symbol('=');
-        (void)constant();
+        (void)constant(false);
         expect_symbol(';');
     }
 
@@ -1170,7 +1191,9 @@ private:
             const SourceLocation option_location = current_.location;
             const std::string name = option_name();
             expect_symbol('=');
-            Constant value = constant();
+            // A field `default` is the one place where a leading `+` is
+            // parsed and then refused by `apply_default` (W-40, exception E1).
+            Constant value = constant(name == "default");
             if (name == "default") {
                 if (state.has_default) throw ParseFailure(option_location, "duplicate default field option");
                 state.has_default = true;
@@ -1313,14 +1336,20 @@ private:
                                "explicit default values are not allowed in proto3",
                                easypb_schema::DIAGNOSTIC_PROTO3_EXPLICIT_DEFAULT);
         }
-        if (field.label == FieldDescriptorProto::LABEL_REPEATED || field.has_oneof_index) {
-            throw ParseFailure(value.location, "default value is not allowed on repeated or oneof fields");
+        // CR-11: protoc accepts an explicit default on a oneof member.
+        // `ParseDefaultAssignment` (`parser.cc:1225-1361`) has no oneof
+        // clause, and the descriptor it writes is an optional field with
+        // `oneof_index`; the descriptor path already accepts that shape. Only
+        // the repeated-field refusal stays here.
+        if (field.label == FieldDescriptorProto::LABEL_REPEATED) {
+            throw ParseFailure(value.location, "default value is not allowed on repeated fields");
         }
 
         // W-40 (option B): refuse every leading `+` on a numeric constant
-        // before the type switch. The sign parser in `constant()` stays: the
-        // error points at the value, and other option consumers may still
-        // need the token consumed. `protoc` calls `ConsumeInteger64` /
+        // before the type switch. `constant(true)` parses the sign only for
+        // this caller, so the error points at the value with the type-specific
+        // message; every ordinary option passes `false` and refuses the sign
+        // as a grammar error (CR-28). `protoc` calls `ConsumeInteger64` /
         // `ConsumeNumber` without a unary-plus branch (`parser.cc:1272`,
         // `:1312`), so these spellings never reach its value parsers either.
         if ((value.kind == Constant::INTEGER_VALUE ||
@@ -1807,6 +1836,8 @@ private:
         result.name = out_.strings.save(name);
         result.has_name = true;
         bool allow_alias = false;
+        bool has_allow_alias = false;
+        SourceLocation allow_alias_location;
         std::set<std::string> value_names;
         std::vector<std::int32_t> numbers;
         std::vector<NumberRange> reserved_ranges;
@@ -1820,15 +1851,18 @@ private:
             //                EnumValue
             if (accept_symbol(';')) continue;                         // EmptyStatement
             if (accept_keyword("option")) {                           // EnumOption
+                const SourceLocation option_location = current_.location;
                 const std::string option = option_name();
                 expect_symbol('=');
-                const Constant value = constant();
+                const Constant value = constant(false);
                 expect_symbol(';');
                 if (option == "allow_alias") {
                     if (value.kind != Constant::BOOL_VALUE) {
                         throw ParseFailure(value.location, "allow_alias must be true or false");
                     }
                     allow_alias = value.text == "true";
+                    has_allow_alias = true;
+                    allow_alias_location = option_location;
                     // D-28 (fix round r13): the option travels in the model,
                     // because the linker validates descriptor-origin enums for
                     // repeated numbers and cannot tell an intentional alias
@@ -1870,7 +1904,11 @@ private:
             }
             if (current_.kind == TOKEN_SYMBOL && current_.symbol == '[') {
                 const FieldOptionState ignored = field_options();
-                if (ignored.has_default || ignored.has_packed || ignored.has_cpp_type) {
+                // CR-27: protoc special-cases `json_name` only in
+                // `ParseFieldOptions` (`parser.cc:1210-1214`); an enum value's
+                // options go through `ParseOption`, where the name is unknown.
+                if (ignored.has_default || ignored.has_packed ||
+                    ignored.has_cpp_type || ignored.has_json_name) {
                     throw ParseFailure(value_location,
                         "field-only options are not enum-value options");
                 }
@@ -1879,6 +1917,31 @@ private:
             out_.declaration_locations[easypb_schema::enum_value_path(
                 enum_path, static_cast<int>(result.value.size()))] = value_location;
             result.value.push_back(std::move(value));
+        }
+
+        // CR-26: protoc's parser validates `allow_alias` before the descriptor
+        // builder sees the enum (`ValidateEnum`, parser.cc:520-575). An
+        // explicit `false` has no effect, and `true` without a shared number is
+        // unnecessary; both are refusals. The rules are source-text rules:
+        // protoc's descriptor path accepts the same options, so the descriptor
+        // path here stays at parity and does not grow a check of its own.
+        if (has_allow_alias && !allow_alias) {
+            throw ParseFailure(allow_alias_location,
+                "\"" + name + "\" declares 'option allow_alias = false;' which "
+                "has no effect. Please remove the declaration.");
+        }
+        bool has_duplicate_number = false;
+        {
+            std::set<std::int32_t> unique;
+            for (std::size_t i = 0; i < numbers.size(); ++i) {
+                if (!unique.insert(numbers[i]).second) has_duplicate_number = true;
+            }
+        }
+        if (allow_alias && !has_duplicate_number) {
+            throw ParseFailure(allow_alias_location,
+                "\"" + name + "\" declares support for enum aliases but no enum "
+                "values share field numbers. Please remove the unnecessary "
+                "'option allow_alias = true;' declaration.");
         }
 
         if (result.value.empty()) {
@@ -1907,16 +1970,11 @@ private:
             !result.value.empty() && result.value[0].number != 0) {
             throw ParseFailure(current_.location, "the first proto3 enum value must be zero");
         }
-        if (!allow_alias) {
-            std::set<std::int32_t> unique;
-            for (std::size_t i = 0; i < numbers.size(); ++i) {
-                if (!unique.insert(numbers[i]).second) {
-                    throw ParseFailure(
-                        current_.location,
-                        "duplicate enum number requires option allow_alias = true",
-                        easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
-                }
-            }
+        if (!allow_alias && has_duplicate_number) {
+            throw ParseFailure(
+                current_.location,
+                "duplicate enum number requires option allow_alias = true",
+                easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
         }
         return result;
     }

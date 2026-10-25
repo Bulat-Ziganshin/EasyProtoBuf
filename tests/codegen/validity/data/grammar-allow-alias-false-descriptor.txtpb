@@ -1,0 +1,13 @@
+# CR-26: explicit `allow_alias = false` with no shared number. protoc's parser
+# refuses the source as a no-op declaration, but its descriptor path accepts
+# the option; codegen must match that verdict on the descriptor path.
+file {
+  name: "grammar-allow-alias-false-descriptor.proto"
+  syntax: "proto2"
+  enum_type {
+    name: "E"
+    value { name: "A" number: 0 }
+    value { name: "B" number: 1 }
+    options { allow_alias: false }
+  }
+}

@@ -1,0 +1,7 @@
+// CR-20: `syntax` is recognized only as the first token, so an empty
+// statement before it makes the declaration an ordinary top-level token.
+; syntax = "proto2";
+
+message M {
+  optional int32 a = 1;
+}

@@ -15,7 +15,8 @@ Two shapes come from protoc:
   `--encode=google.protobuf.FileDescriptorSet`, because protoc cannot produce
   them from source text: an enum value named `1A`, a field whose type is 99, a
   field with no type at all, a proto2 group, a file name with a newline, a raw
-  out-of-range or leading-plus default, and the W-42/W-43 collision shapes.
+  out-of-range or leading-plus default, the W-42/W-43 collision shapes, and the
+  B7 `allow_alias` shapes whose rules live in protoc's source parser only.
 
 A crafted `.pbs` wins over the `.proto` of the same stem: the raw spelling is
 the point of `defaults-float-overflow`, `defaults-bytes-upper-hex`,
@@ -63,11 +64,20 @@ DESCRIPTOR_DIRS = [
 
 # The source-only fixtures: protoc refuses most of them, and a generated `.pbs`
 # would either fail the script or add an unintended descriptor twin. The
-# validity lane drives these from the `.proto` directly (W-15, W-40, W-41).
+# validity lane drives these from the `.proto` directly (W-15, W-40, W-41, B7).
 SOURCE_ONLY_FIXTURES = {
     "bom",
     "bom-control",
     "empty-syntax",
+    "grammar-allow-alias-false",
+    "grammar-allow-alias-false-aliased",
+    "grammar-allow-alias-useless",
+    "grammar-enum-json-name",
+    "grammar-field-option-plus",
+    "grammar-leading-semicolon",
+    "grammar-option-plus",
+    "grammar-option-plus-known",
+    "grammar-repeated-default",
     "json-name-map-collision",
     "literals-aggregate-nul",
     "literals-nested-comment",
