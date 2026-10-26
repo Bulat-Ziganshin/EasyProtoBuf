@@ -16,6 +16,16 @@
 
 #include "b.pb.hpp"
 
+// The probe needs an over-aligned byte buffer for placement-new. `alignas`
+// is C++11 but GCC 4.7 does not implement it, and std::aligned_storage is
+// rejected by MSVC when the requested alignment exceeds alignof(max_align_t).
+// The compiler-specific spelling works on every supported toolchain.
+#if defined(_MSC_VER)
+#  define EASYPB_TEST_ALIGNAS_16 __declspec(align(16))
+#else
+#  define EASYPB_TEST_ALIGNAS_16 __attribute__((aligned(16)))
+#endif
+
 namespace {
 
 // A zeroed buffer is the compiler's business, so the check spells the expected
@@ -23,7 +33,7 @@ namespace {
 // presence flags start clear.
 bool zero_initialized()
 {
-    alignas(::p::M) unsigned char storage[sizeof(::p::M)];
+    EASYPB_TEST_ALIGNAS_16 unsigned char storage[sizeof(::p::M)];
     std::memset(storage, 0xAB, sizeof storage);
     ::p::M* value = new (storage) ::p::M;
     return value->e == ::q::E::Z && ! value->has_e && value->i == 0 &&

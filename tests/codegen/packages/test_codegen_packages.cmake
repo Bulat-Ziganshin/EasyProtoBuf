@@ -91,7 +91,7 @@ require_contains("${external_out}" "::other::External item;" "Absolute imported 
 # CR-08/P7: the compatibility mode cannot see `other.State`'s declaration, so
 # the implicit default is the definition-independent zero cast rather than an
 # indeterminate member (`::other::State implicit_state;` used to be emitted).
-require_contains("${external_out}" "::other::State implicit_state = static_cast<::other::State>(0);" "Implicit imported enum is zero-initialized")
+require_contains("${external_out}" "::other::State implicit_state = static_cast< ::other::State>(0);" "Implicit imported enum is zero-initialized")
 require_not_contains("${external_out}" "::other::State implicit_state;"
     "The implicit imported enum must carry an initializer")
 run_ok(external_no_defaults_out external_no_defaults_err
@@ -114,7 +114,7 @@ run_ok(complete_out complete_err
     "${external_pbs}" "${other_pbs}")
 require_contains("${complete_out}" "::other::State implicit_state = ::other::State::READY;"
     "P7 E11: the complete link spells the imported enum's first value")
-require_contains("${external_out}" "::other::State implicit_state = static_cast<::other::State>(0);"
+require_contains("${external_out}" "::other::State implicit_state = static_cast< ::other::State>(0);"
     "P7 E11: the compatibility mode can only write the zero value")
 
 run_ok(shadow_out shadow_err ${CODEGEN} --descriptor-set "${shadow_pbs}")

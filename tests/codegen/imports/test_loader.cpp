@@ -689,11 +689,46 @@ void test_directory_argument_is_reported_as_directory()
     CHECK(logical_files.files().empty());
 }
 
-// Declared with the working-directory helpers below; this row moves the
-// working directory, and the helpers live where the other cwd-moving tests use
-// them.
-bool set_working_directory(const std::string& disk_path);
-std::string current_working_directory_text();
+// Working-directory helpers shared by this row and the long-path tests below.
+// Setting it moves the whole process, so every caller must restore it before
+// returning. Both halves live here, outside the Windows-only section, because
+// this row runs on every platform: defining them only under _WIN32 left the
+// POSIX link with an undefined reference.
+bool set_working_directory(const std::string& disk_path)
+{
+#ifdef _WIN32
+    std::vector<wchar_t> wide;
+    if (!wide_from_utf8(disk_path, wide)) return false;
+    return SetCurrentDirectoryW(&wide[0]) != FALSE;
+#else
+    return ::chdir(disk_path.c_str()) == 0;
+#endif
+}
+
+// The working directory as the platform reports it, UTF-8, without a trailing
+// separator. Empty means the query could not answer.
+std::string current_working_directory_text()
+{
+#ifdef _WIN32
+    const DWORD needed = GetCurrentDirectoryW(0, 0);
+    if (needed == 0) return std::string();
+    std::vector<wchar_t> buffer(needed);
+    const DWORD length = GetCurrentDirectoryW(needed, &buffer[0]);
+    if (length == 0 || length >= needed) return std::string();
+    std::string text;
+    if (!easypb_file::utf8_from_wide(&buffer[0], text)) return std::string();
+    return text;
+#else
+    std::vector<char> buffer(4096);
+    for (;;) {
+        if (::getcwd(&buffer[0], buffer.size()) != 0) {
+            return std::string(&buffer[0]);
+        }
+        if (errno != ERANGE) return std::string();
+        buffer.resize(buffer.size() * 2);
+    }
+#endif
+}
 
 void test_existing_file_outside_roots_is_retried_as_logical_name()
 {
@@ -1776,30 +1811,6 @@ void long_path_remove_dir(const std::string& disk_path)
     }
     wide.push_back(L'\0');
     RemoveDirectoryW(&wide[0]);
-}
-
-// Working-directory helpers for the test below. Setting it moves the whole
-// process, and every other test resolves its fixtures relative to the CTest
-// working directory, so a caller must put it back before returning.
-bool set_working_directory(const std::string& disk_path)
-{
-    std::vector<wchar_t> wide;
-    if (!wide_from_utf8(disk_path, wide)) return false;
-    return SetCurrentDirectoryW(&wide[0]) != FALSE;
-}
-
-// The working directory as the platform reports it, UTF-8, without a trailing
-// separator. Empty means the query could not answer.
-std::string current_working_directory_text()
-{
-    const DWORD needed = GetCurrentDirectoryW(0, 0);
-    if (needed == 0) return std::string();
-    std::vector<wchar_t> buffer(needed);
-    const DWORD length = GetCurrentDirectoryW(needed, &buffer[0]);
-    if (length == 0 || length >= needed) return std::string();
-    std::string text;
-    if (!easypb_file::utf8_from_wide(&buffer[0], text)) return std::string();
-    return text;
 }
 
 // Disk spelling of the first `count` components of a fixture chain below the

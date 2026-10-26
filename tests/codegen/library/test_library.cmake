@@ -200,7 +200,7 @@ if(NOT p7_thin_header STREQUAL p7_full_header)
         "P7: the thin compatibility header differs from the complete closure's")
 endif()
 require_contains(p7_thin_header
-    "::q::E e = static_cast<::q::E>(0);"
+    "::q::E e = static_cast< ::q::E>(0);"
     "P7: the external enum member must be zero-initialized, not left indeterminate")
 require_contains(p7_thin_err "not declared in the linked set"
     "The compatibility warning for the external enum")

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <map>
@@ -780,8 +781,14 @@ std::string integral_default_str(const FieldDescriptorProto& field)
 // file, so the two agreement rules below hold (CR-08, P7).
 std::string zero_enum_default(const FieldDescriptorProto& field)
 {
-    return myformat(" = static_cast<{0}>(0)",
-                    cpp_qualified_type_str(field.type_name));
+    // GCC 4.7 still tokenizes "<::" as the alternative token "<:" followed by
+    // ':', so the whole initializer goes through the same separator helper as
+    // the field declarations (cpp_type_legacy_safe). The type itself does not
+    // contain '<': the digraph is formed by the cast's '<' and the leading
+    // "::" of the qualified name.
+    return cpp_type_legacy_safe(
+        myformat(" = static_cast<{0}>(0)",
+                 cpp_qualified_type_str(field.type_name)));
 }
 
 
@@ -1267,92 +1274,82 @@ void detect_dependency_cycles(std::vector<MessageInfo>& roots)
 }
 
 
-// Return the top-level/sibling unit that lexically contains `message`.
-// Topological ordering works on whole lexical subtrees because a nested C++
-// struct cannot be moved outside its enclosing struct independently.
-MessageInfo* containing_unit(const std::vector<MessageInfo*>& units,
-                             const MessageInfo& message)
-{
-    for (auto* unit: units) {
-        if (message.proto_name == unit->proto_name ||
-            is_under_proto_scope(message.proto_name, unit->proto_name)) {
-            return unit;
-        }
-    }
-    return nullptr;
-}
-
-
 // Stable topological ordering for a set of sibling lexical subtrees.
 // A dependency between any two messages inside different subtrees becomes a
 // dependency between the corresponding roots.  Dependencies are visited in
 // original source order so unrelated messages retain their previous order.
+//
+// The walk is O(units + dependency edges): the message-to-unit owner map is
+// built once, and every frame walks its own edge list.  Scanning all units for
+// each frame made a 12 000-message value chain O(n^2) and timed out the
+// Debug CTest lane on the oldest MSVC toolset (CR-35 fixture), even though the
+// result was correct.
 std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo*>& units)
 {
-    std::map<MessageInfo*, std::set<MessageInfo*> > dependencies;
-
     // Collapse field-level dependencies to the sibling/root granularity that
-    // can actually be reordered in C++ source.
-    for (auto* unit: units) {
-        std::vector<MessageInfo*> subtree;
-        collect_message_infos(*unit, subtree);
-        for (auto* source: subtree) {
+    // can actually be reordered in C++ source.  `owner` answers "which unit
+    // contains this message" once, instead of the prefix scan that used to
+    // run for every field dependency.
+    std::vector<std::vector<MessageInfo*> > subtrees(units.size());
+    std::map<MessageInfo*, std::size_t> owner;
+    for (std::size_t i = 0; i < units.size(); ++i) {
+        collect_message_infos(*units[i], subtrees[i]);
+        for (auto* message: subtrees[i]) owner[message] = i;
+    }
+
+    std::vector<std::vector<std::size_t> > dependencies(units.size());
+    for (std::size_t i = 0; i < units.size(); ++i) {
+        std::vector<std::size_t>& unit_deps = dependencies[i];
+        for (auto* source: subtrees[i]) {
             for (auto* dependency: source->dependencies) {
-                MessageInfo* target_unit = containing_unit(units, *dependency);
-                if (target_unit && target_unit != unit) {
-                    dependencies[unit].insert(target_unit);
+                const std::map<MessageInfo*, std::size_t>::const_iterator found =
+                    owner.find(dependency);
+                if (found != owner.end() && found->second != i) {
+                    unit_deps.push_back(found->second);
                 }
             }
         }
+        std::sort(unit_deps.begin(), unit_deps.end());
+        unit_deps.erase(std::unique(unit_deps.begin(), unit_deps.end()),
+                        unit_deps.end());
     }
 
-    std::map<MessageInfo*, GraphColor> color;
+    std::vector<GraphColor> color(units.size(), GraphColor::Unvisited);
     std::vector<MessageInfo*> result;
     result.reserve(units.size());
-    for (auto* unit: units) color[unit] = GraphColor::Unvisited;
 
     // The same explicit stack as the cycle walk (CR-35): a chain of lexical
     // subtrees is as deep as its dependency chain, so a recursive visitor
-    // overflows on a schema the generator otherwise accepts. `next` is the
-    // index into `units`, which is walked in source order to keep unrelated
-    // output stable.
+    // overflows on a schema the generator otherwise accepts. The dependency
+    // list is sorted by source position, so this is the same visiting order
+    // the former full-unit scan produced, without the scan.
     struct Frame
     {
-        MessageInfo* unit;
-        const std::set<MessageInfo*>* unit_deps;
+        std::size_t unit;
         std::size_t next;
     };
 
     std::vector<Frame> stack;
-    for (auto* unit: units) {
-        if (color[unit] != GraphColor::Unvisited) continue;
+    for (std::size_t root = 0; root < units.size(); ++root) {
+        if (color[root] != GraphColor::Unvisited) continue;
 
-        color[unit] = GraphColor::OnStack;
-        const std::map<MessageInfo*, std::set<MessageInfo*> >::const_iterator
-            first = dependencies.find(unit);
-        stack.push_back(Frame{
-            unit, first == dependencies.end() ? 0 : &first->second, 0});
+        color[root] = GraphColor::OnStack;
+        stack.push_back(Frame{root, 0});
         while (! stack.empty()) {
             Frame& frame = stack.back();
-            if (frame.next >= units.size()) {
+            const std::vector<std::size_t>& unit_deps =
+                dependencies[frame.unit];
+            if (frame.next >= unit_deps.size()) {
                 color[frame.unit] = GraphColor::Finished;
-                result.push_back(frame.unit);  // dependencies were appended first
+                result.push_back(units[frame.unit]);  // dependencies first
                 stack.pop_back();
                 continue;
             }
 
-            MessageInfo* candidate = units[frame.next++];
-            if (frame.unit_deps == 0 ||
-                frame.unit_deps->count(candidate) == 0) {
-                continue;
-            }
+            const std::size_t candidate = unit_deps[frame.next++];
             if (color[candidate] == GraphColor::Unvisited) {
                 color[candidate] = GraphColor::OnStack;
-                const std::map<MessageInfo*, std::set<MessageInfo*> >::
-                    const_iterator found = dependencies.find(candidate);
-                stack.push_back(Frame{
-                    candidate, found == dependencies.end() ? 0 : &found->second,
-                    0});
+                stack.push_back(Frame{candidate, 0});
             } else if (color[candidate] == GraphColor::OnStack) {
                 // This is a cycle between lexical units (for example, two
                 // root structs whose nested messages depend on each other).
@@ -1364,10 +1361,10 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
                 }
                 for (std::size_t i = start; i < stack.size(); ++i) {
                     if (! path.empty()) path += " -> ";
-                    path += stack[i].unit->cpp_absolute_name;
+                    path += units[stack[i].unit]->cpp_absolute_name;
                 }
                 if (! path.empty()) path += " -> ";
-                path += candidate->cpp_absolute_name;
+                path += units[candidate]->cpp_absolute_name;
                 throw std::runtime_error(
                     "recursive message value dependency: " + path);
             }

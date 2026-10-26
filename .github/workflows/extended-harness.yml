@@ -102,10 +102,9 @@ jobs:
           -DEASYPB_PYTHON="$(command -v python3)"
 
     - name: Build the full tree
-      # Only the two binaries this job measures.  The full test suite has a
-      # pre-existing POSIX link gap in codegen_imports_loader_test that belongs
-      # to the import-loader review, not to this harness; BUILD_TESTING stays ON
-      # so the parity generator test is registered by CTest.
+      # Only the two binaries this job measures: the three-OS matrix owns the
+      # full test suite, and BUILD_TESTING stays ON here so the parity
+      # generator test is registered by CTest.
       run: >
         cmake --build build/harness-ci --target easypb_codegen
         parser_differential_compare -j 4

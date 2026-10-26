@@ -458,6 +458,17 @@ bool read_disk_file(const std::string& path, std::string& contents,
     CloseHandle(handle);
     return true;
 #else
+    // A POSIX directory opens successfully and only fails the read with
+    // EISDIR. The iterator-based read below cannot tell that failure from an
+    // empty file (the iterator reads through the stream buffer and leaves the
+    // istream state untouched), so the type is probed first. The loader
+    // already stats candidates during the search; one more stat is cheaper
+    // than reporting a directory as an empty schema (CR-37/CR-47).
+    std::string status_error;
+    if (disk_file_status(path, status_error) == FILE_STATUS_DIRECTORY) {
+        error = "is a directory, not a schema file";
+        return false;
+    }
     // Clear errno before opening: only the open below may decide that
     // this failure is a denial, never a value some earlier call left
     // behind (a missing file after a denied candidate would otherwise be
