@@ -180,7 +180,10 @@ same value rules to the parsed constant (`U-08`):
 - `lazy = true` and `unverified_lazy = true` are accepted only on a message
   field; a scalar field gets `[lazy = true] can only be specified for
   submessage fields`. Either flag written as `false` is the default and is
-  accepted on every field.
+  accepted on every field. The known-option table carries no second copy of
+  this rule (`U-42`): the parser records the non-default flags as field
+  provenance, and this shared pass is the single answer on both doors and in
+  both parse modes.
 - An enumerator outside the enumerated `JSType` set is an unknown field, as in
   protoc's closed proto2 decoder, so it reads as JS_NORMAL and changes no
   verdict.
@@ -215,9 +218,23 @@ balanced value are checked while the name and value stay untyped; an unresolved
 `(vendor.option)` is therefore accepted where protoc would refuse it. This is
 the owner decision D2-A (2026-10-25), recorded as P1 exception E13 in
 `build/verification/property-catalogue.md` and pinned by the
-`codegen.options` lane. `(easypb.cpp).type` is the one custom name with
-product semantics and keeps its existing handling; other `(easypb.cpp).*`
-spellings are refused.
+`codegen.options` lane.
+
+`(easypb.cpp).type` is the one custom name with product semantics, and it is a
+**field** option (`U-54`). A field accepts the plain `(easypb.cpp).type`, the
+fully-qualified `(.easypb.cpp).type` and the spaced `( easypb.cpp ).type`
+spelling - all normalize to one option name and the emitter reads the same
+value, so the generated header is unchanged. Every other declaration scope
+refuses it - file, message, oneof, enum, enum value, extension range, service
+and method - with `Option "(easypb.cpp).type" is a field option and cannot be
+set at <scope> scope`; the reference compiler refuses the same text with
+`Option field "(easypb.cpp)" is not a field or extension of message
+"<Owner>Options"`. The statement form `option (easypb.cpp) = { ... };` is not a
+field option either: a non-field scope refuses it by the same scope rule, and
+inside a field bracket list the parser asks for `(easypb.cpp).type` instead.
+Other `(easypb.cpp).*` spellings are refused. The descriptor door models the
+option in `FieldOptions` only, so the other scopes have no descriptor
+representation: placement is a source-text rule, as it is for `protoc`.
 
 A dotted sub-field assignment on a singular message-typed option
 (`[feature_support.edition_introduced = ...]`) is also outside the

@@ -19,6 +19,7 @@ CI contract is the recorded verdict.
 | `accept-message-options.proto` | `MessageOptions` bools, including `message_set_wire_format` on a field-less MessageSet |
 | `accept-field-options.proto` | `FieldOptions`: 64-bit `jstype`, message `lazy`/`unverified_lazy`, `ctype`, `weak`, `packed` both ways, `retention`, repeated `targets`, aggregate `feature_support`/`edition_defaults` |
 | `accept-value-defaults.proto` | the four `U-08` default spellings: `lazy = false` and `unverified_lazy = false` on an `int32`, `jstype = JS_NORMAL` on an `int32`, `packed = false` on a map |
+| `accept-cpp-type-spellings.proto` | `(easypb.cpp).type` on a field in its three spellings: plain, fully-qualified leading dot and spaced parentheses; the header check reads the three customized members |
 | `accept-enum-options.proto` | `EnumOptions.allow_alias` and enum-value bool/aggregate options |
 | `accept-service-options.proto` | `ServiceOptions.deprecated`, `MethodOptions.deprecated`/`idempotency_level` |
 | `accept-ext-range-options.proto` | repeated aggregate `declaration`, and `verification = UNVERIFIED` on a range without declarations |
@@ -59,6 +60,10 @@ stdout, and the expected sentence in stderr:
 | `reject-lazy-scalar.proto` | submessage fields |
 | `reject-unverified-lazy-scalar.proto` | submessage fields |
 | `reject-lazy-enum.proto` | submessage fields, after the named type resolves to an enum |
+| `reject-cpp-type-file.proto` | `(easypb.cpp).type` is a field option: file scope |
+| `reject-cpp-type-message.proto` | the same option at message scope |
+| `reject-cpp-type-enum.proto` | the same option at enum scope |
+| `reject-cpp-type-ext-range.proto` | the same option at extension range scope |
 | `reject-map-entry.proto` | `map_entry should not be set explicitly` |
 | `reject-map-packed.proto` | `map fields cannot have default or packed options` (the non-default `packed = true`) |
 | `reject-ext-range-unverified-declaration.proto` | `UNVERIFIED` with declarations |
@@ -84,7 +89,11 @@ but deliberately accepts an unresolved custom option. That is an owner
 decision from D2-A (2026-10-25), recorded as P1 exception **E13** in
 `build/verification/property-catalogue.md`; the executable side of the
 exception is `accept-custom-options.proto` in this lane. `(easypb.cpp)` is the
-one custom name with product semantics and keeps its existing handling.
+one custom name with product semantics: it is a **field** option (`U-54`), so
+its `.type` member is accepted in a field bracket list and refused at every
+other declaration scope with a diagnostic that names the option and the scope
+(`reject-cpp-type-*`). The header check on `accept-cpp-type-spellings.proto`
+keeps the three accepted field spellings tied to the emitted members.
 
 The table validates top-level option names only. A dotted sub-field assignment
 to a singular message-typed option (`[feature_support.edition_introduced =

@@ -3535,14 +3535,15 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
         }
     }
     // D2-A / U-13: `lazy` and `unverified_lazy` are legal only on a message
-    // field (`ValidateFieldOptions`, descriptor.cc:7968-7974). A scalar is
-    // refused by the parser already; a named type's kind is unknown until
-    // resolution, so the option is recorded and this pass answers with the kind
-    // the linker resolved. The source door keeps `lazy = true`/`unverified_lazy
-    // = true` in the field's provenance (D2-A) while the descriptor door
-    // decodes the option value itself (U-13); either way one rule answers, and
-    // a field that carries no such option - or only the default `false` - never
-    // reaches it (U-08).
+    // field (`ValidateFieldOptions`, descriptor.cc:7968-7974). This pass is
+    // the rule for both doors and both parse modes: the source door keeps
+    // `lazy = true`/`unverified_lazy = true` in the field's provenance (D2-A)
+    // while the descriptor door decodes the option value itself (U-13); either
+    // way one rule answers, and a field that carries no such option - or only
+    // the default `false` - never reaches it (U-08). A scalar is refused here;
+    // a named type's kind is unknown until resolution, so the same rule
+    // answers with the kind the linker resolved. R09 (U-42) removed the parser
+    // table's unreachable copy of this rule.
     if (!unknown && field.has_type &&
         field.type != FieldDescriptorProto::TYPE_MESSAGE) {
         const FieldSource* source = find_field_source(file, field_path);

@@ -1148,16 +1148,22 @@ private:
     // One door for the option table. A parenthesized (custom) name stays
     // opaque: its definition is an extension in an import this frontend does
     // not resolve, and D2-A deliberately does not implement typed custom
-    // options (`OPTIONS.md`, "Schema option validation"). Every other name
-    // must be a known field of the owner's `*Options` message, must be set
-    // once unless the field is repeated, and must carry the field's value
-    // kind plus the value-dependent kind rules.
+    // options (`OPTIONS.md`, "Schema option validation"), with one exception:
+    // EasyProtoBuf's own `(easypb.cpp)` family is scoped, and `.type` is
+    // meaningful only on a field (R09, U-54). Every other name must be a
+    // known field of the owner's `*Options` message, must be set once unless
+    // the field is repeated, and must carry the field's value kind plus the
+    // value-dependent kind rules.
     void validate_option(OptionOwnerKind owner, const std::string& name,
                          const Constant& value, const SourceLocation& where,
                          const OptionFieldKind& field,
                          std::set<std::string>& seen)
     {
-        if (!name.empty() && name[0] == '(') return;
+        if (!name.empty() && name[0] == '(') {
+            const std::string scope_error = custom_option_scope_error(owner, name);
+            if (!scope_error.empty()) throw ParseFailure(where, scope_error);
+            return;
+        }
 
         const KnownOption* option = find_known_option(owner, name);
         if (option == 0) {
@@ -1371,6 +1377,15 @@ private:
                 }
                 state.has_json_name = true;
                 state.json_name = std::move(value.text);
+            } else if (name.compare(0, 12, "(easypb.cpp)") == 0 &&
+                       owner != OPTION_OWNER_FIELD) {
+                // R09 (U-54): EasyProtoBuf's C++ type option is a field
+                // option. The branch below would otherwise retain it in a
+                // state the enum-value and extension-range callers discard, so
+                // a non-field scope must refuse it and name both the option
+                // and the scope.
+                throw ParseFailure(option_location,
+                    custom_option_scope_error(owner, name));
             } else if (name == "(easypb.cpp).type") {
                 if (state.has_cpp_type) {
                     throw ParseFailure(option_location,
@@ -1734,9 +1749,6 @@ private:
         OptionFieldKind field_kind;
         field_kind.has_type = field.has_type;
         field_kind.type = field.type;
-        field_kind.named = field.has_type_name;
-        field_kind.repeated =
-            field.label == FieldDescriptorProto::LABEL_REPEATED;
         const FieldOptionState options = field_options(OPTION_OWNER_FIELD,
                                                        field_kind);
         expect_symbol(';');
@@ -1806,13 +1818,12 @@ private:
         const std::string field_name = identifier();
         expect_symbol('=');
         const std::int32_t number = positive_field_number();
-        // A map field is a repeated synthetic-entry message: repeated, a named
-        // message kind, so `jstype` is refused and `lazy` is legal.
+        // A map field is a repeated synthetic-entry message: a message kind,
+        // so `jstype` is refused while `lazy = true` stays legal for the
+        // shared field pass.
         OptionFieldKind field_kind;
         field_kind.has_type = true;
         field_kind.type = FieldDescriptorProto::TYPE_MESSAGE;
-        field_kind.named = true;
-        field_kind.repeated = true;
         const FieldOptionState options = field_options(OPTION_OWNER_FIELD,
                                                        field_kind);
         expect_symbol(';');

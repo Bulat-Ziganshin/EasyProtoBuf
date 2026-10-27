@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+package options.demo;
+
+// U-54 / R09: an extension range's bracket list is a shared field-option list,
+// but the C++ type option is meaningful only on a field. protoc 30.1: `Option
+// field "(easypb.cpp)" is not a field or extension of message
+// "ExtensionRangeOptions".`
+message Scoped {
+  extensions 100 to 199 [(easypb.cpp).type = "RangeBox"];
+}

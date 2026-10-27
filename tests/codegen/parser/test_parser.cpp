@@ -34,6 +34,24 @@ const FieldDescriptorProto* find_field(const DescriptorProto& message, const cha
     return 0;
 }
 
+// R09 (U-44): `OptionFieldKind` carried a `repeated` flag that the parser
+// wrote and no rule read. The member is gone; this compile-time guard fails if
+// a write-only field-kind flag comes back.
+template <typename T, typename = void>
+struct has_repeated_member
+{
+    static const bool value = false;
+};
+
+template <typename T>
+struct has_repeated_member<T, decltype((void)T::repeated)>
+{
+    static const bool value = true;
+};
+
+static_assert(!has_repeated_member<easypb_proto::OptionFieldKind>::value,
+              "OptionFieldKind::repeated is dead machinery (R09, U-44)");
+
 void test_complex_proto3()
 {
     const std::string source =
@@ -1095,6 +1113,77 @@ void test_easypb_cpp_field_options_are_retained()
         easypb_proto::Diagnostic bad_error;
         CHECK(!easypb_proto::parse_proto("bad-cpp-options.proto", invalid[i], bad, bad_error));
         CHECK(!bad_error.message.empty());
+    }
+}
+
+// R09 (U-54): `(easypb.cpp).type` is a field option. The three field
+// spellings normalize to one option name and stay accepted; every other
+// declaration scope refuses it with a diagnostic that names the option and the
+// scope. Enum value and extension range are the two owners `field_options`
+// shares with a field, so they prove the shared bracket list cannot retain a
+// value its caller would discard.
+void test_cpp_type_option_is_field_only()
+{
+    const char* accepted[] = {
+        "message M { optional int32 a = 1 [(easypb.cpp).type = \"PlainBox\"]; }",
+        "message M { optional int32 a = 1 [(.easypb.cpp).type = \"DotBox\"]; }",
+        "message M { optional int32 a = 1 [( easypb.cpp ).type = \"SpacedBox\"]; }",
+    };
+    const char* expected_types[] = { "PlainBox", "DotBox", "SpacedBox" };
+    for (std::size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        const bool ok = easypb_proto::parse_proto(
+            "cpp-type-field.proto",
+            std::string("syntax = \"proto2\";\n") + accepted[i], parsed, error);
+        if (!ok) std::cerr << accepted[i] << ": " << error.message << '\n';
+        CHECK(ok);
+        if (!ok || parsed.file.message_type.empty() ||
+            parsed.file.message_type[0].field.empty()) {
+            continue;
+        }
+        const FieldDescriptorProto& field = parsed.file.message_type[0].field[0];
+        CHECK(field.has_options && field.options.has_cpp);
+        CHECK(field.options.cpp.has_type);
+        CHECK(text(field.options.cpp.type) == expected_types[i]);
+    }
+
+    struct ScopeCase
+    {
+        const char* source;
+        const char* scope;
+    };
+    const ScopeCase refused[] = {
+        { "option (easypb.cpp).type = \"A\"; "
+          "message M { optional int32 x = 1; }", "file scope" },
+        { "message M { option (easypb.cpp).type = \"A\"; "
+          "optional int32 x = 1; }", "message scope" },
+        { "message M { oneof c { option (easypb.cpp).type = \"A\"; "
+          "int32 x = 1; } }", "oneof scope" },
+        { "enum E { option (easypb.cpp).type = \"A\"; Z = 0; }", "enum scope" },
+        { "enum E { Z = 0 [(easypb.cpp).type = \"A\"]; }", "enum value scope" },
+        { "message M { optional int32 x = 1; } "
+          "service S { option (easypb.cpp).type = \"A\"; }", "service scope" },
+        { "message M { optional int32 x = 1; } "
+          "service S { rpc R (M) returns (M) { "
+          "option (easypb.cpp).type = \"A\"; } }", "method scope" },
+        { "message M { extensions 100 to 199 "
+          "[(easypb.cpp).type = \"A\"]; }", "extension range scope" },
+    };
+    for (std::size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        const bool ok = easypb_proto::parse_proto(
+            "cpp-type-scope.proto",
+            std::string("syntax = \"proto2\";\n") + refused[i].source,
+            parsed, error);
+        if (ok) {
+            std::cerr << "accepted at " << refused[i].scope << ": "
+                      << refused[i].source << '\n';
+        }
+        CHECK(!ok);
+        CHECK(error.message.find("(easypb.cpp).type") != std::string::npos);
+        CHECK(error.message.find(refused[i].scope) != std::string::npos);
     }
 }
 
@@ -2456,6 +2545,21 @@ void test_known_option_field_kind_rules()
         if (ok) std::cerr << "accepted: " << refused[i] << '\n';
         CHECK(!ok);
     }
+
+    // R09 (U-42): the message-only `lazy` rule is not a table rule. The
+    // parser keeps the non-default flag in the field provenance and the shared
+    // field pass answers it, so a scalar is still refused when type resolution
+    // is deferred - a table-side branch would be unreachable here and proves
+    // nothing.
+    easypb_proto::ParsedProto deferred;
+    easypb_proto::Diagnostic deferred_error;
+    easypb_proto::ParseOptions deferred_options;
+    deferred_options.defer_type_resolution = true;
+    CHECK(!easypb_proto::parse_proto("g2-lazy-deferred.proto",
+        "syntax = \"proto3\";\n"
+        "message M { int32 x = 1 [lazy = true]; }\n",
+        deferred, deferred_error, deferred_options));
+    CHECK(deferred_error.message.find("submessage fields") != std::string::npos);
 }
 
 // R08: the option *value* grammar. A value is one identifier (U-23), a leading
@@ -2568,6 +2672,7 @@ int main()
     test_buffer_api_owns_result_strings();
     test_custom_option_name_parts_are_consumed();
     test_easypb_cpp_field_options_are_retained();
+    test_cpp_type_option_is_field_only();
     test_malformed_custom_option_name_parts_are_rejected();
     test_service_rpc_syntax_is_consumed();
     test_service_is_rejected_inside_message();

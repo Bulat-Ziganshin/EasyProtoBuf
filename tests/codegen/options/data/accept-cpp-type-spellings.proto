@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package options.demo;
+
+// U-54 / R09: `(easypb.cpp).type` is a field option. The emitter accepts the
+// plain spelling, the fully-qualified leading-dot spelling and spaces inside
+// the parentheses; the parser normalizes all three to one option name.
+message CppTypeSpellings {
+  int32 plain = 1 [(easypb.cpp).type = "PlainBox"];
+  int32 leading_dot = 2 [(.easypb.cpp).type = "DotBox"];
+  int32 spaced = 3 [( easypb.cpp ).type = "SpacedBox"];
+}

@@ -73,6 +73,7 @@ set(accepted_fixtures
     accept-message-options
     accept-field-options
     accept-value-defaults
+    accept-cpp-type-spellings
     accept-enum-options
     accept-service-options
     accept-ext-range-options
@@ -97,6 +98,20 @@ require_contains(field_out "put_packed_int32(7, x.packed_values);"
     "packed = true selects the packed codec")
 require_contains(field_out "put_repeated_int32(8, x.unpacked_values);"
     "packed = false selects the unpacked codec")
+
+# U-54 / R09: `(easypb.cpp).type` is retained only on a field, and the three
+# spellings the emitter supports - plain, fully-qualified leading dot, and
+# spaces inside the parentheses - normalize to the same option. Reading the
+# header proves the accepted fixtures still configure the emitted members.
+run_ok(cpp_type_out cpp_type_err
+    ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/accept-cpp-type-spellings.proto")
+require_empty(cpp_type_err "The accept-cpp-type-spellings stderr")
+require_contains(cpp_type_out "PlainBox plain = 0;"
+    "The plain (easypb.cpp).type spelling")
+require_contains(cpp_type_out "DotBox leading_dot = 0;"
+    "The leading-dot (.easypb.cpp).type spelling")
+require_contains(cpp_type_out "SpacedBox spaced = 0;"
+    "The spaced ( easypb.cpp ).type spelling")
 
 # E14: the validation-only table has no nested option model. protoc accepts a
 # dotted sub-field assignment to a singular message option; this frontend
@@ -139,6 +154,17 @@ expect_refusal(reject-unverified-lazy-scalar
     "[lazy = true] can only be specified for submessage fields")
 expect_refusal(reject-lazy-enum
     "[lazy = true] can only be specified for submessage fields")
+# U-54 / R09: `(easypb.cpp).type` is a field option; the owner is part of the
+# check, so a statement or bracket list at any other declaration scope refuses
+# with a diagnostic that names both the option and the scope.
+expect_refusal(reject-cpp-type-file
+    "Option \"(easypb.cpp).type\" is a field option and cannot be set at file scope")
+expect_refusal(reject-cpp-type-message
+    "Option \"(easypb.cpp).type\" is a field option and cannot be set at message scope")
+expect_refusal(reject-cpp-type-enum
+    "Option \"(easypb.cpp).type\" is a field option and cannot be set at enum scope")
+expect_refusal(reject-cpp-type-ext-range
+    "Option \"(easypb.cpp).type\" is a field option and cannot be set at extension range scope")
 expect_refusal(reject-map-entry
     "map_entry should not be set explicitly")
 # U-08: the default `packed = false` is accepted on a map (the accepted

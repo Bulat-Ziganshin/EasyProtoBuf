@@ -46,14 +46,15 @@ enum OptionConstantKind
 
 // The declared kind of the field an option list belongs to. Only the
 // field-only rules read it; every other owner passes a default instance.
+// R09 (U-44): the struct carries no `repeated`/`named` flag. Those were
+// written by the parser and never read by a rule - repeatedness is decided by
+// the field provenance and a named type's kind by the shared semantic pass.
 struct OptionFieldKind
 {
     bool has_type;
     int type;        // FieldDescriptorProto::TYPE_*
-    bool named;      // has_type_name: a message or enum, unknown until linking
-    bool repeated;
 
-    OptionFieldKind() : has_type(false), type(0), named(false), repeated(false) {}
+    OptionFieldKind() : has_type(false), type(0) {}
 };
 
 struct KnownOption
@@ -74,6 +75,17 @@ struct KnownOption
 // Finds a known field of the owner's `*Options` message. Returns null for an
 // unknown name or a name whose only owner is a different declaration.
 const KnownOption* find_known_option(OptionOwnerKind owner, const std::string& name);
+
+// The declaration scope an owner denotes, for diagnostics that name it
+// ("file", "message", "extension range", ...).
+const char* option_owner_name(OptionOwnerKind owner);
+
+// Returns an empty string when the parenthesized custom `name` may be set at
+// `owner`, and the scoped refusal otherwise. Custom options are otherwise
+// opaque; `(easypb.cpp).type` is the one name with product semantics and is
+// meaningful only on a field, so every other scope refuses it (R09, U-54).
+std::string custom_option_scope_error(OptionOwnerKind owner,
+                                      const std::string& name);
 
 // The table as a sequence, for the family test that covers every row.
 std::size_t known_option_count();

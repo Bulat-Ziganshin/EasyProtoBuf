@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package options.demo;
+
+// U-54 / R09: an enum-scope statement sets the field-only C++ type option.
+// protoc 30.1: `Option field "(easypb.cpp)" is not a field or extension of
+// message "EnumOptions".`
+enum Scoped {
+  option (easypb.cpp).type = "EnumBox";
+
+  ZERO = 0;
+}

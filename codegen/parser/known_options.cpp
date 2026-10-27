@@ -150,6 +150,37 @@ const KnownOption* find_known_option(OptionOwnerKind owner,
 }
 
 
+const char* option_owner_name(OptionOwnerKind owner)
+{
+    switch (owner) {
+        case OPTION_OWNER_FILE:            return "file";
+        case OPTION_OWNER_MESSAGE:         return "message";
+        case OPTION_OWNER_FIELD:           return "field";
+        case OPTION_OWNER_ONEOF:           return "oneof";
+        case OPTION_OWNER_ENUM:            return "enum";
+        case OPTION_OWNER_ENUM_VALUE:      return "enum value";
+        case OPTION_OWNER_SERVICE:         return "service";
+        case OPTION_OWNER_METHOD:          return "method";
+        case OPTION_OWNER_EXTENSION_RANGE: return "extension range";
+    }
+    return "declaration";
+}
+
+
+std::string custom_option_scope_error(OptionOwnerKind owner,
+                                      const std::string& name)
+{
+    // Only EasyProtoBuf's own custom family is scoped; every other
+    // parenthesized name stays opaque (E13). `(easypb.cpp).type` configures
+    // one field's C++ storage, so a statement or bracket list at any other
+    // scope is refused instead of being accepted and dropped (U-54).
+    if (owner == OPTION_OWNER_FIELD) return std::string();
+    if (name.compare(0, 12, "(easypb.cpp)") != 0) return std::string();
+    return "Option \"" + name + "\" is a field option and cannot be set at " +
+           option_owner_name(owner) + " scope";
+}
+
+
 std::size_t known_option_count()
 {
     return KNOWN_OPTION_COUNT;
@@ -230,19 +261,10 @@ std::string known_option_value_error(const KnownOption& option,
                    "or sfixed64 fields";
         }
     }
-    if (option_name == "lazy" || option_name == "unverified_lazy") {
-        // `ValidateFieldOptions` refuses a non-message field
-        // (descriptor.cc:7968-7974). Either flag written as `false` is the
-        // default and every field accepts it (U-08); only `true` reaches the
-        // rule. A named type's kind is unknown until linking, so that half is
-        // decided by the shared semantic pass, which records the option's
-        // location in the field provenance.
-        if (text == "true" &&
-            !field.named && (!field.has_type ||
-                             field.type != FieldDescriptorProto::TYPE_MESSAGE)) {
-            return "[lazy = true] can only be specified for submessage fields";
-        }
-    }
+    // R09 (U-42): `lazy` and `unverified_lazy` are message-only, but the rule
+    // is not a table rule: the parser keeps the non-default flags in the
+    // field's provenance and `validate_field_encoding` answers it after
+    // resolution on both doors (U-13), so no reachable copy belongs here.
     return std::string();
 }
 
