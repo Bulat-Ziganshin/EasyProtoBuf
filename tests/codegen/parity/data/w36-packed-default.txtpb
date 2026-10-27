@@ -1,0 +1,14 @@
+file {
+  name: "w36_packed_proto3.proto"
+  package: "w36"
+  syntax: "proto3"
+  message_type {
+    name: "Packed"
+    field {
+      name: "values"
+      number: 1
+      label: LABEL_REPEATED
+      type: TYPE_INT32
+    }
+  }
+}

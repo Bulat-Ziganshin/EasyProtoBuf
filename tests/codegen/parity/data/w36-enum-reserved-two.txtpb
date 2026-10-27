@@ -1,0 +1,15 @@
+file {
+  name: "w36_enum_reserved.proto"
+  package: "w36"
+  enum_type {
+    name: "Reserved"
+    value {
+      name: "A"
+      number: 1
+    }
+    reserved_range {
+      start: 2
+      end: 2
+    }
+  }
+}

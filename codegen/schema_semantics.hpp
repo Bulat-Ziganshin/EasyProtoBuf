@@ -15,6 +15,17 @@ namespace easypb_schema {
 // classify types and validate scalar defaults identically.
 int builtin_type(const std::string& name);
 bool packable_type(int type);
+
+// The `packed` value a field has before the command-line overrides: the
+// field's own option when it is written, and otherwise the schema default -
+// a repeated packable field of a proto3 file is packed, every other field is
+// not. The emitter and the descriptor merge must answer this question the
+// same way, or two containers holding one logical file could disagree about
+// the wire format they generate (U-04). `syntax` is the classification of the
+// field's own file (`classify_file_syntax`), never a second reading of the
+// syntax string.
+bool effective_packed(const FieldDescriptorProto& field, FileSyntax syntax);
+
 bool valid_map_key_type(int type);
 bool parse_unsigned_integer(const std::string& text, std::uint64_t& result);
 bool parse_signed_32(const std::string& text, std::int32_t& result);

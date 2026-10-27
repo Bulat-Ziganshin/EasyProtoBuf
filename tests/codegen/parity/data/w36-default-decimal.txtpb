@@ -1,0 +1,14 @@
+file {
+  name: "w36_default.proto"
+  package: "w36"
+  message_type {
+    name: "Default"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      default_value: "10"
+    }
+  }
+}

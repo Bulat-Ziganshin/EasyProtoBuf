@@ -96,7 +96,12 @@ Two bounds apply to the output side. An output name must be a logical path, so a
 - `-p, --packed` — encode every eligible repeated numeric field in packed form.
 - `--no-packed` — encode every repeated field in unpacked form.
 
-The two options cannot be used together. Without either override, Codegen follows the field's schema option where present and the normal proto2/proto3 default behavior otherwise.
+The two options cannot be used together. Without either override, Codegen
+uses the field's `packed` option when it is written and the schema default
+otherwise: a repeated primitive or enum field of a proto3 file is packed, and
+every other field (including a proto2 field) is not. This is the same
+effective value the descriptor merge compares (U-04), so two containers that
+spell one logical file cannot change the wire format by argument order.
 
 ## Schema option validation
 

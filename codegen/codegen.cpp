@@ -204,15 +204,15 @@ bool write_as_packed(const FieldDescriptorProto& field,
     // invocation; no part of the generator compares `file.syntax` itself
     // (plan 5 A25), and an unsupported file never receives proto3 semantics.
     // The linker refuses FILE_SYNTAX_UNSUPPORTED before generation once the
-    // standalone CLI runs it; until that adapter/CLI batch lands, this
-    // expression keeps the bytes the pre-extraction generator produced for
-    // every input of the existing corpus (S7).
-    return is_repeated(field) &&
-           is_numeric_field(field) &&
-           (context.options.packed ?    true :
-            context.options.no_packed ? false :
-            field.options.has_packed ? field.options.packed :
-            context.syntax == easypb_schema::FILE_SYNTAX_PROTO3);
+    // standalone CLI runs it.
+    //
+    // U-04: the schema default is answered by `effective_packed`, the same
+    // helper the descriptor merge compares, so the wire format cannot depend
+    // on which container was named first.
+    if (!is_repeated(field) || !is_numeric_field(field)) return false;
+    if (context.options.packed) return true;
+    if (context.options.no_packed) return false;
+    return easypb_schema::effective_packed(field, context.syntax);
 }
 
 

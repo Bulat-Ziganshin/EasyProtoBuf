@@ -48,17 +48,24 @@ bool append_unnamed_descriptor(const FileDescriptorProto& file,
                                Diagnostic& error);
 
 // True when two decoded files carry the same modeled content: every field
-// descriptor.pb.hpp declares. Where the absence of a field changes what the
-// linker reads, presence is content too (an absent kind is refused, an absent
-// label is OPTIONAL, an absent oneof index means "not in a oneof"); where it
-// only spells the protobuf default, the effective value decides instead
-// (CR-24: absent/`"proto2"` syntax, `packed = false`, an empty option message,
-// a derived `json_name`). The presence bits of `name` and `package` are not
-// modeled identity (W-48): ingest normalizes them, and the strings are
-// compared instead. The descriptor loader uses this for the overlap rule of
-// `W-36` - a file two containers both carry is merged when the two copies
-// agree, and refused as a conflict when they do not - and the rule is about
-// the content this project reads, not about the two containers' bytes.
+// descriptor.pb.hpp declares, read at its effective value. Where the absence
+// of a field changes what the linker reads, presence is content too (an absent
+// kind is refused, an absent oneof index means "not in a oneof"); where it only
+// spells the protobuf default, the effective value decides instead: an absent
+// label is `LABEL_OPTIONAL`, `packed` is the value the emitter writes
+// (`effective_packed`), an absent range endpoint is 0, and a default value is
+// the canonical text the adapter stores. A `cpp` group without its `type`
+// member is no custom type; a present-but-empty `type` stays distinct because
+// generation (and the source parser) refuse it. The presence bits of `name` and
+// `package` are not modeled identity (W-48): ingest normalizes them, and the
+// strings are compared instead. For the unsupported syntax class the edition
+// carrier is compared too, so a class read from `edition` and one read from
+// `syntax` are not one file (U-52).
+//
+// The descriptor loader uses this for the overlap rule of `W-36` - a file two
+// containers both carry is merged when the two copies agree, and refused as a
+// conflict when they do not - and the rule is about the content this project
+// reads, not about the two containers' bytes.
 bool same_descriptor_file(const FileDescriptorProto& left,
                           const FileDescriptorProto& right);
 

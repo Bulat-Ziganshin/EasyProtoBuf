@@ -1,0 +1,12 @@
+file {
+  name: "w36_label.proto"
+  package: "w36"
+  message_type {
+    name: "Label"
+    field {
+      name: "value"
+      number: 1
+      type: TYPE_INT32
+    }
+  }
+}

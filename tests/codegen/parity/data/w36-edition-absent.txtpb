@@ -1,0 +1,8 @@
+file {
+  name: "w36_edition.proto"
+  package: "w36"
+  syntax: "editions"
+  message_type {
+    name: "Edition"
+  }
+}

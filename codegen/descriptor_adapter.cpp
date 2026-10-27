@@ -40,6 +40,37 @@ bool integral_default_type(int type)
     }
 }
 
+// The text a default value is stored and compared by. Floating-point and
+// integral defaults are re-rendered from their parsed value, because the
+// reference compiler and this project's source parser both store that form
+// (W-04, CR-02, CR-17); `0x0A`, `012` and `10` are therefore one value, not
+// three. The refusal spellings `'+'` and leading ASCII whitespace are never
+// rewritten: they are diagnostics (W-03, W-40), and normalizing them would
+// move the refusal behind a rewritten value. Every other family keeps its
+// stored spelling, because that spelling is what the emitter writes.
+std::string canonical_default_text(const FieldDescriptorProto& field)
+{
+    const std::string raw = view_text(field.default_value);
+    if (!field.has_type) return raw;
+    std::string normalized;
+    if (field.type == FieldDescriptorProto::TYPE_FLOAT ||
+        field.type == FieldDescriptorProto::TYPE_DOUBLE) {
+        if (can_normalize_default_text(raw) &&
+            canonical_float_default(
+                raw, field.type == FieldDescriptorProto::TYPE_FLOAT,
+                normalized)) {
+            return normalized;
+        }
+        return raw;
+    }
+    if (integral_default_type(field.type) &&
+        can_normalize_default_text(raw) &&
+        canonical_integral_default(raw, normalized)) {
+        return normalized;
+    }
+    return raw;
+}
+
 void intern_enum(StringPool& strings, EnumDescriptorProto& enum_type)
 {
     enum_type.name = intern_text(strings, enum_type.name);
@@ -90,36 +121,19 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         // text a protoc-written descriptor already carries comes back
         // unchanged, so `--print-descriptor` bytes do not move for any
         // accepted row.
-        if (field.has_default_value && field.has_type &&
-            (field.type == FieldDescriptorProto::TYPE_FLOAT ||
-             field.type == FieldDescriptorProto::TYPE_DOUBLE)) {
-            // W-35: the default may be the empty null view; the one guarded
-            // conversion owns the empty case.
-            const std::string raw = view_text(field.default_value);
-            if (can_normalize_default_text(raw)) {
-                std::string normalized;
-                if (canonical_float_default(
-                        raw, field.type == FieldDescriptorProto::TYPE_FLOAT,
-                        normalized) &&
-                    normalized != raw) {
-                    field.default_value = strings.save(normalized);
-                }
-            }
-        } else if (field.has_default_value && field.has_type &&
-                   integral_default_type(field.type)) {
-            // CR-17's descriptor half: protoc re-renders an integral default
-            // from its parsed value (`descriptor.cc:2835`), so the adapter
-            // must do the same or a hand-written `.pbs` carrying `010` would
-            // emit a different header from the source path. A text the shared
-            // parser rejects keeps its spelling; validate_default owns the
-            // range and grammar diagnostics.
-            const std::string raw = view_text(field.default_value);
-            if (can_normalize_default_text(raw)) {
-                std::string normalized;
-                if (canonical_integral_default(raw, normalized) &&
-                    normalized != raw) {
-                    field.default_value = strings.save(normalized);
-                }
+        //
+        // CR-17's descriptor half: protoc re-renders an integral default
+        // from its parsed value (`descriptor.cc:2835`), so the adapter must do
+        // the same or a hand-written `.pbs` carrying `0x0A` would emit a
+        // different header from the source path. A text the shared parser
+        // rejects keeps its spelling; validate_default owns the range and
+        // grammar diagnostics. The merge identity reads the same canonical
+        // text (U-07), so the two copies of one file cannot disagree about a
+        // default only because one container spelled it differently.
+        if (field.has_default_value) {
+            const std::string canonical = canonical_default_text(field);
+            if (canonical != view_text(field.default_value)) {
+                field.default_value = strings.save(canonical);
             }
         }
     }
@@ -247,35 +261,45 @@ bool fail(const std::string& label, const std::string& message,
 //
 // `W-36` makes two containers that carry the same logical file a merge instead
 // of a blanket refusal. "The same file" is decided over the modeled content:
-// every field descriptor.pb.hpp declares. Where the ABSENCE of a field has a
-// defined meaning for the linker, presence is content too (an absent kind is
-// refused by W-10, an absent label is read as OPTIONAL, an absent oneof index
-// means "not in a oneof"). Where absence is just the protobuf default, the
-// comparison uses the effective value instead of the presence bit, so a
-// re-encoded set and its source stay one file (CR-24): absent/`"proto2"`
-// syntax, `packed = false` beside an absent option, an empty option message
-// beside an absent one, and a derived `json_name` beside a written one. The
-// file's `name` and `package` are compared by value; their presence bits are
-// normalized at ingest (W-48) and are not modeled identity. Strings compare by
-// value, so the comparison is independent of which pool owns them.
+// every field descriptor.pb.hpp declares, read at its EFFECTIVE value. Where
+// the ABSENCE of a field has a defined meaning for the linker, presence is
+// content too (an absent kind is refused by W-10, an absent oneof index means
+// "not in a oneof"). Where absence is only the protobuf default, the value the
+// linker and the emitter read decides, so a re-encoded set and its source stay
+// one file (CR-24, U-07): an absent label is `LABEL_OPTIONAL`, an absent
+// `packed` option is the schema default (`effective_packed`), an absent range
+// endpoint is 0, a `cpp` group without its `type` member is no type override,
+// and a default value is compared as the canonical text the adapter stores.
+// The file's `name` and `package` are compared by value; their presence bits
+// are normalized at ingest (W-48) and are not modeled identity. Strings compare
+// by value, so the comparison is independent of which pool owns them.
 //
 // The walk must grow with the model: a field added to descriptor.pb.hpp and
 // not compared here would make two different files look identical. The
 // unit suite pins that with the identity fixture of the loader lane.
 
-bool same_descriptor(const CppFieldOptions& left, const CppFieldOptions& right)
+// An absent label is LABEL_OPTIONAL. The raw member defaults to 0, which is
+// not a label at all, so the raw value and the presence bit cannot decide
+// identity (U-07).
+int effective_label(const FieldDescriptorProto& field)
 {
-    // An absent `(easypb.cpp).type` and an empty one are the same request.
-    return left.type == right.type;
+    return field.has_label ? field.label : FieldDescriptorProto::LABEL_OPTIONAL;
 }
 
-bool same_descriptor(const FieldOptions& left, const FieldOptions& right)
+// A custom type is a request only when the extension group AND its `type`
+// member are present; otherwise the emitter applies the global option
+// (`cpp_type_as_str`), so a `cpp` group without `type` is the unset request
+// (U-07). A present-but-empty `type` is NOT the unset request: both the source
+// parser and the emitter refuse that spelling, and treating it as absent would
+// make the pair's verdict depend on the argument order while opening a
+// descriptor-only door the source path closes.
+bool same_cpp_type(const FieldOptions& left, const FieldOptions& right)
 {
-    // `packed` is read as a bool, so unset and explicit false agree; the same
-    // holds for the whole option message being absent.
-    return (left.has_packed ? left.packed : false) ==
-               (right.has_packed ? right.packed : false) &&
-           same_descriptor(left.cpp, right.cpp);
+    const bool left_request = left.has_cpp && left.cpp.has_type;
+    const bool right_request = right.has_cpp && right.cpp.has_type;
+    if (left_request != right_request) return false;
+    if (!left_request) return true;
+    return left.cpp.type == right.cpp.type;
 }
 
 // The effective JSON name: the written one when the descriptor carries it, the
@@ -291,12 +315,13 @@ std::string effective_json_name(const FieldDescriptorProto& field)
 }
 
 bool same_descriptor(const FieldDescriptorProto& left,
-                     const FieldDescriptorProto& right)
+                     const FieldDescriptorProto& right, FileSyntax syntax)
 {
     return left.name == right.name && left.number == right.number &&
-           left.label == right.label && left.type == right.type &&
+           effective_label(left) == effective_label(right) &&
+           left.type == right.type &&
            left.type_name == right.type_name &&
-           left.default_value == right.default_value &&
+           canonical_default_text(left) == canonical_default_text(right) &&
            left.oneof_index == right.oneof_index &&
            effective_json_name(left) == effective_json_name(right) &&
            // D1-A: an explicit `optional` in proto3 is presence, so a copy
@@ -305,10 +330,13 @@ bool same_descriptor(const FieldDescriptorProto& left,
            // and an explicit false are the same value.
            (left.has_proto3_optional ? left.proto3_optional : false) ==
                (right.has_proto3_optional ? right.proto3_optional : false) &&
-           same_descriptor(left.options, right.options) &&
+           same_cpp_type(left.options, right.options) &&
+           // U-04: `packed` is compared at its EFFECTIVE value, exactly as the
+           // emitter computes it; presence alone would accept a proto3 pair
+           // whose wire format depends on argument order.
+           effective_packed(left, syntax) == effective_packed(right, syntax) &&
            left.has_name == right.has_name &&
            left.has_number == right.has_number &&
-           left.has_label == right.has_label &&
            left.has_type == right.has_type &&
            left.has_type_name == right.has_type_name &&
            left.has_default_value == right.has_default_value &&
@@ -328,29 +356,28 @@ bool same_descriptor(const MessageOptions& left, const MessageOptions& right)
                     : false);
 }
 
+// A range endpoint is the stored value: an absent endpoint is the protobuf
+// default 0, and the linker reads that value, not the bit. Two copies that
+// spell one range with different presence are one file (U-07).
 bool same_descriptor(const DescriptorProto_ExtensionRange& left,
                      const DescriptorProto_ExtensionRange& right)
 {
-    return left.start == right.start && left.end == right.end &&
-           left.has_start == right.has_start && left.has_end == right.has_end;
+    return left.start == right.start && left.end == right.end;
 }
 
 // CR-06: a reserved range is modeled content, so two copies of one logical
-// file that disagree about it are two different definitions. The presence bits
-// are compared like every other range's: an absent endpoint is the protobuf
-// default 0, not the same statement as a written 0.
+// file that disagree about it are two different definitions. The values decide;
+// presence does not (U-07).
 bool same_descriptor(const DescriptorProto_ReservedRange& left,
                      const DescriptorProto_ReservedRange& right)
 {
-    return left.start == right.start && left.end == right.end &&
-           left.has_start == right.has_start && left.has_end == right.has_end;
+    return left.start == right.start && left.end == right.end;
 }
 
 bool same_descriptor(const EnumDescriptorProto_EnumReservedRange& left,
                      const EnumDescriptorProto_EnumReservedRange& right)
 {
-    return left.start == right.start && left.end == right.end &&
-           left.has_start == right.has_start && left.has_end == right.has_end;
+    return left.start == right.start && left.end == right.end;
 }
 
 bool same_descriptor(const EnumValueDescriptorProto& left,
@@ -397,7 +424,8 @@ bool same_descriptor(const OneofDescriptorProto& left,
     return left.name == right.name && left.has_name == right.has_name;
 }
 
-bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right)
+bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right,
+                     FileSyntax syntax)
 {
     if (left.name != right.name || left.has_name != right.has_name ||
         left.extension_count != right.extension_count ||
@@ -412,10 +440,12 @@ bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right)
         return false;
     }
     for (std::size_t i = 0; i < left.field.size(); ++i) {
-        if (!same_descriptor(left.field[i], right.field[i])) return false;
+        if (!same_descriptor(left.field[i], right.field[i], syntax)) return false;
     }
     for (std::size_t i = 0; i < left.nested_type.size(); ++i) {
-        if (!same_descriptor(left.nested_type[i], right.nested_type[i])) return false;
+        if (!same_descriptor(left.nested_type[i], right.nested_type[i], syntax)) {
+            return false;
+        }
     }
     for (std::size_t i = 0; i < left.enum_type.size(); ++i) {
         if (!same_descriptor(left.enum_type[i], right.enum_type[i])) return false;
@@ -477,6 +507,10 @@ bool same_descriptor(const ServiceDescriptorProto& left,
 // protoc, so they are one file here too (CR-24). An unsupported class keeps the
 // deciding spelling in the comparison, because two different unsupported
 // spellings are two different files - both are then refused by A25, not merged.
+// U-52: the carrier is part of that spelling. A file whose class comes from the
+// `edition` field and one whose class comes from the `syntax` string are not
+// one input even when the stored edition VALUE happens to agree; without the
+// presence bit the merge would silently keep one of them.
 bool same_file_syntax(const FileDescriptorProto& left,
                       const FileDescriptorProto& right)
 {
@@ -484,7 +518,8 @@ bool same_file_syntax(const FileDescriptorProto& left,
     const FileSyntax right_class = classify_file_syntax(right);
     if (left_class != right_class) return false;
     if (left_class != FILE_SYNTAX_UNSUPPORTED) return true;
-    return left.edition == right.edition && left.syntax == right.syntax;
+    return left.has_edition == right.has_edition &&
+           left.edition == right.edition && left.syntax == right.syntax;
 }
 
 bool same_descriptor_file(const FileDescriptorProto& left,
@@ -495,7 +530,10 @@ bool same_descriptor_file(const FileDescriptorProto& left,
     // ingest normalizes the bits, so a stored copy and an incoming copy of one
     // file must not look different here. `syntax`/`edition` are compared by
     // class (CR-24); every other presence bit still decides, because it
-    // changes what the linker reads.
+    // changes what the linker reads. The field walk receives the file's own
+    // syntax class, because the effective `packed` default depends on it
+    // (U-04).
+    const FileSyntax syntax = classify_file_syntax(left);
     if (left.name != right.name || left.package != right.package ||
         !same_file_syntax(left, right) ||
         left.dependency.size() != right.dependency.size() ||
@@ -510,7 +548,8 @@ bool same_descriptor_file(const FileDescriptorProto& left,
         if (left.dependency[i] != right.dependency[i]) return false;
     }
     for (std::size_t i = 0; i < left.message_type.size(); ++i) {
-        if (!same_descriptor(left.message_type[i], right.message_type[i])) {
+        if (!same_descriptor(left.message_type[i], right.message_type[i],
+                             syntax)) {
             return false;
         }
     }

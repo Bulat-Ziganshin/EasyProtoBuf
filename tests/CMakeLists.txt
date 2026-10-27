@@ -717,6 +717,12 @@ if(BUILD_TESTING)
         ext-max
         message-set-empty
         w36-same
+        w36-packed-default
+        w36-packed-string-default
+        w36-packed-proto2-default
+        w36-label-explicit
+        w36-enum-reserved-zero
+        w36-default-decimal
         w68-root
         w68-dep)
     set(codegen_parity_compile_sources)

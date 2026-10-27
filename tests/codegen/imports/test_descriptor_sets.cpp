@@ -176,12 +176,15 @@ struct SemanticSpelling
     SemanticSpelling()
         : explicit_proto2(false), write_json_name(true),
           write_empty_options(false), write_packed_false(false),
+          write_empty_cpp_group(false), write_empty_cpp_type(false),
           proto3_optional(false), package("p"), field_number(1) {}
 
     bool explicit_proto2;    // protoc omits `syntax` for a proto2 file
     bool write_json_name;    // protoc always writes the derived name
     bool write_empty_options; // an empty FieldOptions message
     bool write_packed_false;  // `packed = false`, the proto2 default
+    bool write_empty_cpp_group; // FieldOptions { [easypb.cpp] {} }
+    bool write_empty_cpp_type;  // [easypb.cpp].type present but empty
     bool proto3_optional;     // D1-A presence flag (wire field 17)
     const char* package;
     int field_number;
@@ -197,6 +200,17 @@ std::string semantic_file(const SemanticSpelling& spelling)
         field += wire_message_field(8, std::string());
     } else if (spelling.write_packed_false) {
         field += wire_message_field(8, wire_uint_field(2, 0));
+    } else if (spelling.write_empty_cpp_group) {
+        // The extension group is present with no member: no type override.
+        field += wire_message_field(
+            8, wire_message_field(EASYPB_CPP_FIELD_OPTIONS_NUMBER,
+                                  std::string()));
+    } else if (spelling.write_empty_cpp_type) {
+        // The type member is present with empty text: a request the source
+        // parser and the generator both refuse.
+        field += wire_message_field(
+            8, wire_message_field(EASYPB_CPP_FIELD_OPTIONS_NUMBER,
+                                  wire_text_field(1, "")));
     }
     if (spelling.write_json_name) field += wire_text_field(10, "f");
     // D1-A: the presence flag is modeled content, so a copy that carries it
@@ -799,15 +813,19 @@ void test_loader_merges_semantically_equal_copies()
     CHECK(write_binary_file(base, semantic_file(protoc_like)));
 
     // One variant per non-identity presence bit the merge used to refuse.
-    SemanticSpelling spellings[4];
+    // U-07 adds the `(easypb.cpp)` group with no `type` member: both the group
+    // and its member must be present for a custom type to exist, so the empty
+    // group is the unset request.
+    SemanticSpelling spellings[5];
     spellings[0].explicit_proto2 = true;
     spellings[1].write_json_name = false;
     spellings[2].write_packed_false = true;
     spellings[3].write_empty_options = true;
+    spellings[4].write_empty_cpp_group = true;
 
     easypb_schema::SchemaSet set;
     easypb_schema::Diagnostic error;
-    for (std::size_t i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < 5; ++i) {
         CHECK(write_binary_file(variant, semantic_file(spellings[i])));
         std::vector<std::string> inputs;
         inputs.push_back(base);
@@ -827,10 +845,17 @@ void test_loader_merges_semantically_equal_copies()
     // different fields and must not merge.
     SemanticSpelling different_presence;
     different_presence.proto3_optional = true;
-    for (std::size_t i = 0; i < 3; ++i) {
-        const SemanticSpelling& spelling =
-            i == 0 ? different_package
-                   : (i == 1 ? different_number : different_presence);
+    // U-07: a present-but-empty `(easypb.cpp).type` is not the unset request.
+    // The source parser and the generator refuse that spelling (`must not be
+    // empty`), so the merge must refuse the pair instead of choosing the copy
+    // that hides the refusal.
+    SemanticSpelling different_cpp_type;
+    different_cpp_type.write_empty_cpp_type = true;
+    const SemanticSpelling* differences[4] = {
+        &different_package, &different_number, &different_presence,
+        &different_cpp_type};
+    for (std::size_t i = 0; i < 4; ++i) {
+        const SemanticSpelling& spelling = *differences[i];
         CHECK(write_binary_file(variant, semantic_file(spelling)));
         std::vector<std::string> inputs;
         inputs.push_back(base);
@@ -843,6 +868,39 @@ void test_loader_merges_semantically_equal_copies()
     }
     std::remove(base.c_str());
     std::remove(variant.c_str());
+}
+
+// U-52: identity for the unsupported syntax class includes the edition
+// CARRIER. A file whose class comes from `edition` and one whose class comes
+// from the `syntax` string are two different definitions even when the stored
+// edition value agrees; comparing only the value would merge the pair and then
+// silently keep one copy. The comparison must answer the same way in both
+// orders.
+void test_identity_compares_the_edition_carrier()
+{
+    FileDescriptorProto from_edition;
+    from_edition.name = "edition-carrier.proto";
+    from_edition.syntax = "editions";
+    from_edition.has_syntax = true;
+    from_edition.edition = 0;  // EDITION_UNKNOWN, an unsupported edition
+    from_edition.has_edition = true;
+
+    FileDescriptorProto from_syntax;
+    from_syntax.name = "edition-carrier.proto";
+    from_syntax.syntax = "editions";
+    from_syntax.has_syntax = true;
+    from_syntax.has_edition = false;
+
+    CHECK(easypb_schema::classify_file_syntax(from_edition) ==
+          easypb_schema::FILE_SYNTAX_UNSUPPORTED);
+    CHECK(easypb_schema::classify_file_syntax(from_syntax) ==
+          easypb_schema::FILE_SYNTAX_UNSUPPORTED);
+    CHECK(!easypb_schema::same_descriptor_file(from_edition, from_syntax));
+    CHECK(!easypb_schema::same_descriptor_file(from_syntax, from_edition));
+
+    // The control: two copies that both carry the edition bit are one file.
+    const FileDescriptorProto same_edition = from_edition;
+    CHECK(easypb_schema::same_descriptor_file(from_edition, same_edition));
 }
 
 // D2, the custom half: `(easypb.cpp).type` strings are interned like every
@@ -967,6 +1025,7 @@ int main(int argc, char** argv)
     test_loader_rejects_duplicate_names_within_one_container();
     test_loader_merges_duplicate_names_across_containers(fixture_dir);
     test_loader_merges_semantically_equal_copies();
+    test_identity_compares_the_edition_carrier();
     test_loader_custom_type_strings_survive_the_container(fixture_dir);
 
     if (failures != 0) {

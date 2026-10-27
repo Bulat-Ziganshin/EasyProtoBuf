@@ -245,6 +245,101 @@ require_contains(w36_conflict_err "w36-conflict-a.pbs"
 require_contains(w36_conflict_err "w36-conflict-b.pbs"
     "The W-36 conflict diagnostic must name the second container")
 
+# --- U-04/U-07/U-52: identity is the effective semantic value ---------------
+#
+# One logical file in two containers must merge when the two copies describe
+# the same schema, and must be refused when they do not. The rows below spell
+# one option, label, range or default two ways; the two single-container
+# headers are byte-identical, and the merge must accept BOTH orders and
+# produce that same header, so the wire format can never depend on which
+# container was named first. A genuinely different value stays a conflict in
+# both orders.
+function(expect_merge_accept description first second)
+    run_ok(merge_first_out merge_first_err
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${first}.pbs")
+    run_ok(merge_second_out merge_second_err
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${second}.pbs")
+    require_empty(merge_first_err "${description}: single ${first} stderr")
+    require_empty(merge_second_err "${description}: single ${second} stderr")
+    if(NOT merge_first_out STREQUAL merge_second_out)
+        message(FATAL_ERROR
+            "${description}: the two single-container headers differ")
+    endif()
+    run_ok(merge_ab_out merge_ab_err
+        ${CODEGEN} --descriptor-set
+        "${DATA_DIR}/${first}.pbs" "${DATA_DIR}/${second}.pbs")
+    run_ok(merge_ba_out merge_ba_err
+        ${CODEGEN} --descriptor-set
+        "${DATA_DIR}/${second}.pbs" "${DATA_DIR}/${first}.pbs")
+    require_empty(merge_ab_err "${description}: merged stderr")
+    require_empty(merge_ba_err "${description}: reverse merged stderr")
+    if(NOT merge_ab_out STREQUAL merge_first_out)
+        message(FATAL_ERROR
+            "${description}: the merged header differs from a single container")
+    endif()
+    if(NOT merge_ba_out STREQUAL merge_ab_out)
+        message(FATAL_ERROR
+            "${description}: the merged header depends on the argument order")
+    endif()
+endfunction()
+
+function(expect_merge_conflict description first second)
+    expect_refusal("${description}: first order"
+        "two containers carry different definitions of one logical file"
+        ${CODEGEN} --descriptor-set
+        "${DATA_DIR}/${first}.pbs" "${DATA_DIR}/${second}.pbs")
+    expect_refusal("${description}: reverse order"
+        "two containers carry different definitions of one logical file"
+        ${CODEGEN} --descriptor-set
+        "${DATA_DIR}/${second}.pbs" "${DATA_DIR}/${first}.pbs")
+endfunction()
+
+# U-04: `packed` is compared at the value `write_as_packed` emits. An absent
+# proto3 option on a repeated packable field is packed; an explicit
+# `packed = true` is the same file, an explicit `packed = false` is not. A
+# field that cannot be packed is never packed, so an explicit false on it is
+# the default. proto2 defaults to unpacked, so there the true spelling is the
+# different definition.
+expect_merge_accept("a proto3 packed default beside an explicit packed = true"
+    w36-packed-default w36-packed-true)
+expect_merge_accept("a proto2 packed default beside an explicit packed = false"
+    w36-packed-proto2-default w36-packed-proto2-false)
+expect_merge_accept("an unpackable repeated string beside packed = false"
+    w36-packed-string-default w36-packed-string-false)
+expect_merge_conflict("a proto3 packed default beside packed = false"
+    w36-packed-default w36-packed-unpacked)
+expect_merge_conflict("a proto2 packed default beside packed = true"
+    w36-packed-proto2-default w36-packed-proto2-true)
+
+# U-07: an absent label is LABEL_OPTIONAL, not "no label". The single headers
+# are identical, so the pair is one file; required is a different definition.
+expect_merge_accept("an absent label beside LABEL_OPTIONAL"
+    w36-label-absent w36-label-explicit)
+expect_merge_conflict("LABEL_OPTIONAL beside LABEL_REQUIRED"
+    w36-label-explicit w36-label-required)
+
+# U-07: an absent range endpoint is the protobuf default 0. An empty enum
+# reserved range is [0, 0], which is a valid declaration and the same file as
+# the explicit spelling; a different range is a different definition.
+expect_merge_accept("an empty enum reserved range beside [0, 0]"
+    w36-enum-reserved-empty w36-enum-reserved-zero)
+expect_merge_conflict("an enum reserved range [0, 0] beside [2, 2]"
+    w36-enum-reserved-zero w36-enum-reserved-two)
+
+# U-07: a default value is the canonical text both frontends store, so the
+# hexadecimal `0x0A` is the decimal `10`, while `11` is another value.
+expect_merge_accept("an int32 default spelled 0x0A beside 10"
+    w36-default-hex w36-default-decimal)
+expect_merge_conflict("an int32 default 10 beside 11"
+    w36-default-decimal w36-default-other)
+
+# U-52: an unsupported class keeps its carrier. A file whose class comes from
+# the edition field and one whose class comes from the syntax string are two
+# different definitions, even when the stored edition value agrees; the merge
+# must refuse the pair instead of silently keeping one copy.
+expect_merge_conflict("an edition carrier beside a syntax carrier"
+    w36-edition-empty w36-edition-absent)
+
 # --- W-37: the map entry's declaration order ---------------------------------
 #
 # A map entry is key first, value second by declaration order. A hand-built

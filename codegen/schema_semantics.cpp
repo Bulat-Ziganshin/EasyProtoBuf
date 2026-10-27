@@ -76,6 +76,20 @@ bool packable_type(int type)
            type != FieldDescriptorProto::TYPE_GROUP && type != 0;
 }
 
+bool effective_packed(const FieldDescriptorProto& field, FileSyntax syntax)
+{
+    // A non-repeated field and a field whose kind cannot be packed are never
+    // packed, whatever the option says: the option is only meaningful on the
+    // shape it was written for. When the option IS written it decides both
+    // ways, so an explicit `packed = false` is a proto3 unpacked field.
+    if (field.label != FieldDescriptorProto::LABEL_REPEATED ||
+        !packable_type(field.type)) {
+        return false;
+    }
+    if (field.options.has_packed) return field.options.packed;
+    return syntax == FILE_SYNTAX_PROTO3;
+}
+
 bool valid_map_key_type(int type)
 {
     return type == FieldDescriptorProto::TYPE_INT32 ||

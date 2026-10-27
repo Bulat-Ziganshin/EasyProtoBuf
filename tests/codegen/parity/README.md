@@ -48,6 +48,18 @@ controls (`ext-max`, `message-set-empty`) is compared byte for byte.
 | a method endpoint that names nothing | `data/methods-missing.proto` / `.pbs` | `W-16` |
 | one logical file in two identical containers | `data/w36-same-{a,b}.pbs` | `W-36` |
 | one logical file in two conflicting containers | `data/w36-conflict-{a,b}.pbs` | `W-36` |
+| a proto3 packed default beside `packed = true` (accepted) | `data/w36-packed-default.pbs`, `data/w36-packed-true.pbs` | `U-04` |
+| a proto3 packed default beside `packed = false` (refused) | `data/w36-packed-default.pbs`, `data/w36-packed-unpacked.pbs` | `U-04` |
+| a proto2 packed default beside `packed = false` (accepted) | `data/w36-packed-proto2-{default,false}.pbs` | `U-04` |
+| a proto2 packed default beside `packed = true` (refused) | `data/w36-packed-proto2-{default,true}.pbs` | `U-04` |
+| an unpackable repeated string beside `packed = false` (accepted) | `data/w36-packed-string-{default,false}.pbs` | `U-04` |
+| an absent label beside `LABEL_OPTIONAL` (accepted) | `data/w36-label-{absent,explicit}.pbs` | `U-07` |
+| `LABEL_OPTIONAL` beside `LABEL_REQUIRED` (refused) | `data/w36-label-{explicit,required}.pbs` | `U-07` |
+| an empty enum reserved range beside `[0, 0]` (accepted) | `data/w36-enum-reserved-{empty,zero}.pbs` | `U-07` |
+| an enum reserved range `[0, 0]` beside `[2, 2]` (refused) | `data/w36-enum-reserved-{zero,two}.pbs` | `U-07` |
+| an int32 default `0x0A` beside `10` (accepted) | `data/w36-default-{hex,decimal}.pbs` | `U-07` |
+| an int32 default `10` beside `11` (refused) | `data/w36-default-{decimal,other}.pbs` | `U-07` |
+| an unsupported class carried by `edition` beside one carried by `syntax` (refused) | `data/w36-edition-{empty,absent}.pbs` | `U-52` |
 | a map entry in key-then-value order (accepted) | `data/map-ok.proto` / `.pbs` | `W-37` |
 | a map entry that declares the value first | `data/map-reversed.pbs` | `W-37` |
 | a proto3 enum whose first value is zero (accepted) | `data/enum-ok.proto` / `.pbs` | `W-44` |
@@ -71,6 +83,14 @@ controls (`ext-max`, `message-set-empty`) is compared byte for byte.
 | extension declarations are not validated (xfail) | `data/ext-member-*.pbs`, `data/ext-unvalidated.proto` | `CR-25`, E6 |
 | a thin set: the import is named but not carried | `data/w68-root.proto` / `.pbs` | `W-68` |
 | the imported file | `data/w68-dep.proto` / `.pbs` | `W-68` |
+
+The merge rows (`U-04`, `U-07`, `U-52`) are descriptor-only by construction:
+the source path reads one definition of a file, so only two containers can
+disagree about a spelling. Each accepted pair is driven through both argument
+orders and must produce the same header as either single container; each
+refused pair must answer "two containers carry different definitions of one
+logical file" in both orders. The `.proto` fixture cannot carry the pair, so
+the driver does not run a source half for these rows.
 
 Two shapes cannot be written as `.proto` source at all, and the driver says so
 where it skips the source half:
