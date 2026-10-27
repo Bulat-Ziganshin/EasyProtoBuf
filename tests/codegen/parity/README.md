@@ -24,6 +24,15 @@ the extension range's `verification`/`declaration` pair. They are the same
 kind of row - a rule that used to exist on the source door only, now asked on
 both - with the accepted controls compared byte for byte.
 
+Step R05 (`U-10`, `U-11`, `U-12`, `U-21`) adds the descriptor invariants around
+presence, oneofs and MessageSet. `message_set_wire_format` is the one option the
+source parser used to validate and drop; it now travels in the model, so a
+MessageSet with fields (`U-10`) and a proto3 MessageSet (`U-12`) are verdicts on
+both doors. The `proto3_optional` rules (`U-11`) and the oneof-contiguity rule
+(`U-21`) are descriptor-only by construction - the source parser synthesizes the
+flag's one-field oneof and parses oneof bodies as one block - and their accepted
+twins live in the validity lane.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -83,8 +92,15 @@ both - with the accepted controls compared byte for byte.
 | the same reserved name twice | `data/res-dup-name.proto` / `.pbs` | `CR-06` |
 | an enum value using a reserved number | `data/enum-reserved.proto` / `.pbs` | `CR-06` |
 | an enum value using a reserved name | `data/enum-reserved-name.proto` / `.pbs` | `CR-06` |
-| a MessageSet with no fields (accepted) | `data/message-set-empty.proto` / `.pbs` | `CR-23` |
-| a MessageSet that declares a field | `data/message-set-fields.pbs` | `CR-23` |
+| a MessageSet with no fields (accepted) | `data/message-set-empty.proto` / `.pbs` | `CR-23`, `U-10`/`U-12` |
+| a MessageSet that declares a field | `data/message-set-fields.proto` / `.pbs` | `CR-23`, `U-10` |
+| a MessageSet in a proto3 file | `data/message-set-proto3.proto` / `.pbs` | `U-12` |
+| `proto3_optional` with no oneof | `data/p3opt-no-oneof.pbs` | `U-11` |
+| `proto3_optional` in a proto2 file | `data/p3opt-proto2.pbs` | `U-11` |
+| `proto3_optional` in a two-field oneof | `data/p3opt-two-field-oneof.pbs` | `U-11` |
+| `proto3_optional` on a repeated field | `data/p3opt-repeated.pbs` | `U-11` |
+| a synthetic oneof before a real oneof | `data/p3opt-synthetic-first.pbs` | `U-11` |
+| members of one oneof separated by an ordinary field | `data/oneof-not-contiguous.pbs` | `U-21` |
 | an unnamed field / message / service | `data/no-{field,message,service}-name.pbs` | `CR-46` |
 | a `jstype` on a 64-bit field (accepted) | `data/opt-jstype-int64.proto` / `.pbs` | `U-13` |
 | a `jstype` on an int32 field | `data/opt-jstype-int32.proto` / `.pbs` | `U-13` |
@@ -120,9 +136,10 @@ where it skips the source half:
 
 `data/ext-overlap.proto` exists although `protoc` refuses to compile it: the
 source path is this project's own parser, and the refusal is part of the lane.
-The descriptor halves of the shapes `protoc` refuses are encoded from the
-`.txtpb` beside them, so the readable form of every crafted descriptor is in
-the tree.
+The same is true of `message-set-fields.proto` and `message-set-proto3.proto`,
+whose refusals are real rows now that the source door models the option. The
+descriptor halves of the shapes `protoc` refuses are encoded from the `.txtpb`
+beside them, so the readable form of every crafted descriptor is in the tree.
 
 The step-B5 rows (`CR-06`, `CR-07`, `CR-23`, `CR-46`) follow the same rule.
 Each reserved/extension shape has a `.proto` half the source parser answers as
@@ -132,14 +149,22 @@ refuses the shape and cannot write its descriptor. `ext-max` and
 `.pbs` halves are protoc-written and the accepted-pair check compares the two
 headers byte for byte.
 
-Two B5 shapes are descriptor-only by construction:
+Two B5 shapes were descriptor-only when the rule was written:
 
-- **a MessageSet that declares fields** (`CR-23`) — the source parser parses a
-  message option as an uninterpreted value and discards it (B1 gap `G2`), so
-  the field-bearing shape cannot reach the model from source text. The
-  field-less control is accepted on both paths and its header is unchanged.
+- **a MessageSet that declares fields** (`CR-23`) — the source parser used to
+  parse a message option as an uninterpreted value and discard it (B1 gap `G2`).
+  R05 (`U-10`) closes that gap: the option travels in the model, so the
+  field-bearing shape is refused on both doors now, and the field-less control is
+  still accepted on both with an unchanged header.
 - **an unnamed field/message/service** (`CR-46`) — the source grammar cannot
   spell a nameless declaration; only a crafted descriptor can.
+
+The four `p3opt-*` rows and `oneof-not-contiguous` are descriptor-only by
+construction (`U-11`, `U-21`): the source parser sets `proto3_optional` only for
+an explicit proto3 `optional`, synthesizes the one-field oneof itself and appends
+it after every real oneof, and parses a oneof body as one block. Their accepted
+twins - `p3opt-ok`, `oneof-contiguous` and `message-set-empty` - are in the
+validity lane, which compares the two headers byte for byte.
 
 The R04 rows (`U-13`, `U-22`) follow the same rule. The `jstype` and either
 lazy flag are decoded by the descriptor door and validated by the shared

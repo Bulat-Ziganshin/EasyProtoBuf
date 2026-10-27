@@ -1162,6 +1162,39 @@ private:
                         seen);
     }
 
+    // OptionStatement in a message body. Every message option is validated like
+    // any other option; the one that also changes a verdict is retained.
+    //
+    // R05 (U-10): `message_set_wire_format` is the message option the generator
+    // cannot represent - a MessageSet is a different wire encoding - so it
+    // travels in the model with its presence bit instead of being validated and
+    // dropped. Both refusals protoc derives from it then answer on the source
+    // door through the shared reference-free sweep: a MessageSet that declares
+    // ordinary fields (U-10) and the option in a proto3 file (U-12). The option
+    // statement's own position is recorded at the option record's descriptor
+    // path, so a source diagnostic points at the declaration that contradicts
+    // the rule.
+    void parse_message_option(DescriptorProto& message,
+                              const DescriptorPath& message_path,
+                              std::set<std::string>& seen)
+    {
+        const SourceLocation option_location = current_.location;
+        const std::string name = option_name();
+        expect_symbol('=');
+        const Constant value = constant(false);
+        expect_symbol(';');
+        validate_option(OPTION_OWNER_MESSAGE, name, value, option_location,
+                        OptionFieldKind(), seen);
+        if (name == "message_set_wire_format") {
+            // validate_option has already refused anything but `true`/`false`.
+            message.options.message_set_wire_format = value.text == "true";
+            message.options.has_message_set_wire_format = true;
+            message.has_options = true;
+            out_.declaration_locations[easypb_schema::message_options_path(
+                message_path)] = option_location;
+        }
+    }
+
     // RpcBody <- "{" (EmptyStatement / OptionStatement)* "}"
     // RPC metadata is intentionally not retained by the trimmed descriptor.
     void parse_rpc_body()
@@ -1983,7 +2016,7 @@ private:
                 parse_map(message, message_path, map_location);              // MapField
             }
             else if (accept_keyword("option"))
-                parse_option_statement(OPTION_OWNER_MESSAGE, option_names);                          // OptionStatement
+                parse_message_option(message, message_path, option_names);                  // OptionStatement
             else if (accept_keyword("reserved")) parse_reserved(false, reserved_ranges, reserved_names); // ReservedMessage
             else if (accept_keyword("extensions")) parse_extensions(extension_ranges);            // Extensions
             else if (accept_keyword("extend")) parse_extend();                               // Extend

@@ -210,10 +210,12 @@ enum DiagnosticCode
     // `MessageOptions.message_set_wire_format = true` and also declares
     // ordinary fields. protoc refuses the shape ("MessageSets cannot have
     // fields, only extensions.", descriptor.cc:6372-6380, :7994-8001), because
-    // the wire encoding of a MessageSet is not an ordinary message. The source
-    // parser does not model message options at all (B1 gap G2), so this is the
-    // descriptor-origin half of the rule; the field-less MessageSet protoc
-    // accepts is accepted here too.
+    // the wire encoding of a MessageSet is not an ordinary message. The option
+    // travels in the model on both doors since R05 (U-10): the source parser
+    // retains `message_set_wire_format` instead of validating and dropping it,
+    // so the same reference-free sweep answers a source MessageSet and a
+    // decoded one. The field-less MessageSet protoc accepts is accepted here
+    // too.
     DIAGNOSTIC_MESSAGE_SET_WITH_FIELDS,
     // Step B8 (root R6, CR-22): a CUSTOM `json_name` is shaped like the
     // extension spelling - it starts with '[' and ends with ']'. protoc refuses
@@ -225,7 +227,42 @@ enum DiagnosticCode
     // duplicate-symbol one, and it applies to both syntaxes. Both frontends
     // answer it: the parser writes the option into the descriptor, and the
     // check rides the reference-free `validate_json_names` sweep.
-    DIAGNOSTIC_INVALID_JSON_NAME
+    DIAGNOSTIC_INVALID_JSON_NAME,
+    // R05 (U-12): a message declares `message_set_wire_format` in a proto3
+    // file. protoc refuses the shape when it builds the file
+    // (`ValidateProto3Message`, descriptor.cc:7900-7904: "MessageSet is not
+    // supported in proto3."), because a MessageSet is encoded with the proto2
+    // MessageSet wire format and proto3 has no extensions. The option travels
+    // in the model on both doors since R05 (U-10), so this is one rule asked of
+    // two values: the source door refuses the declaration as text and the
+    // descriptor door refuses the same option in a decoded file.
+    DIAGNOSTIC_MESSAGE_SET_IN_PROTO3,
+    // R05 (U-11): the `proto3_optional` flag and the oneof layout it implies
+    // are not one protoc would build. Three shapes share the code because they
+    // are one category - the flag cannot describe this field:
+    //   * the flag on a field of a file that is not proto3 (`BuildField`,
+    //     descriptor.cc:6614-6622: "The [proto3_optional=true] option may only
+    //     be set on proto3 fields, not <name>");
+    //   * the flag on a field that is not the only member of a oneof, or that
+    //     claims no oneof at all (`CrossLinkMessage`, descriptor.cc:7331-7342:
+    //     "Fields with proto3_optional set must be a member of a one-field
+    //     oneof");
+    //   * a synthetic oneof - one field, that field carrying the flag - declared
+    //     before a oneof that is not synthetic (`:7344-7358`: "Synthetic oneofs
+    //     must be after all other oneofs").
+    // Only a descriptor can carry these shapes: the source parser sets the flag
+    // only for an explicit proto3 `optional` and appends the synthetic oneof it
+    // creates after every real oneof (B12, D1-A), so the source door always
+    // reaches the rule with a shape that satisfies it.
+    DIAGNOSTIC_INVALID_PROTO3_OPTIONAL,
+    // R05 (U-21): the members of one `oneof_index` are not a contiguous run in
+    // the message's field list. protoc refuses the shape while it builds the
+    // descriptor (`CrossLinkMessage`, descriptor.cc:7280-7301: "Fields in the
+    // same oneof must be defined consecutively. ..."), because
+    // `OneofDescriptor::field(i)` indexes the members as an array. The source
+    // parser cannot produce the shape - a oneof body is parsed as one block and
+    // its fields are appended together - so this is a descriptor-door rule.
+    DIAGNOSTIC_ONEOF_NOT_CONTIGUOUS
 };
 
 struct Diagnostic

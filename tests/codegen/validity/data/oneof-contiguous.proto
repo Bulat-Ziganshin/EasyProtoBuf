@@ -1,0 +1,16 @@
+// R05 (U-21), accepted control: the members of oneof `o` are adjacent in the
+// message's field list. protoc 30.1 accepts the shape, and the descriptor half
+// protoc writes keeps the same order, so the contiguity rule must not refuse a
+// oneof merely because an ordinary field follows it (the `oneof-not-contiguous`
+// parity fixture covers the refused spelling).
+syntax = "proto3";
+
+message ContiguousOneof
+{
+    oneof o
+    {
+        int32 a = 1;
+        int32 c = 2;
+    }
+    int32 b = 3;
+}

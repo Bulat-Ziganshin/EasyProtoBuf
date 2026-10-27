@@ -1,0 +1,21 @@
+# R05 (U-11): a repeated proto3 field carries proto3_optional. The flag marks
+# explicit presence, which a repeated field cannot have, and the field claims no
+# oneof. protoc 30.1 refuses it ("Fields with proto3_optional set must be a
+# member of a one-field oneof"); the source parser refuses a repeated label on
+# an explicit proto3 `optional` as text, so the descriptor door is the one this
+# fixture pins.
+file {
+  name: "p3opt-repeated.proto"
+  package: "parity"
+  syntax: "proto3"
+  message_type {
+    name: "M"
+    field {
+      name: "f"
+      number: 1
+      label: LABEL_REPEATED
+      type: TYPE_INT32
+      proto3_optional: true
+    }
+  }
+}

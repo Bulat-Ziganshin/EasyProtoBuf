@@ -18,9 +18,11 @@
 #include <iterator>
 #include <set>
 #include <string>
+#include <utility>
 
 #include "descriptor.pb.hpp"
 #include "descriptor_adapter.hpp"
+#include "schema_linker.hpp"
 #include "schema_semantics.hpp"
 #include "schema_semantics_internal.hpp"
 
@@ -1317,7 +1319,7 @@ void test_rule_oneofs_d28_unclaimed_declaration_is_refused()
     // D-28: a declaration no field claims is refused.
     easypb_schema::Diagnostic error;
     CHECK(!easypb_schema::internal::validate_message_oneofs(
-        file, message, "M", message_path, error));
+        file, message, "M", message_path, false, error));
     CHECK(error.message.find("has no fields") != std::string::npos);
 
     // Control: once a field claims it, the same declaration passes.
@@ -1327,7 +1329,7 @@ void test_rule_oneofs_d28_unclaimed_declaration_is_refused()
     field.oneof_index = 0;
     message.field.push_back(field);
     CHECK(easypb_schema::internal::validate_message_oneofs(
-        file, message, "M", message_path, error));
+        file, message, "M", message_path, false, error));
 }
 
 void test_rule_type_a7_declared_kind_mismatch_is_refused()
@@ -2496,6 +2498,299 @@ void test_rule_message_set_wire_format_directly()
     }
 }
 
+// R05 (U-12): MessageSet is a proto2 wire format. The option is refused in a
+// proto3 file before the field count is asked about; a proto2 MessageSet keeps
+// the CR-23 rule above. Only a source file or a decoded descriptor can carry the
+// shape, and both doors reach the same sweep.
+void test_rule_message_set_proto3_directly()
+{
+    // proto3, field-less MessageSet: refused by the syntax rule.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.options.message_set_wire_format = true;
+        message.options.has_message_set_wire_format = true;
+        message.has_options = true;
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_message_set_wire_format(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MESSAGE_SET_IN_PROTO3);
+        CHECK(error.message.find("MessageSet is not supported in proto3") !=
+              std::string::npos);
+    }
+    // proto3, MessageSet with a field: the syntax rule is the more fundamental
+    // one, so it answers first.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.options.message_set_wire_format = true;
+        message.options.has_message_set_wire_format = true;
+        message.has_options = true;
+        message.field.push_back(make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32));
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_message_set_wire_format(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_MESSAGE_SET_IN_PROTO3);
+    }
+    // The proto2 field-less control stays accepted (the CR-23 test above owns
+    // the field-bearing refusal).
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.options.message_set_wire_format = true;
+        message.options.has_message_set_wire_format = true;
+        message.has_options = true;
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_message_set_wire_format(file, error));
+    }
+    // The rule is about the option's value: a written `false` changes nothing.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        message.options.message_set_wire_format = false;
+        message.options.has_message_set_wire_format = true;
+        message.has_options = true;
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_message_set_wire_format(file, error));
+    }
+}
+
+// R05 (U-11, U-21): the `proto3_optional` flag is legal only in proto3 and only
+// on the sole member of its oneof, synthetic oneofs follow every real one, and
+// the members of one `oneof_index` are a contiguous run. Each case below is the
+// smallest message that reaches one rule.
+void test_rule_proto3_optional_and_oneof_layout_directly()
+{
+    const easypb_schema::DescriptorPath message_path =
+        easypb_schema::file_message_path(0);
+
+    // U-11: the flag with no oneof at all.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto field = make_scalar_field(
+            file, "f", 1, FieldDescriptorProto::TYPE_INT32);
+        field.proto3_optional = true;
+        field.has_proto3_optional = true;
+        message.field.push_back(field);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_oneofs(
+            file, message, ".M", message_path, true, error));
+        CHECK(error.code ==
+              easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL);
+        CHECK(error.message.find("must be a member of a one-field oneof") !=
+              std::string::npos);
+    }
+    // U-11: the flag in a proto2 file, with an otherwise valid one-field oneof.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto field = make_scalar_field(
+            file, "f", 1, FieldDescriptorProto::TYPE_INT32);
+        field.proto3_optional = true;
+        field.has_proto3_optional = true;
+        field.oneof_index = 0;
+        field.has_oneof_index = true;
+        message.field.push_back(field);
+        OneofDescriptorProto oneof;
+        oneof.name = file.strings.save("_f");
+        oneof.has_name = true;
+        message.oneof_decl.push_back(oneof);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_oneofs(
+            file, message, ".M", message_path, false, error));
+        CHECK(error.code ==
+              easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL);
+        CHECK(error.message.find("may only be set on proto3 fields") !=
+              std::string::npos);
+        // The same message in a proto3 file is the accepted control.
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        CHECK(easypb_schema::internal::validate_message_oneofs(
+            file, message, ".M", message_path, true, error));
+    }
+    // U-11: the flag on a member of a two-field oneof.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto field = make_scalar_field(
+            file, "f", 1, FieldDescriptorProto::TYPE_INT32);
+        field.proto3_optional = true;
+        field.has_proto3_optional = true;
+        field.oneof_index = 0;
+        field.has_oneof_index = true;
+        message.field.push_back(field);
+        FieldDescriptorProto other = make_scalar_field(
+            file, "g", 2, FieldDescriptorProto::TYPE_INT32);
+        other.oneof_index = 0;
+        other.has_oneof_index = true;
+        message.field.push_back(other);
+        OneofDescriptorProto oneof;
+        oneof.name = file.strings.save("o");
+        oneof.has_name = true;
+        message.oneof_decl.push_back(oneof);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_oneofs(
+            file, message, ".M", message_path, true, error));
+        CHECK(error.code ==
+              easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL);
+        CHECK(error.message.find("must be a member of a one-field oneof") !=
+              std::string::npos);
+    }
+    // U-11: a repeated field carrying the flag and no oneof.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto field = make_scalar_field(
+            file, "f", 1, FieldDescriptorProto::TYPE_INT32);
+        field.label = FieldDescriptorProto::LABEL_REPEATED;
+        field.proto3_optional = true;
+        field.has_proto3_optional = true;
+        message.field.push_back(field);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_oneofs(
+            file, message, ".M", message_path, true, error));
+        CHECK(error.message.find("must be a member of a one-field oneof") !=
+              std::string::npos);
+    }
+    // U-11: a synthetic oneof declared before a real oneof.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto optional_field = make_scalar_field(
+            file, "f", 1, FieldDescriptorProto::TYPE_INT32);
+        optional_field.proto3_optional = true;
+        optional_field.has_proto3_optional = true;
+        optional_field.oneof_index = 0;
+        optional_field.has_oneof_index = true;
+        message.field.push_back(optional_field);
+        FieldDescriptorProto real_field = make_scalar_field(
+            file, "g", 2, FieldDescriptorProto::TYPE_INT32);
+        real_field.oneof_index = 1;
+        real_field.has_oneof_index = true;
+        message.field.push_back(real_field);
+        OneofDescriptorProto synthetic;
+        synthetic.name = file.strings.save("_f");
+        synthetic.has_name = true;
+        message.oneof_decl.push_back(synthetic);
+        OneofDescriptorProto real;
+        real.name = file.strings.save("o");
+        real.has_name = true;
+        message.oneof_decl.push_back(real);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_oneofs(
+            file, message, ".M", message_path, true, error));
+        CHECK(error.code ==
+              easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL);
+        CHECK(error.message.find("synthetic oneofs must be after all other "
+                                 "oneofs") != std::string::npos);
+        // The accepted control: the same two declarations, real oneof first.
+        std::swap(message.oneof_decl[0], message.oneof_decl[1]);
+        optional_field.oneof_index = 1;
+        real_field.oneof_index = 0;
+        message.field[0] = optional_field;
+        message.field[1] = real_field;
+        CHECK(easypb_schema::internal::validate_message_oneofs(
+            file, message, ".M", message_path, true, error));
+    }
+    // U-21: members of oneof 0 separated by an ordinary field.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto member = make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        member.oneof_index = 0;
+        member.has_oneof_index = true;
+        message.field.push_back(member);
+        message.field.push_back(make_scalar_field(
+            file, "b", 2, FieldDescriptorProto::TYPE_INT32));
+        FieldDescriptorProto returning = make_scalar_field(
+            file, "c", 3, FieldDescriptorProto::TYPE_INT32);
+        returning.oneof_index = 0;
+        returning.has_oneof_index = true;
+        message.field.push_back(returning);
+        OneofDescriptorProto oneof;
+        oneof.name = file.strings.save("o");
+        oneof.has_name = true;
+        message.oneof_decl.push_back(oneof);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_message_oneofs(
+            file, message, ".M", message_path, true, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_ONEOF_NOT_CONTIGUOUS);
+        CHECK(error.message.find("b") != std::string::npos);
+        CHECK(error.message.find("must be defined consecutively") !=
+              std::string::npos);
+    }
+    // U-21 accepted control: the two members adjacent, the ordinary field after
+    // the oneof.
+    {
+        easypb_schema::SchemaFile file;
+        file.file.syntax = file.strings.save("proto3");
+        file.file.has_syntax = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto first = make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        first.oneof_index = 0;
+        first.has_oneof_index = true;
+        message.field.push_back(first);
+        FieldDescriptorProto second = make_scalar_field(
+            file, "c", 2, FieldDescriptorProto::TYPE_INT32);
+        second.oneof_index = 0;
+        second.has_oneof_index = true;
+        message.field.push_back(second);
+        message.field.push_back(make_scalar_field(
+            file, "b", 3, FieldDescriptorProto::TYPE_INT32));
+        OneofDescriptorProto oneof;
+        oneof.name = file.strings.save("o");
+        oneof.has_name = true;
+        message.oneof_decl.push_back(oneof);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::internal::validate_message_oneofs(
+            file, message, ".M", message_path, true, error));
+    }
+}
+
 // CR-45: copy_descriptor assigns the package presence bit instead of only
 // setting it, so a present-but-empty package normalizes to "no package" and a
 // non-empty package stays present whatever bit the caller carried.
@@ -2816,14 +3111,108 @@ void test_descriptor_extension_range_options_are_decoded(
     }
 }
 
+// --- R05: the proto3_optional, oneof-layout and MessageSet descriptor rules,
+// --- driven through the real link verdict ------------------------------------
+
+struct RefusedDescriptorRow
+{
+    const char* stem;
+    const char* expected;
+    easypb_schema::DiagnosticCode code;
+};
+
+// U-10, U-11, U-12 and U-21: one committed `.pbs` per invalid shape. Every row
+// is decoded from protoc's own encoding of the `.txtpb` beside it, appended to a
+// schema set and linked in complete mode, which is the verdict the CLI gives; the
+// accepted controls are the validity lane's protoc-written twins, which must
+// link cleanly. The first row also pins that the decoded flag and the absent
+// oneof are what the rule sees, not a value the loader normalized away.
+void test_descriptor_optional_and_oneof_rules(const std::string& fixture_dir)
+{
+    const std::string parity = fixture_dir + "/codegen/parity/data";
+    const RefusedDescriptorRow rows[] = {
+        {"p3opt-no-oneof", "must be a member of a one-field oneof",
+         easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL},
+        {"p3opt-proto2", "may only be set on proto3 fields",
+         easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL},
+        {"p3opt-two-field-oneof", "must be a member of a one-field oneof",
+         easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL},
+        {"p3opt-repeated", "must be a member of a one-field oneof",
+         easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL},
+        {"p3opt-synthetic-first", "synthetic oneofs must be after all other oneofs",
+         easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL},
+        {"oneof-not-contiguous", "must be defined consecutively",
+         easypb_schema::DIAGNOSTIC_ONEOF_NOT_CONTIGUOUS},
+        {"message-set-proto3", "MessageSet is not supported in proto3",
+         easypb_schema::DIAGNOSTIC_MESSAGE_SET_IN_PROTO3},
+    };
+    for (std::size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(parity + "/" + rows[i].stem + ".pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(
+            decoded.file, std::string(rows[i].stem) + ".pbs", set, error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            easypb_schema::LinkedSchema linked;
+            CHECK(!easypb_schema::link_schema(
+                set, easypb_schema::LINK_COMPLETE, linked, error));
+            CHECK(error.message.find(rows[i].expected) != std::string::npos);
+            CHECK(error.code == rows[i].code);
+        }
+    }
+
+    // The decoded model: the flag is present, and the oneof index is absent.
+    {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(parity + "/p3opt-no-oneof.pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() == 1 &&
+            !decoded.file[0].message_type.empty() &&
+            !decoded.file[0].message_type[0].field.empty()) {
+            const FieldDescriptorProto& field =
+                decoded.file[0].message_type[0].field[0];
+            CHECK(field.has_proto3_optional);
+            CHECK(field.proto3_optional);
+            CHECK(!field.has_oneof_index);
+        }
+    }
+
+    // Accepted controls: the validity lane's protoc-written twins.
+    const std::string validity = fixture_dir + "/codegen/validity/data";
+    const char* accepted[] = {"p3opt-ok", "oneof-contiguous",
+                              "message-set-empty"};
+    for (std::size_t i = 0;
+         i < sizeof(accepted) / sizeof(accepted[0]); ++i) {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(validity + "/" + accepted[i] + ".pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(
+            decoded.file, std::string(accepted[i]) + ".pbs", set, error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            easypb_schema::LinkedSchema linked;
+            CHECK(easypb_schema::link_schema(
+                set, easypb_schema::LINK_COMPLETE, linked, error));
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     if (argc < 2 || argv[1][0] == '\0') {
         std::cerr << "usage: codegen_schema_semantics_test <tests-source-dir>\n"
-                  << "The argument is the tests/ source directory: the R04 rows\n"
-                  << "decode the tracked .pbs fixtures under codegen/*/data/.\n";
+                  << "The argument is the tests/ source directory: the R04/R05\n"
+                  << "rows decode the tracked .pbs fixtures under codegen/*/data/.\n";
         return EXIT_FAILURE;
     }
     const std::string fixture_dir = argv[1];
@@ -2879,10 +3268,13 @@ int main(int argc, char** argv)
     test_rule_reserved_declarations_directly();
     test_rule_extension_bound_directly();
     test_rule_message_set_wire_format_directly();
+    test_rule_message_set_proto3_directly();
+    test_rule_proto3_optional_and_oneof_layout_directly();
     test_adapter_normalizes_the_package_presence_bit();
     test_descriptor_decode_rejects_a_wrong_wire_type(fixture_dir);
     test_descriptor_field_options_are_decoded(fixture_dir);
     test_descriptor_extension_range_options_are_decoded(fixture_dir);
+    test_descriptor_optional_and_oneof_rules(fixture_dir);
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

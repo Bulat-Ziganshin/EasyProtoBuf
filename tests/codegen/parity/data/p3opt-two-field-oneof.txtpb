@@ -1,0 +1,28 @@
+# R05 (U-11): proto3_optional on a field of a two-field oneof. The oneof is not
+# a "one-field oneof", so the shape does not describe explicit presence. protoc
+# 30.1 refuses it ("Fields with proto3_optional set must be a member of a
+# one-field oneof").
+file {
+  name: "p3opt-two-field-oneof.proto"
+  package: "parity"
+  syntax: "proto3"
+  message_type {
+    name: "M"
+    field {
+      name: "f"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      proto3_optional: true
+      oneof_index: 0
+    }
+    field {
+      name: "g"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      oneof_index: 0
+    }
+    oneof_decl { name: "o" }
+  }
+}

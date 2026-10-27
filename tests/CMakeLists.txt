@@ -295,7 +295,10 @@ if(BUILD_TESTING)
         literals-lexemes
         literals-descriptor-octal
         grammar-table
-        scope-easypb)
+        scope-easypb
+        p3opt-ok
+        oneof-contiguous
+        message-set-empty)
 
     foreach(name ${codegen_validity_fixtures})
         add_custom_command(
@@ -338,7 +341,10 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/literals-lexemes.pb.hpp
             ${codegen_validity_descriptor_dir}/literals-descriptor-octal.pb.hpp
             ${codegen_validity_descriptor_dir}/grammar-table.pb.hpp
-            ${codegen_validity_descriptor_dir}/scope-easypb.pb.hpp)
+            ${codegen_validity_descriptor_dir}/scope-easypb.pb.hpp
+            ${codegen_validity_descriptor_dir}/p3opt-ok.pb.hpp
+            ${codegen_validity_descriptor_dir}/oneof-contiguous.pb.hpp
+            ${codegen_validity_descriptor_dir}/message-set-empty.pb.hpp)
 
     add_executable(codegen_validity_runtime_test
         ${codegen_validity_dir}/validity_runtime.cpp)

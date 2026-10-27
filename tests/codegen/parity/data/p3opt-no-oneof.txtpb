@@ -1,0 +1,20 @@
+# R05 (U-11): a proto3 field carries proto3_optional but claims no oneof.
+# protoc 30.1 refuses it ("Fields with proto3_optional set must be a member of
+# a one-field oneof"); the source parser cannot produce the shape because it
+# synthesizes the one-field oneof itself (B12), so the descriptor door is the
+# one this fixture pins.
+file {
+  name: "p3opt-no-oneof.proto"
+  package: "parity"
+  syntax: "proto3"
+  message_type {
+    name: "M"
+    field {
+      name: "f"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      proto3_optional: true
+    }
+  }
+}

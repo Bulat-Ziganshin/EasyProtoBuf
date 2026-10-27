@@ -1,0 +1,34 @@
+# R05 (U-21): fields a and c belong to oneof 0 and field b does not, so the
+# members of the oneof are not a contiguous run in the message's field list.
+# protoc 30.1 refuses it ("Fields in the same oneof must be defined
+# consecutively"); the source parser appends a oneof body's fields in one block,
+# so only a crafted descriptor can carry the shape.
+file {
+  name: "oneof-not-contiguous.proto"
+  package: "parity"
+  syntax: "proto3"
+  message_type {
+    name: "M"
+    field {
+      name: "a"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      oneof_index: 0
+    }
+    field {
+      name: "b"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+    field {
+      name: "c"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      oneof_index: 0
+    }
+    oneof_decl { name: "o" }
+  }
+}

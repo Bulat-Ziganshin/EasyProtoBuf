@@ -44,6 +44,9 @@
 #include "plus-controls.pb.hpp"
 #include "plus-descriptor-controls.pb.hpp"
 #include "scope-easypb.pb.hpp"
+#include "p3opt-ok.pb.hpp"
+#include "oneof-contiguous.pb.hpp"
+#include "message-set-empty.pb.hpp"
 
 // W-38's accepted boundary: the 101-component package compiles and its
 // message can be named.

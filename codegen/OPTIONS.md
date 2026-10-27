@@ -118,7 +118,10 @@ checked after linking), `packed` only on repeated primitive or enum fields,
 `optimize_for` only on its enumerators, `message_set_wire_format` only on
 messages, and `verification = UNVERIFIED` refused beside a non-empty extension
 `declaration` list. An unknown unparenthesized name, an option in the wrong
-owner, and a wrong value kind are refusals; the value itself is discarded.
+owner, and a wrong value kind are refusals. A recognized value is discarded
+unless a rule or the generated code reads it: `default`, `json_name`, `packed`,
+`(easypb.cpp).type`, `allow_alias`, `message_set_wire_format`, and the
+`lazy`/`unverified_lazy` presence the shared field pass reads after resolution.
 
 This is validation, not feature support: no Java/C#/Go option changes the
 generated C++. Only `default`, `json_name`, `packed` and `(easypb.cpp).type`
@@ -129,6 +132,29 @@ range's `verification`/`declaration` - and asks the same rules over the
 decoded values (`U-13`, `U-22`). Every other standard option is read as an
 unknown field on the `.pbs` door, which is what protoc does with an option it
 does not model here.
+
+### The `message_set_wire_format` rule on both doors
+
+`message_set_wire_format` is validated on the source door like every other
+message option, and its value now travels in the model (`MessageOptions`), so
+one reference-free sweep answers both doors (`U-10`, `U-12`):
+
+- the option is accepted only in a proto2 file. A proto3 message that declares
+  it is refused with `MessageSet is not supported in proto3`, the reference
+  compiler's own sentence (`ValidateProto3Message`, `descriptor.cc:7900-7904`),
+  because a MessageSet is encoded with the proto2 MessageSet wire format and
+  proto3 has no extension ranges to carry its items;
+- a message that declares the option must have no ordinary fields - a MessageSet
+  carries extensions only - so a message with fields is refused with `a
+  MessageSet cannot have fields, only extensions` (`BuildField`,
+  `descriptor.cc:6372-6380`, `:7994-8001`);
+- a field-less proto2 MessageSet is accepted, exactly as `protoc` accepts it.
+  The option has no effect on the generated C++, so both doors emit an ordinary
+  (empty) structure.
+
+The source door records the option statement's position, so its refusal points
+at the declaration that contradicts the rule; the descriptor door has no
+positions and names the message-options descriptor path.
 
 ### The descriptor door's `jstype` and `lazy` rules
 

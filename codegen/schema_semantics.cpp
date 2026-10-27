@@ -2427,12 +2427,29 @@ bool validate_message_reserved(const SchemaFile& file,
 // not about a reference, so it rides the reference-free stage. A MessageSet
 // whose only members are extensions - or that declares no members at all -
 // stays accepted, exactly as protoc accepts it.
+//
+// R05 (U-12): the same option is refused in a proto3 file. protoc asks it in
+// `ValidateProto3Message` (`descriptor.cc:7900-7904`, "MessageSet is not
+// supported in proto3."), because the MessageSet wire format is a proto2
+// feature and proto3 has no extension ranges to carry its items. The syntax
+// rule runs first: a proto3 message cannot be a MessageSet at all, so the field
+// count is not the interesting fact about it.
 bool validate_message_set_in_message(const SchemaFile& file,
                                      const DescriptorProto& message,
                                      const std::string& qualified_name,
                                      const DescriptorPath& message_path,
-                                     Diagnostic& error)
+                                     bool is_proto3, Diagnostic& error)
 {
+    if (message.options.message_set_wire_format && is_proto3) {
+        const DescriptorPath options_path = message_options_path(message_path);
+        return fail_at_code(
+            file,
+            "message \"" + qualified_name +
+                "\" declares message_set_wire_format; MessageSet is not "
+                "supported in proto3",
+            declaration_location(file, options_path), options_path,
+            DIAGNOSTIC_MESSAGE_SET_IN_PROTO3, error);
+    }
     if (message.options.message_set_wire_format && !message.field.empty()) {
         const DescriptorPath options_path = message_options_path(message_path);
         return fail_at_code(
@@ -2449,7 +2466,7 @@ bool validate_message_set_in_message(const SchemaFile& file,
                 file, message.nested_type[i],
                 joined_name(qualified_name, message.nested_type[i].name),
                 message_nested_path(message_path, static_cast<int>(i)),
-                error)) {
+                is_proto3, error)) {
             return false;
         }
     }
@@ -3549,24 +3566,67 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
     return true;
 }
 
-// 4. oneof declarations claimed by no field (D-28) - after the field loop on
-// purpose
+// 4. oneof layout and declarations: contiguous members (U-21), declarations
+// claimed by no field (D-28), and the `proto3_optional` invariants (U-11)
 bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
                              const std::string& scope,
-                             const DescriptorPath& message_path, Diagnostic& error)
+                             const DescriptorPath& message_path, bool is_proto3,
+                             Diagnostic& error)
 {
+    // R05 (U-21): the members of one `oneof_index` must be a contiguous run in
+    // the message's field list. protoc asserts exactly that while it fills each
+    // oneof's member array (`CrossLinkMessage`, descriptor.cc:7280-7301) and
+    // names the field that interrupted the run:
+    //
+    //   Fields in the same oneof must be defined consecutively. "b" cannot be
+    //   defined before the completion of the "o" oneof definition.
+    //
+    // The scan mirrors the reference: a oneof is only looked at from its second
+    // member on, and the field reported is the one BEFORE the returning member
+    // - the ordinary field that closed the run - because that is the spelling
+    // the rule calls out. Only a descriptor can carry the shape: a source oneof
+    // body is parsed as one block, so the source door never reaches this scan
+    // with a violation.
+    std::vector<std::int32_t> last_member(message.oneof_decl.size(), -1);
+    for (std::size_t i = 0; i < message.field.size(); ++i) {
+        const FieldDescriptorProto& field = message.field[i];
+        if (!field.has_oneof_index || field.oneof_index < 0 ||
+            static_cast<std::size_t>(field.oneof_index) >=
+                message.oneof_decl.size()) {
+            // The index-range rule in validate_field_encoding owns this shape and
+            // runs first in every caller; skipping it here keeps the scan total.
+            continue;
+        }
+        const std::size_t index = static_cast<std::size_t>(field.oneof_index);
+        if (last_member[index] != -1 &&
+            static_cast<std::size_t>(last_member[index]) + 1 != i) {
+            const DescriptorPath boundary_path =
+                message_field_path(message_path, static_cast<int>(i) - 1);
+            return fail_at_code(
+                file,
+                "fields in the same oneof must be defined consecutively; \"" +
+                    view_text(message.field[i - 1].name) +
+                    "\" interrupts the \"" +
+                    view_text(message.oneof_decl[index].name) +
+                    "\" oneof definition",
+                declaration_location(file, boundary_path), boundary_path,
+                DIAGNOSTIC_ONEOF_NOT_CONTIGUOUS, error);
+        }
+        last_member[index] = static_cast<std::int32_t>(i);
+    }
+
     // D-28 (fix round r13, contract clause 12): every oneof declaration must be
-    // claimed by at least one field. The index-RANGE check inside the loop
+    // claimed by at least one field. The index-RANGE check inside the field loop
     // above only refuses a field pointing outside the list, so a declaration
     // nothing points at is invisible to it, while protoc refuses the same shape
     // when it builds a descriptor (`Oneof must have at least one field.`).
     //
-    // It sits after the loop on purpose: a message that carries BOTH a dangling
-    // index and an unclaimed declaration is still reported by the more specific
-    // index rule first. It runs in both modes over every message, referenced or
-    // not, and the deferred pass reaches it too - which is how the SOURCE half
-    // is covered, since the parser accepts an empty oneof body as text while
-    // protoc does not.
+    // It sits after the field walks on purpose: a message that carries BOTH a
+    // dangling index and an unclaimed declaration is still reported by the more
+    // specific index rule first. It runs in both modes over every message,
+    // referenced or not, and the deferred pass reaches it too - which is how the
+    // SOURCE half is covered, since the parser accepts an empty oneof body as
+    // text while protoc does not.
     for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
         bool claimed = false;
         for (std::size_t j = 0; j < message.field.size() && !claimed; ++j) {
@@ -3583,6 +3643,104 @@ bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
                     "\" in " + scope + " has no fields",
                 declaration_location(file, oneof_path), oneof_path,
                 DIAGNOSTIC_EMPTY_ONEOF, error);
+        }
+    }
+
+    // R05 (U-11): the `proto3_optional` flag. protoc asks three questions, each
+    // against the file's syntax or the oneof layout, never against a source
+    // spelling (`descriptor.cc:6614-6622` and `:7331-7342`):
+    //
+    //   * the flag means "explicit presence in proto3" and nothing else, so a
+    //     field of a proto2 file must not carry it;
+    //   * the flag is expressed by a one-field oneof: the containing oneof must
+    //     be synthetic, and `is_synthetic()` is shape-based
+    //     (`descriptor.h:2900-2902`) - exactly one member field, and that member
+    //     carries the flag. A one-field oneof named by hand therefore counts.
+    //
+    // The source door always satisfies both: B12 sets the flag only for an
+    // explicit proto3 `optional` and synthesizes the one-field oneof itself, so
+    // this pass validates that model instead of duplicating its construction.
+    for (std::size_t i = 0; i < message.field.size(); ++i) {
+        const FieldDescriptorProto& field = message.field[i];
+        // protoc reads the VALUE (`proto.proto3_optional()`), so a written
+        // `false` reaches no rule here.
+        if (!field.proto3_optional) continue;
+        const DescriptorPath field_path =
+            message_field_path(message_path, static_cast<int>(i));
+        if (!is_proto3) {
+            return fail_at_code(
+                file,
+                "the [proto3_optional=true] option may only be set on proto3 "
+                "fields, not " + joined_name(scope, field.name),
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_PROTO3_OPTIONAL, error);
+        }
+        std::size_t members = 0;
+        std::size_t member_index = 0;
+        const bool claims_oneof =
+            field.has_oneof_index && field.oneof_index >= 0 &&
+            static_cast<std::size_t>(field.oneof_index) <
+                message.oneof_decl.size();
+        if (claims_oneof) {
+            for (std::size_t j = 0; j < message.field.size(); ++j) {
+                if (!message.field[j].has_oneof_index ||
+                    message.field[j].oneof_index != field.oneof_index) {
+                    continue;
+                }
+                ++members;
+                member_index = j;
+            }
+        }
+        if (!claims_oneof || members != 1 || member_index != i) {
+            return fail_at_code(
+                file,
+                "field \"" + joined_name(scope, field.name) +
+                    "\" sets proto3_optional but is not a member of a one-field "
+                    "oneof; fields with proto3_optional set must be a member of "
+                    "a one-field oneof",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_PROTO3_OPTIONAL, error);
+        }
+    }
+
+    // R05 (U-11): a synthetic oneof - one member field, that field carrying the
+    // flag - must come after every oneof that is not synthetic
+    // (`descriptor.cc:7344-7358`, "Synthetic oneofs must be after all other
+    // oneofs"). protoc uses the position to split `real_oneof_decl_count_` from
+    // the declarations the user wrote, so a synthetic oneof in the middle would
+    // move a real one into the tail. The source parser appends its synthetic
+    // oneofs, which is why a source file can only satisfy this rule.
+    std::size_t first_synthetic = message.oneof_decl.size();
+    for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
+        std::size_t members = 0;
+        std::size_t member_index = 0;
+        for (std::size_t j = 0; j < message.field.size(); ++j) {
+            if (!message.field[j].has_oneof_index ||
+                message.field[j].oneof_index != static_cast<std::int32_t>(i)) {
+                continue;
+            }
+            ++members;
+            member_index = j;
+        }
+        const bool synthetic =
+            members == 1 && message.field[member_index].proto3_optional;
+        if (!synthetic) {
+            if (first_synthetic != message.oneof_decl.size()) {
+                const DescriptorPath oneof_path =
+                    message_oneof_path(message_path, static_cast<int>(i));
+                return fail_at_code(
+                    file,
+                    "synthetic oneofs must be after all other oneofs; \"" +
+                        view_text(message.oneof_decl[i].name) +
+                        "\" in " + scope +
+                        " is not synthetic and follows one that is",
+                    declaration_location(file, oneof_path), oneof_path,
+                    DIAGNOSTIC_INVALID_PROTO3_OPTIONAL, error);
+            }
+            continue;
+        }
+        if (first_synthetic == message.oneof_decl.size()) {
+            first_synthetic = i;
         }
     }
     return true;
@@ -3839,7 +3997,8 @@ bool resolve_message(SchemaFile& file, const SymbolIndex& symbols,
         }
     }
 
-    if (!validate_message_oneofs(file, message, scope, message_path, error)) {
+    if (!validate_message_oneofs(file, message, scope, message_path, is_proto3,
+                                 error)) {
         return false;
     }
     return validate_nested_types(file, symbols, visible_files, unresolved_policy,
@@ -4138,13 +4297,18 @@ bool validate_message_set_wire_format(SchemaFile& file, Diagnostic& error)
 {
     // Same reference-free shape: the option and the field count are both in
     // the descriptor, and a MessageSet that declares fields is malformed even
-    // when nothing references the message (step B5, CR-23).
+    // when nothing references the message (step B5, CR-23). R05 (U-12) adds the
+    // syntax half of the option's rule: MessageSet is a proto2 wire format, so
+    // a proto3 file that declares the option is refused before its field count
+    // is asked about.
     const std::string prefix = package_prefix(file);
+    const bool is_proto3 =
+        classify_file_syntax(file.file) == FILE_SYNTAX_PROTO3;
     for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
         if (!validate_message_set_in_message(
                 file, file.file.message_type[i],
                 joined_name(prefix, file.file.message_type[i].name),
-                file_message_path(static_cast<int>(i)), error)) {
+                file_message_path(static_cast<int>(i)), is_proto3, error)) {
             return false;
         }
     }

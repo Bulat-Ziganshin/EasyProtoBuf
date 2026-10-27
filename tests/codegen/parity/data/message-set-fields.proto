@@ -1,0 +1,16 @@
+// R05 (U-10): the source-door twin of `message-set-fields.pbs`. The parser now
+// retains `message_set_wire_format` instead of validating and dropping it, so
+// this declaration reaches the shared reference-free sweep and is refused
+// ("a MessageSet cannot have fields"). protoc 30.1 refuses the file with the
+// same verdict ("MessageSets cannot have fields, only extensions."), which is
+// why the descriptor half beside this file is crafted from `.txtpb` instead of
+// compiled from this source.
+syntax = "proto2";
+
+package parity;
+
+message M {
+  option message_set_wire_format = true;
+
+  optional int32 a = 1;
+}

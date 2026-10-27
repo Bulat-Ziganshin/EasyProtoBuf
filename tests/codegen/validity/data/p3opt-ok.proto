@@ -1,0 +1,13 @@
+// R05 (U-11), accepted control: an explicit proto3 `optional` field. The parser
+// sets the field's proto3_optional flag and creates the synthetic one-field
+// oneof named `_f` (B12, D1-A); the descriptor half protoc writes carries the
+// same flag and oneof. Both doors accept the shape and must emit the same
+// header, so the synthetic-oneof invariant is proven on the accept side as well
+// as on the refusal side (the `p3opt-no-oneof`, `p3opt-proto2`,
+// `p3opt-two-field-oneof` and `p3opt-synthetic-first` parity fixtures).
+syntax = "proto3";
+
+message SyntheticOptional
+{
+    optional int32 f = 1;
+}

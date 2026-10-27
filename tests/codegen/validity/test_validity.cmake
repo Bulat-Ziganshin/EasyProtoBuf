@@ -140,7 +140,10 @@ set(paired_fixtures
     literals-escapes
     literals-lexemes
     grammar-table
-    scope-easypb)
+    scope-easypb
+    p3opt-ok
+    oneof-contiguous
+    message-set-empty)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -844,6 +847,30 @@ if(FULL_BUILD)
             "  descriptor: ${scope_desc_err}\n  source:     ${scope_src_err}")
     endif()
 endif()
+
+# --- R05: the accepted twins of the proto3_optional and MessageSet rules ------
+#
+# The parity lane refuses the crafted shapes; these three pairs are the accept
+# side, driven through the paired loop above (identical headers byte for byte,
+# and the build compiles the descriptor-path header). The assertions name the
+# emitted field so a verdict that accepted the schema but lost the field cannot
+# pass.
+run_ok(p3opt_ok_out p3opt_ok_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/p3opt-ok.pbs")
+require_empty(p3opt_ok_err "The p3opt-ok descriptor stderr")
+require_contains(p3opt_ok_out "::int32_t f = 0;" "U-11: the optional field")
+require_contains(p3opt_ok_out "bool has_f =" "U-11: explicit presence")
+
+run_ok(oneof_contiguous_out oneof_contiguous_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/oneof-contiguous.pbs")
+require_empty(oneof_contiguous_err "The oneof-contiguous descriptor stderr")
+require_contains(oneof_contiguous_out "::int32_t a = 0;" "U-21: the first member")
+require_contains(oneof_contiguous_out "::int32_t b = 0;" "U-21: the ordinary field")
+
+run_ok(message_set_out message_set_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/message-set-empty.pbs")
+require_empty(message_set_err "The message-set-empty descriptor stderr")
+require_contains(message_set_out "struct EmptyMessageSet" "U-10: the MessageSet")
 
 # --- U-58: the descriptor decoder is strict about wire types -----------------
 #

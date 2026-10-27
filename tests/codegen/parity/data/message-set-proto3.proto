@@ -1,0 +1,13 @@
+// R05 (U-12): the source-door twin of `message-set-proto3.pbs`. The parser now
+// retains `message_set_wire_format`, so the shared sweep sees the proto3
+// MessageSet and refuses it ("MessageSet is not supported in proto3"). protoc
+// 30.1 refuses the file with the same verdict, which is why the descriptor half
+// beside this file is crafted from `.txtpb` instead of compiled from this
+// source.
+syntax = "proto3";
+
+package parity;
+
+message M {
+  option message_set_wire_format = true;
+}

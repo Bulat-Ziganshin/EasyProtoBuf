@@ -466,18 +466,69 @@ expect_reserved_refusal(enum-reserved-name
     "enum value name \"A\" is reserved"
     "enum value name is reserved: A")
 
-# --- CR-23: MessageSet with fields ------------------------------------------
+# --- CR-23 / U-10: MessageSet with fields ------------------------------------
 #
 # The option changes the wire encoding, so an ordinary struct cannot represent
 # it. protoc refuses a MessageSet that declares fields and accepts one that
 # does not; the accepted `message-set-empty` pair above pins the second half.
-# The source half has no fixture for the field-bearing shape: the parser parses
-# a message option as an uninterpreted value and discards it (B1 gap G2), so the
-# shape cannot reach the model from source text. The descriptor door is the one
-# this row is about.
+# Since R05 the parser retains `message_set_wire_format` in the model instead of
+# validating and dropping the statement (U-10), so the field-bearing shape is a
+# verdict on BOTH doors now, and the same reference-free sweep answers it. The
+# descriptor half stays crafted from `.txtpb` because protoc refuses the source
+# and cannot write its descriptor.
 expect_refusal("The descriptor path must refuse a MessageSet with fields"
     "a MessageSet cannot have fields"
     ${CODEGEN} --descriptor-set "${DATA_DIR}/message-set-fields.pbs")
+if(FULL_BUILD)
+    expect_refusal("The source path must refuse a MessageSet with fields"
+        "a MessageSet cannot have fields"
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/message-set-fields.proto")
+endif()
+
+# --- R05 (U-12): MessageSet in proto3 ----------------------------------------
+#
+# A MessageSet is encoded with the proto2 MessageSet wire format and proto3 has
+# no extension ranges, so protoc refuses the option in a proto3 file even when
+# the message declares no fields ("MessageSet is not supported in proto3.",
+# descriptor.cc:7900-7904). The source door answers the same rule from the
+# option it now retains; the descriptor half is crafted because protoc refuses
+# the source and cannot write its descriptor.
+expect_refusal("The descriptor path must refuse a proto3 MessageSet"
+    "MessageSet is not supported in proto3"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/message-set-proto3.pbs")
+if(FULL_BUILD)
+    expect_refusal("The source path must refuse a proto3 MessageSet"
+        "MessageSet is not supported in proto3"
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/message-set-proto3.proto")
+endif()
+
+# --- R05 (U-11/U-21): proto3_optional and the oneof layout -------------------
+#
+# Four crafted descriptors the reference compiler refuses and this project used
+# to accept. Every one is descriptor-only: the source parser sets the flag only
+# for an explicit proto3 `optional`, synthesizes the one-field oneof itself and
+# appends it after every real oneof (B12), while a source oneof body is parsed
+# as one block - so no source file can spell these shapes. The accepted twins
+# live in the validity lane (`p3opt-ok`, `oneof-contiguous`), and
+# `message-set-empty` above covers the MessageSet accept side.
+expect_refusal("The descriptor path must refuse proto3_optional without a oneof"
+    "must be a member of a one-field oneof"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/p3opt-no-oneof.pbs")
+expect_refusal("The descriptor path must refuse proto3_optional in a proto2 file"
+    "may only be set on proto3 fields"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/p3opt-proto2.pbs")
+expect_refusal("The descriptor path must refuse proto3_optional in a two-field oneof"
+    "must be a member of a one-field oneof"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/p3opt-two-field-oneof.pbs")
+expect_refusal("The descriptor path must refuse a repeated proto3_optional field"
+    "must be a member of a one-field oneof"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/p3opt-repeated.pbs")
+expect_refusal("The descriptor path must refuse a synthetic oneof before a real one"
+    "synthetic oneofs must be after all other oneofs"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/p3opt-synthetic-first.pbs")
+expect_refusal("The descriptor path must refuse non-contiguous oneof members"
+    "must be defined consecutively"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/oneof-not-contiguous.pbs")
 
 # --- CR-46: optional names are not required fields -------------------------
 #

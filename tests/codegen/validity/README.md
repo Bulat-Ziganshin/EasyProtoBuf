@@ -10,6 +10,12 @@ The review of 2026-10-27 added two rows of the file-scope name rules
 (`U-02`/`U-03`): the names lane owns the rule, and this lane proves the two
 input paths reach the same verdict and the same diagnostic for it.
 
+Step R05 adds the accepted twins of the descriptor invariants the parity lane
+refuses: an explicit proto3 `optional` field (one synthetic one-field oneof,
+`U-11`), a oneof whose members are adjacent in the field list (`U-21`), and a
+proto2 MessageSet with no ordinary fields (`U-10`/`U-12`). Each pair is
+protoc-written and must emit the same header through both doors.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -94,6 +100,9 @@ input paths reach the same verdict and the same diagnostic for it.
 | a leading `+` on ordinary options (refused) | `.proto` only | `CR-28` |
 | `package easypb;` with a non-colliding type (accepted) | `.proto` + `.pbs` | `U-02` |
 | a global-namespace `message int32_t` (refused on both paths) | `.proto` + `.pbs` | `U-03` |
+| an explicit proto3 `optional` field (accepted) | `.proto` + `.pbs` | `U-11` |
+| adjacent members of one oneof (accepted) | `.proto` + `.pbs` | `U-21` |
+| a proto2 MessageSet with no fields (accepted) | `.proto` + `.pbs` | `U-10`/`U-12` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted

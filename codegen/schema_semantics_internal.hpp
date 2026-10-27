@@ -172,11 +172,14 @@ bool validate_message_map_entries(const SchemaFile& file,
                                   const std::string& qualified_name,
                                   Diagnostic& error);
 
-// 4. oneof declarations claimed by no field (D-28) - after the field loop on
-// purpose
+// 4. oneof layout and declarations: contiguous members (U-21), declarations
+// claimed by no field (D-28), and the `proto3_optional` invariants (U-11).
+// `is_proto3` is the file's own syntax: the proto3_optional flag means
+// presence only there.
 bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
                              const std::string& scope,
-                             const DescriptorPath& message_path, Diagnostic& error);
+                             const DescriptorPath& message_path, bool is_proto3,
+                             Diagnostic& error);
 
 // 5. nested type names, then recursion
 bool validate_nested_types(SchemaFile& file, const SymbolIndex& symbols,

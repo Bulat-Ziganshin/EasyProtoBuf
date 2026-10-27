@@ -1,0 +1,14 @@
+# R05 (U-12): a proto3 message declares message_set_wire_format and no fields at
+# all, so only the syntax rule can refuse it. protoc 30.1 refuses it ("MessageSet
+# is not supported in proto3."); the source parser now retains the option
+# (U-10), so both doors answer the same rule and the source half is
+# message-set-proto3.proto beside this file.
+file {
+  name: "message-set-proto3.proto"
+  package: "parity"
+  syntax: "proto3"
+  message_type {
+    name: "M"
+    options { message_set_wire_format: true }
+  }
+}
