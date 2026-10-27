@@ -384,6 +384,39 @@ if(FULL_BUILD)
             "The source and descriptor printed trees disagree:\nsource:\n${service_source_body}\ndescriptor:\n${service_descriptor_body}")
     endif()
 
+    # U-17: a bare CR inside a line comment is content, not a terminator. The
+    # fixture hides `message Hidden` after the CR on the comment line, so a
+    # lexer that stops at CR prints a second message. `cr-comment.pbs` is
+    # protoc's own descriptor for the same source (generated with
+    # `--descriptor_set_out`); after the input-spelling line the two prints
+    # must agree, and the swallowed message must be absent from both.
+    set(cr_comment_proto "${DATA_DIR}/cr-comment.proto")
+    set(cr_comment_pbs "${DATA_DIR}/cr-comment.pbs")
+    run_ok(cr_comment_src_out cr_comment_src_err
+        ${CODEGEN} --print-descriptor ${cr_comment_proto})
+    run_ok(cr_comment_pbs_out cr_comment_pbs_err
+        ${CODEGEN} --descriptor-set --print-descriptor ${cr_comment_pbs})
+    string(FIND "${cr_comment_src_out}" "\n" cr_comment_src_newline)
+    math(EXPR cr_comment_src_body_start "${cr_comment_src_newline} + 1")
+    string(SUBSTRING "${cr_comment_src_out}" ${cr_comment_src_body_start} -1
+        cr_comment_src_body)
+    string(FIND "${cr_comment_pbs_out}" "\n" cr_comment_pbs_newline)
+    math(EXPR cr_comment_pbs_body_start "${cr_comment_pbs_newline} + 1")
+    string(SUBSTRING "${cr_comment_pbs_out}" ${cr_comment_pbs_body_start} -1
+        cr_comment_pbs_body)
+    if(NOT cr_comment_src_body STREQUAL cr_comment_pbs_body)
+        message(FATAL_ERROR
+            "U-17: the CR-comment source and descriptor prints disagree:\nsource:\n${cr_comment_src_body}\ndescriptor:\n${cr_comment_pbs_body}")
+    endif()
+    if(cr_comment_src_body MATCHES "Hidden")
+        message(FATAL_ERROR
+            "U-17: the bare CR terminated the line comment instead of staying content:\n${cr_comment_src_body}")
+    endif()
+    if(NOT cr_comment_src_body MATCHES "message Visible")
+        message(FATAL_ERROR
+            "U-17: the message after the CR-comment line is missing:\n${cr_comment_src_body}")
+    endif()
+
     # D1-A: proto3 `optional` fills the presence gap the B1 inventory found.
     # The source parser synthesizes the same flag and synthetic oneofs protoc
     # writes, so the printed trees agree after the input-spelling line, and

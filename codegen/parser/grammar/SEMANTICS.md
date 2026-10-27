@@ -22,8 +22,11 @@ The grammar uses the intended lexical and syntactic forms directly:
 - adjacent quoted strings form one string literal;
 - single- and double-quoted strings exclude their own closing quote, a raw LF,
   NUL, and an unescaped backslash; a raw CR is content;
-- line comments and block comments are represented explicitly, and a block
-  comment may not contain a nested `/*`;
+- a line comment ends only at LF or end of input, so a bare CR is comment
+  content; block comments are represented explicitly, and a block comment may
+  not contain a nested `/*`;
+- a tab advances the column to the next multiple of 8, as the reference
+  tokenizer's `NextChar` does, and only LF starts a new line;
 - proto2 ordinary fields have a label, while oneof fields do not;
 - proto3 ordinary fields are unlabeled, `optional`, or `repeated`;
 - keyword rules have identifier boundaries;
@@ -41,8 +44,9 @@ The grammar uses the intended lexical and syntactic forms directly:
   and the value must decode to exactly `proto2` or `proto3`;
 - at most one package declaration is accepted;
 - proto2 ordinary fields require `optional`, `required`, or `repeated`;
-- proto3 rejects `required`, explicit defaults, extension ranges, and extend
-  declarations;
+- proto3 rejects `required`, explicit defaults and extension ranges; an
+  `extend` declaration is accepted only when its extendee is one of the nine
+  `google.protobuf.*Options` messages, and is otherwise refused;
 - proto2 groups are outside the EasyPB parser;
 - service/RPC declarations are accepted at top level, including unary and streaming endpoints;
 - service and RPC options are validated and consumed; service names and method
@@ -100,8 +104,8 @@ The EasyPB parser therefore:
   parts at any dotted position and leading dots inside parentheses, but
   materializes only fields present in the trimmed descriptor model, including
   `default`, `packed`, `allow_alias`, map-entry information, and oneof indices;
-- parses proto2 `extend` bodies and emits a warning instead of storing extension
-  declarations;
+- parses proto2 and descriptor-option proto3 `extend` bodies and emits a
+  warning instead of storing extension declarations;
 - validates reserved and extension ranges without serializing them.
 
 ## Additional syntax in the complete grammar

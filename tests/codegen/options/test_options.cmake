@@ -113,6 +113,20 @@ require_contains(cpp_type_out "DotBox leading_dot = 0;"
 require_contains(cpp_type_out "SpacedBox spaced = 0;"
     "The spaced ( easypb.cpp ).type spelling")
 
+# U-16: proto3 accepts `extend` only for the nine descriptor-option messages
+# protoc's `AllowedExtendeeInProto3` names (`descriptor.cc:1105-1131`). The
+# declaration is parsed and discarded, so the header still carries the ordinary
+# message and the E6 warning says the extension surface is unmodelled. The
+# fixture spells all nine names, plus the leading-dot form of one of them.
+run_ok(proto3_extend_out proto3_extend_err
+    ${CODEGEN} -I "${DATA_DIR}"
+    "${DATA_DIR}/accept-proto3-extend-options.proto")
+require_contains(proto3_extend_out "struct Payload"
+    "The proto3 extend accepted header")
+require_contains(proto3_extend_err
+    "extend declaration parsed but not stored"
+    "The E6 warning for a proto3 descriptor-option extend")
+
 # E14: the validation-only table has no nested option model. protoc accepts a
 # dotted sub-field assignment to a singular message option; this frontend
 # refuses the name and supports the aggregate spelling instead. The fixture is
@@ -165,6 +179,10 @@ expect_refusal(reject-cpp-type-enum
     "Option \"(easypb.cpp).type\" is a field option and cannot be set at enum scope")
 expect_refusal(reject-cpp-type-ext-range
     "Option \"(easypb.cpp).type\" is a field option and cannot be set at extension range scope")
+# U-16: only the nine descriptor-option extendees are allowed in proto3; a
+# user message keeps the proto2-only refusal.
+expect_refusal(reject-proto3-extend-user
+    "extend declarations are allowed only in proto2")
 expect_refusal(reject-map-entry
     "map_entry should not be set explicitly")
 # U-08: the default `packed = false` is accepted on a map (the accepted

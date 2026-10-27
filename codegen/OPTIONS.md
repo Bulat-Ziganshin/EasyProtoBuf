@@ -242,6 +242,28 @@ validation-only table: it is refused as an unknown name, while protoc accepts
 it. This stricter boundary is P1 exception E14 and is pinned by the same lane;
 the aggregate spelling `[feature_support = { ... }]` is the supported form.
 
+### Proto3 `extend` declarations and the E6 warning
+
+A proto3 file may declare `extend` only for the nine descriptor-option
+messages: `google.protobuf.FileOptions`, `MessageOptions`, `FieldOptions`,
+`EnumOptions`, `EnumValueOptions`, `ServiceOptions`, `MethodOptions`,
+`OneofOptions` and `ExtensionRangeOptions`. The extendee is compared by name,
+with a leading dot accepted, exactly as protoc's `AllowedExtendeeInProto3`
+compares it (`descriptor.cc:1105-1131`); every other extendee keeps the source
+parser's proto2 refusal (`extend declarations are allowed only in proto2`).
+A whitelisted declaration is parsed, its fields are validated and discarded,
+and the run emits the recorded E6 warning `extend declaration parsed but not
+stored by the trimmed FileDescriptorProto model`; generation continues, as it
+always has on the proto2 path. The descriptor door counts extension members
+without decoding them (E6), so no verdict depends on the declaration's
+content.
+
+A `json_name` on an extension field must equal the name derived from the field
+name (`custom_name` -> `customName`). A different spelling is refused with the
+reference compiler's sentence `option json_name is not allowed on extension
+fields.`; the equal spelling stays accepted. This is a source-text rule, because
+the descriptor door does not decode extension fields.
+
 ### Aggregate option bodies are brace-balanced only
 
 `declaration`, `edition_defaults` and `feature_support` are the three
@@ -345,7 +367,7 @@ codegen --benchmark-parser [--benchmark-ms 500] a.proto b.proto
 
 For a reproducible real-world workload, pass schemas from the [`tests/codegen/parser/differential/corpus/`](../tests/codegen/parser/differential/corpus/) directory. Tests on a 4 GHz Zen3 CPU showed 100–200 MB/s parsing throughput.
 
-Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation reports the warnings its load and link stored — a dropped `extend` declaration, a compatibility reference into a missing dependency — on stderr before it writes the header, with the exit code still 0; stdout stays the header only. The generation run stops only when an import cannot be found or a reference stays unresolved, instead of guessing whether the type is a message or enum.
+Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation reports the warnings its load and link stored — a dropped `extend` declaration (the E6 warning), a compatibility reference into a missing dependency — on stderr before it writes the header, with the exit code still 0; stdout stays the header only. The generation run stops only when an import cannot be found or a reference stays unresolved, instead of guessing whether the type is a message or enum.
 
 `--print-descriptor` and `--benchmark-parser` cannot be used together. `--benchmark-parser` accepts `.proto` source files, not descriptor-set input. Structural, packed-field, and C++ type generation options cannot be combined with either utility mode. `-I/--proto_path` is a search root for `.proto` generation, not a code-generation option: the utility modes parse each file on its own and do not resolve imports, so `-I` with either mode is refused with its own sentence (`-I/--proto_path is a search-root option for .proto generation; descriptor print and parser benchmark modes do not resolve imports`) rather than being called a code-generation option.
 

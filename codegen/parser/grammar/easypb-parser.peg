@@ -166,6 +166,8 @@ K_STRING              <- < "string" ![A-Za-z0-9_] >
 
 %whitespace           <- (Space / LineComment / BlockComment)*
 Space                 <- [ \t\r\n\x0b\x0c]
-LineComment           <- "//" [^\r\n]*
+# A line comment ends only at LF or end of input; a bare CR is content, as
+# protoc's ConsumeLineComment decides.
+LineComment           <- "//" [^\n\x00]*
 # Block comments do not nest: a second "/*" inside one is an error.
 BlockComment          <- "/*" (!("*/" / "/*") .)* "*/"

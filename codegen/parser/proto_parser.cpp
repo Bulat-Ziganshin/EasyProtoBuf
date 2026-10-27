@@ -292,35 +292,21 @@ private:
         return position < source_size_ ? source_[position] : '\0';
     }
 
+    // Consumes exactly one source byte with protoc's `Tokenizer::NextChar`
+    // position rule (`io/tokenizer.cc:246-256`): only '\n' starts a line, a
+    // bare CR is content, and a tab advances to the next multiple of 8. CRLF
+    // still counts one line - the CR is one column of content and the LF
+    // resets the column - so a CRLF file keeps the line numbering the
+    // whitespace scanner had when it folded the pair. U-17 and U-33.
     void advance()
-    {
-        if (offset_ >= source_size_) return;
-        const char c = source_[offset_++];
-        if (c == '\r') {
-            if (offset_ < source_size_ && source_[offset_] == '\n') ++offset_;
-            ++line_;
-            column_ = 1;
-        } else if (c == '\n') {
-            ++line_;
-            column_ = 1;
-        } else {
-            ++column_;
-        }
-    }
-
-    // Consumes exactly one source byte. `advance()` folds a CRLF pair into
-    // one newline for the whitespace scanner; a string literal is the one
-    // place where protoc sees the bytes separately (`ConsumeString`), and it
-    // must refuse the LF of a CRLF pair (CR-29), so the pair cannot collapse
-    // there. A bare CR is content, not a line break, exactly as protoc counts
-    // it (`Tokenizer::NextChar` increments the line on '\n' only).
-    void advance_byte()
     {
         if (offset_ >= source_size_) return;
         const char c = source_[offset_++];
         if (c == '\n') {
             ++line_;
             column_ = 1;
+        } else if (c == '\t') {
+            column_ += 8 - (column_ - 1) % 8;
         } else {
             ++column_;
         }
@@ -337,7 +323,9 @@ private:
             if (peek() == '/' && peek(1) == '/') {
                 advance();
                 advance();
-                while (peek() != '\0' && peek() != '\r' && peek() != '\n') advance();
+                // U-17: `Tokenizer::ConsumeLineComment` stops only at LF or
+                // end of input; a bare CR is ordinary comment content.
+                while (peek() != '\0' && peek() != '\n') advance();
                 continue;
             }
             if (peek() == '/' && peek(1) == '*') {
@@ -481,7 +469,7 @@ private:
         token.kind = TOKEN_STRING;
         token.location = location();
         const char quote = peek();
-        advance_byte();
+        advance();
 
         while (peek() != quote) {
             if (peek() == '\0') throw ParseFailure(token.location, "unterminated string literal");
@@ -490,15 +478,15 @@ private:
             }
             if (peek() != '\\') {
                 token.text.push_back(peek());
-                advance_byte();
+                advance();
                 continue;
             }
 
             const SourceLocation escape_location = location();
-            advance_byte();
+            advance();
             const char escaped = peek();
             if (escaped == '\0') throw ParseFailure(escape_location, "unterminated escape sequence");
-            advance_byte();
+            advance();
             switch (escaped) {
                 case 'a': token.text.push_back('\a'); break;
                 case 'b': token.text.push_back('\b'); break;
@@ -520,7 +508,7 @@ private:
                     unsigned count = 0;
                     while (count != 2 && ascii_hex(peek())) {
                         value = value * 16u + static_cast<unsigned>(hex_value(peek()));
-                        advance_byte();
+                        advance();
                         ++count;
                     }
                     token.text.push_back(static_cast<char>(value));
@@ -545,7 +533,7 @@ private:
                             throw ParseFailure(escape_location, "incomplete Unicode escape");
                         }
                         value = value * 16ul + static_cast<unsigned long>(hex_value(peek()));
-                        advance_byte();
+                        advance();
                     }
                     // CR-13: FetchUnicodePoint assembles a head + trail
                     // UTF-16 pair; a trail that is not a valid second unit
@@ -566,7 +554,7 @@ private:
                             value = 0x10000ul +
                                     ((value - 0xd800ul) << 10) +
                                     (trail - 0xdc00ul);
-                            for (unsigned i = 0; i < 6; ++i) advance_byte();
+                            for (unsigned i = 0; i < 6; ++i) advance();
                         }
                     }
                     append_utf8(token.text, value);
@@ -581,7 +569,7 @@ private:
                         unsigned count = 1;
                         while (count != 3 && peek() >= '0' && peek() <= '7') {
                             value = value * 8u + static_cast<unsigned>(peek() - '0');
-                            advance_byte();
+                            advance();
                             ++count;
                         }
                         token.text.push_back(static_cast<char>(value & 0xffu));
@@ -591,7 +579,7 @@ private:
                     break;
             }
         }
-        advance_byte();
+        advance();
         return token;
     }
 };
@@ -657,6 +645,7 @@ struct FieldOptionState
     std::string cpp_type;
     bool has_json_name;
     std::string json_name;
+    SourceLocation json_name_location;
     // D2-A: `lazy`/`unverified_lazy` are legal only on a message field. The
     // kind of a named type is unknown until linking, so the parser records
     // `true` and the shared field pass decides with the resolved kind; `false`
@@ -712,6 +701,35 @@ bool range_contains(const NumberRange& range, std::int64_t value)
 bool ranges_overlap(const NumberRange& left, const NumberRange& right)
 {
     return left.first <= right.last && right.first <= left.last;
+}
+
+// U-16: protoc's `AllowedExtendeeInProto3` list (`descriptor.cc:1105-1131`).
+// Declaration options are the one extension surface proto3 allows, and the
+// reference compiler compares the extendee's full name with these nine names
+// rather than resolving the import. A leading dot is the package separator of
+// a fully-qualified spelling, not part of the name.
+bool allowed_proto3_extendee(const std::string& name)
+{
+    static const char* const kOptionMessages[] = {
+        "FileOptions",
+        "MessageOptions",
+        "FieldOptions",
+        "EnumOptions",
+        "EnumValueOptions",
+        "ServiceOptions",
+        "MethodOptions",
+        "OneofOptions",
+        "ExtensionRangeOptions"
+    };
+    const std::string full_name =
+        !name.empty() && name[0] == '.' ? name.substr(1) : name;
+    for (std::size_t i = 0;
+         i < sizeof(kOptionMessages) / sizeof(kOptionMessages[0]); ++i) {
+        if (full_name == std::string("google.protobuf.") + kOptionMessages[i]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 class Parser
@@ -1267,8 +1285,11 @@ private:
         method.name = out_.strings.save(name);
         method.has_name = true;
         expect_symbol('(');
+        // U-38: protoc writes the presence bit only for an explicitly spelled
+        // `stream` (`ParseServiceMethod`, parser.cc:2281-2286, 2301-2307); a
+        // unary method leaves both fields absent, so the model must too.
         method.client_streaming = accept_keyword("stream");
-        method.has_client_streaming = true;
+        method.has_client_streaming = method.client_streaming;
         const std::string input_type = full_identifier(true);
         method.input_type = out_.strings.save(input_type);
         method.has_input_type = true;
@@ -1276,7 +1297,7 @@ private:
         if (!accept_keyword("returns")) fail("expected 'returns' in rpc declaration");
         expect_symbol('(');
         method.server_streaming = accept_keyword("stream");
-        method.has_server_streaming = true;
+        method.has_server_streaming = method.server_streaming;
         const std::string output_type = full_identifier(true);
         method.output_type = out_.strings.save(output_type);
         method.has_output_type = true;
@@ -1377,6 +1398,7 @@ private:
                 }
                 state.has_json_name = true;
                 state.json_name = std::move(value.text);
+                state.json_name_location = option_location;
             } else if (name.compare(0, 12, "(easypb.cpp)") == 0 &&
                        owner != OPTION_OWNER_FIELD) {
                 // R09 (U-54): EasyProtoBuf's C++ type option is a field
@@ -1675,7 +1697,7 @@ private:
                     bool oneof_field, std::int32_t oneof_index)
     {
         FieldProvenance provenance;
-        message.field.push_back(parse_field(oneof_field, oneof_index, &provenance));
+        message.field.push_back(parse_field(oneof_field, oneof_index, &provenance, false));
         record_field_source(message_path, message.field.size() - 1, provenance);
     }
 
@@ -1683,11 +1705,15 @@ private:
     //               FieldOptions? ";"
     // OneofField <- TypeName Identifier "=" FieldNumber FieldOptions? ";"
     // oneof_field selects the second production and records oneof_index.
+    // extension_field marks a field inside an `extend` body: its json_name is
+    // restricted to the derived spelling (U-25), because protoc refuses a
+    // custom name on an extension field.
     // Provenance (raw type spelling and option locations) is reported through
     // the out-parameter; extend declarations pass null because their fields
     // are validated but not retained.
     FieldDescriptorProto parse_field(bool oneof_field, std::int32_t oneof_index,
-                                     FieldProvenance* provenance)
+                                     FieldProvenance* provenance,
+                                     bool extension_field)
     {
         FieldDescriptorProto field;
 
@@ -1751,6 +1777,15 @@ private:
         field_kind.type = field.type;
         const FieldOptionState options = field_options(OPTION_OWNER_FIELD,
                                                        field_kind);
+        // U-25: protoc's `ValidateFieldOptions` refuses a json_name on an
+        // extension field when it differs from `ToJsonName(field->name())`
+        // (`descriptor.cc:8023-8037`); the equal spelling is the derived name
+        // and stays accepted.
+        if (extension_field && options.has_json_name &&
+            options.json_name != easypb_schema::to_json_name(name)) {
+            throw ParseFailure(options.json_name_location,
+                "option json_name is not allowed on extension fields.");
+        }
         expect_symbol(';');
 
         if (oneof_field) {
@@ -2164,6 +2199,7 @@ private:
         std::set<std::string> value_names;
         std::vector<std::int32_t> numbers;
         std::vector<SourceLocation> number_locations;
+        std::vector<SourceLocation> value_locations;
         std::vector<NumberRange> reserved_ranges;
         std::set<std::string> reserved_names;
         std::set<std::string> option_names;
@@ -2215,6 +2251,7 @@ private:
             if (!value_names.insert(value_name).second) {
                 throw ParseFailure(value_location, "duplicate enum value name " + value_name);
             }
+            value_locations.push_back(value_location);
             expect_symbol('=');
             EnumValueDescriptorProto value;
             value.name = out_.strings.save(value_name);
@@ -2293,16 +2330,23 @@ private:
         }
 
         if (!reserved_names.empty() || !reserved_ranges.empty()) {
+            // U-32: this re-check runs after the closing brace, so `fail()`
+            // pointed at the token following the enum. The declaration
+            // positions were captured while each value was in front of the
+            // cursor, so the refusal names the value that reuses a reserved
+            // name or number instead.
             for (std::size_t i = 0; i < result.value.size(); ++i) {
                 if (!reserved_names.empty()) {
                     const std::string value_name = view_text(result.value[i].name);
                     if (reserved_names.find(value_name) != reserved_names.end()) {
-                        fail("enum value name is reserved: " + value_name);
+                        throw ParseFailure(value_locations[i],
+                            "enum value name is reserved: " + value_name);
                     }
                 }
                 for (std::size_t r = 0; r < reserved_ranges.size(); ++r) {
                     if (range_contains(reserved_ranges[r], result.value[i].number)) {
-                        fail("enum value number is reserved");
+                        throw ParseFailure(value_locations[i],
+                            "enum value number is reserved");
                     }
                 }
             }
@@ -2475,17 +2519,25 @@ private:
 
     // Extend <- "extend" TypeName "{" (EmptyStatement / Field)* "}"
     // The syntax is validated, but fields are not retained because the trimmed
-    // FileDescriptorProto has no extension collection.
+    // FileDescriptorProto has no extension collection. U-16: proto3 accepts
+    // this declaration only for the nine descriptor-option extendees protoc's
+    // `AllowedExtendeeInProto3` names; every other extendee keeps the proto2
+    // refusal. The accepted body is discarded with the E6 warning, exactly as
+    // the proto2 path discards it.
     void parse_extend()
     {
         const SourceLocation where = current_.location;
-        if (syntax_ != easypb_schema::FILE_SYNTAX_PROTO2) fail("extend declarations are allowed only in proto2");
-        (void)full_identifier(true);
+        const std::string extendee = full_identifier(true);
+        if (syntax_ != easypb_schema::FILE_SYNTAX_PROTO2 &&
+            !allowed_proto3_extendee(extendee)) {
+            throw ParseFailure(where,
+                "extend declarations are allowed only in proto2");
+        }
         expect_symbol('{');
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated extend body");
             if (accept_symbol(';')) continue;
-            (void)parse_field(false, 0, 0);
+            (void)parse_field(false, 0, 0, true);
         }
         Diagnostic warning;
         warning.file = file_name_;

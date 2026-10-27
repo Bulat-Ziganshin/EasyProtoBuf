@@ -1,0 +1,4 @@
+syntax = "proto2";
+// U-17: a bare CR inside a line comment is content, not a terminator.
+// c message Hidden { optional int32 a = 1; }
+message Visible { optional int32 b = 1; }

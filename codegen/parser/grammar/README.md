@@ -27,7 +27,7 @@ The `map` production uses lookahead (`K_MAP &"<"`) deliberately. This mirrors bo
 
 [`easypb-parser.peg`](easypb-parser.peg) describes token spellings and the recursive-descent syntax implemented by [`../proto_parser.cpp`](../proto_parser.cpp). It deliberately separates grammar from checks that use numeric values, the selected proto syntax, descriptor types, or symbol tables. Those checks are documented in [`SEMANTICS.md`](SEMANTICS.md).
 
-The grammar describes what the frontend can parse structurally, not every source construct retained by the trimmed descriptor model. For example, the parser validates and retains `service`/`rpc` declarations (a service name and, per method, its name and both endpoint types) but validates and discards proto2 `extend` declarations without retaining extension descriptors.
+The grammar describes what the frontend can parse structurally, not every source construct retained by the trimmed descriptor model. For example, the parser validates and retains `service`/`rpc` declarations (a service name and, per method, its name and both endpoint types) but validates and discards `extend` declarations without retaining extension descriptors.
 
 ## Complete proto2/proto3 grammar
 

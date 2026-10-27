@@ -371,6 +371,37 @@ void test_lexer_diagnostics()
     CHECK(error.location.line == 1 && error.location.column == 1);
 }
 
+// U-33: protoc's `Tokenizer::NextChar` advances a tab to the next multiple of
+// `kTabWidth = 8` (`io/tokenizer.cc:246-256`), so a diagnostic after a tab
+// names the same column the reference compiler would. A tab that starts at
+// column 1, 2 or 8 lands on column 9; a tab at column 9 lands on 17.
+void test_tab_columns_expand_to_tab_stops()
+{
+    struct Case
+    {
+        const char* name;
+        std::size_t spaces;
+        std::size_t column;
+    };
+    static const Case cases[] = {
+        {"tab-column-1.proto", 0, 9},
+        {"tab-column-2.proto", 1, 9},
+        {"tab-column-8.proto", 7, 9},
+        {"tab-column-9.proto", 8, 17}
+    };
+    for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        std::string source = "syntax = \"proto3\";\n";
+        source.append(cases[i].spaces, ' ');
+        source += "\t!\n";
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        CHECK(!easypb_proto::parse_proto(cases[i].name, source, parsed, error));
+        CHECK(error.message.find("unexpected character") != std::string::npos);
+        CHECK(error.location.line == 2);
+        CHECK(error.location.column == cases[i].column);
+    }
+}
+
 // R2 / B4: the escape table, one row per protoc rule
 // (`Tokenizer::ParseStringAppend`, `FetchUnicodePoint`, `AppendUTF8`;
 // `io/tokenizer.cc:1049-1235`). A string default stores the decoded bytes; a
@@ -560,6 +591,32 @@ void test_lexer_comment_and_control_rules()
     CHECK(easypb_proto::parse_proto("empty-comment.proto",
         "/**/\nsyntax = \"proto3\";\nmessage M { int32 a = 1; }\n",
         parsed, error));
+
+    // U-17: a line comment ends only at LF or end of input, so a bare CR is
+    // content. `message Hidden` stays inside the comment; a lexer that stopped
+    // at the CR would parse it as a second message. The garbage line proves
+    // the accepted verdict of protoc's `ConsumeLineComment`, and the CRLF
+    // control keeps its terminator and line numbering.
+    CHECK(easypb_proto::parse_proto("line-cr.proto",
+        "syntax = \"proto2\";\n"
+        "// c\rmessage Hidden { optional int32 a = 1; }\n"
+        "message M { optional int32 b = 1; }\n", parsed, error));
+    CHECK(parsed.file.message_type.size() == 1);
+    if (parsed.file.message_type.size() == 1) {
+        CHECK(text(parsed.file.message_type[0].name) == "M");
+    }
+    CHECK(easypb_proto::parse_proto("line-cr-garbage.proto",
+        "syntax = \"proto2\";\n// c\rgarbage garbage garbage\n", parsed, error));
+    CHECK(easypb_proto::parse_proto("line-crlf.proto",
+        "syntax = \"proto2\";\n// c\r\nmessage M { optional int32 b = 1; }\n",
+        parsed, error));
+    CHECK(parsed.file.message_type.size() == 1);
+    // Only LF starts a line: the error after the CR-bearing comment is on the
+    // third physical line, not the fourth a CR-as-newline counter would name.
+    CHECK(!easypb_proto::parse_proto("line-cr-position.proto",
+        "syntax = \"proto2\";\n// c\rstill comment\n!\n", parsed, error));
+    CHECK(error.location.line == 3);
+    CHECK(error.location.column == 1);
 
     // The aggregate scanner is the consumer CR-19 measured: the NUL used to
     // match `strchr(punctuation, '\0')` and disappear as a symbol token.
@@ -790,7 +847,18 @@ void test_post_body_refusals_point_inside_the_declaration()
          "  extensions 100 to 199;\n"
          "  reserved 150 to 250;\n"
          "}\n",
-         3, 14, "overlap"}
+         3, 14, "overlap"},
+        // U-32: the reserved declaration follows the value that reuses it, so
+        // the post-body re-check is the one that fires. It must point at the
+        // value (2:17), not at the token after the closing brace.
+        {"reserved-enum-number-after-position.proto",
+         "syntax=\"proto2\";\n"
+         "enum E { A = 0; B = 2; reserved 2; }\n",
+         2, 17, "enum value number is reserved"},
+        {"reserved-enum-name-after-position.proto",
+         "syntax=\"proto2\";\n"
+         "enum E { A = 0; OLD = 1; reserved \"OLD\"; }\n",
+         2, 17, "enum value name is reserved"}
     };
 
     for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
@@ -1233,6 +1301,50 @@ void test_service_rpc_syntax_is_consumed()
     CHECK(text(parsed.file.message_type[0].name) == "Request");
     CHECK(text(parsed.file.message_type[1].name) == "Reply");
     CHECK(text(parsed.file.message_type[2].name) == "AfterService");
+}
+
+// U-38: protoc records a streaming field only when the `stream` keyword is
+// spelled (`ParseServiceMethod`, parser.cc:2281-2286, 2301-2307); a unary
+// method leaves both fields absent. The has_* flags are the presence bits a
+// descriptor writer would carry, so a non-streaming method must not look like
+// an explicit `stream` in the trimmed model.
+void test_rpc_streaming_presence_flags()
+{
+    const char* source =
+        "syntax = \"proto3\";\n"
+        "message Request { string text = 1; }\n"
+        "message Reply { string text = 1; }\n"
+        "service S {\n"
+        "  rpc Unary(Request) returns (Reply);\n"
+        "  rpc Client(stream Request) returns (Reply);\n"
+        "  rpc Server(Request) returns (stream Reply);\n"
+        "  rpc Bidi(stream Request) returns (stream Reply);\n"
+        "}\n";
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("rpc-presence.proto", source, parsed, error));
+    CHECK(parsed.file.service.size() == 1);
+    if (parsed.file.service.size() != 1) return;
+    const ServiceDescriptorProto& service = parsed.file.service[0];
+    CHECK(service.method.size() == 4);
+    if (service.method.size() != 4) return;
+    struct Row
+    {
+        bool client;
+        bool server;
+    };
+    static const Row rows[] = {
+        {false, false},
+        {true, false},
+        {false, true},
+        {true, true}
+    };
+    for (std::size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+        CHECK(service.method[i].client_streaming == rows[i].client);
+        CHECK(service.method[i].server_streaming == rows[i].server);
+        CHECK(service.method[i].has_client_streaming == rows[i].client);
+        CHECK(service.method[i].has_server_streaming == rows[i].server);
+    }
 }
 
 void test_service_is_rejected_inside_message()
@@ -2655,6 +2767,7 @@ int main()
     test_numeric_literal_forms();
     test_numeric_default_spellings_are_canonical();
     test_lexer_diagnostics();
+    test_tab_columns_expand_to_tab_stops();
     test_lexer_escape_table();
     test_lexer_lexeme_table();
     test_lexer_comment_and_control_rules();
@@ -2675,6 +2788,7 @@ int main()
     test_cpp_type_option_is_field_only();
     test_malformed_custom_option_name_parts_are_rejected();
     test_service_rpc_syntax_is_consumed();
+    test_rpc_streaming_presence_flags();
     test_service_is_rejected_inside_message();
     test_rejects_service_scope_name_collisions();
     test_rejects_malformed_rpc_syntax();

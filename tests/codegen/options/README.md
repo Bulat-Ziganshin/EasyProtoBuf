@@ -24,6 +24,7 @@ CI contract is the recorded verdict.
 | `accept-service-options.proto` | `ServiceOptions.deprecated`, `MethodOptions.deprecated`/`idempotency_level` |
 | `accept-ext-range-options.proto` | repeated aggregate `declaration`, and `verification = UNVERIFIED` on a range without declarations |
 | `accept-custom-options.proto` | parenthesized custom names at all nine owner scopes; the values are opaque (policy, see below) |
+| `accept-proto3-extend-options.proto` | a proto3 `extend` for each of the nine `google.protobuf.*Options` extendees, plus one leading-dot spelling; the bodies are discarded with the E6 warning (`U-16`) |
 | `accept-aggregate-bodies.proto` | the three aggregate-valued standard options with an unknown inner field; the bodies are brace-balanced only (policy, see below) |
 
 The driver also reads the generated header of `accept-field-options.proto` and
@@ -64,6 +65,7 @@ stdout, and the expected sentence in stderr:
 | `reject-cpp-type-message.proto` | the same option at message scope |
 | `reject-cpp-type-enum.proto` | the same option at enum scope |
 | `reject-cpp-type-ext-range.proto` | the same option at extension range scope |
+| `reject-proto3-extend-user.proto` | a proto3 `extend` of a user message: `extend declarations are allowed only in proto2` (`U-16`) |
 | `reject-map-entry.proto` | `map_entry should not be set explicitly` |
 | `reject-map-packed.proto` | `map fields cannot have default or packed options` (the non-default `packed = true`) |
 | `reject-ext-range-unverified-declaration.proto` | `UNVERIFIED` with declarations |
@@ -101,6 +103,24 @@ to a singular message-typed option (`[feature_support.edition_introduced =
 spelling `[feature_support = { edition_introduced: ... }]` is the supported
 form. This stricter boundary is P1 exception **E14**, pinned by
 `policy-feature-support-subfield.proto`.
+
+## Proto3 `extend` declarations (`U-16`)
+
+`accept-proto3-extend-options.proto` declares an extension for each of the nine
+`google.protobuf.*Options` messages and repeats one with the leading-dot
+spelling. That is the complete proto3 whitelist of protoc's
+`AllowedExtendeeInProto3` (`descriptor.cc:1105-1131`); the parser compares the
+extendee name and does not resolve the import, so the declaration is accepted
+without linking `descriptor.proto`. The bodies are validated and discarded, and
+the run prints the E6 warning `extend declaration parsed but not stored by the
+trimmed FileDescriptorProto model`; the header is the ordinary one for the
+file's message. `reject-proto3-extend-user.proto` is the other direction: a
+proto3 `extend` of a user message keeps the proto2-only refusal.
+
+The `google/protobuf/descriptor.proto` beside the fixtures is a minimal
+stand-in: the nine option messages with an extension range, enough to make the
+fixture protoc-valid without copying the real descriptor. The parser does not
+read it; the loader only has to find the import the fixture names.
 
 The known table is closed at `protoc` 30.1. An option added by a later release
 is unknown until the table is refreshed; the doc comment in

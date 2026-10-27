@@ -1,0 +1,18 @@
+// U-16 fixture dependency: the nine descriptor-option messages the proto3
+// extend whitelist names. Only their names and extension ranges matter to the
+// fixture - the parser compares the extendee name and discards the extension
+// body - so this minimal stand-in keeps the fixture protoc-valid without
+// copying all of descriptor.proto.
+syntax = "proto2";
+
+package google.protobuf;
+
+message FileOptions { extensions 1000 to max; }
+message MessageOptions { extensions 1000 to max; }
+message FieldOptions { extensions 1000 to max; }
+message EnumOptions { extensions 1000 to max; }
+message EnumValueOptions { extensions 1000 to max; }
+message ServiceOptions { extensions 1000 to max; }
+message MethodOptions { extensions 1000 to max; }
+message OneofOptions { extensions 1000 to max; }
+message ExtensionRangeOptions { extensions 1000 to max; }

@@ -1,0 +1,14 @@
+// U-16: a proto3 `extend` of a user message keeps the proto2-only refusal.
+// protoc refuses the same shape in its own terms - a local proto3 message has
+// no extension range, and the extendee is not one of the nine options
+// messages. The parser answers before reading the body, so the diagnostic
+// names the declaration, not a field.
+syntax = "proto3";
+
+message NotOptions {
+  int32 value = 1;
+}
+
+extend NotOptions {
+  optional int32 extra = 100;
+}

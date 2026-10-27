@@ -1,0 +1,15 @@
+// U-25: a json_name on an extension field must equal the derived name.
+// protoc's `ValidateFieldOptions` refuses a custom spelling on an extension
+// field (`descriptor.cc:8023-8037`), even though the prototype parser accepts
+// it; the equal control is `ext-json-name-equal.proto`.
+syntax = "proto2";
+
+package validity;
+
+message Extendable {
+  extensions 100 to 199;
+}
+
+extend Extendable {
+  optional int32 custom_name = 100 [json_name = "renamed"];
+}

@@ -1,0 +1,15 @@
+// U-25: the equal spelling stays accepted. `custom_name` derives `customName`,
+// so protoc's `field->json_name() != ToJsonName(field->name())` gate is false
+// and the extension body is accepted (and then discarded with the E6 warning).
+syntax = "proto2";
+
+package validity;
+
+message Extendable {
+  extensions 100 to 199;
+}
+
+extend Extendable {
+  optional int32 custom_name = 100 [json_name = "customName"];
+  optional int32 plain = 101 [json_name = "plain"];
+}

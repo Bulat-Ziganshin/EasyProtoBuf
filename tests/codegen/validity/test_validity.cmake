@@ -854,6 +854,21 @@ if(FULL_BUILD)
         ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/json-name-map-collision.proto")
     require_empty(json_map_out "The map JSON-name source stdout")
     require_contains(json_map_err "conflicts with" "The map JSON-name source refusal")
+
+    # U-25: a custom json_name on an extension field is refused; the equal
+    # spelling is accepted. Extension fields are not decoded from a `.pbs`
+    # (E6), so this is a source-text rule with no descriptor half.
+    run_fail(ext_json_out ext_json_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/ext-json-name.proto")
+    require_empty(ext_json_out "The extension json_name refusal stdout")
+    require_contains(ext_json_err
+        "option json_name is not allowed on extension fields."
+        "The extension json_name refusal")
+
+    run_ok(ext_json_equal_out ext_json_equal_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/ext-json-name-equal.proto")
+    require_contains(ext_json_equal_out "struct Extendable"
+        "The equal extension json_name accepted header")
 endif()
 
 # W-06: the out-of-range integer default stays refused on both paths; the

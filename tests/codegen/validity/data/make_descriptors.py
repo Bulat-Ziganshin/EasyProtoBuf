@@ -67,6 +67,9 @@ from common.descriptor_fixtures import (build_fixtures,
 # The source-only fixtures: protoc refuses most of them, and a generated `.pbs`
 # would either fail the script or add an unintended descriptor twin. The
 # validity lane drives these from the `.proto` directly (W-15, W-40, W-41, B7).
+# `ext-json-name*` are source-only for the opposite reason: protoc accepts the
+# equal spelling, but this model counts extension members without decoding them
+# (E6), so a descriptor twin would carry no rule to test.
 # `lite-runtime-dep` is source-only in a different sense: protoc refuses the
 # importing file (U-15), so the pair is encoded from `nonlite-imports-lite.txtpb`
 # and the dependency has no standalone descriptor of its own.
@@ -74,6 +77,8 @@ SOURCE_ONLY_FIXTURES = (
     "bom",
     "bom-control",
     "empty-syntax",
+    "ext-json-name",
+    "ext-json-name-equal",
     "grammar-allow-alias-false",
     "grammar-allow-alias-false-aliased",
     "grammar-allow-alias-useless",

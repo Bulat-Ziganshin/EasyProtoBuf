@@ -126,6 +126,8 @@ must emit the same header as the option-less control on both doors.
 | a custom `json_name` with an embedded NUL | `.proto` + crafted `.pbs` | `U-57` |
 | a non-lite file importing a `LITE_RUNTIME` file (accepted) | `.proto` + crafted `.pbs` | `U-15` |
 | the four option default values, with an option-less control (accepted) | `.proto` + `.pbs` | `U-08` |
+| an extension `json_name` that differs from the derived name (refused) | `.proto` only | `U-25` |
+| an extension `json_name` equal to the derived name (accepted) | `.proto` only | `U-25` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted
@@ -157,6 +159,10 @@ only inside that set.
 - `W-07`: a source field always declares a type (or a deferred type name), so
   the absent-type shape is descriptor-only; `W-10`'s decision is the rule that
   refuses it.
+- `U-25`: an extension field is a source construct this model does not decode
+  from a `.pbs` (the descriptor door counts extension members without reading
+  them, exception E6), so both the refusal and the equal-spelling control exist
+  only as `.proto` text.
 
 ## The default-value family (B3)
 
@@ -285,6 +291,7 @@ The crafted fixtures come from `.txtpb` with
 `--encode=google.protobuf.FileDescriptorSet`. A `.txtpb` wins over the
 `.proto` of the same stem, because the raw spelling is the point. The
 source-only fixtures (`bom`, `bom-control`, `empty-syntax`,
+`ext-json-name`, `ext-json-name-equal`,
 `grammar-allow-alias-false`, `grammar-allow-alias-false-aliased`,
 `grammar-allow-alias-useless`, `grammar-enum-json-name`,
 `grammar-field-option-plus`, `grammar-leading-semicolon`,
@@ -298,6 +305,9 @@ are skipped: protoc refuses most of them,
 and a generated `.pbs` would add an unintended twin. `lite-runtime-dep` is
 skipped because protoc refuses its importer, so the pair is encoded from
 `nonlite-imports-lite.txtpb` and the dependency has no standalone descriptor.
+`ext-json-name*` are skipped for the opposite reason: the descriptor model
+does not decode extension members (E6), so only the source half carries the
+`U-25` rule.
 
 **One byte is not protoc's text format.** `field-type-unknown` declares
 `type: 99`, and the text format answers *"Unknown enumeration value of \"99\"
