@@ -1256,6 +1256,23 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     endif()
 
+    # U-27/U-37's POSIX read rows are POSIX-only for the same reason: the
+    # test includes file_paths.cpp with a wrapped read to inject EINTR, cap
+    # the chunk size and fail the last row with EIO. The schema library is
+    # linked for max_logical_path_components only.
+    if(NOT WIN32)
+        add_executable(codegen_imports_output_posix_reader_test
+            codegen/imports/test_posix_reader.cpp)
+        target_include_directories(codegen_imports_output_posix_reader_test
+            PRIVATE ${PROJECT_SOURCE_DIR}/codegen)
+        target_link_libraries(codegen_imports_output_posix_reader_test
+            PRIVATE easypb_schema)
+        add_test(NAME codegen.imports.output.posix-reader
+            COMMAND codegen_imports_output_posix_reader_test)
+        set_tests_properties(codegen.imports.output.posix-reader PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endif()
+
     # Plan 5's in-memory lane: the owned adapter and the linked generator
     # through easypb_codegen_core alone (T4: no descriptor-file wrapper, no
     # native helper, no publisher). The driver prepares the strict `.pbs`

@@ -32,6 +32,10 @@ codegen -I schemas --out-dir build/generated common/state.proto common/node.prot
 
 `--target` is not used with source input: the input list itself is the selection.
 
+A positional input named more than once is compiled once: `codegen -I schemas a.proto a.proto` writes one header, and `--print-descriptor a.proto a.proto` prints one tree, byte-identical to the single-input run. Duplicate inputs are deduplicated silently as a CLI convenience; this is a deliberate divergence from `protoc` 30.1, which refuses a repeated input whose code output it would write twice (`Tried to write the same file twice`), although the same repetition is accepted with `--descriptor_set_out`.
+
+An absolute input path must lie inside a search root. With no `-I`, the working directory is the default root for relative spellings only: `codegen C:/work/a.proto` is refused with the reference compiler's sentence (`File does not reside within any path specified using --proto_path (or -I). You must specify a --proto_path which encompasses this file.`), while `codegen -I C:/work C:/work/a.proto` is accepted. On Windows a drive-relative search root (`-I C:repo`) is refused because it would be anchored to the per-drive current directory: name an absolute path (`C:\repo`) or a path relative to the working directory instead, and a relative spelling such as `foo\bar` stays accepted.
+
 Top-level `service` and `rpc` declarations are validated, and every method's name and endpoint types are linked, while message codecs from the same file are generated. A duplicate method name or an endpoint that is missing or is not a message type is refused; method options are validated and discarded. Codegen does not generate RPC client or server APIs.
 
 ### Descriptor-set input
@@ -361,7 +365,7 @@ codegen --descriptor-set --print-descriptor tutorial.pbs
 codegen --benchmark-parser [--benchmark-ms 500] a.proto b.proto
 ```
 
-`--print-descriptor` prints the parsed or decoded descriptor tree instead of generating C++. Messages, enums, services and their methods are printed; a method shows its endpoint types and, for a streaming method, its `client_streaming`/`server_streaming` markers. When an input cannot be read, the refusal appends the read layer's reason (`read access is denied`, `is a directory, not a schema file`, or the platform error) instead of a generic "cannot read file".
+`--print-descriptor` prints the parsed or decoded descriptor tree instead of generating C++. Messages, enums, services and their methods are printed; a method shows its endpoint types and, for a streaming method, its `client_streaming`/`server_streaming` markers. When an input cannot be read, the refusal appends the read layer's reason (`read access is denied`, `is a directory, not a schema file`, or the platform error: `Win32 error N` on Windows, `errno N: text` on POSIX) instead of a generic "cannot read file".
 
 `--benchmark-parser` reads all input files before timing, runs one unmeasured warm-up round, and then parses complete corpus rounds for at least 100 ms by default. `--benchmark-ms N` changes the minimum measured parser time; `N` must be at least 100 and the option is valid only with `--benchmark-parser`. A read failure prints the file and the same read reason and exits 1, like every other CLI failure; the benchmark mode has no special exit code.
 

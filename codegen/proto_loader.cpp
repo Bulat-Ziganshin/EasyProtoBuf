@@ -35,11 +35,17 @@ struct LoaderState {
     std::vector<std::string> search_roots;
     std::vector<std::string> search_roots_absolute;
     easypb_schema::SchemaSet* result;
+    // True when the root list was synthesized because the caller named none.
+    // The implicit working directory is the reference compiler's default
+    // `--proto_path`, but its textual mapping never contains an absolute
+    // input, so an absolute argument still needs an explicit root here
+    // (review 1027, U-59).
+    bool implicit_root;
     // Discovery path from the selected root to the file being loaded,
     // used only to spell diagnostics.
     std::vector<std::string> chain;
 
-    LoaderState() : result(0) {}
+    LoaderState() : result(0), implicit_root(false) {}
 };
 
 std::string chain_text(const std::vector<std::string>& chain,
@@ -491,9 +497,11 @@ bool load_chain(const std::string& logical,
 // roots. A denied access is a failure in both shapes, never a fall-through to
 // the other one.
 
-// The failure shared by every argument shape that lies under no search
-// root. The reference compiler reports the same state as "File does not
-// reside within any path specified using --proto_path (or -I)".
+// The failure shared by the relative argument shapes that lie under no
+// search root. The reference compiler reports the same state as "File does
+// not reside within any path specified using --proto_path (or -I)"; an
+// absolute argument uses that sentence verbatim below, so the reader can
+// compare it with protoc's own transcript (review 1027, U-59).
 bool fail_outside_search_roots(const std::string& argument,
                                const LoaderState& state,
                                easypb_schema::Diagnostic& error)
@@ -508,8 +516,28 @@ bool fail_outside_search_roots(const std::string& argument,
                 easypb_schema::DIAGNOSTIC_INVALID_IMPORT, message.str());
 }
 
+// An absolute argument outside every explicit search root. The reference
+// compiler prints this sentence from its NO_MAPPING branch; its default "."
+// mapping is textual and never contains an absolute spelling, which is why
+// an absolute input must name an explicit -I root. The loader matches
+// normalized roots instead of raw spellings, but requires the same explicit
+// root (review 1027, U-59).
+bool fail_absolute_outside_search_roots(const std::string& argument,
+                                        easypb_schema::Diagnostic& error)
+{
+    return fail(error, argument, easypb_schema::unknown_location(),
+                easypb_schema::DIAGNOSTIC_INVALID_IMPORT,
+                "File does not reside within any path specified using "
+                "--proto_path (or -I). You must specify a --proto_path which "
+                "encompasses this file");
+}
+
 // True when an existing path lies under one of the search roots, using
-// the same byte-wise root mapping as the rest of the loader.
+// the same byte-wise root mapping as the rest of the loader. A path equal
+// to a root lies inside it: the empty remainder names the root directory
+// itself, which is a directory rather than an unmapped file (review 1027,
+// U-28). `strip_search_root_prefix` keeps strict containment because an
+// empty remainder is not a valid logical name.
 bool lies_under_search_root(const std::string& path,
                             const LoaderState& state,
                             std::string* containing_root)
@@ -517,15 +545,17 @@ bool lies_under_search_root(const std::string& path,
     const std::string absolute = easypb_file::lexical_absolute(path);
     for (std::size_t i = 0; i < state.search_roots.size(); ++i) {
         std::string remainder;
-        if (easypb_file::strip_search_root_prefix(
+        if (absolute != state.search_roots_absolute[i] &&
+            !easypb_file::strip_search_root_prefix(
                 absolute,
                 state.search_roots_absolute[i],
                 remainder)) {
-            if (containing_root != 0) {
-                *containing_root = state.search_roots[i];
-            }
-            return true;
+            continue;
         }
+        if (containing_root != 0) {
+            *containing_root = state.search_roots[i];
+        }
+        return true;
     }
     return false;
 }
@@ -557,6 +587,7 @@ bool resolve_root(const std::string& argument, LoaderState& state,
         return fail(error, argument, easypb_schema::unknown_location(),
                     easypb_schema::DIAGNOSTIC_INVALID_IMPORT, message.str());
     }
+    const bool absolute_argument = easypb_file::is_absolute_disk_path(argument);
     std::string status_error;
     const easypb_file::FileStatus root_status =
         easypb_file::disk_file_status(argument, status_error);
@@ -566,6 +597,14 @@ bool resolve_root(const std::string& argument, LoaderState& state,
                     easypb_schema::DIAGNOSTIC_GENERIC, status_error);
     }
     if (root_status == easypb_file::FILE_STATUS_FILE) {
+        // An absolute input must name an explicit search root. The implicit
+        // working directory is the default only for logical names: protoc's
+        // textual mapping never contains an absolute spelling, so
+        // `codegen /abs/a.proto` with no -I is refused even when the file is
+        // physically under the working directory (review 1027, U-59).
+        if (absolute_argument && state.implicit_root) {
+            return fail_absolute_outside_search_roots(argument, error);
+        }
         std::string mapped;
         std::string resolved;
         easypb_schema::Diagnostic mapping_error;
@@ -579,6 +618,11 @@ bool resolve_root(const std::string& argument, LoaderState& state,
             error = mapping_error;
             return false;
         case MAP_OUTSIDE: {
+            // An absolute spelling cannot be read as a virtual name, so it
+            // is not retried as one; it keeps the reference sentence.
+            if (absolute_argument) {
+                return fail_absolute_outside_search_roots(argument, error);
+            }
             // The reference compiler's NO_MAPPING answer: a spelling that
             // names an existing file under no search root is retried as a
             // virtual (logical) name through the ordered roots before the run
@@ -628,6 +672,9 @@ bool resolve_root(const std::string& argument, LoaderState& state,
                         easypb_schema::DIAGNOSTIC_INVALID_IMPORT,
                         message.str());
         }
+        if (absolute_argument) {
+            return fail_absolute_outside_search_roots(argument, error);
+        }
         return fail_outside_search_roots(argument, state, error);
     }
 
@@ -676,6 +723,7 @@ bool load_source_files(const SourceLoaderOptions& options,
     LoaderState state;
     state.result = &result;
     state.search_roots = options.proto_paths;
+    state.implicit_root = options.proto_paths.empty();
     if (state.search_roots.empty()) state.search_roots.push_back(".");
     // An empty entry means the working directory, exactly like ".":
     // join_disk_path already treats "" as cwd, and this keeps
@@ -683,6 +731,19 @@ bool load_source_files(const SourceLoaderOptions& options,
     state.search_roots_absolute.reserve(state.search_roots.size());
     for (std::size_t i = 0; i < state.search_roots.size(); ++i) {
         if (state.search_roots[i].empty()) state.search_roots[i] = ".";
+        // A drive-relative root ("C:foo", "C:") is anchored to the per-drive
+        // current directory, so one spelling can name a different tree from
+        // run to run; the reference compiler refuses the form, and so does
+        // this loader (review 1027, U-60). A drive-absolute ("C:/foo") or a
+        // plain relative spelling is unaffected.
+        if (easypb_file::is_drive_relative_disk_path(state.search_roots[i])) {
+            return fail(error, state.search_roots[i],
+                        easypb_schema::unknown_location(),
+                        easypb_schema::DIAGNOSTIC_INVALID_IMPORT,
+                        "drive-relative spelling is not a search root; use "
+                        "an absolute path or a path relative to the working "
+                        "directory");
+        }
         const std::string absolute =
             easypb_file::lexical_absolute(state.search_roots[i]);
         if (absolute.empty()) {

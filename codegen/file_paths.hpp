@@ -79,6 +79,21 @@ FileStatus disk_file_status(const std::string& path, std::string& error);
 bool read_disk_file(const std::string& path, std::string& contents,
                     std::string& error);
 
+// True when the spelling is absolute in the native sense: a POSIX path
+// starting with '/', or a Windows drive-absolute ("C:/x") or UNC
+// ("\\host\share") path. A rooted ("\x") or drive-relative ("C:x") Windows
+// spelling is not absolute: the platform resolves it against a current
+// directory. The loader uses this to require an explicit search root for an
+// absolute input (review 1027, U-59).
+bool is_absolute_disk_path(const std::string& path);
+
+// True for a Windows drive-relative spelling: a drive letter and ':' with no
+// separator after it ("C:foo", "C:"). Such a spelling is anchored to the
+// per-drive current directory, so the same text can name a different tree
+// from one run to the next; the reference compiler refuses it as a
+// --proto_path root (review 1027, U-60). Always false off Windows.
+bool is_drive_relative_disk_path(const std::string& path);
+
 // Lexically normalized absolute form with '/' separators (backslashes
 // become '/' on Windows only), duplicate separators collapsed and
 // '.'/'..' resolved lexically without touching the filesystem. Used to

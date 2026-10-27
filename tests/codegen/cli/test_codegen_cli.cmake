@@ -1076,12 +1076,14 @@ if(FULL_BUILD)
     endif()
 
     # The control: only a valid logical name has that reading. An absolute
-    # spelling outside the roots keeps the outside-roots refusal (protoc:
-    # "File does not reside within any path specified using --proto_path").
+    # spelling outside the roots keeps the outside-roots refusal in the
+    # reference compiler's own sentence (protoc: "File does not reside within
+    # any path specified using --proto_path (or -I)"; review 1027, U-59).
     run_fail_in("${b9_roots}" b9_abs_out b9_abs_err
         ${CODEGEN} -I roots "${b9_roots}/thing.proto")
     require_empty(b9_abs_out "B9 an absolute out-of-root input publishes nothing")
-    require_contains(b9_abs_err "outside all search roots"
+    require_contains(b9_abs_err
+        "File does not reside within any path specified using --proto_path (or -I)"
         "B9 an absolute out-of-root input keeps its refusal")
 endif()
 
@@ -1521,4 +1523,131 @@ if(FULL_BUILD)
                 "CR-47 ${b10_bench_kind}: expected one diagnostic line, got:\n${b10_bench_err}")
         endif()
     endforeach()
+endif()
+
+# --- R12: input paths, duplicates and roots (U-19, U-28, U-59, U-60) --------
+#
+# Row                          codegen after R12                   protoc 30.1
+# duplicate positional         one header, rc 0                    rc 0 for --descriptor_set_out;
+#                                                                  "Tried to write the same file
+#                                                                  twice" for a code output
+# print duplicate              byte-identical to one input         no print mode
+# absolute input, no -I        the reference sentence, rc 1        "File does not reside within ..."
+# absolute input, explicit -I  rc 0                                rc 0
+# directory equal to a root    "is a directory, not a schema file" "Input file is a directory."
+# drive-relative -I C:foo      refusal naming the rule             "Could not make proto path relative"
+#
+# U-19 is the owner-decided divergence (variant B): repeated positional inputs
+# stay a silent CLI convenience, so the row pins the acceptance and the aligned
+# print mode instead of protoc's refusal.
+
+# The descriptor door shares the input list, so it deduplicates identically:
+# two identical containers produce one header and one printed tree.
+run_ok(r12_pbs_dup_out r12_pbs_dup_err
+    ${CODEGEN} --descriptor-set ${single} ${single})
+run_ok(r12_pbs_single_out r12_pbs_single_err
+    ${CODEGEN} --descriptor-set ${single})
+if(NOT r12_pbs_dup_out STREQUAL r12_pbs_single_out)
+    message(FATAL_ERROR
+        "R12 U-19: a duplicate descriptor input changed the generated header")
+endif()
+run_ok(r12_pbs_print_dup_out r12_pbs_print_dup_err
+    ${CODEGEN} --descriptor-set --print-descriptor ${single} ${single})
+run_ok(r12_pbs_print_single_out r12_pbs_print_single_err
+    ${CODEGEN} --descriptor-set --print-descriptor ${single})
+if(NOT r12_pbs_print_dup_out STREQUAL r12_pbs_print_single_out)
+    message(FATAL_ERROR
+        "R12 U-19: a duplicate descriptor print is not identical to the single run")
+endif()
+
+if(FULL_BUILD)
+    set(r12 "${WORK_DIR}/r12")
+    file(MAKE_DIRECTORY "${r12}/root")
+    file(WRITE "${r12}/a.proto"
+        "syntax = \"proto3\";\nmessage DuplicateInput { int32 a = 1; }\n")
+    file(WRITE "${r12}/root/a.proto"
+        "syntax = \"proto3\";\nmessage RootedInput { int32 a = 1; }\n")
+
+    # U-19: the repeated positional is compiled once and publishes one header.
+    file(MAKE_DIRECTORY "${r12}/dup-out")
+    run_ok_in("${r12}" r12_dup_out r12_dup_err
+        ${CODEGEN} -I . --out-dir dup-out a.proto a.proto)
+    require_empty(r12_dup_out "R12 duplicate input stdout")
+    require_empty(r12_dup_err "R12 duplicate input stderr")
+    file(GLOB r12_dup_files "${r12}/dup-out/*")
+    list(LENGTH r12_dup_files r12_dup_count)
+    if(NOT r12_dup_count EQUAL 1)
+        message(FATAL_ERROR
+            "R12 U-19: a repeated input published ${r12_dup_count} files: ${r12_dup_files}")
+    endif()
+    file(READ "${r12}/dup-out/a.pb.hpp" r12_dup_header)
+    require_contains(r12_dup_header "struct DuplicateInput"
+        "R12 U-19: the single published header is the input")
+
+    # --print-descriptor follows the same one-input rule: the duplicate run
+    # prints exactly what the single-input run prints (no per-file heading).
+    run_ok_in("${r12}" r12_print_dup_out r12_print_dup_err
+        ${CODEGEN} --print-descriptor a.proto a.proto)
+    run_ok_in("${r12}" r12_print_single_out r12_print_single_err
+        ${CODEGEN} --print-descriptor a.proto)
+    if(NOT r12_print_dup_out STREQUAL r12_print_single_out)
+        message(FATAL_ERROR
+            "R12 U-19: a duplicate print run is not identical to the single run")
+    endif()
+    require_contains(r12_print_dup_out "message DuplicateInput"
+        "R12 U-19: the print run printed the input")
+    require_not_contains(r12_print_dup_out "== a.proto =="
+        "R12 U-19: one unique input has no per-file heading")
+
+    # U-59: an absolute input needs an explicit -I root. The file is inside
+    # the working directory, so the implicit root would have contained it
+    # before the fix; protoc refuses it, and so does codegen now.
+    run_fail_in("${r12}" r12_abs_out r12_abs_err
+        ${CODEGEN} "${r12}/a.proto")
+    require_empty(r12_abs_out "R12 U-59 absolute input without a root stdout")
+    require_contains(r12_abs_err
+        "File does not reside within any path specified using --proto_path (or -I)"
+        "R12 U-59 the refusal uses the reference sentence")
+    string(REGEX MATCHALL "\n" r12_abs_lines "${r12_abs_err}")
+    list(LENGTH r12_abs_lines r12_abs_count)
+    if(NOT r12_abs_count EQUAL 1)
+        message(FATAL_ERROR
+            "R12 U-59: expected one diagnostic line, got:\n${r12_abs_err}")
+    endif()
+
+    # The same absolute spelling loads once a root encompasses it.
+    run_ok_in("${r12}" r12_abs_root_out r12_abs_root_err
+        ${CODEGEN} -I "${r12}" "${r12}/a.proto")
+    require_contains(r12_abs_root_out "struct DuplicateInput"
+        "R12 U-59 an absolute input under an explicit root loads")
+    require_empty(r12_abs_root_err "R12 U-59 accepted absolute input stderr")
+
+    # U-28: a directory equal to the search root is inside it, so it is
+    # reported as a directory rather than as an outsider.
+    run_fail_in("${r12}" r12_dir_out r12_dir_err
+        ${CODEGEN} -I root root)
+    require_empty(r12_dir_out "R12 U-28 root directory stdout")
+    require_contains(r12_dir_err "is a directory, not a schema file"
+        "R12 U-28 the root directory is a directory")
+    require_not_contains(r12_dir_err "outside all search roots"
+        "R12 U-28 the root directory is not an outsider")
+    run_fail_in("${r12}" r12_dot_out r12_dot_err
+        ${CODEGEN} .)
+    require_contains(r12_dot_err "is a directory, not a schema file"
+        "R12 U-28 the implicit root directory is a directory")
+
+    # U-60: a drive-relative search root is refused. An absolute root and a
+    # plain relative root stay accepted: the rows above use a relative root
+    # and the absolute-input row uses ${r12}.
+    if(WIN32)
+        run_fail_in("${r12}" r12_drive_out r12_drive_err
+            ${CODEGEN} -I "C:foo" a.proto)
+        require_empty(r12_drive_out "R12 U-60 drive-relative root stdout")
+        require_contains(r12_drive_err "drive-relative spelling is not a search root"
+            "R12 U-60 the refusal names the rule")
+        run_fail_in("${r12}" r12_bare_drive_out r12_bare_drive_err
+            ${CODEGEN} -I "C:" a.proto)
+        require_contains(r12_bare_drive_err "drive-relative spelling is not a search root"
+            "R12 U-60 a bare drive is the same form")
+    endif()
 endif()

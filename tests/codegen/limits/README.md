@@ -243,6 +243,7 @@ source-path chain cases write their own `.proto` files into the lane's
 | `codegen.imports.output` | the publisher's name check, the bounded directory creation, the writer's share mode, the NUL refusal and the prefix translation |
 | `codegen.imports.output.cwd` | the Windows fault-injected working-directory refusal (`S7b`, Windows only) |
 | `codegen.imports.output.posix-writer` | the POSIX writer loop: `EINTR`, zero return, 64 KiB cap (`S7b`, POSIX only) |
+| `codegen.imports.output.posix-reader` | the POSIX read loop: `EINTR`, short reads, errno text and fstat directory classification (`U-27`/`U-37`, POSIX only) |
 
 The lane runs in every build profile: the full C++17 tree, the full C++11
 tree, the lite (parser-off) tree, and the legacy toolchains. The `W-46`

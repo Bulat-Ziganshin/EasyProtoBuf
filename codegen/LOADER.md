@@ -33,9 +33,10 @@ Every rule below is observable behavior, and each one has a counterpart in the r
   (`command_line_interface.cc:1721-1741`). A stale copy in the working directory therefore cannot
   hide the file the roots name, and the logical name stays the spelling, so the output name does too.
 - **An input that lies under no root and is no logical name is an error.** protoc reports
-  `File does not reside within any path specified using --proto_path (or -I)` for the same state; the
-  loader reports it as "lies outside all search roots". A spelling with no virtual reading (absolute,
-  a parent reference, a backslash) never reaches the retry.
+  `File does not reside within any path specified using --proto_path (or -I)` for the same state; a
+  relative spelling gets the loader's "lies outside all search roots" sentence, while an absolute
+  spelling keeps protoc's sentence and additionally needs an explicit root (U-59). A spelling with no
+  virtual reading (absolute, a parent reference, a backslash) never reaches the retry.
 - **The mapping is textual.** Prefix comparison is byte-wise and case-sensitive, with a component
   boundary, mirroring `ApplyMapping`. A root spelled differently does not contain the file, even where
   the filesystem would open it; no case folding, no file identity. Roots and arguments are normalized
@@ -118,6 +119,15 @@ An argument is first tried **as a disk path**, and only if no such file exists i
 logical name. Disk first is deliberate: a spelling that names a real file stays a disk path even when
 it would also be a valid logical name.
 
+An **absolute argument must name an explicit search root**. The implicit working directory (the
+default when the caller passes no roots) serves relative spellings only: protoc's default mapping is
+the empty spelling `"."`, and its textual comparison never contains an absolute path, so an absolute
+input without `-I` is refused with the reference sentence (`File does not reside within any path
+specified using --proto_path (or -I). You must specify a --proto_path which encompasses this file.`)
+instead of inventing a logical name from the physical location (review 1027, U-59). Roots and
+arguments are normalized before the comparison, so an explicit root does contain an absolute file
+under it even when the root was spelled relative — the normalization difference recorded below.
+
 When the file exists, `map_disk_to_logical` walks the search roots in order, strips the first root that
 contains the path byte-wise, and produces a logical name. The name is then **re-verified**: if that
 logical name resolves to a different file under the same ordered roots, this is reported as shadowed
@@ -134,10 +144,12 @@ fails as an invalid root spelling (protoc reports it as unresolvable; both are h
 nothing).
 
 An argument that names an existing **directory** is reported as a directory when it lies under a root
-(`root "..." is a directory, not a schema file (search root "...")`) and as the ordinary outside-roots
-failure when it does not. protoc distinguishes the same two cases — `Input file is a directory.` from
-the failed open, and `File does not reside within any path specified using --proto_path (or -I)` when
-no mapping applies — and, like here, never retries such a spelling as a virtual name.
+— equality counts, so `codegen -I root root` and `codegen .` name the root itself — with
+`root "..." is a directory, not a schema file (search root "...")`, and as the ordinary outside-roots
+failure when it does not; an absolute directory outside every root keeps the reference sentence
+instead. protoc distinguishes the same two cases — `Input file is a directory.` from the failed open,
+and `File does not reside within any path specified using --proto_path (or -I)` when no mapping
+applies — and, like here, never retries such a spelling as a virtual name.
 
 An **empty argument** is refused before anything else happens, with a message that says the file name
 is empty. It is not a spelling to interpret, and it is not an empty logical path either. protoc treats
@@ -171,6 +183,18 @@ Check 3 answers "why deferred, and why two names". The source must not outlive p
 otherwise it is retained for the whole walk while the import depth is not known in advance. At the
 same time `physical_name` is needed afterwards for diagnostics, and `file.name` must hold the logical
 path: generated include names come from it, and it is the key that matches files against each other.
+
+### Reading one file (`read_disk_file`)
+
+On POSIX the file is opened once and read through the descriptor: `open`, then `fstat` to classify
+the entry that was actually opened, then `read` in a loop that retries `EINTR` and treats every short
+count as progress rather than as the end. The iterator-based read this replaces could not report a
+failure at all — `istreambuf_iterator` never sets the stream state, so the post-read `fail()` guard
+was dead code and a short read returned truncated bytes with success — and the stat probe ran before
+the open, leaving a window in which the entry could change (review 1027, U-27). A failing read now
+clears the buffer and reports the errno value and text (`cannot read file (errno N: text)`), the
+platform detail `OPTIONS.md` promises (U-37). The Windows branch already reads in a `ReadFile` loop
+and is unchanged: it reports `Win32 error N`.
 
 ### Imports (`follow_import`)
 
@@ -236,8 +260,9 @@ dependency already marked by the other list.
 
 **In the graph:** an import that is absent on disk, even when no type references it; a cycle; a chain
 deeper than the import-chain bound; a file under a search root whose remainder is not a valid logical
-name; a shadowed input; an argument that lies outside all search roots (after the logical-name retry),
-names a directory, or is empty; a denied access while resolving or reading.
+name; a shadowed input; a relative argument that lies outside all search roots (after the logical-name
+retry); an absolute argument outside every explicit root (the reference sentence above); a directory
+argument, or an empty one; a denied access while resolving or reading.
 
 Import failures carry their own `DiagnosticCode`: `DIAGNOSTIC_INVALID_IMPORT`,
 `DIAGNOSTIC_MISSING_IMPORT`, `DIAGNOSTIC_IMPORT_CYCLE`. They are distinct values, and a test asserts
@@ -254,10 +279,14 @@ Everything here is diagnostic quality, spelling strictness, or a more forgiving 
 Two bullets accept a spelling the reference compiler cannot resolve — parent references, and a network
 path past the path cap — and neither can select a different file than the caller named.
 
-- **`..` and Windows drive-relative spellings are resolved.** `lexical_absolute` turns roots and
-  arguments into an absolute form before the prefix comparison: it resolves relative spellings against
-  the working directory, resolves `..` lexically, and asks the platform path API for drive-relative
-  (`C:x`) and rooted (`\x`) Windows forms. protoc's `CanonicalizePath` only converts backslashes,
+- **`..` is resolved, and drive-relative spellings are resolved outside the root list.**
+  `lexical_absolute` turns paths into an absolute form before the prefix comparison: it resolves
+  relative spellings against the working directory, resolves `..` lexically, and asks the platform
+  path API for drive-relative (`C:x`) and rooted (`\x`) Windows forms. A drive-relative spelling is
+  never accepted as a *search root*, though: the root list is checked before that normalization and
+  the form is refused, because the per-drive current directory would let one spelling name different
+  trees across runs (review 1027, U-60); protoc refuses it as a `--proto_path` as well. protoc's
+  `CanonicalizePath` only converts backslashes,
   drops `.` components and collapses slashes — its own comment says handling `..` is "punted" — and
   `ApplyMapping` then rejects any part still containing a parent reference. Consequence: a spelling
   such as `-I foo foo/../foo/x.proto` maps here and is an error there. It can never select a different
@@ -296,13 +325,14 @@ with a consequence, not an oversight.
   (`FileCaseSensitiveInfo`), no uppercase table, no entry-by-entry confirmation of folded prefix
   matches, and no lexical equivalence of spellings. protoc does byte-wise prefix comparison plus a
   component-boundary check with no folding at all, even on Windows. Consequence: a disk path spelled
-  with a different case for its root is "outside all search roots", exactly like protoc, instead of
-  being folded onto the same file. A different case in the *file name* still opens on Windows, because
+  with a different case for its root does not map, exactly like protoc, instead of being folded onto
+  the same file (a relative spelling reports "outside all search roots"; an absolute one keeps the
+  reference sentence). A different case in the *file name* still opens on Windows, because
   the filesystem is case-insensitive and the loader asks it directly.
 - **The isolated mode.** There is none: a fully qualified, import-free file outside every search root
   does not load on its own. protoc has no such mode either — an input must live under some
-  `--proto_path` — so an absolute input needs an explicit `-I <dir>`, or has to be passed as a logical
-  name.
+  `--proto_path` — so an absolute input needs an explicit `-I <dir>`; the implicit working directory
+  is not one, and a logical name has to be passed instead if the file is to be found through it.
 - **Native file identity and duplicate-alias detection.** Identity (`st_dev`/`st_ino`, volume plus file
   index) is not queried. One physical file under two logical names loads twice, and two files under one
   logical name are not diagnosed here. Both match the reference compiler, which keys everything by name

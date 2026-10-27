@@ -6,8 +6,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
-#include <iterator>
 #include <sstream>
 #include <vector>
 
@@ -41,9 +39,12 @@ bool has_embedded_nul(const std::string& text)
 // Reason text for a failed read. A permission failure reads as "read
 // access is denied" on every platform, the same wording the status query
 // uses and the same fact the reference compiler reports for EACCES;
-// every other failure keeps its platform error code, which is still more
-// than the reference compiler prints for them. The caller names the path:
-// an action entry returns the reason only (W-29).
+// every other failure keeps its platform error code and text, which is
+// still more than the reference compiler prints for them. The caller names
+// the path: an action entry returns the reason only (W-29). The POSIX
+// branch used to drop the errno value entirely, so every failure read as a
+// generic "cannot read file" even though OPTIONS.md promises the platform
+// error (review 1027, U-37).
 std::string read_error_text(unsigned long code, bool denied)
 {
     if (denied) return "read access is denied";
@@ -52,7 +53,8 @@ std::string read_error_text(unsigned long code, bool denied)
 #ifdef _WIN32
     message << " (Win32 error " << code << ")";
 #else
-    (void)code;
+    message << " (errno " << code << ": "
+            << std::strerror(static_cast<int>(code)) << ")";
 #endif
     return message.str();
 }
@@ -332,6 +334,28 @@ std::string join_disk_path(const std::string& directory,
     return base + "/" + logical_name;
 }
 
+bool is_absolute_disk_path(const std::string& path)
+{
+    if (path.empty()) return false;
+#ifdef _WIN32
+    return is_fully_qualified_disk_path(path);
+#else
+    return path[0] == '/';
+#endif
+}
+
+bool is_drive_relative_disk_path(const std::string& path)
+{
+#ifdef _WIN32
+    return path.size() >= 2 && is_alpha(path[0]) && path[1] == ':' &&
+           (path.size() == 2 ||
+            (path[2] != '/' && path[2] != '\\'));
+#else
+    (void)path;
+    return false;
+#endif
+}
+
 FileStatus disk_file_status(const std::string& path, std::string& error)
 {
     error.clear();
@@ -458,35 +482,63 @@ bool read_disk_file(const std::string& path, std::string& contents,
     CloseHandle(handle);
     return true;
 #else
-    // A POSIX directory opens successfully and only fails the read with
-    // EISDIR. The iterator-based read below cannot tell that failure from an
-    // empty file (the iterator reads through the stream buffer and leaves the
-    // istream state untouched), so the type is probed first. The loader
-    // already stats candidates during the search; one more stat is cheaper
-    // than reporting a directory as an empty schema (CR-37/CR-47).
-    std::string status_error;
-    if (disk_file_status(path, status_error) == FILE_STATUS_DIRECTORY) {
+    // Open once and read through the descriptor. The stream-based read this
+    // replaces could not report a failure: istreambuf_iterator reads through
+    // the stream buffer and never calls setstate(), so the post-read fail()
+    // guard was dead code and a short read returned truncated data with
+    // success. The stat probe also ran before the open, leaving a window in
+    // which the entry could be replaced (review 1027, U-27). fstat answers
+    // for the entry that was actually opened, and the loop treats every
+    // short count as progress rather than as the end.
+    errno = 0;
+    const int descriptor = ::open(path.c_str(), O_RDONLY);
+    if (descriptor < 0) {
+        const int code = errno;
+        error = read_failure_reason(
+            path, read_error_text(static_cast<unsigned long>(code),
+                                  code == EACCES));
+        return false;
+    }
+    struct stat status;
+    if (::fstat(descriptor, &status) != 0) {
+        const int code = errno;
+        ::close(descriptor);
+        error = read_failure_reason(
+            path, read_error_text(static_cast<unsigned long>(code),
+                                  code == EACCES));
+        return false;
+    }
+    if (S_ISDIR(status.st_mode) != 0) {
+        ::close(descriptor);
         error = "is a directory, not a schema file";
         return false;
     }
-    // Clear errno before opening: only the open below may decide that
-    // this failure is a denial, never a value some earlier call left
-    // behind (a missing file after a denied candidate would otherwise be
-    // reported as denied too).
-    errno = 0;
-    std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
-    if (!input) {
-        error = read_failure_reason(
-            path, read_error_text(static_cast<unsigned long>(errno),
-                                  errno == EACCES));
-        return false;
+    contents.clear();
+    // The size is a hint only: the loop below never trusts it, so a file
+    // that grows or shrinks between fstat and read still reads exactly once.
+    // The reservation is capped so a sparse file cannot ask for a giant
+    // buffer up front.
+    if (status.st_size > 0) {
+        const std::size_t hint = static_cast<std::size_t>(status.st_size);
+        contents.reserve(hint < (1u << 20) ? hint : (1u << 20));
     }
-    contents.assign(std::istreambuf_iterator<char>(input),
-                    std::istreambuf_iterator<char>());
-    if (!input.eof() && input.fail()) {
-        error = read_failure_reason(path, "cannot read file");
-        return false;
+    char buffer[8192];
+    for (;;) {
+        const ssize_t chunk = ::read(descriptor, buffer, sizeof(buffer));
+        if (chunk < 0) {
+            if (errno == EINTR) continue;
+            const int code = errno;
+            ::close(descriptor);
+            contents.clear();
+            error = read_failure_reason(
+                path, read_error_text(static_cast<unsigned long>(code),
+                                      code == EACCES));
+            return false;
+        }
+        if (chunk == 0) break;
+        contents.append(buffer, static_cast<std::size_t>(chunk));
     }
+    ::close(descriptor);
     return true;
 #endif
 }

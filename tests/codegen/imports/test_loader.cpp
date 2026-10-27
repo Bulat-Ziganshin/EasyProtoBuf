@@ -665,6 +665,20 @@ void test_directory_argument_is_reported_as_directory()
     CHECK(files.files().empty());
     CHECK(files.targets().empty());
 
+    // A directory that is itself a search root lies inside that root: the
+    // empty remainder names the root directory, not an outsider (U-28).
+    easypb_proto::SourceLoaderOptions self;
+    self.proto_paths.push_back(work_root);
+    std::vector<std::string> self_roots(1, work_root);
+    easypb_schema::SchemaSet self_files;
+    CHECK(!easypb_proto::load_source_files(self, self_roots, self_files,
+                                           error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(error.message.find("is a directory, not a schema file") !=
+          std::string::npos);
+    CHECK(error.message.find("outside all search roots") == std::string::npos);
+    CHECK(self_files.files().empty());
+
     // Outside every search root the distinction disappears: this is the
     // same failure as a file that lies outside all roots.
     easypb_proto::SourceLoaderOptions elsewhere;
@@ -773,8 +787,9 @@ void test_existing_file_outside_roots_is_retried_as_logical_name()
     }
 
     // Only a valid logical name has that reading. An absolute spelling outside
-    // the roots keeps the outside-roots refusal: an absolute path has no
-    // virtual form.
+    // the roots keeps the outside-roots refusal in the reference compiler's
+    // own sentence: an absolute path has no virtual form, and protoc refuses
+    // it with "File does not reside within any path ... (U-59)".
     easypb_schema::SchemaSet absolute_files;
     std::vector<std::string> absolute_roots(
         1, easypb_file::lexical_absolute(join_arg(dir, "thing.proto")));
@@ -783,7 +798,9 @@ void test_existing_file_outside_roots_is_retried_as_logical_name()
                                            absolute_files, error));
     CHECK(set_working_directory(saved));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
-    CHECK(error.message.find("outside all search roots") != std::string::npos);
+    CHECK(error.message.find(
+              "File does not reside within any path specified using "
+              "--proto_path (or -I)") != std::string::npos);
     CHECK(absolute_files.files().empty());
 
     // A spelling that is no logical name either keeps its refusal. The leading
@@ -807,6 +824,56 @@ void test_existing_file_outside_roots_is_retried_as_logical_name()
     CHECK(set_working_directory(saved));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_MISSING_IMPORT);
     CHECK(missing_files.files().empty());
+}
+
+void test_absolute_input_requires_an_explicit_root()
+{
+    // U-59: the implicit working directory is the default root for logical
+    // names only. An absolute spelling needs an explicit -I root even when
+    // the file is physically under the working directory, because protoc's
+    // textual "." mapping never contains an absolute path. The refusal uses
+    // the reference compiler's own sentence.
+    require_work_root();
+    const std::string dir = work_path("absolute-input-root");
+    const std::string absolute_dir = easypb_file::lexical_absolute(dir);
+    CHECK(!absolute_dir.empty());
+    const std::string file = join_arg(absolute_dir, "a.proto");
+    CHECK(write_file(file, "syntax = \"proto2\";\nmessage A {}\n"));
+
+    const std::string saved = current_working_directory_text();
+    CHECK(!saved.empty());
+    CHECK(set_working_directory(absolute_dir));
+
+    easypb_proto::SourceLoaderOptions implicit;
+    std::vector<std::string> roots(1, file);
+    easypb_schema::SchemaSet implicit_files;
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_proto::load_source_files(implicit, roots, implicit_files,
+                                           error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(error.message.find(
+              "File does not reside within any path specified using "
+              "--proto_path (or -I)") != std::string::npos);
+    CHECK(implicit_files.files().empty());
+    CHECK(implicit_files.targets().empty());
+
+    // A logical name under the implicit root still loads: only the absolute
+    // spelling needs the explicit root.
+    std::vector<std::string> logical(1, "a.proto");
+    easypb_schema::SchemaSet logical_files;
+    CHECK(easypb_proto::load_source_files(implicit, logical, logical_files,
+                                          error));
+    CHECK(logical_files.files().size() == 1);
+
+    // The same absolute argument resolves once a root names its directory.
+    easypb_proto::SourceLoaderOptions explicit_root;
+    explicit_root.proto_paths.push_back(absolute_dir);
+    easypb_schema::SchemaSet explicit_files;
+    CHECK(easypb_proto::load_source_files(explicit_root, roots,
+                                          explicit_files, error));
+    CHECK(explicit_files.files().size() == 1);
+    CHECK(explicit_files.targets().size() == 1);
+    CHECK(set_working_directory(saved));
 }
 
 void test_empty_input_argument_is_rejected()
@@ -1331,6 +1398,37 @@ void test_empty_search_roots_mean_working_directory()
 }
 
 #ifdef _WIN32
+void test_drive_relative_root_is_refused()
+{
+    // A drive-relative root ("C:repo", bare "C:") is anchored to the
+    // per-drive current directory, so one spelling can name a different
+    // tree from run to run; protoc refuses the form and the loader now does
+    // too (U-60). A drive-absolute and a plain relative root stay accepted.
+    const std::string fixture_root = join_arg(fixture_dir, "diamond");
+    std::vector<std::string> roots(1, "root.proto");
+    easypb_schema::SchemaSet files;
+    easypb_schema::Diagnostic error;
+
+    easypb_proto::SourceLoaderOptions drive_relative;
+    drive_relative.proto_paths.push_back("C:repo");
+    CHECK(!easypb_proto::load_source_files(drive_relative, roots, files,
+                                           error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
+    CHECK(error.message.find("drive-relative spelling") != std::string::npos);
+    CHECK(files.files().empty());
+
+    easypb_proto::SourceLoaderOptions bare_drive;
+    bare_drive.proto_paths.push_back("C:");
+    CHECK(!easypb_proto::load_source_files(bare_drive, roots, files, error));
+    CHECK(error.message.find("drive-relative spelling") != std::string::npos);
+
+    // The control: the same fixture loads through a drive-absolute root.
+    easypb_proto::SourceLoaderOptions absolute;
+    absolute.proto_paths.push_back(fixture_root);
+    CHECK(easypb_proto::load_source_files(absolute, roots, files, error));
+    CHECK(files.files().size() == 4);
+}
+
 void test_windows_separators_in_disk_roots()
 {
     easypb_proto::SourceLoaderOptions options;
@@ -1374,8 +1472,9 @@ void test_case_variant_root_spelling_is_outside_roots()
     easypb_schema::Diagnostic error;
     CHECK(!easypb_proto::load_source_files(options, roots, files, error));
     CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_IMPORT);
-    CHECK(error.message.find("outside all search roots") !=
-          std::string::npos);
+    CHECK(error.message.find(
+              "File does not reside within any path specified using "
+              "--proto_path (or -I)") != std::string::npos);
     CHECK(files.files().empty());
     CHECK(files.targets().empty());
 
@@ -2417,6 +2516,7 @@ int main(int argc, char** argv)
     test_disk_root_with_invalid_logical_name_fails();
     test_directory_argument_is_reported_as_directory();
     test_existing_file_outside_roots_is_retried_as_logical_name();
+    test_absolute_input_requires_an_explicit_root();
     test_empty_input_argument_is_rejected();
     test_root_deduplication_and_repeated_input();
 #ifdef _WIN32
@@ -2447,6 +2547,7 @@ int main(int argc, char** argv)
     test_nested_duplicate_is_rejected();
 #ifdef _WIN32
     test_windows_separators_in_disk_roots();
+    test_drive_relative_root_is_refused();
     test_case_variant_root_spelling_is_outside_roots();
     test_join_preserves_bare_drive_semantics();
     test_absolute_forms_resolve_lexically();

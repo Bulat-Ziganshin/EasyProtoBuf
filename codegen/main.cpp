@@ -458,7 +458,27 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         throw std::runtime_error("Missing input file.");
     }
 
-    command.filenames = parser.non_option_args();
+    // A positional input named twice is compiled once. The loader keys files
+    // by logical name, so generation has always accepted `a.proto a.proto`
+    // silently; keeping that convenience is the owner decision for review
+    // 1027 U-19 (variant B). Deduplicating at the command line gives the
+    // utility modes, the mixed-input check and the per-file print headings
+    // the same one-input list, so `--print-descriptor a.proto a.proto` is
+    // byte-identical to the single-input run. protoc refuses a repeated
+    // input whose output it would write twice ("Tried to write the same file
+    // twice"), so the silence stays a documented divergence.
+    command.filenames.clear();
+    for (std::size_t i = 0; i < parser.non_option_args().size(); ++i) {
+        const std::string& filename = parser.non_option_args()[i];
+        bool seen = false;
+        for (std::size_t j = 0; j < command.filenames.size(); ++j) {
+            if (command.filenames[j] == filename) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) command.filenames.push_back(filename);
+    }
     // A trailing separator is never part of a file name the OS resolves as
     // that file: `simple.proto/` names a directory entry that does not exist.
     // `lexical_absolute` used to trim the separator, so the status query found
