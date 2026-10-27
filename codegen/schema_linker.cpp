@@ -39,7 +39,8 @@ void compute_public_exports(const SchemaFile* root, ExportMemo& memo)
 {
     if (memo.find(root) != memo.end()) return;
     std::vector<const SchemaFile*> stack(1, root);
-    std::vector<std::size_t> next(1, 0);
+    // (1), not (1, 0): libstdc++ 4.8.5 reads the pair as an iterator range.
+    std::vector<std::size_t> next(1);
     while (!stack.empty()) {
         const SchemaFile* file = stack.back();
         std::size_t& index = next.back();
