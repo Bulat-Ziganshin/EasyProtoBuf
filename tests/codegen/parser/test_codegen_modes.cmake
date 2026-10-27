@@ -520,6 +520,65 @@ if(FULL_BUILD)
     if(NOT unresolved_out STREQUAL "")
         message(FATAL_ERROR "Unresolved import emitted partial generated output")
     endif()
+
+    # --- R13: benchmark input rules and multi-file descriptor inspection -----
+
+    # U-35: `x.pbs` is descriptor-set input by inference, and the benchmark
+    # parses source text, so the bytes must be refused instead of decoded as
+    # a schema that happens to parse. The explicit switch gets the same
+    # sentence, so both spellings of the same mode agree.
+    run_fail(r13_bench_pbs_out r13_bench_pbs_err
+        ${CODEGEN} --benchmark-parser --benchmark-ms 100 ${pbs2})
+    if(NOT r13_bench_pbs_out STREQUAL "")
+        message(FATAL_ERROR
+            "R13 U-35 the benchmark described a .pbs on stdout: ${r13_bench_pbs_out}")
+    endif()
+    if(NOT r13_bench_pbs_err MATCHES "accepts [.]proto source files")
+        message(FATAL_ERROR
+            "R13 U-35 the inference refusal does not name the input rule: ${r13_bench_pbs_err}")
+    endif()
+    run_fail(r13_bench_switch_out r13_bench_switch_err
+        ${CODEGEN} --benchmark-parser --descriptor-set ${pbs2})
+    if(NOT r13_bench_switch_out STREQUAL "")
+        message(FATAL_ERROR
+            "R13 U-35 the explicit switch described a .pbs on stdout: ${r13_bench_switch_out}")
+    endif()
+    if(NOT r13_bench_switch_err MATCHES "accepts [.]proto source files")
+        message(FATAL_ERROR
+            "R13 U-35 the switch refusal does not name the input rule: ${r13_bench_switch_err}")
+    endif()
+
+    # U-61: a descriptor set is a container, and inspection prints every file
+    # it holds. The two-file integration bundle is the case the old
+    # "exactly one is required" check refused; no --target is needed because
+    # the mode does not generate and therefore has no root to select.
+    run_ok(r13_multi_print_out r13_multi_print_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+                ${DATA_DIR}/integration-multi.pbs)
+    if(NOT r13_multi_print_err STREQUAL "")
+        message(FATAL_ERROR
+            "R13 U-61 the multi-file print wrote stderr: ${r13_multi_print_err}")
+    endif()
+    string(FIND "${r13_multi_print_out}" "file integration-proto2.proto syntax="
+        r13_multi_first)
+    string(FIND "${r13_multi_print_out}" "file integration-proto3.proto syntax="
+        r13_multi_second)
+    if(r13_multi_first EQUAL -1 OR r13_multi_second EQUAL -1)
+        message(FATAL_ERROR
+            "R13 U-61 the multi-file print drops a file:\n${r13_multi_print_out}")
+    endif()
+    if(NOT r13_multi_first LESS r13_multi_second)
+        message(FATAL_ERROR
+            "R13 U-61 the multi-file print does not keep the set order:\n${r13_multi_print_out}")
+    endif()
+    # The generation path still asks for an explicit target on the same set;
+    # the print mode is the only mode that may inspect it whole.
+    run_fail(r13_multi_generate_out r13_multi_generate_err
+        ${CODEGEN} --descriptor-set ${DATA_DIR}/integration-multi.pbs)
+    if(NOT r13_multi_generate_err MATCHES "--target NAME is required")
+        message(FATAL_ERROR
+            "R13 U-61 generation still needs --target: ${r13_multi_generate_err}")
+    endif()
 else()
     run_fail(source_out source_err ${CODEGEN} ${proto2})
     if(NOT source_err MATCHES "no .proto parser")

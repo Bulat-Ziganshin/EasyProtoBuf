@@ -30,6 +30,9 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+// U-36: _isatty/_setmode and _O_BINARY, used to keep redirected stdout LF-only.
+#include <fcntl.h>
+#include <io.h>
 #endif
 
 #if EASYPB_CODEGEN_WITH_PROTO_PARSER
@@ -139,8 +142,8 @@ bool read_file(const std::string& filename, std::string& contents,
     return easypb_file::read_disk_file(filename, contents, error);
 }
 
-FileDescriptorProto decode_single_file_descriptor(const std::string& filename,
-                                                   const std::string& contents)
+FileDescriptorSet decode_descriptor_set(const std::string& filename,
+                                        const std::string& contents)
 {
     // The nesting bound, before the decode: the decode descends into every
     // nested message the set carries, so a set that nests deeper than the
@@ -157,14 +160,11 @@ FileDescriptorProto decode_single_file_descriptor(const std::string& filename,
         throw std::runtime_error(filename +
             ": descriptor set contains no FileDescriptorProto");
     }
-    if (set.file.size() != 1) {
-        std::ostringstream message;
-        message << filename << ": descriptor set contains " << set.file.size()
-                << " files; exactly one is required. Regenerate it without "
-                   "protoc --include_imports";
-        throw std::runtime_error(message.str());
-    }
-    return set.file[0];
+    // U-61: a set is a container, and inspection prints every file it holds.
+    // Refusing a multi-file set here made `--print-descriptor` unable to look
+    // at the bundles protoc writes with --include_imports, while the
+    // generation path never used this helper.
+    return set;
 }
 #endif
 
@@ -266,6 +266,22 @@ bool flush_stdout()
         make_schema_diagnostic(std::string(), "cannot write to stdout"));
     return false;
 }
+
+#ifdef _WIN32
+// U-36: the CRT writes stdout in text mode, so every '\n' becomes CRLF as soon
+// as the stream is a file or a pipe, while `--out-dir` publishes the same
+// header through the native writer as LF-only bytes. Redirecting stdout is the
+// documented way to produce a header, so the two spellings of one output must
+// agree byte for byte; the switch is made once, before anything is written.
+// An interactive console keeps its text mode, where the translation is the
+// console's own line discipline.
+void use_lf_stdout()
+{
+    if (_isatty(_fileno(stdout)) == 0) {
+        _setmode(_fileno(stdout), _O_BINARY);
+    }
+}
+#endif
 
 // True for a spelling whose last byte is a path separator. On Windows both
 // separators are path syntax; on POSIX a backslash is an ordinary file-name
@@ -415,18 +431,6 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         throw;
     }
 
-    // An unknown or misspelled option is refused instead of silently ignored.
-    // The parser records it and never applies it, so a typo such as
-    // "--no-has-field" for "--no-has-fields" would otherwise generate a header
-    // that keeps the feature the caller asked to drop. The check runs before
-    // help is honoured, matching the reference compiler: protoc reports the
-    // unknown flag even when --help is present (S4/W-20). A token after "--"
-    // is positional by definition and never reaches this list.
-    if (!parser.unknown_options().empty()) {
-        throw std::runtime_error("Unknown flag: " +
-                                 parser.unknown_options()[0]);
-    }
-
     // print auto-generated help message
     if (groff_option->is_set()) {
         GroffOptionPrinter printer(&parser);
@@ -445,6 +449,21 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         command.exit_after_help = true;
         return command;
     }
+
+    // An unknown or misspelled option is refused instead of silently ignored.
+    // The parser records it and never applies it, so a typo such as
+    // "--no-has-field" for "--no-has-fields" would otherwise generate a header
+    // that keeps the feature the caller asked to drop. Help wins over the
+    // unknown list: the owner decision for review 1027 U-45 (variant A) makes
+    // the presence of `--help` produce help and exit 0 whatever else the
+    // command line carries, so a caller who asks for help is never answered
+    // with a typo report. A token after "--" is positional by definition and
+    // never reaches this list.
+    if (!parser.unknown_options().empty()) {
+        throw std::runtime_error("Unknown flag: " +
+                                 parser.unknown_options()[0]);
+    }
+
     // A truly empty argv is help; options that name no input are an error.
     // The reference compiler keeps the two apart: it prints help and exits 0
     // only when no argument at all was given (command_line_interface.cc:
@@ -543,11 +562,6 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         throw std::runtime_error(
             "--benchmark-ms is valid only with --benchmark-parser");
     }
-    if (command.action == ACTION_BENCHMARK_PARSER &&
-        command.input_format == INPUT_DESCRIPTOR_SET) {
-        throw std::runtime_error(
-            "--benchmark-parser accepts .proto source files, not --descriptor-set");
-    }
 
     const bool generation_option_set =
         no_class_option->is_set() || no_decoder_option->is_set() ||
@@ -595,6 +609,17 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         command.input_format = any_pbs ? INPUT_DESCRIPTOR_SET : INPUT_PROTO_SOURCE;
     }
 
+    // U-35: the benchmark parses source text, so descriptor-set input is
+    // refused on BOTH spellings - the explicit switch and a `.pbs` positional
+    // the inference just classified. The check used to sit beside the mode
+    // table, before inference, so `--benchmark-parser x.pbs` decoded the bytes
+    // as source and reported a successful benchmark.
+    if (command.action == ACTION_BENCHMARK_PARSER &&
+        command.input_format == INPUT_DESCRIPTOR_SET) {
+        throw std::runtime_error(
+            "--benchmark-parser accepts .proto source files, not descriptor-set input");
+    }
+
     // The mode table's option halves: -I addresses source search roots and
     // --target addresses files inside descriptor containers. Each is refused
     // in the other mode instead of being silently ignored.
@@ -619,12 +644,23 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
 }
 
 #if EASYPB_CODEGEN_WITH_PROTO_PARSER
-// Descriptor printing keeps its standalone, permissive path: one descriptor
-// file per container, no linking, and no reading of the new generation-only
-// options (they are refused before this runs). The function exists only in
-// the parser-enabled profile, like the action that reaches it.
+// Descriptor printing keeps its standalone, permissive path: no linking and no
+// reading of the new generation-only options (they are refused before this
+// runs). The function exists only in the parser-enabled profile, like the
+// action that reaches it.
+//
+// U-34: the dump is assembled in memory and reaches stdout only after every
+// input has been read, decoded and parsed. The old loop wrote each tree as it
+// went, so a failure on the second input left a truncated dump on stdout that
+// the caller could not tell from a complete one. The benchmark lane already
+// read every file first; this gives the print lane the same all-or-nothing
+// contract.
+//
+// U-61: a descriptor set is a container and every file it holds is printed.
+// Inspection is not generation, so there is no single root to select.
 int run_print_descriptor(const CommandLine& command)
 {
+    std::ostringstream dump;
     for (std::size_t i = 0; i < command.filenames.size(); ++i) {
         const std::string& filename = command.filenames[i];
         std::string contents;
@@ -634,22 +670,25 @@ int run_print_descriptor(const CommandLine& command)
         }
 
         if (command.input_format == INPUT_DESCRIPTOR_SET) {
-            const FileDescriptorProto file =
-                decode_single_file_descriptor(filename, contents);
+            const FileDescriptorSet set =
+                decode_descriptor_set(filename, contents);
             if (command.filenames.size() > 1) {
-                std::cout << "== " << filename << " ==\n";
+                dump << "== " << filename << " ==\n";
             }
-            easypb_proto::print_descriptor(file, std::cout);
+            for (std::size_t j = 0; j < set.file.size(); ++j) {
+                easypb_proto::print_descriptor(set.file[j], dump);
+            }
             continue;
         }
 
         easypb_proto::ParsedProto parsed;
         if (!parse_source_file(filename, contents, parsed)) return 1;
         if (command.filenames.size() > 1) {
-            std::cout << "== " << filename << " ==\n";
+            dump << "== " << filename << " ==\n";
         }
-        easypb_proto::print_descriptor(parsed, std::cout);
+        easypb_proto::print_descriptor(parsed, dump);
     }
+    std::cout << dump.str();
     return 0;
 }
 #endif
@@ -818,6 +857,7 @@ int main(int argc, char** argv)
 {
 #ifdef _WIN32
     const ConsoleUtf8Output console_utf8;
+    use_lf_stdout();
 #else
     // A write to a closed pipe raises SIGPIPE, whose default action kills the
     // process before the stream state can report the failure. The contract is a

@@ -16,6 +16,15 @@ The generated data types do not inherit from runtime classes and do not require 
 - Optionally generate direct self-recursive repeated/map message containers with [`--allow-self-recursive-containers`](OPTIONS.md#structural-options).
 - Build with the embedded `.proto` parser or as a smaller descriptor-set-only executable.
 
+## Command-line contract
+
+- `--help` always wins: `codegen --help --nope` prints the help text and exits 0, while an unknown flag on its own is refused with a nonzero exit. A first `--` ends option parsing, so a later `--help` is an input spelling.
+- The whole result of a successful run goes to stdout, and a failure leaves stdout empty. A redirected stdout uses LF line endings on every platform, so it is byte-identical to the same header written with `--out-dir`.
+- `--print-descriptor` is pure inspection: it prints every file of a descriptor set, including imports, `reserved` declarations, extension ranges and the modeled message/enum options, and it never links or generates C++.
+- `--benchmark-parser` benchmarks `.proto` source only; descriptor-set input is refused.
+
+See [Command-line options](OPTIONS.md) for the full rules.
+
 ## Basic use
 
 Save this schema as `person.proto`:

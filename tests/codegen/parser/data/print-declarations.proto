@@ -1,0 +1,40 @@
+syntax = "proto2";
+
+// U-31: one source carries every declaration the descriptor model retains, so
+// the `.pbs` print of it can be checked against the list the finding names -
+// imports (all three modifiers), message and enum `reserved`, extension
+// ranges, `message_set_wire_format` and `allow_alias`.
+package print_declarations;
+
+import "print-dep.proto";
+import public "print-dep-public.proto";
+import weak "print-dep-weak.proto";
+
+message Legacy
+{
+    option message_set_wire_format = true;
+
+    extensions 100 to 199;
+    reserved 5 to 7;
+    reserved 9;
+    reserved "old_name", "older_name";
+}
+
+message Holder
+{
+    optional Dep normal_dep = 1;
+    optional PublicDep public_dep = 2;
+    optional WeakDep weak_dep = 3;
+    optional Alias kind = 4;
+}
+
+enum Alias
+{
+    option allow_alias = true;
+
+    ZERO = 0;
+    NIL = 0;
+
+    reserved 4 to 6;
+    reserved "GONE";
+}

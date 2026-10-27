@@ -31,7 +31,7 @@ descriptor.pb.hpp decoder|
       generated C++ header
 ```
 
-`main.cpp` selects the input/action mode and parses the command line (`-I/--proto_path` and `--target` are ordered and repeatable, `--out-dir` is single), loads all source roots or descriptor containers, selects targets, links the set, and generates through the core. One selected header goes to stdout, or every selected header is published through `header_output.cpp`. On Windows the command line reaches the program through `GetCommandLineW` with exactly one UTF-8 conversion before any loader runs.
+`main.cpp` selects the input/action mode and parses the command line (`-I/--proto_path` and `--target` are ordered and repeatable, `--out-dir` is single), loads all source roots or descriptor containers, selects targets, links the set, and generates through the core. One selected header goes to stdout, or every selected header is published through `header_output.cpp`. A successful mode builds its whole stdout result before writing it, so a refusal leaves stdout empty; on Windows a redirected stdout is switched to binary mode so its LF bytes match the published file. On Windows the command line reaches the program through `GetCommandLineW` with exactly one UTF-8 conversion before any loader runs.
 
 ## Source layout
 

@@ -722,13 +722,15 @@ if(NOT EXISTS "${w23}/--nope=/integration-proto2.pb.hpp")
         "W-23 the value position was inspected: no --nope= directory with the header")
 endif()
 
-# An unknown option is still unknown, whatever it carries.
-run_fail(w23_unknown_out w23_unknown_err
+# An unknown option is still unknown - unless help was requested. Review 1027
+# U-45 (owner variant A) supersedes the W-23 row: the presence of `--help`
+# prints help and exits 0 whatever else the command line carries, exactly as
+# protoc 30.1 does. The unknown flag alone stays a refusal (W-20 above).
+run_ok(w23_unknown_out w23_unknown_err
     ${CODEGEN} --nope= --help)
-require_empty(w23_unknown_out
-    "W-23 an unknown option must not print help")
-require_contains(w23_unknown_err "Unknown flag: --nope="
-    "W-23 the unknown option is named as typed")
+require_contains(w23_unknown_out "Usage: codegen"
+    "W-23/U-45 --help wins over an unknown option")
+require_empty(w23_unknown_err "W-23/U-45 help stderr")
 
 # A switch takes no value, so a short switch with '=' stays an unknown flag.
 foreach(w23_switches -X= -c=)
@@ -1650,4 +1652,133 @@ if(FULL_BUILD)
         require_contains(r12_bare_drive_err "drive-relative spelling is not a search root"
             "R12 U-60 a bare drive is the same form")
     endif()
+endif()
+
+# --- R13: CLI output modes and help precedence (U-31, U-34, U-36, U-45) -----
+#
+# Row                          codegen after R13                  protoc 30.1
+# --help --nope                help, rc 0                         help, rc 0
+# --nope alone                 "Unknown flag", rc 1               rc 1
+# print, second input missing  stdout empty, rc 1                 no print mode
+# printed .pbs declarations    imports/reserved/extensions shown  --decode shows all
+# redirected stdout            LF only, equal to --out-dir        n/a (POSIX text)
+
+# U-45: the presence of --help is the whole rule. It wins over an unknown flag
+# and exits 0; the unknown flag alone is still refused (W-20 pins the three
+# spellings above).
+run_ok(r13_help_unknown_out r13_help_unknown_err
+    ${CODEGEN} --help --nope)
+require_contains(r13_help_unknown_out "Usage: codegen"
+    "R13 U-45 --help wins over an unknown flag")
+require_empty(r13_help_unknown_err "R13 U-45 help stderr")
+run_fail(r13_unknown_out r13_unknown_err
+    ${CODEGEN} --nope "${DATA_DIR}/integration-proto2.proto")
+require_empty(r13_unknown_out "R13 U-45 unknown flag stdout")
+require_contains(r13_unknown_err "Unknown flag: --nope"
+    "R13 U-45 an unknown flag alone is still refused")
+
+if(FULL_BUILD)
+    set(r13 "${WORK_DIR}/r13")
+    file(MAKE_DIRECTORY "${r13}")
+
+    # U-34: the dump is all-or-nothing. The first input is valid and the
+    # second is missing, so the old loop left the first tree on stdout; the
+    # buffered print must leave it empty. Both doors run through the same
+    # loop; the source row is the finding's own reproduction.
+    run_fail(r13_partial_src_out r13_partial_src_err
+        ${CODEGEN} --print-descriptor
+                "${DATA_DIR}/integration-proto2.proto"
+                "${r13}/missing.proto")
+    require_empty(r13_partial_src_out
+        "R13 U-34 a later source failure leaves stdout empty")
+    require_contains(r13_partial_src_err "missing.proto"
+        "R13 U-34 the source refusal names the failing input")
+    run_fail(r13_partial_pbs_out r13_partial_pbs_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+                "${single}"
+                "${r13}/missing.pbs")
+    require_empty(r13_partial_pbs_out
+        "R13 U-34 a later descriptor failure leaves stdout empty")
+    require_contains(r13_partial_pbs_err "missing.pbs"
+        "R13 U-34 the descriptor refusal names the failing input")
+
+    # U-31: the print of the fixture `.pbs` must carry every declaration the
+    # model decoded. The fixture is protoc 30.1's own descriptor for the
+    # source beside it:
+    #   protoc -I tests/codegen/parser/data --descriptor_set_out \
+    #       tests/codegen/parser/data/print-declarations.pbs \
+    #       print-declarations.proto
+    # The source door retains imports and both options, so those markers are
+    # asserted on both prints; `reserved` and `extensions` are descriptor-door
+    # facts because the source parser validates them without retaining them
+    # (schema.hpp, EnumDescriptorProto_EnumReservedRange).
+    run_ok(r13_decls_pbs_out r13_decls_pbs_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+                "${DATA_DIR}/print-declarations.pbs")
+    require_empty(r13_decls_pbs_err "R13 U-31 descriptor print stderr")
+    foreach(r13_marker
+            "import \"print-dep.proto\";"
+            "import public \"print-dep-public.proto\";"
+            "import weak \"print-dep-weak.proto\";"
+            "message Legacy [message_set_wire_format]"
+            "extensions 100 to 199;"
+            "reserved 5 to 7;"
+            "reserved 9;"
+            "reserved \"old_name\";"
+            "reserved \"older_name\";"
+            "option allow_alias = true;"
+            "reserved 4 to 6;"
+            "reserved \"GONE\";")
+        require_contains(r13_decls_pbs_out "${r13_marker}"
+            "R13 U-31 the .pbs print carries '${r13_marker}'")
+    endforeach()
+
+    # The source door prints the same import and option markers from the
+    # authoritative dependency lists and decoded options. Its stderr carries
+    # the unresolved-import warnings the print mode documents.
+    run_ok(r13_decls_src_out r13_decls_src_err
+        ${CODEGEN} --print-descriptor
+                "${DATA_DIR}/print-declarations.proto")
+    foreach(r13_marker
+            "import \"print-dep.proto\";"
+            "import public \"print-dep-public.proto\";"
+            "import weak \"print-dep-weak.proto\";"
+            "message Legacy [message_set_wire_format]"
+            "option allow_alias = true;")
+        require_contains(r13_decls_src_out "${r13_marker}"
+            "R13 U-31 the source print carries '${r13_marker}'")
+    endforeach()
+endif()
+
+# U-36: a redirected stdout is the documented way to produce a header, so its
+# bytes must equal the `--out-dir` publication of the same schema - LF only,
+# no CRLF. `execute_process(OUTPUT_FILE)` hands the child a real file handle,
+# so the Windows text-mode translation is what is measured; the CR check is
+# Windows-only because only that CRT translates.
+set(r13_lf "${WORK_DIR}/r13-lf")
+file(MAKE_DIRECTORY "${r13_lf}")
+execute_process(
+    COMMAND ${CODEGEN} --descriptor-set "${single}"
+    RESULT_VARIABLE r13_lf_result
+    OUTPUT_FILE "${r13_lf}/stdout.pb.hpp"
+    ERROR_VARIABLE r13_lf_err)
+if(NOT r13_lf_result EQUAL 0)
+    message(FATAL_ERROR
+        "R13 U-36 redirected stdout failed (${r13_lf_result}): ${r13_lf_err}")
+endif()
+file(READ "${r13_lf}/stdout.pb.hpp" r13_lf_text)
+if(WIN32)
+    string(FIND "${r13_lf_text}" "\r" r13_lf_cr)
+    if(NOT r13_lf_cr EQUAL -1)
+        message(FATAL_ERROR
+            "R13 U-36 redirected stdout carries a CR byte at ${r13_lf_cr}")
+    endif()
+endif()
+run_ok(r13_lf_publish_out r13_lf_publish_err
+    ${CODEGEN} --descriptor-set "${single}" --out-dir "${r13_lf}/out")
+require_empty(r13_lf_publish_out "R13 U-36 publication stdout")
+file(READ "${r13_lf}/out/integration-proto2.pb.hpp" r13_lf_published)
+if(NOT r13_lf_text STREQUAL r13_lf_published)
+    message(FATAL_ERROR
+        "R13 U-36 redirected stdout and --out-dir bytes differ")
 endif()
