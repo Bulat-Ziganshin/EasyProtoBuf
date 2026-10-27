@@ -1,0 +1,17 @@
+//
+// U-02: `package easypb;` and a type that carries a runtime type's name.
+//
+// The package itself is allowed (owner decision #1): `namespace easypb` is
+// open, so the generated declarations merge with the runtime header instead of
+// redeclaring it. `Encoder` is not: the emitted `struct Encoder` redefines
+// `easypb::Encoder` and the header does not compile. Each runtime type has its
+// own fixture, so the whole list the decision names is covered.
+
+syntax = "proto3";
+
+package easypb;
+
+message Encoder
+{
+    int32 value = 1;
+}

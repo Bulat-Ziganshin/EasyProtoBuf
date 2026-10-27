@@ -33,6 +33,8 @@
 #include "keyword-nested.pb.hpp"
 #include "namespace-packaged.default.pb.hpp"
 #include "nested-flag.no-has-fields.pb.hpp"
+#include "package-easypb-case.default.pb.hpp"
+#include "package-easypb.default.pb.hpp"
 
 namespace {
 
@@ -256,6 +258,27 @@ int main()
                    easypb::encode(flat)).x == 14 &&
                easypb::decode<insertionstem::A::B>(
                    easypb::encode(nested)).y == 15);
+    }
+
+    // U-02 controls: `package easypb;` is accepted (owner decision #1) as long
+    // as the declarations do not carry a runtime type's name. Both headers
+    // live in `namespace easypb` next to <easypb.hpp> and must compile and
+    // round-trip; `encoder` differs from `Encoder` by case alone, which is a
+    // different C++ name.
+    {
+        easypb::Config config;
+        config.value = 21;
+        const easypb::Config copy =
+            easypb::decode<easypb::Config>(easypb::encode(config));
+        report("easypb package control",
+               copy.value == 21 && copy.has_value);
+    }
+    {
+        easypb::encoder lower;
+        lower.value = 22;
+        const easypb::encoder copy =
+            easypb::decode<easypb::encoder>(easypb::encode(lower));
+        report("easypb package case", copy.value == 22 && copy.has_value);
     }
 
     if (failures != 0) {

@@ -1,0 +1,9 @@
+//
+// U-03: the alignment typedef of <cstddef>.
+
+syntax = "proto3";
+
+message max_align_t
+{
+    int32 value = 1;
+}

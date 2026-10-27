@@ -1,0 +1,19 @@
+//
+// U-01: a nested enum named like the message that encloses it.
+//
+// Same rule as the nested message: the enum's C++ name is a member of the
+// enclosing struct, so `enum Outer` inside `struct Outer` is ill-formed even
+// though the reference compiler accepts the schema and spells the enum
+// `Outer_Outer`.
+
+syntax = "proto3";
+
+message Outer
+{
+    enum Outer
+    {
+        ZERO = 0;
+    }
+
+    int32 other = 1;
+}

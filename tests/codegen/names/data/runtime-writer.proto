@@ -1,0 +1,11 @@
+//
+// U-02: `package easypb;` and a type named after the runtime writer.
+
+syntax = "proto3";
+
+package easypb;
+
+message Writer
+{
+    int32 value = 1;
+}

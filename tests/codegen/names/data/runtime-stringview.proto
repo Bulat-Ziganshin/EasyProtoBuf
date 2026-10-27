@@ -1,0 +1,11 @@
+//
+// U-02: `package easypb;` and a type named after the runtime string view.
+
+syntax = "proto3";
+
+package easypb;
+
+message string_view
+{
+    int32 value = 1;
+}

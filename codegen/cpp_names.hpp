@@ -1,6 +1,7 @@
 #ifndef EASYPB_CODEGEN_CPP_NAMES_HPP_INCLUDED
 #define EASYPB_CODEGEN_CPP_NAMES_HPP_INCLUDED
 
+#include <set>
 #include <string>
 
 #include "descriptor.pb.hpp"
@@ -36,6 +37,19 @@ std::string insertion_macro_stem(const std::string& absolute_proto_name,
 // Validate that every Protobuf package component can be emitted verbatim as a
 // C++ namespace name. The empty package is valid and means global namespace.
 void validate_cpp_package(const std::string& package);
+
+// The global names the generated header's own preamble puts into the global
+// namespace. FILE_TEMPLATE includes <cstdint> directly and <easypb.hpp>, whose
+// includes name <cstdint> and <cstddef> (include/easypb.hpp:13-14), so the C
+// typedefs of those two headers are visible to every generated header. A
+// declaration or a first package component with one of these names is spelled
+// next to a typedef the header itself uses: `struct int32_t` and `namespace
+// int32_t` are both ill-formed (`using typedef-name 'int32_t' after 'struct'`),
+// so the name is an occupant of the file scope and a refused package
+// component. The list is the family the preamble provides, enumerated by the
+// header that declares it, not the handful of names a bug report happened to
+// try.
+const std::set<std::string>& cpp_global_names();
 
 } // namespace easypb_codegen
 

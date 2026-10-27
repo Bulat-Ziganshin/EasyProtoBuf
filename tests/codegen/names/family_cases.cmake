@@ -3,9 +3,10 @@
 # CR-03, CR-04 and CR-09 are one rule: the C++ scope check has to enumerate the
 # occupants a generated scope will hold, not the instances the Protobuf names
 # happen to spell. The lists below are the family: every occupant kind (field,
-# presence flag, nested type, enumerator, generated codec, runtime namespace)
-# crossed with the collision pairs that can exist between them, both syntaxes
-# and the three options that remove an occupant.
+# presence flag, nested type, enumerator, generated codec, runtime namespace,
+# the enclosing class's own name, runtime type, global typedef) crossed with the
+# collision pairs that can exist between them, both syntaxes and the options
+# that remove an occupant.
 #
 # THIS FILE IS SHARED. `tests/CMakeLists.txt` includes it at configure time to
 # generate one compiled header per accepted variant; `test_names.cmake`
@@ -49,6 +50,12 @@ set(codegen_names_accept_variants
     # CR-09 control: the two runtime names are legal inside a package, every
     # runtime reference in the header is absolute, and the header compiles.
     "namespace-packaged|default|-"
+    # U-02 controls: `package easypb;` itself is allowed (owner decision #1).
+    # The declarations carry no runtime name, so the header compiles next to
+    # <easypb.hpp>; `encoder` differs from `Encoder` by case alone, and C++ is
+    # case-sensitive, so it is not a collision either.
+    "package-easypb|default|-"
+    "package-easypb-case|default|-"
     # CR-44 is accepted: both messages are generated and share one insertion
     # stem. The artifact is asserted by
     # `codegen.names.insertion_stem_collision`; this entry only compiles it.
@@ -74,6 +81,31 @@ set(codegen_names_always_refused
     "namespace-easypb|message 'easypb'>runtime namespace 'easypb'"
     "namespace-std|message 'std'>standard library namespace 'std'"
     "namespace-enum-easypb|enum 'easypb'>runtime namespace 'easypb'"
+    # U-01: the class's own name is an occupant of its scope. A nested message,
+    # a nested enum or an enumerator that carries it is ill-formed in C++
+    # ("'Outer::Outer' has the same name as the class in which it is
+    # declared"); the reference compiler accepts all three schemas and renames
+    # the declaration to `Outer_Outer`.
+    "same-name-message|the message 'Outer'>nested message 'Outer'"
+    "same-name-enum|the message 'Outer'>nested enum 'Outer'"
+    "same-name-enum-value|the message 'Outer'>enum value 'Outer'"
+    # U-02: with `package easypb;` the file scope IS the runtime namespace, so
+    # every runtime type the decision names is an occupant. Each name has its
+    # own fixture, and no generation option removes a runtime declaration.
+    "runtime-encoder|message 'Encoder'>runtime type 'Encoder'"
+    "runtime-decoder|message 'Decoder'>runtime type 'Decoder'"
+    "runtime-writer|message 'Writer'>runtime type 'Writer'"
+    "runtime-reader|message 'Reader'>runtime type 'Reader'"
+    "runtime-wiretype|message 'WireType'>runtime type 'WireType'"
+    "runtime-pbtype|message 'PBType'>runtime type 'PBType'"
+    "runtime-stringview|message 'string_view'>runtime type 'string_view'"
+    # U-03: the global typedefs the preamble declares are occupants of the
+    # global namespace: the header spells every scalar type absolutely, so
+    # `struct int32_t` redefines a typedef it uses.
+    "global-int32|message 'int32_t'>global typedef 'int32_t'"
+    "global-uint64|message 'uint64_t'>global typedef 'uint64_t'"
+    "global-size-t|message 'size_t'>global typedef 'size_t'"
+    "global-max-align-t|message 'max_align_t'>global typedef 'max_align_t'"
     # CR-10: a descriptor-origin name that is not a C++ identifier is refused
     # rather than emitted; the two needles are the rule and the offending name.
     "digit-field|not a valid C++ identifier>0Zc"

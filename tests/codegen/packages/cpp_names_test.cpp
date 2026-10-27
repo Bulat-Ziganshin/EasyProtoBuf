@@ -51,6 +51,7 @@ bool rejects_absolute_name(const std::string& name)
 int main()
 {
     using easypb_codegen::cpp_absolute_name;
+    using easypb_codegen::cpp_global_names;
     using easypb_codegen::cpp_identifier;
     using easypb_codegen::cpp_local_name;
     using easypb_codegen::insertion_macro_stem;
@@ -119,6 +120,17 @@ int main()
     validate_cpp_package("foo_bar.baz2");
     validate_cpp_package("app.module");
     validate_cpp_package("app.import");
+    // U-02 (owner decision #1, variant A): `package easypb;` is allowed. The
+    // runtime names are occupants of that file scope, not a reason to refuse
+    // the namespace itself.
+    validate_cpp_package("easypb");
+    validate_cpp_package("easypb.sub");
+    // U-03: only the FIRST component is spelled in the global namespace, where
+    // the preamble's typedefs live. A later component is nested and may shadow
+    // them without a redefinition (`tests/codegen/packages/data/shadow.proto`
+    // declares `message int32_t` in `package app.std.easypb`).
+    validate_cpp_package("foo.int32_t");
+    validate_cpp_package("foo.size_t.bar");
 
     CHECK(rejects_package("std"));
     CHECK(rejects_package("std.foo"));
@@ -130,6 +142,31 @@ int main()
     // namespace named after one of them does not compile either.
     CHECK(rejects_package("NULL"));
     CHECK(rejects_package("foo.assert"));
+    // U-03: the first package component is a namespace in the global
+    // namespace, next to the typedefs the generated preamble declares.
+    CHECK(rejects_package("int32_t"));
+    CHECK(rejects_package("uint64_t"));
+    CHECK(rejects_package("size_t"));
+    CHECK(rejects_package("max_align_t"));
+    CHECK(rejects_package("intptr_t.app"));
+
+    // U-03: the list is the family the preamble provides, not the five names a
+    // bug report happened to try: both <cstdint> groups and the <cstddef>
+    // typedefs are occupants of the global namespace.
+    CHECK(cpp_global_names().count("int8_t") == 1);
+    CHECK(cpp_global_names().count("int32_t") == 1);
+    CHECK(cpp_global_names().count("uint64_t") == 1);
+    CHECK(cpp_global_names().count("int_least16_t") == 1);
+    CHECK(cpp_global_names().count("uint_fast64_t") == 1);
+    CHECK(cpp_global_names().count("intmax_t") == 1);
+    CHECK(cpp_global_names().count("size_t") == 1);
+    CHECK(cpp_global_names().count("ptrdiff_t") == 1);
+    CHECK(cpp_global_names().count("max_align_t") == 1);
+    // A name the preamble does not provide, and a runtime type (which lives in
+    // namespace easypb, not in the global namespace), stay out of the list.
+    CHECK(cpp_global_names().count("wxWidget") == 0);
+    CHECK(cpp_global_names().count("Encoder") == 0);
+    CHECK(cpp_global_names().count("std") == 0);
 
     return EXIT_SUCCESS;
 }

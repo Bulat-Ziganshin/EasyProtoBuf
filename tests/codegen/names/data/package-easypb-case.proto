@@ -1,0 +1,15 @@
+//
+// U-02 accepted control: the comparison is exact, so case alone is no
+// collision.
+//
+// `encoder` and `Encoder` are two different C++ names; C++ is case-sensitive,
+// so the runtime type is not redefined and the header compiles.
+
+syntax = "proto3";
+
+package easypb;
+
+message encoder
+{
+    int32 value = 1;
+}

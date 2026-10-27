@@ -294,7 +294,8 @@ if(BUILD_TESTING)
         literals-escapes
         literals-lexemes
         literals-descriptor-octal
-        grammar-table)
+        grammar-table
+        scope-easypb)
 
     foreach(name ${codegen_validity_fixtures})
         add_custom_command(
@@ -336,7 +337,8 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/literals-escapes.pb.hpp
             ${codegen_validity_descriptor_dir}/literals-lexemes.pb.hpp
             ${codegen_validity_descriptor_dir}/literals-descriptor-octal.pb.hpp
-            ${codegen_validity_descriptor_dir}/grammar-table.pb.hpp)
+            ${codegen_validity_descriptor_dir}/grammar-table.pb.hpp
+            ${codegen_validity_descriptor_dir}/scope-easypb.pb.hpp)
 
     add_executable(codegen_validity_runtime_test
         ${codegen_validity_dir}/validity_runtime.cpp)
@@ -511,6 +513,8 @@ if(BUILD_TESTING)
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codegen-names
             -DRUNTIME=$<TARGET_FILE:codegen_names_runtime_test>
             -DGENERATED_DIR=${codegen_names_descriptor_dir}
+            -DREPO_DIR=${PROJECT_SOURCE_DIR}
+            -DDESCRIPTOR_ROOT=${codegen_custom_types_data_dir}/option-roots
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_names_dir}/test_names.cmake)
 

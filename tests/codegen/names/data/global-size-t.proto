@@ -1,0 +1,12 @@
+//
+// U-03: a name from <cstddef> rather than <cstdint>.
+//
+// The preamble reaches <cstddef> through <easypb.hpp>, so the list is not the
+// fixed-width integers alone.
+
+syntax = "proto3";
+
+message size_t
+{
+    int32 value = 1;
+}

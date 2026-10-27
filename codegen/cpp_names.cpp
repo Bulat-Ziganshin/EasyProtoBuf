@@ -258,6 +258,37 @@ std::string insertion_macro_stem(const std::string& absolute_proto_name,
     return result;
 }
 
+// The global typedefs the generated header's preamble makes visible.
+//
+// The list is grouped by the header that declares each group, and both headers
+// reach every generated file: FILE_TEMPLATE includes <cstdint>, and it includes
+// <easypb.hpp>, which includes <cstdint> and <cstddef> itself
+// (include/easypb.hpp:13-14). The names are the C names, not std:: ones,
+// because the emitter spells its scalar types absolutely (`::int32_t`), which
+// is also why a generated `int32_t` cannot coexist with them. Only the C names
+// are occupants: the `std::`-only spellings (`std::nullptr_t`, `std::byte`)
+// are not in the global namespace and stay legal.
+const std::set<std::string>& cpp_global_names()
+{
+    static const char* const values[] = {
+        // <cstdint>: exact-width integer typedefs.
+        "int8_t", "int16_t", "int32_t", "int64_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+        // <cstdint>: least-width and fast-width integer typedefs.
+        "int_least8_t", "int_least16_t", "int_least32_t", "int_least64_t",
+        "uint_least8_t", "uint_least16_t", "uint_least32_t", "uint_least64_t",
+        "int_fast8_t", "int_fast16_t", "int_fast32_t", "int_fast64_t",
+        "uint_fast8_t", "uint_fast16_t", "uint_fast32_t", "uint_fast64_t",
+        // <cstdint>: pointer-width and maximum-width integer typedefs.
+        "intptr_t", "uintptr_t", "intmax_t", "uintmax_t",
+        // <cstddef>: the size, offset and alignment typedefs.
+        "size_t", "ptrdiff_t", "max_align_t"
+    };
+    static const std::set<std::string> result(
+        values, values + sizeof(values) / sizeof(values[0]));
+    return result;
+}
+
 void validate_cpp_package(const std::string& package)
 {
     if (package.empty()) return;
@@ -291,6 +322,16 @@ void validate_cpp_package(const std::string& package)
         if (i == 0 && component == "std") {
             throw std::runtime_error(
                 "Protobuf package cannot generate the global C++ namespace 'std'");
+        }
+        // The first component is the namespace the file's declarations open,
+        // so it is spelled in the global namespace - where the preamble's own
+        // typedefs live. A later component is nested and may shadow them
+        // without a redefinition (`namespace foo { namespace int32_t { ... } }`
+        // is legal), so only the first one is refused.
+        if (i == 0 && cpp_global_names().count(component) != 0) {
+            throw std::runtime_error(
+                "Protobuf package component '" + component +
+                "' is a global C++ typedef the generated header uses");
         }
     }
 }

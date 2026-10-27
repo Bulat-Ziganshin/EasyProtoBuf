@@ -1,0 +1,15 @@
+//
+// U-03: a top-level message named like a global typedef of the preamble.
+//
+// The generated header includes <cstdint> and spells every scalar type
+// absolutely (`::int32_t`), so `struct int32_t` in the global namespace is a
+// redefinition of the typedef the header itself uses: g++ reports "using
+// typedef-name 'int32_t' after 'struct'". The reference compiler accepts the
+// schema.
+
+syntax = "proto3";
+
+message int32_t
+{
+    int32 value = 1;
+}

@@ -43,6 +43,7 @@
 #include "packages-deep-101.pb.hpp"
 #include "plus-controls.pb.hpp"
 #include "plus-descriptor-controls.pb.hpp"
+#include "scope-easypb.pb.hpp"
 
 // W-38's accepted boundary: the 101-component package compiles and its
 // message can be named.
@@ -281,6 +282,16 @@ int main()
         deep_package::DeepPackage101 deep;
         deep.value = 1;
         report("deep package", deep.value == 1);
+    }
+    // U-02: `package easypb;` is accepted and lands in the runtime namespace.
+    // The type is generated and compiles beside <easypb.hpp>; the value travels
+    // under the field number the schema gives it.
+    {
+        easypb::ValidityConfig value;
+        value.value = 17;
+        const easypb::ValidityConfig copy =
+            easypb::decode<easypb::ValidityConfig>(easypb::encode(value));
+        report("easypb package", copy.value == 17 && copy.has_value);
     }
 
     // The special floating-point defaults.

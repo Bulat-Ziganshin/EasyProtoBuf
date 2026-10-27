@@ -4,11 +4,14 @@ One lane for the two rows of the plan-5 follow-up's session S2: `W-08` (a
 C++ keyword in a declaration name) and `W-09` (a presence flag that collides
 with a member of the same message), for the post-closure review of
 2026-10-22 that found both rules incomplete (`PC-01`: a nested type collides
-with a presence flag as well; `PC-02`: the escape rule is not injective), and
-for step B6 of the verification stage, which turned the rule into an
+with a presence flag as well; `PC-02`: the escape rule is not injective), for
+step B6 of the verification stage, which turned the rule into an
 **occupant enumeration** (`CR-03` enumerators, `CR-04` codec names, `CR-09`
 runtime namespaces, `CR-10` non-identifier names, `CR-43` the local-name
-helper; `CR-44` stays accepted).
+helper; `CR-44` stays accepted), and for the review of 2026-10-27, which added
+the occupants that were still missing: the class's own name (`U-01`), the
+runtime types under `package easypb;` (`U-02`) and the global typedefs of the
+generated preamble (`U-03`).
 
 Every row is a counter-example against `protoc` 30.1, and the lane proves the
 fix in the three ways the session's brief names.
@@ -43,10 +46,10 @@ C++ name.
 
 `family_cases.cmake` is the family as data, shared by the build and the
 driver. It crosses the occupant kinds of a C++ scope — field, presence flag,
-nested type, enumerator, generated codec, runtime namespace — with the
-collision pairs that can exist between them, both syntaxes and the three
-options that remove an occupant (`--no-has-fields`, `--no-encoder`,
-`--no-decoder`).
+nested type, enumerator, generated codec, runtime namespace, the enclosing
+class's own name, runtime type, global typedef — with the collision pairs that
+can exist between them, both syntaxes and the three options that remove an
+occupant (`--no-has-fields`, `--no-encoder`, `--no-decoder`).
 
 - An **accepted** case must exit 0, leave stderr empty, emit a header, and
   produce the same bytes from the `.proto` and the `.pbs`. The build
@@ -93,6 +96,10 @@ says which decision to re-evaluate.
 | top-level types named `easypb` / `std`, and an enum named `easypb` | `data/namespace-easypb.proto`, `namespace-std.proto`, `namespace-enum-easypb.proto` / `.pbs` | `CR-09` |
 | the same two names inside a package (accepted control) | `data/namespace-packaged.proto` / `.pbs` | `CR-09` |
 | a descriptor-origin field / enumerator / message / enum name that starts with a digit | `data/digit-{field,value,message,enum}.txtpb` / `.pbs` | `CR-10` |
+| a nested message / nested enum / enumerator named like its message | `data/same-name-message.proto`, `same-name-enum.proto`, `same-name-enum-value.proto` / `.pbs` | `U-01` |
+| `package easypb;` with a type named after each runtime type (`Encoder`, `Decoder`, `Writer`, `Reader`, `WireType`, `PBType`, `string_view`) | `data/runtime-{encoder,decoder,writer,reader,wiretype,pbtype,stringview}.proto` / `.pbs` | `U-02` |
+| `package easypb;` with a non-colliding type, and one whose name differs by case (accepted controls) | `data/package-easypb.proto`, `package-easypb-case.proto` / `.pbs` | `U-02` |
+| a top-level `int32_t` / `uint64_t` / `size_t` / `max_align_t` message | `data/global-{int32,uint64,size-t,max-align-t}.proto` / `.pbs` | `U-03` |
 | `A_B` next to `A::B` (accepted) | `data/insertion-stem-collision.proto` / `.pbs` | `CR-44` |
 
 Every fixture exists twice: as `.proto` source text and as the `.pbs`
@@ -106,7 +113,8 @@ schema outright ("Enum name class_ has the same name as class if you ignore
 case and strip out the enum name prefix"), so protoc cannot produce it either.
 Those five `.pbs` files are encoded from the `.txtpb` beside each one with
 `protoc --encode`. Every other `.pbs` is protoc's own encoding of the
-`.proto` beside it.
+`.proto` beside it - including the `U-01`, `U-02` and `U-03` rows, whose
+schemas the reference compiler accepts.
 
 ## Rebuilding the fixtures
 
@@ -134,3 +142,11 @@ Running the lane never needs `protoc`: the `.pbs` files are committed.
 
 The lane runs in every build profile: the full C++17 tree, the full C++11
 tree, the lite (parser-off) tree, and the legacy toolchains.
+
+The driver also accepts `REPO_DIR` and `DESCRIPTOR_ROOT`. With both, it runs
+the source path on the repository's own `codegen/easypb/options.proto` — the
+`package easypb;` control that owner decision #1 keeps compiling — using the
+same two roots the custom-types lane uses (the `codegen` directory that holds
+`easypb/options.proto`, and the test-only `google/protobuf/descriptor.proto`).
+The run succeeds with the one documented `extend` notice, which the driver
+asserts, plus a `namespace easypb` and a `CppFieldOptions` declaration.

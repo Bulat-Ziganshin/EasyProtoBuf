@@ -139,7 +139,8 @@ set(paired_fixtures
     leading-space-control
     literals-escapes
     literals-lexemes
-    grammar-table)
+    grammar-table
+    scope-easypb)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -814,3 +815,32 @@ run_fail(no_type_out no_type_err
     ${CODEGEN} --descriptor-set "${DATA_DIR}/default-no-type.pbs")
 require_empty(no_type_out "The no-type default stdout")
 require_contains(no_type_err "declares no type" "The no-type default refusal")
+
+# --- U-02/U-03: the file-scope name rules through both doors -----------------
+#
+# The names lane owns the rules; this block proves the two input paths reach
+# the SAME verdict and the SAME diagnostic, so neither frontend can lose or
+# rename the declaration on its way to the emitter. The accepted half
+# (`scope-easypb`) is in the paired loop above, which compares the headers byte
+# for byte and lets the build compile the descriptor-path one.
+run_fail(scope_desc_out scope_desc_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/scope-globals.pbs")
+require_empty(scope_desc_out "The global-typedef refusal stdout")
+require_contains(scope_desc_err "message 'int32_t'"
+    "U-03: the global-typedef refusal names the message")
+require_contains(scope_desc_err "global typedef 'int32_t'"
+    "U-03: the global-typedef refusal names the typedef")
+if(FULL_BUILD)
+    run_fail(scope_src_out scope_src_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/scope-globals.proto")
+    require_empty(scope_src_out "The global-typedef refusal stdout on the source path")
+    require_contains(scope_src_err "message 'int32_t'"
+        "U-03: the source-path refusal names the message")
+    require_contains(scope_src_err "global typedef 'int32_t'"
+        "U-03: the source-path refusal names the typedef")
+    if(NOT scope_src_err STREQUAL scope_desc_err)
+        message(FATAL_ERROR
+            "The two input paths disagree on the U-03 refusal:\n"
+            "  descriptor: ${scope_desc_err}\n  source:     ${scope_src_err}")
+    endif()
+endif()

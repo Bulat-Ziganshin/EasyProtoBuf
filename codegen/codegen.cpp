@@ -396,11 +396,29 @@ std::string cpp_type_as_str(const FieldDescriptorProto& field, const MapType* ma
 // not: the escape rule (cpp_identifier) gives a keyword a suffix, and a
 // second declaration may already own the suffixed name - `class` and
 // `class_` both become `class_`.
+//
+// `kind` is what the declaration is, for the diagnostic and for the one
+// asymmetry C++ has about a class's own name: a nested type or an enumerator
+// that carries it is ill-formed ("'Outer::Outer' has the same name as the
+// class in which it is declared"), while a non-static data member may carry it
+// because only a user-declared constructor would make that ill-formed
+// ([class.mem]/22) and a generated struct declares none.
+enum ScopeMemberKind
+{
+    SCOPE_MEMBER_FIELD,
+    SCOPE_MEMBER_PRESENCE_FLAG,
+    SCOPE_MEMBER_TYPE,             // a nested or top-level message or enum
+    SCOPE_MEMBER_ENUMERATOR,
+    SCOPE_MEMBER_CODEC,
+    SCOPE_MEMBER_ENCLOSING_TYPE,   // the struct's own name
+    SCOPE_MEMBER_GLOBAL_NAME       // a runtime type or a preamble typedef
+};
+
 struct ScopeMember
 {
     std::string cpp_name;      // the name the header spells
     std::string description;   // what the declaration is, for the diagnostic
-    bool presence_flag;        // the member is a presence flag
+    ScopeMemberKind kind;
 };
 
 
@@ -410,6 +428,26 @@ std::string member_description(const std::string& kind,
                                const std::string& name)
 {
     return myformat("{0} '{1}'", kind, name);
+}
+
+
+// Would declaring both members in one C++ scope fail to compile?
+//
+// Only one pair is legal: the struct's own name next to a field or a presence
+// flag of that name (see ScopeMemberKind). Every other pair is a
+// redeclaration.
+bool cpp_declarations_conflict(const ScopeMember& first,
+                               const ScopeMember& second)
+{
+    if (first.kind == SCOPE_MEMBER_ENCLOSING_TYPE ||
+        second.kind == SCOPE_MEMBER_ENCLOSING_TYPE) {
+        const ScopeMemberKind other =
+            first.kind == SCOPE_MEMBER_ENCLOSING_TYPE ? second.kind
+                                                      : first.kind;
+        return other == SCOPE_MEMBER_TYPE ||
+               other == SCOPE_MEMBER_ENUMERATOR;
+    }
+    return true;
 }
 
 
@@ -430,14 +468,19 @@ void refuse_duplicate_cpp_names(const std::vector<ScopeMember>& members,
     for (std::size_t i = 0; i < members.size(); ++i) {
         const std::map<std::string, ScopeMember>::const_iterator found =
             seen.find(members[i].cpp_name);
-        if (found != seen.end()) {
+        if (found != seen.end() &&
+            cpp_declarations_conflict(found->second, members[i])) {
             // The presence flag keeps the wording session S2 established for
             // it: the diagnostic names the field and the flag it collides
             // with, which is more precise than the generic one.
-            if (found->second.presence_flag || members[i].presence_flag) {
-                const ScopeMember& flag = found->second.presence_flag
+            const bool first_is_flag =
+                found->second.kind == SCOPE_MEMBER_PRESENCE_FLAG;
+            const bool second_is_flag =
+                members[i].kind == SCOPE_MEMBER_PRESENCE_FLAG;
+            if (first_is_flag || second_is_flag) {
+                const ScopeMember& flag = first_is_flag
                     ? found->second : members[i];
-                const ScopeMember& other = found->second.presence_flag
+                const ScopeMember& other = first_is_flag
                     ? members[i] : found->second;
                 throw std::runtime_error(
                     myformat("The {0} of {1} collides with the {2}: both "
@@ -451,7 +494,9 @@ void refuse_duplicate_cpp_names(const std::vector<ScopeMember>& members,
                          scope, found->second.description,
                          members[i].description, members[i].cpp_name));
         }
-        seen.insert(std::make_pair(members[i].cpp_name, members[i]));
+        if (found == seen.end()) {
+            seen.insert(std::make_pair(members[i].cpp_name, members[i]));
+        }
     }
 }
 
@@ -469,7 +514,7 @@ void check_enum_value_names(const EnumDescriptorProto& enum_type)
             view_text(value.name));
         member.description = member_description("enum value",
                                                 view_text(value.name));
-        member.presence_flag = false;
+        member.kind = SCOPE_MEMBER_ENUMERATOR;
         members.push_back(member);
     }
     if (members.empty()) return;
@@ -1388,11 +1433,12 @@ std::vector<MessageInfo*> dependency_safe_order(std::vector<MessageInfo>& messag
 
 // The members of one message's struct.
 //
-// The struct holds five kinds of declaration, and all five live in the same
+// The struct holds six kinds of declaration, and all six live in the same
 // C++ scope: the fields, the presence flags, the nested enums, the
-// enumerators of those enums and the nested messages. (The free codec
-// functions spell the same names, but they live at file scope.) Two of them
-// can ask for the same name even when the Protobuf names are all different:
+// enumerators of those enums, the nested messages and the struct's own name.
+// (The free codec functions spell the same names, but they live at file
+// scope.) Two of them can ask for the same name even when the Protobuf names
+// are all different:
 //
 //   - the presence flag of a field is named after the field, so the field
 //     `foo` wants the flag `has_foo` and the field `has_foo` wants the
@@ -1404,7 +1450,13 @@ std::vector<MessageInfo*> dependency_safe_order(std::vector<MessageInfo>& messag
 //     the field `foo` and of its presence flag (CR-03);
 //   - the escape rule is not injective, so the fields `class` and `class_`
 //     both want the member `class_`, and so do the values `class` and
-//     `class_` of two different nested enums.
+//     `class_` of two different nested enums;
+//   - the class's own name is a declaration of its own scope (U-01): C++
+//     refuses a nested type or an enumerator that carries it ("'Outer::Outer'
+//     has the same name as the class in which it is declared") although the
+//     reference compiler accepts `message Outer { message Outer { ... } }`
+//     and renames it to `Outer_Outer`. A field or a presence flag of that
+//     name is legal C++ and stays accepted (cpp_declarations_conflict).
 //
 // The reference compiler accepts the first two shapes. In proto3 a scalar
 // field has no presence accessor, so nothing collides there; in proto2 it
@@ -1422,12 +1474,19 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
                                                 const GenerationContext& context)
 {
     std::vector<ScopeMember> members;
+    // The struct's own name comes first, so a diagnostic names the class
+    // before the declaration that collides with it.
+    ScopeMember enclosing;
+    enclosing.cpp_name = info.cpp_name;
+    enclosing.description = member_description("message", info.simple_name);
+    enclosing.kind = SCOPE_MEMBER_ENCLOSING_TYPE;
+    members.push_back(enclosing);
     for (const auto& field: info.descriptor->field) {
         ScopeMember member;
         member.cpp_name = field_member_name(field);
         member.description = member_description("field",
                                                 view_text(field.name));
-        member.presence_flag = false;
+        member.kind = SCOPE_MEMBER_FIELD;
         members.push_back(member);
     }
     for (const auto& field: info.descriptor->field) {
@@ -1437,7 +1496,7 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
         member.description =
             myformat("presence flag of the field '{0}'",
                      view_text(field.name));
-        member.presence_flag = true;
+        member.kind = SCOPE_MEMBER_PRESENCE_FLAG;
         members.push_back(member);
     }
     for (const auto& enum_type: info.descriptor->enum_type) {
@@ -1446,7 +1505,7 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
             view_text(enum_type.name));
         member.description = member_description("nested enum",
                                                 view_text(enum_type.name));
-        member.presence_flag = false;
+        member.kind = SCOPE_MEMBER_TYPE;
         members.push_back(member);
         // An unscoped enum's enumerators belong to the scope that declares
         // the enum, not to the enum: `M::E::has_foo` and `M::has_foo` are
@@ -1457,7 +1516,7 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
                 view_text(value.name));
             enumerator.description = member_description(
                 "enum value", view_text(value.name));
-            enumerator.presence_flag = false;
+            enumerator.kind = SCOPE_MEMBER_ENUMERATOR;
             members.push_back(enumerator);
         }
     }
@@ -1466,19 +1525,35 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
         member.cpp_name = info.children[i].cpp_name;
         member.description = member_description("nested message",
                                                 info.children[i].simple_name);
-        member.presence_flag = false;
+        member.kind = SCOPE_MEMBER_TYPE;
         members.push_back(member);
     }
     return members;
 }
 
 
+// The runtime types `include/easypb.hpp` declares in `namespace easypb`.
+//
+// Owner decision #1 (DECISIONS.md) allows `package easypb;` and treats these
+// names as occupants of the file scope: with that package the generated
+// namespace IS the runtime namespace, so `message Encoder` redefines
+// `easypb::Encoder` and the header does not compile. The list is the seven
+// types the decision names, in declaration order of the runtime header.
+const char* const EASYPB_RUNTIME_TYPES[] = {
+    "Encoder", "Decoder", "Writer", "Reader", "WireType", "PBType",
+    "string_view"
+};
+
+
 // The declarations of one file's scope.
 //
 // A file's scope holds the top-level messages, the top-level enums, the
-// enumerators of those enums, the two free codec overloads and - in an
-// un-packaged schema - the two runtime namespaces every header references.
-// A nested declaration belongs to the scope of its own parent.
+// enumerators of those enums, the two free codec overloads and the names the
+// generated preamble already owns: in an un-packaged schema the two runtime
+// namespaces every header references (CR-09) and the global typedefs of
+// <cstdint> and <cstddef> (U-03), and with `package easypb;` the runtime types
+// themselves (U-02). A nested declaration belongs to the scope of its own
+// parent.
 //
 // The codec functions are emitted only when their option is on (CR-04), and
 // the runtime namespaces are global names only when the package is empty
@@ -1495,7 +1570,7 @@ void check_file_scope_names(const FileDescriptorProto& file,
             view_text(enum_type.name));
         member.description = member_description("enum",
                                                 view_text(enum_type.name));
-        member.presence_flag = false;
+        member.kind = SCOPE_MEMBER_TYPE;
         members.push_back(member);
         for (const auto& value: enum_type.value) {
             ScopeMember enumerator;
@@ -1503,7 +1578,7 @@ void check_file_scope_names(const FileDescriptorProto& file,
                 view_text(value.name));
             enumerator.description = member_description(
                 "enum value", view_text(value.name));
-            enumerator.presence_flag = false;
+            enumerator.kind = SCOPE_MEMBER_ENUMERATOR;
             members.push_back(enumerator);
         }
     }
@@ -1512,7 +1587,7 @@ void check_file_scope_names(const FileDescriptorProto& file,
         member.cpp_name = roots[i].cpp_name;
         member.description = member_description("message",
                                                 roots[i].simple_name);
-        member.presence_flag = false;
+        member.kind = SCOPE_MEMBER_TYPE;
         members.push_back(member);
     }
     if (! context.options.no_encoder) {
@@ -1520,7 +1595,7 @@ void check_file_scope_names(const FileDescriptorProto& file,
         member.cpp_name = "encode";
         member.description = member_description("generated encoder function",
                                                 "encode");
-        member.presence_flag = false;
+        member.kind = SCOPE_MEMBER_CODEC;
         members.push_back(member);
     }
     if (! context.options.no_decoder) {
@@ -1528,7 +1603,7 @@ void check_file_scope_names(const FileDescriptorProto& file,
         member.cpp_name = "decode";
         member.description = member_description("generated decoder function",
                                                 "decode");
-        member.presence_flag = false;
+        member.kind = SCOPE_MEMBER_CODEC;
         members.push_back(member);
     }
     if (context.package.empty()) {
@@ -1536,16 +1611,50 @@ void check_file_scope_names(const FileDescriptorProto& file,
         easypb.cpp_name = "easypb";
         easypb.description =
             member_description("runtime namespace", "easypb");
-        easypb.presence_flag = false;
+        easypb.kind = SCOPE_MEMBER_GLOBAL_NAME;
         members.push_back(easypb);
         ScopeMember std_namespace;
         std_namespace.cpp_name = "std";
         std_namespace.description =
             member_description("standard library namespace", "std");
-        std_namespace.presence_flag = false;
+        std_namespace.kind = SCOPE_MEMBER_GLOBAL_NAME;
         members.push_back(std_namespace);
+        // U-03: the global typedefs the header's own preamble declares. The
+        // emitter spells every scalar type absolutely (`::int32_t`), so a
+        // declaration in the GLOBAL namespace that owns one of these names is
+        // a redefinition of a typedef the header itself uses. Inside a package
+        // the same name is legal and is not shadowed - the qualified spelling
+        // is why `tests/codegen/packages/data/shadow.proto` declares
+        // `message int32_t` in `package app.std.easypb` and stays accepted -
+        // so the occupancy is the same "no package" case as the namespaces
+        // above.
+        const std::set<std::string>& global_names =
+            easypb_codegen::cpp_global_names();
+        for (std::set<std::string>::const_iterator it = global_names.begin();
+             it != global_names.end(); ++it) {
+            ScopeMember member;
+            member.cpp_name = *it;
+            member.description = member_description("global typedef", *it);
+            member.kind = SCOPE_MEMBER_GLOBAL_NAME;
+            members.push_back(member);
+        }
     }
-    if (members.empty()) return;
+    if (context.package == "easypb") {
+        // U-02: the file's declarations open `namespace easypb`, the one the
+        // runtime header already declares its types in. The package itself is
+        // allowed (owner decision #1); a type that carries one of those names
+        // is refused, naming both occupants.
+        for (std::size_t i = 0;
+             i < sizeof(EASYPB_RUNTIME_TYPES) / sizeof(EASYPB_RUNTIME_TYPES[0]);
+             ++i) {
+            ScopeMember member;
+            member.cpp_name = EASYPB_RUNTIME_TYPES[i];
+            member.description = member_description("runtime type",
+                                                    EASYPB_RUNTIME_TYPES[i]);
+            member.kind = SCOPE_MEMBER_GLOBAL_NAME;
+            members.push_back(member);
+        }
+    }
     refuse_duplicate_cpp_names(members, "the file scope");
 }
 

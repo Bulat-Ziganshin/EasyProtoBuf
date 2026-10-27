@@ -1,0 +1,19 @@
+//
+// U-01: an enumerator named like the message that encloses it.
+//
+// An unscoped enum's values are members of the struct that declares the enum,
+// so `Outer = 0` inside the message `Outer` is a declaration of `Outer::Outer`
+// - the same shape as a nested type of that name, and one the reference
+// compiler accepts because its own enumerators live inside the enum's scope.
+
+syntax = "proto3";
+
+message Outer
+{
+    enum Kind
+    {
+        Outer = 0;
+    }
+
+    int32 other = 1;
+}

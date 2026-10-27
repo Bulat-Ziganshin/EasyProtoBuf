@@ -6,6 +6,10 @@ of session S7a (`W-04`, `W-06`, `W-07`, `W-15`, `W-38`, `W-39`, `W-40`,
 `W-41`, `W-42`, `W-43`). Every row is a counter-example against `protoc` 30.1,
 and the lane proves the fix in the three ways the session briefs name.
 
+The review of 2026-10-27 added two rows of the file-scope name rules
+(`U-02`/`U-03`): the names lane owns the rule, and this lane proves the two
+input paths reach the same verdict and the same diagnostic for it.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -88,6 +92,8 @@ and the lane proves the fix in the three ways the session briefs name.
 | `allow_alias = false` with a shared number (refused) | `.proto` + crafted `.pbs` | `CR-26` |
 | `json_name` on an enum value (refused) | `.proto` only | `CR-27` |
 | a leading `+` on ordinary options (refused) | `.proto` only | `CR-28` |
+| `package easypb;` with a non-colliding type (accepted) | `.proto` + `.pbs` | `U-02` |
+| a global-namespace `message int32_t` (refused on both paths) | `.proto` + `.pbs` | `U-03` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted

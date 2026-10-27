@@ -1,0 +1,9 @@
+//
+// U-03: the 64-bit member of the same family.
+
+syntax = "proto3";
+
+message uint64_t
+{
+    int32 value = 1;
+}

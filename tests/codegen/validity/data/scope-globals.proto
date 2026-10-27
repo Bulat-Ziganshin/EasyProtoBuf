@@ -1,0 +1,14 @@
+//
+// U-03 through both doors: a global-namespace declaration named like a typedef
+// the generated preamble declares.
+//
+// The names lane owns the rule; this lane proves the two input paths refuse it
+// with the same verdict and the same diagnostic, so neither frontend can lose
+// the name on its way to the emitter.
+
+syntax = "proto3";
+
+message int32_t
+{
+    int32 value = 1;
+}

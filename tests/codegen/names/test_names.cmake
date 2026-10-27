@@ -34,6 +34,13 @@
 #   RUNTIME       the built runtime checker
 #   GENERATED_DIR the descriptor-path headers the build generated and compiled
 #   FULL_BUILD    1 when the proto parser is available
+#
+# Optional arguments:
+#   REPO_DIR        the checkout root; with it and DESCRIPTOR_ROOT the lane
+#                   compiles the repository's own `package easypb;` schema
+#                   (`codegen/easypb/options.proto`) on the source path
+#   DESCRIPTOR_ROOT the directory holding `google/protobuf/descriptor.proto`
+#                   that `codegen/easypb/options.proto` imports
 
 foreach(required_var CODEGEN DATA_DIR WORK_DIR RUNTIME GENERATED_DIR)
     if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
@@ -237,3 +244,26 @@ foreach(entry ${codegen_names_refusal_cases})
         endforeach()
     endif()
 endforeach()
+
+# --- U-02: the repository's own `package easypb;` schema ---------------------
+#
+# Owner decision #1 allows `package easypb;` and refuses only a declaration
+# that carries a runtime type's name. The control is the repository's own
+# `codegen/easypb/options.proto`: it declares `package easypb;` and
+# `CppFieldOptions`, so it must keep compiling. Its imports are the roots the
+# custom-types lane already uses (the `easypb` package directory and the
+# test-only `google/protobuf/descriptor.proto`).
+if(FULL_BUILD AND DEFINED REPO_DIR AND DEFINED DESCRIPTOR_ROOT)
+    run_ok(options_out options_err
+        ${CODEGEN} -I "${REPO_DIR}/codegen" -I "${DESCRIPTOR_ROOT}"
+        "${REPO_DIR}/codegen/easypb/options.proto")
+    # The only diagnostic is the documented `extend` notice: the file's
+    # extension is parsed and validated but not stored in the trimmed
+    # descriptor model, so it cannot reach the emitter as a declaration.
+    require_contains(options_err "extend declaration parsed but not stored"
+        "The repository's options.proto extend notice")
+    require_contains(options_out "namespace easypb {"
+        "The repository's options.proto package namespace")
+    require_contains(options_out "struct CppFieldOptions"
+        "The repository's options.proto declaration")
+endif()

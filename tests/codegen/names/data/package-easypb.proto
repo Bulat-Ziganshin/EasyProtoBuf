@@ -1,0 +1,16 @@
+//
+// U-02 accepted control: `package easypb;` itself is allowed.
+//
+// Owner decision #1 keeps the package and refuses only a declaration that
+// carries a runtime type's name. `Config` carries none, so the header is
+// emitted, compiles next to <easypb.hpp>, and must stay accepted under every
+// generation option.
+
+syntax = "proto3";
+
+package easypb;
+
+message Config
+{
+    int32 value = 1;
+}

@@ -1,0 +1,20 @@
+//
+// U-01: a nested message named like the message that encloses it.
+//
+// The reference compiler accepts the schema and renames the nested type to
+// `Outer_Outer`; this emitter spells the nested `struct Outer` inside
+// `struct Outer`, which C++ forbids ("'Outer::Outer' has the same name as the
+// class in which it is declared"). The class's own name is therefore an
+// occupant of its scope, not just the fields and the nested declarations.
+
+syntax = "proto3";
+
+message Outer
+{
+    message Outer
+    {
+        int32 value = 1;
+    }
+
+    int32 other = 1;
+}

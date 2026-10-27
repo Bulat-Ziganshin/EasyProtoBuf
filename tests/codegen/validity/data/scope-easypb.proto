@@ -1,0 +1,16 @@
+//
+// U-02 accepted through both doors: `package easypb;` with a declaration that
+// carries no runtime type's name.
+//
+// The names lane owns the rule; this lane proves the two input paths agree on
+// the verdict and on the header, so the source frontend and the descriptor
+// frontend place the same declaration in the same namespace.
+
+syntax = "proto3";
+
+package easypb;
+
+message ValidityConfig
+{
+    int32 value = 1;
+}
