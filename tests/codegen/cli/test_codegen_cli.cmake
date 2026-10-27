@@ -893,8 +893,15 @@ if(FULL_BUILD)
     require_empty(w66_stdout_out
         "W-66 a generation failure leaves stdout empty")
     require_contains(w66_stdout_err
-        "cycle.proto: recursive message value dependency: ::cyc::A -> ::cyc::B -> ::cyc::A"
+        "recursive message value dependency: ::cyc::A -> ::cyc::B -> ::cyc::A"
         "W-66 the stdout failure names the target and the reason")
+    # U-30: the same sentence is preceded by the position of the declaration
+    # that closes the cycle. The descriptor half below cannot carry one; the
+    # reason - not the prefix - is what W-66 requires both doors to share.
+    if(NOT w66_stdout_err MATCHES "cycle[.]proto:[0-9]+:[0-9]+: ")
+        message(FATAL_ERROR
+            "U-30: the stdout cycle refusal carries no file:line:column: ${w66_stdout_err}")
+    endif()
     require_not_contains(w66_stdout_err "Exception:"
         "W-66 the stdout failure is a diagnostic, not an exception text")
 endif()

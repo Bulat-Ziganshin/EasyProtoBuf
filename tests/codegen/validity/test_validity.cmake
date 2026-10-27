@@ -913,10 +913,17 @@ if(FULL_BUILD)
         "U-03: the source-path refusal names the message")
     require_contains(scope_src_err "global typedef 'int32_t'"
         "U-03: the source-path refusal names the typedef")
-    if(NOT scope_src_err STREQUAL scope_desc_err)
+    # U-30: the source door carries the position of the refused declaration;
+    # a `.pbs` carries no source text, so its sentence has no coordinates.
+    # The two doors must agree on the verdict and on the sentence, not on a
+    # prefix one of them cannot know.
+    if(NOT scope_src_err MATCHES "scope-globals[.]proto:[0-9]+:[0-9]+: ")
         message(FATAL_ERROR
-            "The two input paths disagree on the U-03 refusal:\n"
-            "  descriptor: ${scope_desc_err}\n  source:     ${scope_src_err}")
+            "The U-03 source refusal carries no file:line:column: ${scope_src_err}")
+    endif()
+    if(scope_desc_err MATCHES "scope-globals[.]proto:[0-9]+:[0-9]+: ")
+        message(FATAL_ERROR
+            "The descriptor refusal fabricated a source position: ${scope_desc_err}")
     endif()
 endif()
 
@@ -1106,3 +1113,50 @@ if(FULL_BUILD)
     require_identical_headers(option_defaults_src option_control_src
         "U-08: the default-valued options changed the source header")
 endif()
+
+# --- R11: the emitter validates what it emits (U-20) -------------------------
+#
+# `--no-class` suppresses every struct, so a member default value has no
+# initializer to describe. The custom-string-type refusal that `defaults-nul`
+# triggers with a class must not fire without one: the caller declares the
+# member, and the codecs - which reference `x.nul` but no default - are still
+# emitted. The NUL default itself is accepted with the default std::string
+# type (the paired loop above); the refusal is the one the owner's decision of
+# 2026-10-21 made for a string type that cannot carry the length.
+run_fail(no_class_nul_class_out no_class_nul_class_err
+    ${CODEGEN} --descriptor-set --string-type "::my::String"
+    "${DATA_DIR}/defaults-nul.pbs")
+require_empty(no_class_nul_class_out
+    "The custom-string-type refusal stdout without --no-class")
+require_contains(no_class_nul_class_err "cannot carry it"
+    "U-20: the embedded NUL stays a refusal while the member is emitted")
+
+run_ok(no_class_nul_desc_out no_class_nul_desc_err
+    ${CODEGEN} --descriptor-set --no-class --string-type "::my::String"
+    "${DATA_DIR}/defaults-nul.pbs")
+require_empty(no_class_nul_desc_err
+    "The --no-class NUL-default descriptor stderr")
+require_absent(no_class_nul_desc_out "struct NulDefaults"
+    "U-20: --no-class must not emit the struct")
+require_contains(no_class_nul_desc_out "inline void encode("
+    "U-20: --no-class still emits the codecs")
+
+if(FULL_BUILD)
+    run_ok(no_class_nul_src_out no_class_nul_src_err
+        ${CODEGEN} -I "${DATA_DIR}" --no-class --string-type "::my::String"
+        "${DATA_DIR}/defaults-nul.proto")
+    require_empty(no_class_nul_src_err
+        "The --no-class NUL-default source stderr")
+    require_identical_headers(no_class_nul_desc_out no_class_nul_src_out
+        "The two doors disagree on the --no-class NUL default")
+endif()
+
+# `--no-class` skips MEMBER generation only. A schema error still fails: the
+# same flag on a field number outside 1..536870911 is refused by the semantics
+# layer before the emitter is asked for anything.
+run_fail(no_class_number_out no_class_number_err
+    ${CODEGEN} --descriptor-set --no-class
+    "${DATA_DIR}/field-number-too-large.pbs")
+require_empty(no_class_number_out "The --no-class field-number stdout")
+require_contains(no_class_number_err "outside the valid range 1..536870911"
+    "U-20: --no-class keeps schema-level refusals")

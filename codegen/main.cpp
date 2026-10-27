@@ -729,11 +729,21 @@ int run_generation(const CommandLine& command)
         // Generate into memory first: a failure must leave stdout empty. The
         // failure is a diagnostic, not an exception text: the --out-dir path
         // builds the same one (generate_files), so both print one line in one
-        // shape, naming the target (W-66).
+        // shape, naming the target (W-66) and, for a declaration failure, its
+        // source position (U-30).
         std::string header;
         try {
             header = easypb_codegen::generate_header(*targets[0], linked,
                                                      command.generation_options);
+        } catch (const easypb_codegen::EmitterError& problem) {
+            easypb_schema::Diagnostic diagnostic = make_schema_diagnostic(
+                easypb_schema::schema_file_label(*targets[0]),
+                problem.what());
+            diagnostic.location =
+                easypb_codegen::emitter_declaration_location(
+                    *targets[0], problem.declaration_path());
+            report_schema_diagnostic(diagnostic);
+            return 1;
         } catch (const std::exception& problem) {
             report_schema_diagnostic(make_schema_diagnostic(
                 easypb_schema::schema_file_label(*targets[0]),

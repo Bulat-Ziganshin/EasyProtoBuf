@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "generation_options.hpp"
+#include "emitter_error.hpp"
 #include "schema.hpp"
 #include "schema_linker.hpp"
 
@@ -38,10 +39,13 @@ struct GeneratedFile
 //
 // The result owns its text and keeps no view into the schema; common code
 // never prints, never selects a stream and never exits. A semantic failure
-// throws std::runtime_error (or std::exception from a helper); frontends that
-// own a Diagnostic use generate_files, which converts the failure. The options
-// are normalized by this call on a local copy (W-11), so a default-constructed
-// set is valid input and the caller's object is not mutated.
+// throws std::runtime_error (or std::exception from a helper); a failure about
+// one declaration throws EmitterError, which carries that declaration's
+// DescriptorPath so a frontend with source metadata can print
+// `file:line:column` (U-30). Frontends that own a Diagnostic use
+// generate_files, which converts the failure. The options are normalized by
+// this call on a local copy (W-11), so a default-constructed set is valid input
+// and the caller's object is not mutated.
 std::string generate_header(const easypb_schema::SchemaFile& target,
                             const easypb_schema::LinkedSchema& schema,
                             const GenerationOptions& options);

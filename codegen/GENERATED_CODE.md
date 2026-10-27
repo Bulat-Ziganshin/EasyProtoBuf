@@ -87,6 +87,8 @@ Eligible repeated numeric fields can be encoded in packed or unpacked form. [`--
 
 `--no-class` suppresses generated structures and enum declarations while leaving the codec overloads available. This can be used to adapt existing C++ types: declare the required message and enum types first, then include the generated output containing only the external codec overloads. For packaged schemas, those handwritten types must be declared in the mapped package namespace.
 
+Because no structure is emitted, the member declarations and their default-value initializers are not generated, and the initializer's own checks are skipped: a member default value that cannot be spelled for the configured string type (an embedded NUL with anything other than `std::string`) is not refused, because no member initializer would carry it. Option and schema validation still runs in full - the empty `(easypb.cpp).type` option, field numbers and kinds, default-value grammar and ranges, option placement, reserved declarations and the C++ name-collision rules are all answered before generation - so `--no-class` cannot turn an invalid schema into a header. The codecs keep referencing the members the caller declares (`x.field`, and `x.has_field` when the presence flags are enabled), and the name rules still refuse a collision the caller's own declaration would have to contain.
+
 ## Base C++ type generation
 
 Before applying a field/container template, Codegen determines the base C++ type corresponding to each singular Protobuf type:

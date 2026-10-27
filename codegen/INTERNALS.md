@@ -153,6 +153,10 @@ Before emitting text, Codegen validates the resulting definition-dependency grap
 
 For valid acyclic schemas, sibling lexical subtrees are put into a stable topological order. This handles forward references while preserving source order where dependencies do not require reordering. The same dependency rule is used for top-level messages and nested siblings.
 
+The order is computed once per sibling list in `stable_topological_order` (`codegen.cpp`). Field-level dependencies are first collapsed to the lexical-subtree ("unit") that can actually be reordered: one pass collects every message of every unit and builds the message-to-unit owner map, so a dependency lookup is one map query instead of a scan; each unit then keeps a sorted, duplicate-free list of the unit indexes it depends on. The walk itself is a post-order depth-first traversal over an explicit heap stack (one C++ frame per dependency chain would overflow the process stack on the 12 000-message `dependency-chain` fixture), and each unit is entered and completed once while every edge is examined once - the cost is O(units + dependency edges). This is the linear form of the same visiting order the former per-frame full-unit scan produced, not a new order.
+
+The result is deterministic and a function of the descriptor alone: roots are visited in declaration order, a unit's dependencies are visited in ascending unit index (that is, source order), and a unit is appended when its last dependency completes. No pointer value, hash order or insertion order participates, so the same input produces the same bytes in every run and through either input door. The `codegen.limits` lane asserts both properties on the committed 12 000-message chain: two descriptor runs and the source run produce one header byte for byte.
+
 ## Generation
 
 After dependency validation, generation is a recursive pass over the ordered message tree:
@@ -164,6 +168,8 @@ After dependency validation, generation is a recursive pass over the ordered mes
 5. Emit free `inline encode(...)` / `decode(...)` overloads for every real message, including nested messages.
 
 The definition-dependency graph is fully built and validated before any generated text is emitted, so unsupported recursive schemas fail without leaving a partial result.
+
+Every emitter refusal about a declaration throws `EmitterError` ([`emitter_error.hpp`](emitter_error.hpp)) with that declaration's `DescriptorPath`; `generate_files` and the CLI's stdout path resolve the path through `SchemaFile::declaration_locations`, so a `.proto` input reports `file:line:column` (U-30). A `.pbs` carries no source text, so the lookup stays unknown there and the sentence keeps its file name alone; a refusal that is not about a declaration (an option contradiction, a target without a logical name) carries no path by construction. The name layer is positioned the same way: `cpp_identifier` keeps owning the rule, and the emitter wraps its call with the field, enum value or message whose declaration supplied the name.
 
 Generation settings live in `easypb_codegen::GenerationOptions` ([`generation_options.hpp`](generation_options.hpp)) with their defaults and the shared validation/derived behavior, so a core-only caller gets the same options the CLI does. Per-file generator state lives in an explicit context created per target, not in file-scope variables, so one process can generate several targets without leaking state; the user-facing behavior is documented in [OPTIONS.md](OPTIONS.md).
 

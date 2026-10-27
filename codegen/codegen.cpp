@@ -11,6 +11,7 @@
 #include <easypb.hpp>
 #include "descriptor.pb.hpp"
 #include "cpp_names.hpp"
+#include "emitter_error.hpp"
 #include "generation.hpp"
 #include "generation_options.hpp"
 #include "header_paths.hpp"
@@ -25,6 +26,9 @@ using easypb_schema::view_text;
 // namespace of a PUBLIC include directory.
 using easypb_codegen::myformat;
 using easypb_codegen::number_to_string;
+// U-30: the emitter's positioned refusal type, used by every declaration rule
+// in this file.
+using easypb_codegen::EmitterError;
 
 
 // Protobuf and C++ naming/formatting constants used by the generator
@@ -175,6 +179,29 @@ std::string field_member_name(const FieldDescriptorProto& field)
 }
 
 
+// The C++ spelling of one declaration name, refused with the declaration the
+// caller is reading (U-30). `cpp_identifier` owns the rule; this wrapper only
+// remembers where the name came from, so the diagnostic can carry a source
+// position instead of `unknown_location`.
+std::string cpp_identifier_at(const std::string& name,
+                              const easypb_schema::DescriptorPath& path)
+{
+    try {
+        return easypb_codegen::cpp_identifier(name);
+    } catch (const std::exception& problem) {
+        throw EmitterError(path, problem.what());
+    }
+}
+
+
+// The member and presence-flag names of one field, positioned at that field.
+std::string field_member_name_at(const FieldDescriptorProto& field,
+                                 const easypb_schema::DescriptorPath& path)
+{
+    return cpp_identifier_at(view_text(field.name), path);
+}
+
+
 // The C++ member name of a field's presence flag.
 //
 // The flag is named after the field, so it is named after the ESCAPED field:
@@ -183,6 +210,13 @@ std::string field_member_name(const FieldDescriptorProto& field)
 std::string field_flag_name(const FieldDescriptorProto& field)
 {
     return "has_" + field_member_name(field);
+}
+
+
+std::string field_flag_name_at(const FieldDescriptorProto& field,
+                               const easypb_schema::DescriptorPath& path)
+{
+    return "has_" + field_member_name_at(field, path);
 }
 
 
@@ -419,6 +453,10 @@ struct ScopeMember
     std::string cpp_name;      // the name the header spells
     std::string description;   // what the declaration is, for the diagnostic
     ScopeMemberKind kind;
+    // The declaration the member came from, so a refusal can be positioned
+    // (U-30). Empty for a synthesized member: a generated codec, a runtime
+    // namespace or a preamble typedef has no source declaration.
+    easypb_schema::DescriptorPath path;
 };
 
 
@@ -470,6 +508,13 @@ void refuse_duplicate_cpp_names(const std::vector<ScopeMember>& members,
             seen.find(members[i].cpp_name);
         if (found != seen.end() &&
             cpp_declarations_conflict(found->second, members[i])) {
+            // The collision belongs to the second declaration; a synthesized
+            // member has no path, so the first one is the fallback. Either way
+            // the diagnostic is positioned rather than `unknown_location`
+            // (U-30).
+            const easypb_schema::DescriptorPath& blamed =
+                ! members[i].path.empty() ? members[i].path
+                                          : found->second.path;
             // The presence flag keeps the wording session S2 established for
             // it: the diagnostic names the field and the flag it collides
             // with, which is more precise than the generic one.
@@ -482,13 +527,15 @@ void refuse_duplicate_cpp_names(const std::vector<ScopeMember>& members,
                     ? found->second : members[i];
                 const ScopeMember& other = first_is_flag
                     ? members[i] : found->second;
-                throw std::runtime_error(
+                throw EmitterError(
+                    blamed,
                     myformat("The {0} of {1} collides with the {2}: both "
                              "members would be named '{3}'",
                              other.description, scope, flag.description,
                              members[i].cpp_name));
             }
-            throw std::runtime_error(
+            throw EmitterError(
+                blamed,
                 myformat("In {0}, the {1} and the {2} would both be named "
                          "'{3}' in C++",
                          scope, found->second.description,
@@ -505,13 +552,17 @@ void refuse_duplicate_cpp_names(const std::vector<ScopeMember>& members,
 //
 // An unscoped enum's enumerators are members of the enum's own scope, so
 // two of them cannot carry the same C++ name.
-void check_enum_value_names(const EnumDescriptorProto& enum_type)
+void check_enum_value_names(const EnumDescriptorProto& enum_type,
+                            const easypb_schema::DescriptorPath& enum_path)
 {
     std::vector<ScopeMember> members;
-    for (const auto& value: enum_type.value) {
+    for (std::size_t i = 0; i < enum_type.value.size(); ++i) {
+        const auto& value = enum_type.value[i];
         ScopeMember member;
-        member.cpp_name = easypb_codegen::cpp_identifier(
-            view_text(value.name));
+        member.path = easypb_schema::enum_value_path(
+            enum_path, static_cast<int>(i));
+        member.cpp_name = cpp_identifier_at(view_text(value.name),
+                                            member.path);
         member.description = member_description("enum value",
                                                 view_text(value.name));
         member.kind = SCOPE_MEMBER_ENUMERATOR;
@@ -532,10 +583,11 @@ void check_enum_value_names(const EnumDescriptorProto& enum_type)
 // `enum class` is `class_` (compiler/cpp/helpers.cc:461-469), and the
 // enumerator of a value named `class` is `class_` (helpers.cc:681-683).
 std::string generate_enum(const EnumDescriptorProto& enum_type,
-                          const std::string& indent)
+                          const std::string& indent,
+                          const easypb_schema::DescriptorPath& enum_path)
 {
     const std::string enum_name =
-        easypb_codegen::cpp_identifier(view_text(enum_type.name));
+        cpp_identifier_at(view_text(enum_type.name), enum_path);
     std::string result = myformat("{0}enum {1} : {2}\n{0}{\n",
                                   indent, enum_name, CPP_ENUM_BASE_TYPE);
 
@@ -543,8 +595,10 @@ std::string generate_enum(const EnumDescriptorProto& enum_type,
         const auto& value = enum_type.value[i];
         result += myformat("{0}    {1} = {2}{3}\n",
                            indent,
-                           easypb_codegen::cpp_identifier(
-                               view_text(value.name)),
+                           cpp_identifier_at(
+                               view_text(value.name),
+                               easypb_schema::enum_value_path(
+                                   enum_path, static_cast<int>(i))),
                            number_to_string(value.number),
                            i + 1 < enum_type.value.size() ? "," : "");
     }
@@ -937,12 +991,15 @@ std::string default_value_str(const FieldDescriptorProto& field,
 // The map entry itself is not emitted as a C++ struct; we keep only pointers to
 // its key/value fields, indexed by the entry's absolute Protobuf type name.
 MapTypeByName collect_map_types(const DescriptorProto& message_type,
-                                const std::string& message_proto_name)
+                                const std::string& message_proto_name,
+                                const easypb_schema::DescriptorPath& message_path)
 {
     MapTypeByName result;
 
-    for (const auto& nested_msgtype: message_type.nested_type)
+    for (std::size_t nested_index = 0;
+         nested_index < message_type.nested_type.size(); ++nested_index)
     {
+        const auto& nested_msgtype = message_type.nested_type[nested_index];
         if (nested_msgtype.options.map_entry)
         {
             MapType map_type;
@@ -964,7 +1021,9 @@ MapTypeByName collect_map_types(const DescriptorProto& message_type,
             qualified_name += nested_msgtype.name;
 
             if (! map_type.key_field || ! map_type.value_field) {
-                throw std::runtime_error(
+                throw EmitterError(
+                    easypb_schema::message_nested_path(
+                        message_path, static_cast<int>(nested_index)),
                     myformat("Malformed map entry {0}: fields 1 and 2 are required", qualified_name));
             }
 
@@ -981,7 +1040,9 @@ MapTypeByName collect_map_types(const DescriptorProto& message_type,
             // different C++ - `put_map_string_int32` against
             // `put_map_bytes_string` - depending on the spelling alone.
             if (result.find(qualified_name) != result.end()) {
-                throw std::runtime_error(
+                throw EmitterError(
+                    easypb_schema::message_nested_path(
+                        message_path, static_cast<int>(nested_index)),
                     myformat("Duplicate map entry {0}: a nested map entry with this name is already declared",
                              qualified_name));
             }
@@ -1000,7 +1061,8 @@ MapTypeByName collect_map_types(const DescriptorProto& message_type,
 // unsupported as a map value even though message values are allowed.
 const MapType* find_map_type(const FieldDescriptorProto& field,
                              const MapTypeByName& maptype_by_name,
-                             str_view message_cpp_name)
+                             str_view message_cpp_name,
+                             const easypb_schema::DescriptorPath& field_path)
 {
     if (maptype_by_name.empty() || ! is_repeated(field) ||
         field.type != FieldDescriptorProto::TYPE_MESSAGE) {
@@ -1031,7 +1093,8 @@ const MapType* find_map_type(const FieldDescriptorProto& field,
 
     if (value_type == FieldDescriptorProto::TYPE_GROUP)
     {
-        throw std::runtime_error(
+        throw EmitterError(
+            field_path,
             myformat("Unsupported map value type '{0}' for field {1}.{2}",
                      pbtype_name(*value_field), message_cpp_name, field.name));
     }
@@ -1056,6 +1119,9 @@ struct MessageInfo
     std::string proto_name;           // .pkg.Outer.Inner
     std::string cpp_absolute_name;    // ::pkg::Outer::Inner
     std::string macro_stem;           // EASYPB_Outer_Inner (legacy spelling)
+    // The declaration this subtree came from, so every refusal about it can be
+    // positioned in the source file (U-30).
+    easypb_schema::DescriptorPath path;
     MapTypeByName map_types;
     std::vector<MessageInfo> children;
     std::vector<MessageInfo*> dependencies;
@@ -1074,28 +1140,41 @@ using MessageByProtoName = std::map<str_view, MessageInfo*>;
 // but are not added to the user-visible message tree.
 MessageInfo make_message_info(const DescriptorProto& descriptor,
                               const std::string& parent_proto_name,
-                              const GenerationContext& context)
+                              const GenerationContext& context,
+                              const easypb_schema::DescriptorPath& path)
 {
     MessageInfo info;
     info.descriptor = &descriptor;
+    info.path = path;
     info.simple_name = descriptor.name;
     // The C++ name of the struct. A name that is a C++ keyword is escaped,
     // exactly as the reference compiler escapes it (compiler/cpp/helpers.cc:
     // 451-459 spells the class of a schema that declares `message class`
     // `class_`). The Protobuf name keeps the raw spelling: it is the key of
     // the symbol index and the name a type reference resolves against.
-    info.cpp_name = easypb_codegen::cpp_identifier(info.simple_name);
-    info.proto_name = parent_proto_name.empty()
-        ? context.package_name_prefix + info.simple_name
-        : parent_proto_name + PB_TYPE_DELIMITER + info.simple_name;
-    info.cpp_absolute_name = easypb_codegen::cpp_absolute_name(info.proto_name);
-    info.macro_stem = easypb_codegen::insertion_macro_stem(
-        info.proto_name, context.package);
+    //
+    // The whole name derivation is one declaration's work, so a refusal in the
+    // name layer is positioned at this message (U-30).
+    try {
+        info.cpp_name = easypb_codegen::cpp_identifier(info.simple_name);
+        info.proto_name = parent_proto_name.empty()
+            ? context.package_name_prefix + info.simple_name
+            : parent_proto_name + PB_TYPE_DELIMITER + info.simple_name;
+        info.cpp_absolute_name =
+            easypb_codegen::cpp_absolute_name(info.proto_name);
+        info.macro_stem = easypb_codegen::insertion_macro_stem(
+            info.proto_name, context.package);
+    } catch (const std::exception& problem) {
+        throw EmitterError(path, problem.what());
+    }
 
-    for (const auto& nested: descriptor.nested_type) {
+    for (std::size_t i = 0; i < descriptor.nested_type.size(); ++i) {
+        const DescriptorProto& nested = descriptor.nested_type[i];
         if (! nested.options.map_entry) {
-            info.children.push_back(
-                make_message_info(nested, info.proto_name, context));
+            info.children.push_back(make_message_info(
+                nested, info.proto_name, context,
+                easypb_schema::message_nested_path(path,
+                                                   static_cast<int>(i))));
         }
     }
 
@@ -1217,10 +1296,18 @@ void resolve_message_dependencies(MessageInfo& info,
                                   const MessageByProtoName& index,
                                   const GenerationContext& context)
 {
-    info.map_types = collect_map_types(*info.descriptor, info.proto_name);
+    info.map_types = collect_map_types(*info.descriptor, info.proto_name,
+                                       info.path);
 
-    for (const auto& field: info.descriptor->field) {
-        const MapType* map_type = find_map_type(field, info.map_types, info.cpp_absolute_name);
+    for (std::size_t field_index = 0;
+         field_index < info.descriptor->field.size(); ++field_index) {
+        const FieldDescriptorProto& field = info.descriptor->field[field_index];
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(info.path,
+                                              static_cast<int>(field_index));
+        const MapType* map_type = find_map_type(field, info.map_types,
+                                                info.cpp_absolute_name,
+                                                field_path);
         const FieldDescriptorProto& dependency_field =
             map_type ? *map_type->value_field : field;
         MessageInfo* target = find_type_owner(dependency_field, index);
@@ -1233,7 +1320,8 @@ void resolve_message_dependencies(MessageInfo& info,
             needs_definition &&
             is_ancestor_message(*target, info))
         {
-            throw std::runtime_error(
+            throw EmitterError(
+                field_path,
                 myformat("recursive message value dependency: {0} -> {1}",
                          info.cpp_absolute_name, target->cpp_absolute_name));
         }
@@ -1311,7 +1399,8 @@ void detect_dependency_cycles(std::vector<MessageInfo>& roots)
                 }
                 if (! path.empty()) path += " -> ";
                 path += dependency->cpp_absolute_name;
-                throw std::runtime_error(
+                throw EmitterError(
+                    dependency->path,
                     "recursive message value dependency: " + path);
             }
         }
@@ -1410,7 +1499,8 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
                 }
                 if (! path.empty()) path += " -> ";
                 path += units[candidate]->cpp_absolute_name;
-                throw std::runtime_error(
+                throw EmitterError(
+                    units[candidate]->path,
                     "recursive message value dependency: " + path);
             }
         }
@@ -1480,29 +1570,41 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
     enclosing.cpp_name = info.cpp_name;
     enclosing.description = member_description("message", info.simple_name);
     enclosing.kind = SCOPE_MEMBER_ENCLOSING_TYPE;
+    enclosing.path = info.path;
     members.push_back(enclosing);
-    for (const auto& field: info.descriptor->field) {
+    for (std::size_t i = 0; i < info.descriptor->field.size(); ++i) {
+        const auto& field = info.descriptor->field[i];
         ScopeMember member;
-        member.cpp_name = field_member_name(field);
+        member.path = easypb_schema::message_field_path(
+            info.path, static_cast<int>(i));
+        member.cpp_name = field_member_name_at(field, member.path);
         member.description = member_description("field",
                                                 view_text(field.name));
         member.kind = SCOPE_MEMBER_FIELD;
         members.push_back(member);
     }
-    for (const auto& field: info.descriptor->field) {
+    for (std::size_t i = 0; i < info.descriptor->field.size(); ++i) {
+        const auto& field = info.descriptor->field[i];
         if (! hasfield_enabled(field, context)) continue;
         ScopeMember member;
-        member.cpp_name = field_flag_name(field);
+        member.path = easypb_schema::message_field_path(
+            info.path, static_cast<int>(i));
+        member.cpp_name = field_flag_name_at(field, member.path);
         member.description =
             myformat("presence flag of the field '{0}'",
                      view_text(field.name));
         member.kind = SCOPE_MEMBER_PRESENCE_FLAG;
         members.push_back(member);
     }
-    for (const auto& enum_type: info.descriptor->enum_type) {
+    for (std::size_t i = 0; i < info.descriptor->enum_type.size(); ++i) {
+        const auto& enum_type = info.descriptor->enum_type[i];
+        const easypb_schema::DescriptorPath enum_path =
+            easypb_schema::message_enum_path(info.path,
+                                             static_cast<int>(i));
         ScopeMember member;
-        member.cpp_name = easypb_codegen::cpp_identifier(
-            view_text(enum_type.name));
+        member.path = enum_path;
+        member.cpp_name = cpp_identifier_at(view_text(enum_type.name),
+                                            enum_path);
         member.description = member_description("nested enum",
                                                 view_text(enum_type.name));
         member.kind = SCOPE_MEMBER_TYPE;
@@ -1510,10 +1612,13 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
         // An unscoped enum's enumerators belong to the scope that declares
         // the enum, not to the enum: `M::E::has_foo` and `M::has_foo` are
         // the same declaration (CR-03).
-        for (const auto& value: enum_type.value) {
+        for (std::size_t j = 0; j < enum_type.value.size(); ++j) {
+            const auto& value = enum_type.value[j];
             ScopeMember enumerator;
-            enumerator.cpp_name = easypb_codegen::cpp_identifier(
-                view_text(value.name));
+            enumerator.path = easypb_schema::enum_value_path(
+                enum_path, static_cast<int>(j));
+            enumerator.cpp_name = cpp_identifier_at(
+                view_text(value.name), enumerator.path);
             enumerator.description = member_description(
                 "enum value", view_text(value.name));
             enumerator.kind = SCOPE_MEMBER_ENUMERATOR;
@@ -1522,6 +1627,7 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
     }
     for (std::size_t i = 0; i < info.children.size(); ++i) {
         ScopeMember member;
+        member.path = info.children[i].path;
         member.cpp_name = info.children[i].cpp_name;
         member.description = member_description("nested message",
                                                 info.children[i].simple_name);
@@ -1564,18 +1670,25 @@ void check_file_scope_names(const FileDescriptorProto& file,
                             const GenerationContext& context)
 {
     std::vector<ScopeMember> members;
-    for (const auto& enum_type: file.enum_type) {
+    for (std::size_t i = 0; i < file.enum_type.size(); ++i) {
+        const auto& enum_type = file.enum_type[i];
+        const easypb_schema::DescriptorPath enum_path =
+            easypb_schema::file_enum_path(static_cast<int>(i));
         ScopeMember member;
-        member.cpp_name = easypb_codegen::cpp_identifier(
-            view_text(enum_type.name));
+        member.path = enum_path;
+        member.cpp_name = cpp_identifier_at(view_text(enum_type.name),
+                                            enum_path);
         member.description = member_description("enum",
                                                 view_text(enum_type.name));
         member.kind = SCOPE_MEMBER_TYPE;
         members.push_back(member);
-        for (const auto& value: enum_type.value) {
+        for (std::size_t j = 0; j < enum_type.value.size(); ++j) {
+            const auto& value = enum_type.value[j];
             ScopeMember enumerator;
-            enumerator.cpp_name = easypb_codegen::cpp_identifier(
-                view_text(value.name));
+            enumerator.path = easypb_schema::enum_value_path(
+                enum_path, static_cast<int>(j));
+            enumerator.cpp_name = cpp_identifier_at(
+                view_text(value.name), enumerator.path);
             enumerator.description = member_description(
                 "enum value", view_text(value.name));
             enumerator.kind = SCOPE_MEMBER_ENUMERATOR;
@@ -1584,6 +1697,7 @@ void check_file_scope_names(const FileDescriptorProto& file,
     }
     for (std::size_t i = 0; i < roots.size(); ++i) {
         ScopeMember member;
+        member.path = roots[i].path;
         member.cpp_name = roots[i].cpp_name;
         member.description = member_description("message",
                                                 roots[i].simple_name);
@@ -1675,14 +1789,18 @@ std::string generate_message(MessageInfo& info,
     if (! info.descriptor->enum_type.empty() || ! info.children.empty()) {
         const std::string child_indent = indent + CPP_INDENT;
         // Enum declarations precede nested messages and fields that may use them.
-        for (const auto& enum_type: info.descriptor->enum_type) {
+        for (std::size_t i = 0; i < info.descriptor->enum_type.size(); ++i) {
+            const auto& enum_type = info.descriptor->enum_type[i];
+            const easypb_schema::DescriptorPath enum_path =
+                easypb_schema::message_enum_path(info.path,
+                                                 static_cast<int>(i));
             // The enumerators live in the enum's own scope, and the escape
             // rule is not injective: `class` and `class_` would both be
             // spelled `class_`. The check runs even when the classes are not
             // generated: the codecs spell the enumerators, so the collision
             // would reach the caller's own declaration.
-            check_enum_value_names(enum_type);
-            nested_defs += generate_enum(enum_type, child_indent);
+            check_enum_value_names(enum_type, enum_path);
+            nested_defs += generate_enum(enum_type, child_indent, enum_path);
         }
         for (auto* child: dependency_safe_order(info.children)) {
             nested_defs += generate_message(
@@ -1699,31 +1817,61 @@ std::string generate_message(MessageInfo& info,
     refuse_duplicate_cpp_names(message_scope_members(info, context),
                                myformat("message '{0}'", info.proto_name));
 
-    for (const auto& field: info.descriptor->field)
+    for (std::size_t field_index = 0;
+         field_index < info.descriptor->field.size(); ++field_index)
     {
-        auto map_type = find_map_type(field, info.map_types, info.cpp_absolute_name);
+        const FieldDescriptorProto& field = info.descriptor->field[field_index];
+        // The declaration this field's refusal is about (U-30). Every helper
+        // below reads one field, so one wrapper positions them all.
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(info.path,
+                                              static_cast<int>(field_index));
+        try {
+            auto map_type = find_map_type(field, info.map_types,
+                                          info.cpp_absolute_name, field_path);
 
-        auto cpptype_str = cpp_type_as_str(field, map_type, context);
-        field_defs += myformat("{0}    {1} {2}{3};\n",
-                               indent, cpptype_str, field_member_name(field),
-                               default_value_str(field, enum_index,
-                                                 local_enum_index, context));
+            // The member type and its template validation belong to the schema
+            // (the empty-type option is refused on the source door while that
+            // text is parsed), so the spelling is asked for under every option
+            // set even though `--no-class` discards it.
+            auto cpptype_str = cpp_type_as_str(field, map_type, context);
 
-        if (hasfield_enabled(field, context)) {
-            has_field_defs += myformat("{0}    bool {1} = false;\n",
-                                       indent, field_flag_name(field));
-        }
+            // U-20: the member declaration and its default-value initializer are
+            // emitted only when the class is. A member default-value refusal
+            // describes a member this run does not write - `--no-class` leaves
+            // the caller to declare it - so the initializer is not built at all.
+            // The schema-level validation that owns field numbers, types and
+            // defaults has already run in the semantics layer and is not
+            // affected.
+            if (! context.options.no_class) {
+                field_defs += myformat(
+                    "{0}    {1} {2}{3};\n", indent, cpptype_str,
+                    field_member_name(field),
+                    default_value_str(field, enum_index, local_enum_index,
+                                      context));
 
-        // Field codecs still use the same helpers as top-level messages; only
-        // the enclosing type name and output section have changed.
-        encoder += generate_field_encoder(field, map_type, context);
-        decoder += generate_field_decoder(field, map_type, context);
+                if (hasfield_enabled(field, context)) {
+                    has_field_defs += myformat(
+                        "{0}    bool {1} = false;\n",
+                        indent, field_flag_name(field));
+                }
+            }
 
-        if ((field.label == FieldDescriptorProto::LABEL_REQUIRED) && ! context.options.no_required) {
-            check_required_fields += myformat(
-                CHECK_REQUIRED_FIELD_TEMPLATE, info.cpp_absolute_name,
-                field_flag_name(field),
-                view_text(field.name));
+            // Field codecs still use the same helpers as top-level messages;
+            // only the enclosing type name and output section have changed.
+            encoder += generate_field_encoder(field, map_type, context);
+            decoder += generate_field_decoder(field, map_type, context);
+
+            if ((field.label == FieldDescriptorProto::LABEL_REQUIRED) && ! context.options.no_required) {
+                check_required_fields += myformat(
+                    CHECK_REQUIRED_FIELD_TEMPLATE, info.cpp_absolute_name,
+                    field_flag_name(field),
+                    view_text(field.name));
+            }
+        } catch (const EmitterError&) {
+            throw;
+        } catch (const std::exception& problem) {
+            throw EmitterError(field_path, problem.what());
         }
     }
 
@@ -1965,14 +2113,26 @@ std::string easypb_codegen::generate_header(
     // Per-invocation state: nothing here survives the call, and the
     // classification is made exactly once (plan 5 A25).
     const GenerationContext context(normalized, file);
-    easypb_codegen::validate_cpp_package(context.package);
+    {
+        // FileDescriptorProto.package is field 2, the path the source parser
+        // records the `package` statement under.
+        easypb_schema::DescriptorPath package_path;
+        package_path.push_back(2);
+        try {
+            easypb_codegen::validate_cpp_package(context.package);
+        } catch (const std::exception& problem) {
+            throw EmitterError(package_path, problem.what());
+        }
+    }
 
     // Build the lexical tree first. reserve() is important because the name
     // index will later store pointers into these root objects.
     std::vector<MessageInfo> roots;
     roots.reserve(file.message_type.size());
-    for (const auto& message_type: file.message_type) {
-        roots.push_back(make_message_info(message_type, "", context));
+    for (std::size_t i = 0; i < file.message_type.size(); ++i) {
+        roots.push_back(make_message_info(
+            file.message_type[i], "", context,
+            easypb_schema::file_message_path(static_cast<int>(i))));
     }
 
     // The C++ scope of the file: the top-level messages and enums, the
@@ -2011,12 +2171,16 @@ std::string easypb_codegen::generate_header(
     // Their enumerators are checked even when the classes are not generated:
     // the codecs spell the enumerators, so the collision would reach the
     // caller's own declaration.
-    for (const auto& enum_type: file.enum_type) {
-        check_enum_value_names(enum_type);
+    for (std::size_t i = 0; i < file.enum_type.size(); ++i) {
+        check_enum_value_names(
+            file.enum_type[i],
+            easypb_schema::file_enum_path(static_cast<int>(i)));
     }
     if (! context.options.no_class) {
-        for (const auto& enum_type: file.enum_type) {
-            enum_defs += generate_enum(enum_type, "");
+        for (std::size_t i = 0; i < file.enum_type.size(); ++i) {
+            enum_defs += generate_enum(
+                file.enum_type[i], "",
+                easypb_schema::file_enum_path(static_cast<int>(i)));
         }
     }
     // Top-level messages are ordered by the same dependency rule as nested siblings.
@@ -2143,6 +2307,12 @@ bool easypb_codegen::generate_files(
         }
         try {
             entry.content = generate_header(target, schema, normalized);
+        } catch (const EmitterError& problem) {
+            error.file = logical;
+            error.location = emitter_declaration_location(
+                target, problem.declaration_path());
+            error.message = problem.what();
+            return false;
         } catch (const std::exception& problem) {
             error.file = logical;
             error.location = easypb_schema::unknown_location();

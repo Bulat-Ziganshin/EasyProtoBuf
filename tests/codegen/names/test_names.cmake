@@ -245,6 +245,34 @@ foreach(entry ${codegen_names_refusal_cases})
     endif()
 endforeach()
 
+# --- R11: the refusal carries the source position (U-30) ---------------------
+#
+# The emitter throws a positioned EmitterError, and the CLI turns the path into
+# the file:line:column the parser recorded for that declaration. The descriptor
+# door has no source text, so its sentence keeps the file name alone and must
+# not fabricate coordinates.
+if(FULL_BUILD)
+    run_fail(position_out position_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/escape-field.proto")
+    require_empty(position_out "The positioned name-refusal stdout")
+    if(NOT position_err MATCHES "escape-field[.]proto:[0-9]+:[0-9]+: ")
+        message(FATAL_ERROR
+            "U-30: the name refusal carries no file:line:column: ${position_err}")
+    endif()
+    require_contains(position_err "field 'class'"
+        "U-30: the positioned refusal names the first occupant")
+    require_contains(position_err "field 'class_'"
+        "U-30: the positioned refusal names the second occupant")
+endif()
+
+run_fail(position_desc_out position_desc_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/escape-field.pbs")
+require_empty(position_desc_out "The descriptor name-refusal stdout")
+if(position_desc_err MATCHES "escape-field[.]proto:[0-9]+:[0-9]+: ")
+    message(FATAL_ERROR
+        "The descriptor refusal fabricated a source position: ${position_desc_err}")
+endif()
+
 # --- U-02: the repository's own `package easypb;` schema ---------------------
 #
 # Owner decision #1 allows `package easypb;` and refuses only a declaration

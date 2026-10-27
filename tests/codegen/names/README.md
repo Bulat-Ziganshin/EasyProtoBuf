@@ -16,6 +16,14 @@ generated preamble (`U-03`).
 Every row is a counter-example against `protoc` 30.1, and the lane proves the
 fix in the three ways the session's brief names.
 
+Step R11 adds the position contract of a refusal (`U-30`). The emitter throws
+a positioned error for the declaration it blames, and the CLI turns it into the
+`file:line:column` the parser recorded; a `.pbs` carries no source text, so the
+descriptor door keeps the file name alone. The driver drives
+`data/escape-field.proto` and asserts a real `escape-field.proto:N:M:` prefix
+next to both occupant names, and asserts that the descriptor run does not
+fabricate a position.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path

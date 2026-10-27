@@ -167,6 +167,16 @@ if(NOT empty_cpp_pbs_err MATCHES "must not be empty")
     message(FATAL_ERROR "Empty descriptor C++ type diagnostic is unclear: ${empty_cpp_pbs_err}")
 endif()
 
+# R11 / U-20: `--no-class` skips the member initializer, not the option's own
+# value. An explicitly empty type stays refused on both doors, so the flag
+# cannot turn a descriptor into a header the source door would refuse.
+run_fail(empty_cpp_no_class_out empty_cpp_no_class_err
+    ${CODEGEN} --descriptor-set --no-class ${empty_cpp_type_pbs})
+if(NOT empty_cpp_no_class_err MATCHES "must not be empty")
+    message(FATAL_ERROR
+        "Empty descriptor C++ type under --no-class is unclear: ${empty_cpp_no_class_err}")
+endif()
+
 # 51000 is intentionally occupied by a foreign FieldOptions extension in the
 # parser differential corpus.  It must remain unrelated to EasyProtoBuf after
 # changing our temporary extension number.
@@ -244,6 +254,15 @@ if(FULL_BUILD)
     run_fail(empty_out empty_err ${CODEGEN} -I "${tmp_dir}" "${tmp_dir}/empty.proto")
     if(NOT empty_err MATCHES "must not be empty")
         message(FATAL_ERROR "Empty custom type diagnostic is unclear: ${empty_err}")
+    endif()
+
+    # U-20: the source door refuses the same option value under --no-class (the
+    # parser owns this check), so the descriptor half above stays aligned.
+    run_fail(empty_no_class_out empty_no_class_err
+        ${CODEGEN} -I "${tmp_dir}" --no-class "${tmp_dir}/empty.proto")
+    if(NOT empty_no_class_err MATCHES "must not be empty")
+        message(FATAL_ERROR
+            "Empty custom type under --no-class is unclear: ${empty_no_class_err}")
     endif()
 
     file(WRITE "${tmp_dir}/unknown.proto"

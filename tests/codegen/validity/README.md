@@ -30,6 +30,14 @@ Step R08 adds the accepted option-default pair (`U-08`): `lazy = false`,
 `unverified_lazy = false`, `jstype = JS_NORMAL` and `packed = false` on a map
 must emit the same header as the option-less control on both doors.
 
+Step R11 adds the `--no-class` pair (`U-20`): the embedded-NUL default that is
+refused for a custom string type stays accepted when `--no-class` suppresses
+the member initializer the refusal describes, while the same flag keeps a
+schema-level field-number refusal. It also moves the U-03 refusal comparison to
+the sentence alone: the source door now carries `file:line:column` (`U-30`) and
+the descriptor door cannot, so the driver asserts the position on the source
+path and its absence on the descriptor path instead of byte-equal stderr.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -128,6 +136,7 @@ must emit the same header as the option-less control on both doors.
 | the four option default values, with an option-less control (accepted) | `.proto` + `.pbs` | `U-08` |
 | an extension `json_name` that differs from the derived name (refused) | `.proto` only | `U-25` |
 | an extension `json_name` equal to the derived name (accepted) | `.proto` only | `U-25` |
+| the embedded-NUL default under `--no-class` and a custom string type (accepted) | `defaults-nul.proto` / `.pbs` | `U-20` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted
