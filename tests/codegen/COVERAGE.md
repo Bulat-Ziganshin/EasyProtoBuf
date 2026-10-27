@@ -16,7 +16,7 @@ before B13a replaced them; the fixtures themselves did not move or change.
 | `enums` | closed and open enums, implicit defaults | P1; P2; P3 | - | `codegen.enums*` |
 | `imports` | descriptor/linker corpus, protoc parity table, output and in-memory halves | P1; P2; P3; P4; P5; P6; P7; P8; P9 | CR-06; CR-16; CR-21; CR-22; CR-24; CR-31; CR-32; CR-40; E4; E8; E9; E10; E12 | the widest lane: `codegen.imports.*` |
 | `library` | core API equals the CLI; the P7 thin/full/source triple | P1; P2; P3; P6; P7 | CR-08 | `codegen.library*` |
-| `limits` | nesting and dependency-depth bounds; the physical-root xfail | P1; P3; P8 | CR-35; CR-36; E7 | `codegen.limits*` |
+| `limits` | nesting, dependency and import-chain bounds; the physical-root xfail | P1; P3; P8 | CR-35; CR-36; E7 | `codegen.limits*` |
 | `maps` | scalar, enum and message map fields | P1; P2; P3 | - | `codegen.maps*` |
 | `names` | C++ scope occupants, escaping and insertion stems | P3 | CR-03; CR-04; CR-09; CR-10; CR-43; CR-44 | `codegen.names*` |
 | `nested` | nested and forward declarations | P2; P3 | - | `codegen.nested.runtime` |

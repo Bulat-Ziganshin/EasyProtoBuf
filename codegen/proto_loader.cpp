@@ -213,11 +213,6 @@ MapOutcome map_disk_to_logical(const std::string& argument,
     return MAP_OUTSIDE;
 }
 
-bool load_recursive(const std::string& logical,
-                    const std::string& disk_path,
-                    LoaderState& state,
-                    easypb_schema::Diagnostic& error);
-
 // Reads one disk file and fills its reserved slot with deferred parsing.
 // The temporary source buffer is local to this function, so its lifetime
 // verifiably ends on return, before the caller follows imports: in C++11
@@ -278,106 +273,58 @@ bool read_and_parse_source(const std::string& logical,
     return true;
 }
 
-bool load_dependencies(easypb_schema::SchemaFile& slot,
-                       LoaderState& state,
-                       easypb_schema::Diagnostic& error)
+// One file on the loader's explicit worklist: the slot reserved for it and the
+// position of the next dependency to follow. The stack of frames is the
+// discovery path, and `LoaderState::chain` mirrors it by logical name.
+struct LoadFrame
 {
-    const std::string importer = view_text(slot.file.name);
-    const std::size_t count = slot.file.dependency.size();
-    for (std::size_t i = 0; i < count; ++i) {
-        const std::string dependency = view_text(slot.file.dependency[i]);
-        const easypb_schema::SourceLocation where =
-            import_location(slot, i, dependency);
-        // The descriptor lists are authoritative for graph meaning;
-        // imports supplies positions only, so the weak/public modifiers
-        // come from weak_dependency/public_dependency rather than the
-        // positional imports entry. This matches the binder wording
-        // ("missing public import") for all three modifiers.
-        bool is_weak = false;
-        bool is_public = false;
-        for (std::size_t k = 0; k < slot.file.weak_dependency.size(); ++k) {
-            if (slot.file.weak_dependency[k] ==
-                static_cast<std::int32_t>(i)) {
-                is_weak = true;
-                break;
-            }
-        }
-        for (std::size_t k = 0; k < slot.file.public_dependency.size(); ++k) {
-            if (slot.file.public_dependency[k] ==
-                static_cast<std::int32_t>(i)) {
-                is_public = true;
-                break;
-            }
-        }
-        const char* modifier = "";
-        if (is_weak) modifier = "weak ";
-        else if (is_public) modifier = "public ";
+    easypb_schema::SchemaFile* file;
+    std::size_t next_dependency;
 
-        std::string reason;
-        if (!easypb_schema::validate_logical_path(dependency, reason)) {
-            std::ostringstream message;
-            message << "file \"" << importer << "\": invalid import \""
-                    << dependency << "\": " << reason;
-            if (!state.chain.empty()) {
-                message << " (chain "
-                        << chain_text(state.chain, dependency) << ")";
-            }
-            return fail(error, importer, where,
-                        easypb_schema::DIAGNOSTIC_INVALID_IMPORT,
-                        message.str());
-        }
+    LoadFrame(easypb_schema::SchemaFile* slot, std::size_t next)
+        : file(slot), next_dependency(next) {}
+};
 
-        std::string child_disk;
-        std::string access_error;
-        if (!resolve_logical(dependency, state.search_roots, child_disk,
-                             &access_error)) {
-            if (!access_error.empty()) {
-                std::ostringstream message;
-                message << "file \"" << importer << "\": cannot resolve "
-                        << modifier << "import \"" << dependency
-                        << "\": " << access_error
-                        << "; searched "
-                        << join_quoted(state.search_roots, ", ")
-                        << "; chain "
-                        << chain_text(state.chain, dependency);
-                return fail(error, importer, where,
-                            easypb_schema::DIAGNOSTIC_GENERIC,
-                            message.str());
-            }
-            std::ostringstream message;
-            message << "file \"" << importer << "\": missing "
-                    << modifier << "import \"" << dependency
-                    << "\"; searched " << join_quoted(state.search_roots, ", ");
-            message << "; add the directory containing \"" << dependency
-                    << "\" with -I (--proto_path)";
-            message << "; chain " << chain_text(state.chain, dependency);
-            return fail(error, importer, where,
-                        easypb_schema::DIAGNOSTIC_MISSING_IMPORT,
-                        message.str());
-        }
-
-        if (!load_recursive(dependency, child_disk, state, error)) {
-            return false;
-        }
+// The chain-depth refusal (review 1027, U-05/U-06). The sentence names the
+// offending file, the depth it would reach, the limit, the import that asks
+// for it and the root of this discovery path. The whole chain is deliberately
+// NOT printed: it is the input whose length is the problem, and a suffix of
+// 1 001 names would bury the four facts a reader needs.
+bool fail_chain_depth(const std::string& logical,
+                      std::size_t depth,
+                      const std::string& importer,
+                      const LoaderState& state,
+                      easypb_schema::Diagnostic& error)
+{
+    std::ostringstream message;
+    message << "import chain depth " << depth << " exceeds the limit of "
+            << easypb_schema::max_import_chain_depth() << " files";
+    if (!state.chain.empty()) {
+        message << " (imported by \"" << importer << "\"; the chain starts at \""
+                << state.chain.front() << "\")";
     }
-    return true;
+    return fail(error, logical, easypb_schema::unknown_location(),
+                easypb_schema::DIAGNOSTIC_GENERIC, message.str());
 }
 
-bool load_recursive(const std::string& logical,
-                    const std::string& disk_path,
-                    LoaderState& state,
-                    easypb_schema::Diagnostic& error)
+// Pushes one file onto the worklist: the depth bound first, because a file
+// beyond it is never read; then the reserved slot, the deferred parse and the
+// frame. The slot is reserved before its imports are followed so repeated and
+// cyclic references cannot cause repeated parsing or infinite reads.
+bool begin_frame(const std::string& logical,
+                 const std::string& disk_path,
+                 LoaderState& state,
+                 std::vector<LoadFrame>& stack,
+                 easypb_schema::Diagnostic& error)
 {
-    // A logical name is loaded once: a repeated command-line root or a
-    // diamond import returns the file already present, exactly like the
-    // descriptor pool of the reference compiler keyed by file name. Two
-    // different files under one logical name are not distinguished here;
-    // the resulting duplicate definitions surface later, as in protoc.
-    if (state.result->find_file(logical) != 0) return true;
+    const std::size_t depth = state.chain.size() + 1;
+    if (depth > easypb_schema::max_import_chain_depth()) {
+        return fail_chain_depth(logical, depth,
+                                state.chain.empty() ? std::string()
+                                                    : state.chain.back(),
+                                state, error);
+    }
 
-    // Reserve the logical name before following imports so repeated and
-    // cyclic references cannot cause repeated parsing or infinite reads.
-    // The slot is empty until deferred parsing fills it below.
     easypb_schema::SchemaFile* slot = 0;
     try {
         slot = &state.result->add_file(logical);
@@ -398,9 +345,142 @@ bool load_recursive(const std::string& logical,
     }
 
     state.chain.push_back(logical);
-    const bool dependencies_ok = load_dependencies(*slot, state, error);
-    state.chain.pop_back();
-    return dependencies_ok;
+    stack.push_back(LoadFrame(slot, 0));
+    return true;
+}
+
+// Follows one import of one file: validates the spelling, resolves it through
+// the search roots, and pushes it onto the worklist when it is not loaded yet.
+// Everything else about the import - positions, the weak/public modifier, the
+// diagnostics - is the same for every frame, so it stays in one place.
+bool follow_import(const easypb_schema::SchemaFile& importer_file,
+                   std::size_t index,
+                   LoaderState& state,
+                   std::vector<LoadFrame>& stack,
+                   easypb_schema::Diagnostic& error)
+{
+    const std::string importer = view_text(importer_file.file.name);
+    const std::string dependency =
+        view_text(importer_file.file.dependency[index]);
+    const easypb_schema::SourceLocation where =
+        import_location(importer_file, index, dependency);
+    // The descriptor lists are authoritative for graph meaning;
+    // imports supplies positions only, so the weak/public modifiers
+    // come from weak_dependency/public_dependency rather than the
+    // positional imports entry. This matches the binder wording
+    // ("missing public import") for all three modifiers.
+    bool is_weak = false;
+    bool is_public = false;
+    for (std::size_t k = 0; k < importer_file.file.weak_dependency.size();
+         ++k) {
+        if (importer_file.file.weak_dependency[k] ==
+            static_cast<std::int32_t>(index)) {
+            is_weak = true;
+            break;
+        }
+    }
+    for (std::size_t k = 0; k < importer_file.file.public_dependency.size();
+         ++k) {
+        if (importer_file.file.public_dependency[k] ==
+            static_cast<std::int32_t>(index)) {
+            is_public = true;
+            break;
+        }
+    }
+    const char* modifier = "";
+    if (is_weak) modifier = "weak ";
+    else if (is_public) modifier = "public ";
+
+    std::string reason;
+    if (!easypb_schema::validate_logical_path(dependency, reason)) {
+        std::ostringstream message;
+        message << "file \"" << importer << "\": invalid import \""
+                << dependency << "\": " << reason;
+        if (!state.chain.empty()) {
+            message << " (chain "
+                    << chain_text(state.chain, dependency) << ")";
+        }
+        return fail(error, importer, where,
+                    easypb_schema::DIAGNOSTIC_INVALID_IMPORT,
+                    message.str());
+    }
+
+    std::string child_disk;
+    std::string access_error;
+    if (!resolve_logical(dependency, state.search_roots, child_disk,
+                         &access_error)) {
+        if (!access_error.empty()) {
+            std::ostringstream message;
+            message << "file \"" << importer << "\": cannot resolve "
+                    << modifier << "import \"" << dependency
+                    << "\": " << access_error
+                    << "; searched "
+                    << join_quoted(state.search_roots, ", ")
+                    << "; chain "
+                    << chain_text(state.chain, dependency);
+            return fail(error, importer, where,
+                        easypb_schema::DIAGNOSTIC_GENERIC,
+                        message.str());
+        }
+        std::ostringstream message;
+        message << "file \"" << importer << "\": missing "
+                << modifier << "import \"" << dependency
+                << "\"; searched " << join_quoted(state.search_roots, ", ");
+        message << "; add the directory containing \"" << dependency
+                << "\" with -I (--proto_path)";
+        message << "; chain " << chain_text(state.chain, dependency);
+        return fail(error, importer, where,
+                    easypb_schema::DIAGNOSTIC_MISSING_IMPORT,
+                    message.str());
+    }
+
+    // The dependency is loaded already (a diamond, a repeated root or a file
+    // another target already reached): it stays loaded once and is not walked
+    // again.
+    if (state.result->find_file(dependency) != 0) return true;
+
+    return begin_frame(dependency, child_disk, state, stack, error);
+}
+
+bool load_chain(const std::string& logical,
+                const std::string& disk_path,
+                LoaderState& state,
+                easypb_schema::Diagnostic& error)
+{
+    // A logical name is loaded once: a repeated command-line root or a
+    // diamond import returns the file already present, exactly like the
+    // descriptor pool of the reference compiler keyed by file name. Two
+    // different files under one logical name are not distinguished here;
+    // the resulting duplicate definitions surface later, as in protoc.
+    if (state.result->find_file(logical) != 0) return true;
+
+    // The traversal is a heap worklist, not one C++ call frame per import
+    // edge (review 1027, U-05/U-06): an untrusted chain must not be able to
+    // overflow the process stack, and the chain-depth bound below is a policy
+    // limit rather than the stack's own. Frames are expanded in dependency
+    // declaration order, depth first, exactly like the recursive walk this
+    // replaces, so every diagnostic and the order files are read in are
+    // unchanged.
+    const std::size_t chain_base = state.chain.size();
+    std::vector<LoadFrame> stack;
+    if (!begin_frame(logical, disk_path, state, stack, error)) {
+        state.chain.resize(chain_base);
+        return false;
+    }
+    while (!stack.empty()) {
+        LoadFrame& frame = stack.back();
+        if (frame.next_dependency >= frame.file->file.dependency.size()) {
+            state.chain.pop_back();
+            stack.pop_back();
+            continue;
+        }
+        const std::size_t index = frame.next_dependency++;
+        if (!follow_import(*frame.file, index, state, stack, error)) {
+            state.chain.resize(chain_base);
+            return false;
+        }
+    }
+    return true;
 }
 
 // Turn one command-line root into a logical name plus its disk path. An
@@ -633,7 +713,7 @@ bool load_source_files(const SourceLoaderOptions& options,
             result.clear();
             return false;
         }
-        if (!load_recursive(logical, disk_path, state, error)) {
+        if (!load_chain(logical, disk_path, state, error)) {
             result.clear();
             return false;
         }

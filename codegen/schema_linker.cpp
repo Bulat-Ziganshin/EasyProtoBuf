@@ -20,33 +20,60 @@ namespace easypb_schema {
 
 namespace {
 
-// Cycle-free by construction: bind_import_edges rejects cycles before the
-// linker runs, so a plain memoized DFS needs no in-progress marker, and the
-// entry inserted below is always complete by the time it is read back. Do not
-// "fix" this by adding a recursion guard - the guard would mask the only
-// interesting bug, which is a memo entry returned half-built.
+// One export set per file that re-exports anything, keyed by the file: the
+// single shared structure every Visible(F) is built from. Cycle-free by
+// construction - bind_import_edges rejects cycles before the linker runs, so
+// the public-import subgraph is acyclic - which is why the walk below needs no
+// in-progress marker and why an entry can be trusted once it exists.
 typedef std::map<const SchemaFile*, std::set<const SchemaFile*> > ExportMemo;
 
 // PublicExports(F) = {F} union PublicExports(P) over public imports P of F.
-const std::set<const SchemaFile*>& public_exports(const SchemaFile* file,
-                                                  ExportMemo& memo)
+//
+// The walk is post-order on an explicit heap worklist (review 1027, U-05/U-06):
+// the recursive form overflowed the process stack on a chain of ~1 950
+// `import public` links. A set is created only when every public import below
+// it is complete, so nothing ever reads a half-built entry and the result is
+// the same as the memoized recursion's. The memo is the only per-file export
+// structure: Visible(F) copies out of it, and nothing copies into it twice.
+void compute_public_exports(const SchemaFile* root, ExportMemo& memo)
 {
-    ExportMemo::iterator found = memo.find(file);
-    if (found != memo.end()) return found->second;
-    // Insert first: every caller below concatenates the set it gets back, so
-    // the entry must exist before the walk. Because cycles are impossible (see
-    // above), nothing can read this entry while it is still being built.
-    std::set<const SchemaFile*>& result = memo[file];
-    result.insert(file);
-    for (std::size_t i = 0; i < file->edges.size(); ++i) {
-        const ImportEdge& edge = file->edges[i];
-        if (edge.modifier == ImportInfo::PUBLIC_IMPORT && edge.target != 0) {
+    if (memo.find(root) != memo.end()) return;
+    std::vector<const SchemaFile*> stack(1, root);
+    std::vector<std::size_t> next(1, 0);
+    while (!stack.empty()) {
+        const SchemaFile* file = stack.back();
+        std::size_t& index = next.back();
+        bool descended = false;
+        while (index < file->edges.size()) {
+            const ImportEdge& edge = file->edges[index++];
+            if (edge.modifier != ImportInfo::PUBLIC_IMPORT ||
+                edge.target == 0) {
+                continue;
+            }
+            if (memo.find(edge.target) != memo.end()) continue;
+            // `index` and `file` are not used after the push: both vectors may
+            // reallocate, and the frame's position is already saved in `next`.
+            stack.push_back(edge.target);
+            next.push_back(0);
+            descended = true;
+            break;
+        }
+        if (descended) continue;
+        std::set<const SchemaFile*>& result = memo[file];
+        result.insert(file);
+        for (std::size_t i = 0; i < file->edges.size(); ++i) {
+            const ImportEdge& edge = file->edges[i];
+            if (edge.modifier != ImportInfo::PUBLIC_IMPORT ||
+                edge.target == 0) {
+                continue;
+            }
             const std::set<const SchemaFile*>& sub =
-                public_exports(edge.target, memo);
+                memo.find(edge.target)->second;
             result.insert(sub.begin(), sub.end());
         }
+        stack.pop_back();
+        next.pop_back();
     }
-    return result;
 }
 
 // Visible(F) = {F} union PublicExports(D) over every direct import D of F.
@@ -61,11 +88,82 @@ std::set<const SchemaFile*> visible_files(const SchemaFile* file,
     for (std::size_t i = 0; i < file->edges.size(); ++i) {
         const ImportEdge& edge = file->edges[i];
         if (edge.target == 0) continue;
-        const std::set<const SchemaFile*>& sub =
-            public_exports(edge.target, memo);
+        compute_public_exports(edge.target, memo);
+        const std::set<const SchemaFile*>& sub = memo.find(edge.target)->second;
         result.insert(sub.begin(), sub.end());
     }
     return result;
+}
+
+// The import-chain bound (review 1027, U-05/U-06, owner decision 10). The
+// source loader refuses a discovery chain deeper than the limit while it walks
+// the filesystem; a descriptor-set graph arrives whole, with no filesystem to
+// walk, so the bound is enforced here instead - before the visibility sets are
+// materialised, because every one of them costs memory per file of the chain
+// and the limit exists to bound exactly that cost.
+//
+// The depth of a file is the number of files on the longest import path that
+// starts at it (1 for a file without imports). One iterative post-order walk
+// computes every depth, so the check cannot overflow the stack on the very
+// graph it refuses, and it names the deepest file it found - for a chain that
+// is its head, the file a caller would have compiled.
+bool validate_import_chain_depth(const std::vector<SchemaFile*>& ordered,
+                                 Diagnostic& error)
+{
+    const std::size_t limit = max_import_chain_depth();
+    std::map<const SchemaFile*, std::size_t> depths;
+    std::vector<const SchemaFile*> stack;
+    std::vector<std::size_t> next;
+    const SchemaFile* deepest = 0;
+    std::size_t deepest_depth = 0;
+    for (std::size_t root = 0; root < ordered.size(); ++root) {
+        if (depths.find(ordered[root]) != depths.end()) continue;
+        stack.push_back(ordered[root]);
+        next.push_back(0);
+        while (!stack.empty()) {
+            const SchemaFile* file = stack.back();
+            std::size_t& index = next.back();
+            bool descended = false;
+            while (index < file->edges.size()) {
+                const ImportEdge& edge = file->edges[index++];
+                // Null targets exist only in compatibility mode and lead
+                // nowhere: a missing file is not part of any chain.
+                if (edge.target == 0) continue;
+                if (depths.find(edge.target) != depths.end()) continue;
+                stack.push_back(edge.target);
+                next.push_back(0);
+                descended = true;
+                break;
+            }
+            if (descended) continue;
+            std::size_t depth = 1;
+            for (std::size_t i = 0; i < file->edges.size(); ++i) {
+                const ImportEdge& edge = file->edges[i];
+                if (edge.target == 0) continue;
+                const std::size_t below = depths.find(edge.target)->second;
+                if (below + 1 > depth) depth = below + 1;
+            }
+            depths[file] = depth;
+            stack.pop_back();
+            next.pop_back();
+            if (depth > deepest_depth) {
+                deepest_depth = depth;
+                deepest = file;
+            }
+        }
+    }
+    if (deepest_depth <= limit) return true;
+
+    error = Diagnostic();
+    error.file = schema_file_label(*deepest);
+    error.location = unknown_location();
+    std::ostringstream message;
+    message << "import chain depth " << deepest_depth
+            << " exceeds the limit of " << limit << " files";
+    error.message = message.str();
+    error.warning = false;
+    error.code = DIAGNOSTIC_GENERIC;
+    return false;
 }
 
 bool less_by_logical_name(const SchemaFile* left, const SchemaFile* right)
@@ -347,6 +445,12 @@ bool link_schema(SchemaSet& files, LinkMode mode,
     // Stage 2: bind every file's import edges. In complete mode a missing
     // target is an error.
     if (!bind_import_edges(files, false, error)) return false;
+
+    // Stage 2b (U-05/U-06): the import-chain bound, asked of the bound graph.
+    // It runs before the sweeps, the index and the visibility sets, because
+    // the cost of everything below grows with the depth of a chain - and a
+    // descriptor set reaches this line without the loader's own bound.
+    if (!validate_import_chain_depth(ordered, error)) return false;
 
     // Stage 3a (A26): every synthetic map entry present in an available file
     // must carry a field numbered 1 and a field numbered 2, whether or not

@@ -16,6 +16,7 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -756,7 +757,73 @@ void test_visibility_public_chain_re_exports_recursively()
     CHECK(visible_names(linked, d) == "d.proto");
 }
 
-// Step 3.1/3.2: cross-file collisions. Each pair below is two
+// U-05/U-06: the import-chain bound, asked of the linker directly and at the
+// exact boundary - max_import_chain_depth() files are accepted, one more is
+// refused. The limits lane drives the same rule through the CLI; this row
+// proves the boundary itself without 1 001 files on disk, and the accepted
+// half also exercises the visibility walk at exactly the bound (the recursive
+// `public_exports` died at ~1 950 links, and its per-file export sets were the
+// quadratic-memory half of the finding).
+std::string chain_file_name(std::size_t index)
+{
+    std::ostringstream name;
+    name << 'c' << index << ".proto";
+    return name.str();
+}
+
+// A chain of `length` files, each one public-importing the next and declaring
+// nothing: the graph is the whole fixture.
+void make_public_chain(easypb_schema::SchemaSet& set, std::size_t length)
+{
+    const std::vector<std::int32_t> no_indexes;
+    const std::vector<std::int32_t> index_zero = repeated_indexes(1, 0);
+    for (std::size_t index = 0; index < length; ++index) {
+        std::vector<std::string> deps;
+        if (index + 1 < length) deps.push_back(chain_file_name(index + 1));
+        make_file(set, chain_file_name(index).c_str(), deps,
+                  deps.empty() ? no_indexes : index_zero, no_indexes);
+    }
+}
+
+void test_import_chain_depth_bound()
+{
+    const std::size_t limit = easypb_schema::max_import_chain_depth();
+
+    // Exactly at the bound.
+    {
+        easypb_schema::SchemaSet set;
+        make_public_chain(set, limit);
+        const easypb_schema::LinkedSchema linked = link_ok(set);
+        const easypb_schema::SchemaFile* head = set.find_file(chain_file_name(0));
+        CHECK(head != 0);
+        if (head != 0) {
+            const std::map<const easypb_schema::SchemaFile*,
+                           std::set<const easypb_schema::SchemaFile*> >::const_iterator
+                found = linked.visible_files.find(head);
+            CHECK(found != linked.visible_files.end());
+            if (found != linked.visible_files.end()) {
+                CHECK(found->second.size() == limit);
+            }
+        }
+    }
+
+    // One file more than the bound: refused, and nothing is published.
+    {
+        easypb_schema::SchemaSet set;
+        make_public_chain(set, limit + 1);
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(set, easypb_schema::LINK_COMPLETE,
+                                          linked, error));
+        CHECK(linked.files == 0);
+        CHECK(error.message ==
+              "import chain depth 1001 exceeds the limit of 1000 files");
+        // The deepest file is the head of the chain: the one a caller would
+        // have compiled, and the one the sentence names.
+        CHECK(error.file == chain_file_name(0));
+    }
+}
+
 // dependency-free files, so nothing in the bind stage can be the reason the
 // link fails, and the name-sorted walk indexes `a.proto` before `b.proto`.
 
@@ -7705,6 +7772,7 @@ int main(int argc, char** argv)
     test_visibility_weak_import_behaves_as_ordinary();
     test_visibility_diamond_public_exports_are_complete();
     test_visibility_public_chain_re_exports_recursively();
+    test_import_chain_depth_bound();
     test_index_message_vs_message_across_files();
     test_index_message_vs_enum_across_files();
     test_index_type_vs_enum_value_across_files();

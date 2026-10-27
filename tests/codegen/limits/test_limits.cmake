@@ -107,6 +107,26 @@ function(require_empty variable_name description)
     endif()
 endfunction()
 
+# A refusal is a diagnostic, not a crash: the CLI reports every refusal with
+# exit code 1 (main.cpp), so a crash - 0xC00000FD on Windows, a signal on
+# POSIX - can never pass this check, and the stderr assertion below proves the
+# sentence came from the refusal itself.
+function(run_refused output_var error_var description)
+    execute_process(
+        COMMAND ${ARGN}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error)
+    if(NOT result EQUAL 1)
+        message(FATAL_ERROR
+            "${description}: expected the refusal exit code 1, got '${result}'"
+            " (a crash is not a refusal)\nstdout:\n${output}\nstderr:\n${error}")
+    endif()
+    message(STATUS "${description}: refused with exit code ${result}")
+    set(${output_var} "${output}" PARENT_SCOPE)
+    set(${error_var} "${error}" PARENT_SCOPE)
+endfunction()
+
 file(REMOVE_RECURSE "${WORK_DIR}")
 file(MAKE_DIRECTORY "${WORK_DIR}/descriptor")
 file(MAKE_DIRECTORY "${WORK_DIR}/source")
@@ -253,6 +273,142 @@ if(FULL_BUILD)
             "CR-35: the source and descriptor chain headers disagree")
     endif()
 endif()
+
+# --- the import-chain bound (U-05, U-06) --------------------------------------
+#
+# The import graph is untrusted input. The loader used to recurse once per
+# import edge: a chain of ~1 950 files ended the process with
+# STATUS_STACK_OVERFLOW (0xC00000FD) and an empty stderr, while protoc compiles
+# chains of 3 000-3 500 files. Both walks are heap worklists now, and the
+# chain depth is bounded at 1 000 files (max_import_chain_depth(), owner
+# decision 10) with a sentence that names the depth, the limit and the
+# offending file. 1 000 files is accepted, 1 001 is refused; a 5 000-file
+# chain - the review's crash length, five times the bound - must be refused
+# with that sentence rather than end the process.
+#
+# The source halves are written here, because a 5 000-file chain is not a
+# fixture a repository can carry as 5 000 tracked files.
+#
+# The accepted chain is the SAME schema the `public-chain-1000.pbs` fixture
+# carries, down to the file names, so the two doors are required to produce one
+# header byte for byte: `c<i>.proto` publicly imports `c<i+1>.proto` and
+# declares nothing.
+set(public_chain_length 1000)
+set(public_chain_dir "${WORK_DIR}/public-chain-source")
+if(FULL_BUILD)
+    file(REMOVE_RECURSE "${public_chain_dir}")
+    file(MAKE_DIRECTORY "${public_chain_dir}")
+    math(EXPR public_chain_last "${public_chain_length} - 1")
+    foreach(index RANGE 0 ${public_chain_last})
+        if(index EQUAL public_chain_last)
+            file(WRITE "${public_chain_dir}/c${index}.proto" "")
+        else()
+            math(EXPR public_chain_next "${index} + 1")
+            file(WRITE "${public_chain_dir}/c${index}.proto"
+                "import public \"c${public_chain_next}.proto\";\n")
+        endif()
+    endforeach()
+endif()
+
+# The deep chain is an ordinary import chain, five times the bound: the chain
+# under the last-but-1000 root is exactly 1 000 files deep, the chain under the
+# next one up is 1 001, and the chain under the first is the whole 5 000.
+set(import_chain_length 5000)
+set(import_chain_dir "${WORK_DIR}/import-chain")
+if(FULL_BUILD)
+    file(REMOVE_RECURSE "${import_chain_dir}")
+    file(MAKE_DIRECTORY "${import_chain_dir}")
+    math(EXPR import_chain_last "${import_chain_length} - 1")
+    math(EXPR import_chain_first_refused
+        "${import_chain_length} - 1000 - 1")
+    foreach(index RANGE 0 ${import_chain_last})
+        if(index EQUAL import_chain_last)
+            file(WRITE "${import_chain_dir}/d${index}.proto" "")
+        else()
+            math(EXPR import_chain_next "${index} + 1")
+            file(WRITE "${import_chain_dir}/d${index}.proto"
+                "import \"d${import_chain_next}.proto\";\n")
+        endif()
+    endforeach()
+endif()
+
+if(FULL_BUILD)
+    # 1 000 files deep: accepted, and the whole walk is iterative, so the depth
+    # costs memory (a 1 000-frame worklist) instead of call frames.
+    run_ok(chain_ok_out chain_ok_err
+        ${CODEGEN} -I "${public_chain_dir}"
+        --out-dir "${WORK_DIR}/import-chain-out/accepted"
+        "${public_chain_dir}/c0.proto")
+    require_empty(chain_ok_out "The accepted import-chain stdout")
+    require_empty(chain_ok_err "The accepted import-chain stderr")
+    file(READ "${WORK_DIR}/import-chain-out/accepted/c0.pb.hpp"
+        chain_ok_header)
+    if(chain_ok_header STREQUAL "")
+        message(FATAL_ERROR "The accepted import chain wrote an empty header")
+    endif()
+
+    # One file more than the bound: refused with the bound's own sentence.
+    run_refused(chain_deep_out chain_deep_err "The 1 001-file import chain"
+        ${CODEGEN} -I "${import_chain_dir}"
+        --out-dir "${WORK_DIR}/import-chain-out/refused"
+        "${import_chain_dir}/d${import_chain_first_refused}.proto")
+    require_empty(chain_deep_out "The 1 001-file import-chain stdout")
+    require_contains(chain_deep_err
+        "import chain depth 1001 exceeds the limit of 1000 files"
+        "The 1 001-file import-chain refusal")
+    require_contains(chain_deep_err "d${import_chain_last}.proto"
+        "The 1 001-file import-chain refusal names the offending file")
+
+    # The review's crash length: five times the bound. The process must refuse
+    # it with the same sentence, not end with 0xC00000FD - `run_refused` fails
+    # on any exit code but 1, and the empty stderr of a crash would fail the
+    # assertion below as well.
+    run_refused(chain_long_out chain_long_err "The 5 000-file import chain"
+        ${CODEGEN} -I "${import_chain_dir}"
+        --out-dir "${WORK_DIR}/import-chain-out/long"
+        "${import_chain_dir}/d0.proto")
+    require_empty(chain_long_out "The 5 000-file import-chain stdout")
+    require_contains(chain_long_err
+        "import chain depth 1001 exceeds the limit of 1000 files"
+        "The 5 000-file import-chain refusal")
+endif()
+
+# The descriptor half: the same graph arrives whole in one `.pbs`, with no
+# filesystem walk, so the linker owns the bound there. 1 000 `import public`
+# links is the deepest accepted chain - the length whose export sets used to be
+# copied per file - and 20 000 is the length the review measured the crash at.
+run_ok(public_chain_out public_chain_err
+    ${CODEGEN} --descriptor-set --target c0.proto
+    --out-dir "${WORK_DIR}/public-chain-1000"
+    "${DATA_DIR}/public-chain-1000.pbs")
+require_empty(public_chain_out "The accepted public-chain stdout")
+require_empty(public_chain_err "The accepted public-chain stderr")
+file(READ "${WORK_DIR}/public-chain-1000/c0.pb.hpp" public_chain_header)
+if(public_chain_header STREQUAL "")
+    message(FATAL_ERROR "The accepted public chain wrote an empty header")
+endif()
+
+# Both doors, one header: the accepted chain is one schema, so the `.proto`
+# files written above and the committed `.pbs` must produce the same bytes.
+if(FULL_BUILD)
+    if(NOT chain_ok_header STREQUAL public_chain_header)
+        message(FATAL_ERROR
+            "The source path and the descriptor path disagree on the accepted "
+            "public-import chain")
+    endif()
+endif()
+
+run_refused(public_chain_long_out public_chain_long_err
+    "The 20 000-file public-import chain"
+    ${CODEGEN} --descriptor-set --target c0.proto
+    --out-dir "${WORK_DIR}/public-chain-20000"
+    "${DATA_DIR}/public-chain-20000.pbs")
+require_empty(public_chain_long_out "The 20 000-file public-chain stdout")
+require_contains(public_chain_long_err
+    "import chain depth 20000 exceeds the limit of 1000 files"
+    "The 20 000-file public-chain refusal")
+require_contains(public_chain_long_err "c0.proto"
+    "The 20 000-file public-chain refusal names the offending file")
 
 # --- the bounded output tree -------------------------------------------------
 #

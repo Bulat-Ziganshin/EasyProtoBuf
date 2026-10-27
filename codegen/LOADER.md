@@ -14,9 +14,9 @@ where "Deliberate differences" says otherwise.
 
 The loader turns an ordered list of search roots (`-I`) plus a list of input files into a `SchemaSet`
 holding every file, transitive imports included, each exactly once, with an already validated import
-graph: no missing imports, no cycles. The same graph is validated for descriptor-set input as well,
-with no filesystem access at all. Types and visibility (`public import` as re-export) are still not
-resolved; that is the next step.
+graph: no missing imports, no cycles, and no chain deeper than the documented bound (1 000 files).
+The same graph is validated for descriptor-set input as well, with no filesystem access at all. Types
+and visibility (`public import` as re-export) are still not resolved; that is the next step.
 
 ## The contract, and where it comes from
 
@@ -108,9 +108,9 @@ without the filesystem, or descriptor-set input could not call it at all.
 ## The path of one call
 
 Everything starts in `load_source_files(options, roots, result, error)`: clear the result, normalize
-the roots, then for every input argument call `resolve_root` and load recursively, append the loaded
-file to `targets`, and call `bind_import_edges` once at the very end. The order is not incidental:
-until every file is loaded there is no graph to validate.
+the roots, then for every input argument call `resolve_root` and follow its import chain, append the
+loaded file to `targets`, and call `bind_import_edges` once at the very end. The order is not
+incidental: until every file is loaded there is no graph to validate.
 
 ### Turning an argument into a logical name (`resolve_root`)
 
@@ -145,30 +145,61 @@ it the same way — its CLI answers an empty argument with "it is not valid inpu
 the wording differs. An empty *search root* entry is a different thing altogether: it means the working
 directory, exactly like the default `proto_path`, and the search continues from there.
 
-### Loading one file: three checks in order (`load_recursive`)
+### Loading one file: three checks in order (`begin_frame`)
+
+The chain is followed with an **explicit heap worklist**, not one C++ call frame per import edge
+(`U-05`/`U-06`): a recursive walk ended the process with `STATUS_STACK_OVERFLOW` (`0xC00000FD`) and
+an empty stderr on a chain of ~1 950 files, and the import graph is untrusted input. The walk keeps
+the recursive shape - a frame is expanded in declaration order, depth first, and every diagnostic and
+read order is unchanged - but the depth costs heap, not the process stack.
+
+Every frame goes through the same three checks, in the same order:
 
 1. **The logical name is already present** — return silently, so a repeated command-line root or a
    diamond import is not an error, exactly like the descriptor pool keyed by file name.
-2. **The slot is reserved in the `SchemaSet` before imports are followed.** This is what makes both a
-   diamond and a cycle safe: no file is parsed twice and no recursion can be infinite. The slot is
-   empty at this point; parsing fills it.
-3. **Reading and parsing happen in a separate helper** (`read_and_parse_source`). The file is read into
-   a local buffer and parsed deferred (`defer_type_resolution = true`); the slot gets `file.name` = the
-   logical name and `physical_name` = the disk path; the buffer dies before dependencies are followed.
+2. **The chain depth is within the bound** — `max_import_chain_depth()` files, see
+   [The import-chain bound](#the-import-chain-bound). A file one level deeper is refused before it
+   is read.
+3. **The slot is reserved in the `SchemaSet` before imports are followed.** This is what makes both a
+   diamond and a cycle safe: no file is parsed twice and no walk can be infinite. The slot is empty
+   at this point; parsing fills it. Reading and parsing happen in a separate helper
+   (`read_and_parse_source`): the file is read into a local buffer and parsed deferred
+   (`defer_type_resolution = true`); the slot gets `file.name` = the logical name and `physical_name`
+   = the disk path; the buffer dies before dependencies are followed.
 
 Check 3 answers "why deferred, and why two names". The source must not outlive parsing, because
-otherwise it is retained for the whole transitive walk while the import depth is not known in advance.
-At the same time `physical_name` is needed afterwards for diagnostics, and `file.name` must hold the
-logical path: generated include names come from it, and it is the key that matches files against each
-other.
+otherwise it is retained for the whole walk while the import depth is not known in advance. At the
+same time `physical_name` is needed afterwards for diagnostics, and `file.name` must hold the logical
+path: generated include names come from it, and it is the key that matches files against each other.
 
-### Imports (`load_dependencies`)
+### Imports (`follow_import`)
 
 The walk follows the descriptor's `dependency` list, which is authoritative. The modifier comes from
 `weak_dependency` / `public_dependency` by index, and the parser's `imports` vector is used **only** as
 a source of positions for messages. Every import is loaded, including ones whose types nobody
 references, and a `weak` import has the same existence requirement as a normal one in this complete
 mode.
+
+### The import-chain bound
+
+A discovery chain may be at most **1 000 files** deep (`max_import_chain_depth()`, owner decision 10
+of review 1027). 1 000 files are accepted; the 1 001st is refused with
+
+```text
+f1000.proto: import chain depth 1001 exceeds the limit of 1000 files (imported by "f999.proto"; the chain starts at "f0.proto")
+```
+
+The sentence names the depth, the limit, the offending file, the import that asks for it and the root
+of the chain - and deliberately not the whole chain, whose length is the problem. The bound is a
+policy limit and not a reference behaviour: protoc compiles chains of 3 000-3 500 files, so a schema
+this project refuses is one protoc accepts. It exists because the import graph is untrusted input and
+everything that follows it - the walk, the linker's visibility sets, the generated include graph -
+costs time and memory per level. It is the analogue of the message-nesting limit (31 levels, see
+[GENERATED_CODE.md](GENERATED_CODE.md#current-limitations-and-semantic-differences)): a documented
+refusal at a documented depth instead of a crash or an unbounded allocation at an undocumented one.
+The linker enforces the same bound on the graph it receives, so a descriptor set - which arrives
+without a filesystem walk - is refused identically (`schema_linker.cpp`, `validate_import_chain_depth`).
+
 
 ### Final graph validation (`bind_import_edges`)
 
@@ -188,7 +219,7 @@ a cycle exists. The binder also rejects a repeated name in one dependency list a
   filesystem to decide containment, and nothing canonicalizes case, inodes or reparse points. This is
   the same trade-off protoc documents: two paths that look equivalent (absolute versus relative) are
   simply not equivalent to the compiler.
-- **Caching happens before recursion, and "this is a cycle" is decided in the binder.** The loader
+- **Caching happens before the walk continues, and "this is a cycle" is decided in the binder.** The loader
   prevents infinite work; the common pass is what reports a cycle as an error. The separation is
   deliberate: cycles must be found identically for source input and for descriptor sets.
 - **A failure leaves no partial result.** Any error clears the `SchemaSet` and all edges
@@ -203,10 +234,10 @@ a cycle exists. The binder also rejects a repeated name in one dependency list a
 `public_dependency` / `weak_dependency` index that is negative, out of range, repeated, or names a
 dependency already marked by the other list.
 
-**In the graph:** an import that is absent on disk, even when no type references it; a cycle; a file
-under a search root whose remainder is not a valid logical name; a shadowed input; an argument that
-lies outside all search roots (after the logical-name retry), names a directory, or is empty; a denied
-access while resolving or reading.
+**In the graph:** an import that is absent on disk, even when no type references it; a cycle; a chain
+deeper than the import-chain bound; a file under a search root whose remainder is not a valid logical
+name; a shadowed input; an argument that lies outside all search roots (after the logical-name retry),
+names a directory, or is empty; a denied access while resolving or reading.
 
 Import failures carry their own `DiagnosticCode`: `DIAGNOSTIC_INVALID_IMPORT`,
 `DIAGNOSTIC_MISSING_IMPORT`, `DIAGNOSTIC_IMPORT_CYCLE`. They are distinct values, and a test asserts

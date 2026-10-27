@@ -337,6 +337,30 @@ inline int max_message_nesting_depth()
     return 32;
 }
 
+// The deepest import chain a schema may declare: the number of files on one
+// discovery path from an input file to the file it imports, transitively. A
+// chain of 1 000 files is accepted; the 1 001st is refused.
+//
+// This is a protective bound, not a reference behaviour: protoc compiles
+// chains of 3 000-3 500 files (measured), so a schema this project refuses is
+// one protoc accepts. The bound exists because the import graph is untrusted
+// input and everything that follows it - the loader's walk, the linker's
+// visibility sets, the generated include graph - costs time and memory per
+// level. It was chosen by the owner (review 1027, decision 10) as the analogue
+// of the nesting limit above: a clear refusal at a documented depth instead of
+// a crash or an unbounded allocation at an undocumented one. The refusal has
+// its own sentence and names the depth, the limit and the offending file.
+//
+// The rule lives here because two doors enforce it and they must not
+// disagree: the source loader refuses while it follows imports, and the linker
+// refuses a descriptor-set graph that arrived without a filesystem walk. Both
+// walks use an explicit heap worklist, so the bound is a policy limit, never
+// the process stack's own.
+inline std::size_t max_import_chain_depth()
+{
+    return 1000;
+}
+
 class SchemaFile;
 
 struct FieldSource

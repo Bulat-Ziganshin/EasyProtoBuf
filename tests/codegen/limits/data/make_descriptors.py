@@ -33,6 +33,17 @@ Four shapes are produced:
   cycle detector and topological sort used to overflow on (CR-35). The
   `.pbs` is protoc's own encoding of the `.proto` beside it.
 
+- `public-chain-1000.pbs` / `public-chain-20000.pbs` - a chain of files, each
+  one `import public`-ing the next. These are the descriptor half of the
+  import-chain bound (review 1027, U-05/U-06): the graph arrives whole, with
+  no filesystem to walk, so the linker owns the bound there. 1 000 files is
+  the deepest chain the project accepts; 20 000 is the input that used to end
+  the process in `public_exports`. There is no `.proto` half: a 20 000-file
+  chain is not writable as one source file, and the source door is driven from
+  files the lane writes when it runs. The sets are crafted, not compiled, for
+  the same reason - but each is a well-formed `FileDescriptorSet` that protoc
+  itself accepts as input.
+
 Usage:
 
     python tests/codegen/limits/data/make_descriptors.py [--protoc PATH] [--check]
@@ -71,6 +82,13 @@ DEEP_NAME_COMPONENTS = 101
 # passed. The chain is top-level throughout, so it is the graph depth, not
 # the nesting depth, that the lane exercises.
 CHAIN_LENGTH = 12000
+
+# The import-chain bound of review 1027 (U-05/U-06): 1 000 files are accepted,
+# 1 001 are refused. The public-import chain is the shape whose linker walk
+# used to overflow the stack at ~1 950 links and whose per-file export sets
+# used ~3 GB at 8 000; 20 000 is the length the review measured the crash at.
+PUBLIC_CHAIN_ACCEPTED = 1000
+PUBLIC_CHAIN_REFUSED = 20000
 
 
 def source_text(depth):
@@ -127,6 +145,24 @@ def chain_source_text(length):
     return "\n".join(lines) + "\n"
 
 
+def public_chain_textproto(length):
+    """A descriptor set whose files form one `import public` chain.
+
+    The names are `c0.proto` .. `c<length-1>.proto` because the lane writes the
+    same chain as `.proto` files when it runs and compares the two headers byte
+    for byte: one schema, two doors.
+    """
+    lines = []
+    for index in range(length):
+        lines.append("file {")
+        lines.append('  name: "c%d.proto"' % index)
+        if index + 1 < length:
+            lines.append('  dependency: "c%d.proto"' % (index + 1))
+            lines.append("  public_dependency: 0")
+        lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
 FIXTURES = (
     # The accepted shape: protoc builds the descriptor itself.
     Fixture.compile("nesting-31",
@@ -143,6 +179,15 @@ FIXTURES = (
     Fixture.compile("dependency-chain",
                     source_text=chain_source_text(CHAIN_LENGTH)
                     .encode("utf-8")),
+    # The import-chain bound, descriptor half: the deepest accepted chain and
+    # the length the recursive walk used to die on. Crafted, because no single
+    # `.proto` expresses 1 000 files.
+    Fixture.craft("public-chain-1000",
+                  text=public_chain_textproto(PUBLIC_CHAIN_ACCEPTED)
+                  .encode("utf-8")),
+    Fixture.craft("public-chain-20000",
+                  text=public_chain_textproto(PUBLIC_CHAIN_REFUSED)
+                  .encode("utf-8")),
 )
 
 

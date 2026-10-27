@@ -14,6 +14,11 @@ name. The Windows-only section at the end writes the same fixture through the
 plain and the prefixed spellings and requires one header byte for byte; the
 input half runs under `FULL_BUILD`.
 
+Since the 1027 review it also covers the two graph bounds: the by-value
+dependency chain of `CR-35` (12 000 messages, accepted) and the import-chain
+bound of `U-05`/`U-06` (1 000 files accepted, 1 001 refused, 5 000 and 20 000
+refused without a crash). Both are documented below.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -77,6 +82,8 @@ compares the **bytes** on the wire and reads them back.
 | 32 levels of nested messages (refused) | `data/nesting-32.proto` / `.pbs` | `W-01` |
 | a logical name with 101 components | `data/deep-name.pbs` | `W-32` |
 | 12 000 messages in a by-value dependency chain (accepted) | `data/dependency-chain.proto` / `.pbs` | `CR-35` |
+| 1 000 files in one `import public` chain (accepted) | `data/public-chain-1000.pbs` | `U-05`, `U-06` |
+| 20 000 files in one `import public` chain (refused) | `data/public-chain-20000.pbs` | `U-05`, `U-06` |
 
 The two nesting depths are the reference compiler's own boundary: its
 `MaxMessageDeclarationNestingDepth()` is 32 (`descriptor.h:3045`) and it
@@ -126,6 +133,73 @@ The walk uses an explicit heap stack in both places, so the depth is bounded
 by memory rather than by the process stack. There is no documented depth
 bound to trip: an accepted schema stays accepted.
 
+## The import-chain bound (`U-05`, `U-06`)
+
+The import graph is the second untrusted axis, and it has its own bound: a
+discovery chain may be at most **1 000 files** deep. 1 000 files are accepted,
+the 1 001st is refused with
+
+```text
+d4999.proto: import chain depth 1001 exceeds the limit of 1000 files (imported by "d4998.proto"; the chain starts at "d3999.proto")
+```
+
+which names the depth, the limit, the offending file, the import that asks for
+it and the root of the chain. The descriptor path has no filesystem walk to
+attribute a chain to a root, so its sentence is the same without the
+parenthetical: `c0.proto: import chain depth 20000 exceeds the limit of 1000
+files`. The bound is the import-graph analogue of the nesting limit above, and
+it is a protective limit rather than a reference behaviour: protoc compiles
+chains of 3 000–3 500 files, so a schema this lane refuses for depth is one
+protoc accepts. It exists because both walks used to recurse once per import
+edge (the loader ended the process with `0xC00000FD`, `STATUS_STACK_OVERFLOW`,
+on a chain of ~1 950 files; the linker's `public_exports` did the same on
+~20 000 `import public` links and used ~3 GB on 8 000) and because every
+per-level structure that follows the chain costs memory.
+
+The lane asserts the boundary on both input paths:
+
+| Case | Door | Verdict |
+| --- | --- | --- |
+| 1 000-file `import public` chain (`c0`…`c999`) | source (`.proto` files written into `WORK_DIR`) | exit 0, header written **and equal to the descriptor header byte for byte** |
+| 1 001-file chain | source (`d3999`…`d4999`) | exit 1 with the sentence above and `d4999.proto` named |
+| 5 000-file chain | source (`d0`…) | exit 1 with the same sentence — the review's crash length |
+| 1 000-file `import public` chain | descriptor (`public-chain-1000.pbs`) | exit 0, header written |
+| 20 000-file `import public` chain | descriptor (`public-chain-20000.pbs`) | exit 1, `import chain depth 20000 exceeds the limit of 1000 files` |
+
+The refusals go through `run_refused`, which accepts **exit code 1 only**: a
+crash returns `0xC00000FD` (or a POSIX signal) and fails the row, and the
+stderr assertions below it would fail on a crash's empty stderr as well.
+
+Two details of the fixtures are deliberate. The source chains are written by
+the driver, not committed: a repository cannot carry 6 000 tracked files for
+three rows, and the driver already owns its scratch tree. The two descriptor
+sets are committed, because a single `.pbs` holds the whole graph and
+`protoc`'s text encoder can produce it (`make_descriptors.py`); the 20 000
+links are the length the review measured the crash at. The accepted chain is
+**one schema on both doors** — the `.proto` files and the `.pbs` carry the same
+names and the same edges — so the two headers are compared byte for byte; the
+accepted header is not compiled, because a 1 000-deep public-import chain is
+the subject of the walk and the bound, not of the compiler.
+
+Measured on 2026-10-27 in the `tree-cxx17` profile, before and after (`U-05`,
+`U-06`; the pre-change binary is the `build/verification/tree-cxx17` build,
+whose `schema_linker.cpp` and `proto_loader.cpp` are those of `0ae9683`, the
+last commit that touched them):
+
+| Case | Before | After |
+| --- | --- | --- |
+| source 1 000 `import public` | exit 0, 1.05 s, 59 MB | exit 0, 1.05 s, 58 MB |
+| source 1 001 | exit 0 (accepted — no bound), 1.04 s | exit 1, 1.04 s, 11 MB, the sentence |
+| source 5 000 | **`0xC00000FD`**, 10.14 s, empty stderr | exit 1, 1.05 s, 11 MB, the sentence |
+| descriptor 1 000 `import public` | exit 0, 1.03 s, 58 MB | exit 0, 1.04 s, 58 MB |
+| descriptor 20 000 `import public` | **`0xC00000FD`**, 3.05 s, 111 MB, empty stderr | exit 1, 1.05 s, 111 MB, the sentence |
+
+The peak working set of the accepted 1 000-file chain is unchanged: the
+per-file visibility set is the cost, and the bound is what keeps it bounded
+(the same shape at 8 000 files used ~3 GB before the bound existed). What the
+fix removes is the crash, the 10 s spent reading 5 000 files before dying, and
+the recursion depth.
+
 ## The long-path prefix (`W-46`)
 
 The prefix turns off Win32 path parsing, so it is a transport spelling: the
@@ -151,10 +225,15 @@ are shared with the other descriptor lanes in
 `tests/codegen/common/descriptor_fixtures.py`. It writes the `.proto` and
 `.pbs` files: a 31-level schema and a 32-level schema are not writable by hand,
 and the pair is the whole point of the lane. The same script writes the
-12 000-message dependency chain and its `.pbs`. `--check` regenerates both
-halves in memory and fails on any byte that differs from the committed file.
+12 000-message dependency chain and its `.pbs`, and the two `import public`
+chains (1 000 and 20 000 files) as descriptor sets — those are crafted from
+text format rather than compiled, because no single `.proto` expresses 1 000
+files. `--check` regenerates every fixture in memory and fails on any byte that
+differs from the committed file.
 
-Running the lane never needs `protoc`: the fixtures are committed.
+Running the lane never needs `protoc`: the fixtures are committed. The three
+source-path chain cases write their own `.proto` files into the lane's
+`WORK_DIR` when the driver runs (`FULL_BUILD` only); they are not committed.
 
 ## The lanes it joins
 
