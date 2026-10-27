@@ -59,14 +59,15 @@ OptionName            <- OptionNamePart ("." OptionNamePart)*
 OptionNamePart        <- Identifier / "(" "."? FullIdentifier ")"
 
 Constant              <- StringSequence / SignedFloat / SignedInteger /
-                         BoolLiteral / FullIdentifier / AggregateValue
+                         BoolLiteral / Identifier / "-"? AggregateValue
 SignedInteger         <- Sign? IntegerToken
 SignedFloat           <- Sign? (FloatToken / K_INF / K_NAN)
 BoolLiteral           <- K_TRUE / K_FALSE
 
 # The EasyPB parser balances curly braces for aggregate custom options. It does not
 # interpret their Text Format fields and stores only the fact that an aggregate
-# value was present.
+# value was present. A leading `-` is ignored, as protoc's ParseOption ignores
+# it (U-24); `+` is not a value sign and is refused before this rule.
 AggregateValue        <- "{" AggregateToken* "}"
 AggregateToken        <- AggregateValue / StringAtom / FloatToken /
                          IntegerToken / Identifier / [\[\]()<>=;,.+\-:]
@@ -90,8 +91,10 @@ DecimalInteger        <- < "0" / [1-9] [0-9]* > ![A-Za-z0-9_.]
 
 # TOKEN_FLOAT spellings emitted by Lexer::number(). The integral part is a
 # decimal digit run, so an octal token cannot carry a fraction or an exponent.
+# A second decimal point (`1.2.3`) is a lexical error (U-26), so a float token
+# may not be followed by a dot.
 FloatToken            <- < DecimalDigits ("." [0-9]* Exponent? / Exponent) /
-                           "." [0-9]+ Exponent? > ![A-Za-z_]
+                           "." [0-9]+ Exponent? > ![A-Za-z_.]
 DecimalDigits         <- "0" / [1-9] [0-9]*
 Exponent              <- [eE] [+-]? [0-9]+
 Sign                  <- [+-]

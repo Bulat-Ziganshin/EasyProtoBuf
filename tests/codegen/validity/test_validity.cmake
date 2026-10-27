@@ -145,7 +145,9 @@ set(paired_fixtures
     p3opt-ok
     oneof-contiguous
     message-set-empty
-    reserved-range-end)
+    reserved-range-end
+    option-value-defaults
+    option-value-defaults-control)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -1054,4 +1056,38 @@ if(FULL_BUILD)
     require_empty(lite_import_src_err "The lite-import source stderr")
     require_identical_headers(lite_import_desc_out lite_import_src_out
         "The source and descriptor paths disagree for nonlite-imports-lite")
+endif()
+
+# --- R08: option values by value (U-08) --------------------------------------
+#
+# `lazy = false`, `unverified_lazy = false`, `jstype = JS_NORMAL` and
+# `packed = false` on a map are the option defaults. The rule keys on the
+# value, not the flag, so all four are accepted on both doors and change
+# nothing: the option-carrying header must equal the option-less control's on
+# each door. The paired loop above already proves each door agrees with itself;
+# these two comparisons extend that to the control, which is the byte-level
+# proof that the default values are no-ops. The two fixtures have different
+# logical names, so the control's name is normalized to the option fixture's
+# before the comparison; every other byte must match.
+file(READ "${WORK_DIR}/descriptor/option-value-defaults.pb.hpp"
+    option_defaults_desc)
+file(READ "${WORK_DIR}/descriptor/option-value-defaults-control.pb.hpp"
+    option_control_desc)
+require_contains(option_defaults_desc "struct ValueDefaults"
+    "U-08: the option-carrying descriptor header")
+string(REPLACE "option-value-defaults-control.proto"
+    "option-value-defaults.proto" option_control_desc
+    "${option_control_desc}")
+require_identical_headers(option_defaults_desc option_control_desc
+    "U-08: the default-valued options changed the descriptor header")
+if(FULL_BUILD)
+    file(READ "${WORK_DIR}/source/option-value-defaults.pb.hpp"
+        option_defaults_src)
+    file(READ "${WORK_DIR}/source/option-value-defaults-control.pb.hpp"
+        option_control_src)
+    string(REPLACE "option-value-defaults-control.proto"
+        "option-value-defaults.proto" option_control_src
+        "${option_control_src}")
+    require_identical_headers(option_defaults_src option_control_src
+        "U-08: the default-valued options changed the source header")
 endif()

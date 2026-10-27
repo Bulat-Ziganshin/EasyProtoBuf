@@ -111,17 +111,28 @@ messages of `descriptor.proto` and their 47 known fields, excluding
 `uninterpreted_option` and the nine editions `features` fields. Validation
 covers the owner (file, message, field, oneof, enum, enum value, service,
 method, extension range), the value kind, a second assignment of a singular
-option, and the value-dependent rules protoc applies: `jstype` only on 64-bit
-integers, `lazy`/`unverified_lazy` only on message fields (a named type is
-checked after linking), `packed` only on repeated primitive or enum fields,
-`map_entry` refused in source text, `allow_alias` only on enums,
-`optimize_for` only on its enumerators, `message_set_wire_format` only on
-messages, and `verification = UNVERIFIED` refused beside a non-empty extension
-`declaration` list. An unknown unparenthesized name, an option in the wrong
-owner, and a wrong value kind are refusals. A recognized value is discarded
-unless a rule or the generated code reads it: `default`, `json_name`, `packed`,
-`(easypb.cpp).type`, `allow_alias`, `message_set_wire_format`, and the
-`lazy`/`unverified_lazy` presence the shared field pass reads after resolution.
+option, and the value-dependent rules protoc applies: `jstype` values other
+than `JS_NORMAL` only on 64-bit integers, `lazy = true`/`unverified_lazy = true`
+only on message fields (a named type is checked after linking), `packed = true`
+only on repeated primitive or enum fields, `map_entry` refused in source text,
+`allow_alias` only on enums, `optimize_for` only on its enumerators,
+`message_set_wire_format` only on messages, and `verification = UNVERIFIED`
+refused beside a non-empty extension `declaration` list. An unknown
+unparenthesized name, an option in the wrong owner, and a wrong value kind are
+refusals. A recognized value is discarded unless a rule or the generated code
+reads it: `default`, `json_name`, `packed`, `(easypb.cpp).type`,
+`allow_alias`, `message_set_wire_format`, and the `lazy = true`/
+`unverified_lazy = true` flags the shared field pass reads after resolution.
+
+**The value decides, not the presence of the flag** (`U-08`). Every
+value-dependent rule above speaks about the non-default value: `lazy = false`,
+`unverified_lazy = false` and `jstype = JS_NORMAL` are the options' defaults and
+are accepted on any field kind, including a scalar; `packed = false` is
+accepted on a map, whose field is a repeated message and not packable, while
+`packed = true` on the same map stays refused. The `codegen.options` lane pins
+the four accepted spellings (`accept-value-defaults.proto`, both halves of
+`U-08`), and `codegen.validity` proves that the option-carrying schema emits
+exactly the header of its option-less control on both doors.
 
 This is validation, not feature support: no Java/C#/Go option changes the
 generated C++. Only `default`, `json_name`, `packed` and `(easypb.cpp).type`
@@ -156,10 +167,11 @@ The source door records the option statement's position, so its refusal points
 at the declaration that contradicts the rule; the descriptor door has no
 positions and names the message-options descriptor path.
 
-### The descriptor door's `jstype` and `lazy` rules
+### The `jstype`, `lazy` and `unverified_lazy` rules on both doors
 
 On `.pbs` input the values come from the decoded `FieldOptions`, not from a
-source spelling:
+source spelling; on `.proto` input the parser's known-option table applies the
+same value rules to the parsed constant (`U-08`):
 
 - `jstype = JS_NORMAL` is the option's default and is accepted on every field
   kind; `JS_STRING` and `JS_NUMBER` are accepted only on `int64`, `uint64`,
@@ -173,8 +185,10 @@ source spelling:
   protoc's closed proto2 decoder, so it reads as JS_NORMAL and changes no
   verdict.
 
-The source door answers the same two rules from the option's source position;
-the descriptor door has no positions and reports the descriptor path.
+The source door answers the same rules from the option's source position; the
+descriptor door has no positions and reports the descriptor path. `packed`
+follows the same principle: only `packed = true` on a non-packable field is
+refused, so `packed = false` on a map is accepted (`U-08`).
 
 ### The descriptor door's extension range options
 

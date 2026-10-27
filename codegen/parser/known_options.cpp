@@ -220,18 +220,25 @@ std::string known_option_value_error(const KnownOption& option,
     const std::string option_name(option.name);
     if (option_name == "jstype") {
         // `ValidateJSType` refuses a declared kind outside the 64-bit
-        // integers. An unresolved name is not a 64-bit integer either.
-        if (!field.has_type || !is_64_bit_integer(field.type)) {
+        // integers (`descriptor.cc:8583-8617`). JS_NORMAL is the option's
+        // default and every field accepts it (U-08), so the rule keys on the
+        // value, not on presence. An unresolved name is not a 64-bit integer
+        // either.
+        if (text != "JS_NORMAL" &&
+            (!field.has_type || !is_64_bit_integer(field.type))) {
             return "jstype is only allowed on int64, uint64, sint64, fixed64 "
                    "or sfixed64 fields";
         }
     }
     if (option_name == "lazy" || option_name == "unverified_lazy") {
         // `ValidateFieldOptions` refuses a non-message field
-        // (descriptor.cc:7968-7974). A named type's kind is unknown until
-        // linking; that half is decided by the shared semantic pass, which
-        // records the option's location in the field provenance.
-        if (!field.named && (!field.has_type ||
+        // (descriptor.cc:7968-7974). Either flag written as `false` is the
+        // default and every field accepts it (U-08); only `true` reaches the
+        // rule. A named type's kind is unknown until linking, so that half is
+        // decided by the shared semantic pass, which records the option's
+        // location in the field provenance.
+        if (text == "true" &&
+            !field.named && (!field.has_type ||
                              field.type != FieldDescriptorProto::TYPE_MESSAGE)) {
             return "[lazy = true] can only be specified for submessage fields";
         }

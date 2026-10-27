@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+// U-08: `packed = false` is the option default and is accepted on a map, but
+// `packed = true` is not: a map field is a repeated message and is not
+// packable, so the non-default value stays refused.
+message MapPacked {
+  map<string, string> table = 1 [packed = true];
+}

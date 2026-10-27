@@ -453,6 +453,15 @@ private:
             if (offset_ == digits) throw ParseFailure(token.location, "exponent has no digits");
         }
 
+        // U-26: a decimal number carries at most one decimal point or exponent.
+        // `Tokenizer::ConsumeNumber` reports this at the second dot
+        // (`io/tokenizer.cc:485-492`); without the check `1.2.3` tokenized as
+        // `1.2`, `.`, `3` and an aggregate body silently admitted it.
+        if (peek() == '.') {
+            throw ParseFailure(token.location,
+                               "already saw decimal point or exponent; can't have another one");
+        }
+
         if (ascii_alpha(peek()) || peek() == '_') {
             throw ParseFailure(token.location, "invalid suffix on numeric literal");
         }
@@ -649,8 +658,9 @@ struct FieldOptionState
     bool has_json_name;
     std::string json_name;
     // D2-A: `lazy`/`unverified_lazy` are legal only on a message field. The
-    // kind of a named type is unknown until linking, so the parser records the
-    // option and the shared field pass decides with the resolved kind.
+    // kind of a named type is unknown until linking, so the parser records
+    // `true` and the shared field pass decides with the resolved kind; `false`
+    // is the option default and never reaches the rule (U-08).
     bool has_lazy;
     SourceLocation lazy_location;
     // D2-A: the extension-range pair `declaration` + `verification` is
@@ -1068,9 +1078,14 @@ private:
             advance();
             return value;
         }
-        // BoolLiteral, inf/nan, and FullIdentifier all arrive as identifier tokens.
+        // BoolLiteral, inf/nan, and a single Identifier all arrive as
+        // identifier tokens. U-23: an option value is one identifier, never a
+        // dotted path - `protoc`'s ParseOption consumes a single
+        // `ConsumeIdentifier` (`parser.cc:1527-1531`) and then refuses the
+        // second name part with `Expected "]"`/`Expected ";"`. Type names and
+        // option names keep their own dotted rules; only the value narrows.
         if (current_.kind == TOKEN_IDENTIFIER) {
-            std::string text = full_identifier(false);
+            std::string text = identifier();
             if (!sign.empty() && text != "inf" && text != "nan") {
                 fail("a sign is allowed only before a numeric literal, inf, or nan");
             }
@@ -1080,22 +1095,38 @@ private:
             else value.kind = Constant::IDENTIFIER_VALUE;
             return value;
         }
-        if (!sign.empty()) fail("expected value after sign");
 
         // AggregateValue.  The parser only balances braces because arbitrary options
         // are not represented by the trimmed descriptor model.
-        if (accept_symbol('{')) {
+        //
+        // U-24: `protoc` consumes an optional leading `-` before every value and
+        // then ignores it when the value is an aggregate (`parser.cc:1508`,
+        // `:1593-1598`); `+` is not a value sign there and stays refused here.
+        // The sign is kept for numeric literals above.
+        if (current_.kind == TOKEN_SYMBOL && current_.symbol == '{' && sign != "+") {
+            advance();
             value.kind = Constant::AGGREGATE_VALUE;
             value.text = "{}";
-            unsigned depth = 1;
+            // U-47: protoc counts with a signed `int brace_depth`
+            // (`parser.cc:1430`); an unsigned 32-bit counter can wrap on a
+            // crafted value. Use a checked `std::size_t` and refuse before the
+            // increment would overflow.
+            std::size_t depth = 1;
             while (depth != 0) {
                 if (current_.kind == TOKEN_END) fail("unterminated aggregate option value");
-                if (current_.kind == TOKEN_SYMBOL && current_.symbol == '{') ++depth;
-                else if (current_.kind == TOKEN_SYMBOL && current_.symbol == '}') --depth;
+                if (current_.kind == TOKEN_SYMBOL && current_.symbol == '{') {
+                    if (depth == (std::numeric_limits<std::size_t>::max)()) {
+                        fail("aggregate option value is nested too deeply");
+                    }
+                    ++depth;
+                } else if (current_.kind == TOKEN_SYMBOL && current_.symbol == '}') {
+                    --depth;
+                }
                 advance();
             }
             return value;
         }
+        if (!sign.empty()) fail("expected value after sign");
         fail("expected option constant");
         return value;
     }
@@ -1365,7 +1396,12 @@ private:
             } else {
                 validate_option(owner, name, value, option_location,
                                 field_kind, seen);
-                if (name == "lazy" || name == "unverified_lazy") {
+                // U-08: the value decides, not the presence. `lazy = false` and
+                // `unverified_lazy = false` are the option defaults and are
+                // legal on every field kind; only `true` reaches the deferred
+                // message-only rule in `validate_field_encoding`.
+                if ((name == "lazy" || name == "unverified_lazy") &&
+                    value.text == "true") {
                     state.has_lazy = true;
                     state.lazy_location = option_location;
                 }
@@ -1780,7 +1816,11 @@ private:
         const FieldOptionState options = field_options(OPTION_OWNER_FIELD,
                                                        field_kind);
         expect_symbol(';');
-        if (options.has_default || options.has_packed) {
+        if (options.has_default || (options.has_packed && options.packed)) {
+            // U-08: `protoc` asks `options().packed()` (value, not presence),
+            // so an explicit `packed = false` on a map is the default and is
+            // accepted; `packed = true` stays refused because a map field is a
+            // repeated message, which is not packable.
             // Point at the offending option value, not at the key type.
             const SourceLocation option_location = options.has_default
                 ? options.default_value.location

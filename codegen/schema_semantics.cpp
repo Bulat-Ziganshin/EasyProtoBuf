@@ -3538,10 +3538,11 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
     // field (`ValidateFieldOptions`, descriptor.cc:7968-7974). A scalar is
     // refused by the parser already; a named type's kind is unknown until
     // resolution, so the option is recorded and this pass answers with the kind
-    // the linker resolved. The source door keeps the spelling in the field's
-    // provenance (D2-A) while the descriptor door decodes the option value
-    // itself (U-13); either way one rule answers, and a field that carries no
-    // such option never reaches it.
+    // the linker resolved. The source door keeps `lazy = true`/`unverified_lazy
+    // = true` in the field's provenance (D2-A) while the descriptor door
+    // decodes the option value itself (U-13); either way one rule answers, and
+    // a field that carries no such option - or only the default `false` - never
+    // reaches it (U-08).
     if (!unknown && field.has_type &&
         field.type != FieldDescriptorProto::TYPE_MESSAGE) {
         const FieldSource* source = find_field_source(file, field_path);

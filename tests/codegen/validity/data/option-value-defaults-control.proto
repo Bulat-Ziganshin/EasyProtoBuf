@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package option.values;
+
+// The option-less control for `option-value-defaults.proto` (U-08): the four
+// default spellings are no-ops, so both files must emit the same header on
+// both doors.
+message ValueDefaults {
+  int32 lazy_false = 1;
+  int32 unverified_false = 2;
+  int32 js_normal = 3;
+  map<string, string> unpacked_map = 4;
+}

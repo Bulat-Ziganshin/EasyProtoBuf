@@ -195,6 +195,11 @@ void test_map_option_rejections_point_at_the_option()
 {
     easypb_proto::ParsedProto parsed;
     easypb_proto::Diagnostic error;
+    // U-08: an explicit `packed = false` is the option default, so the map is
+    // accepted; only `true` is refused on a repeated message field.
+    CHECK(easypb_proto::parse_proto("map-packed-false.proto",
+        "message M { map<string, int32> x = 1 [packed = false]; }",
+        parsed, error));
     CHECK(!easypb_proto::parse_proto("bad-map-packed.proto",
         "message M { map<string, int32> x = 1 [packed = true]; }",
         parsed, error));
@@ -2411,6 +2416,12 @@ void test_known_option_field_kind_rules()
         "message M { sint64 x = 1 [jstype = JS_NUMBER]; }",
         "message M { fixed64 x = 1 [jstype = JS_NORMAL]; }",
         "message M { sfixed64 x = 1 [jstype = JS_STRING]; }",
+        "message M { int32 x = 1 [jstype = JS_NORMAL]; }",
+        "message M { string x = 1 [jstype = JS_NORMAL]; }",
+        "message M { int32 x = 1 [lazy = false]; }",
+        "message M { string x = 1 [lazy = false]; }",
+        "message M { int32 x = 1 [unverified_lazy = false]; }",
+        "message M { map<string, string> t = 1 [packed = false]; }",
         "message M { int32 x = 1 [ctype = CORD]; }",
         "message M { int32 x = 1 [weak = true]; }",
         "message M { repeated int32 x = 1 [packed = true]; }",
@@ -2445,6 +2456,75 @@ void test_known_option_field_kind_rules()
         if (ok) std::cerr << "accepted: " << refused[i] << '\n';
         CHECK(!ok);
     }
+}
+
+// R08: the option *value* grammar. A value is one identifier (U-23), a leading
+// `-` before an aggregate is ignored (U-24), a number carries at most one
+// decimal point or exponent (U-26), and the aggregate balancer is checked
+// (U-47).
+void test_option_value_grammar()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    // U-23: one identifier is the whole value; a dotted path stops at the dot,
+    // so the list or statement terminator is missing.
+    CHECK(easypb_proto::parse_proto("value-identifier.proto",
+        "syntax = \"proto2\"; message M { optional int32 a = 1 [(myopt) = foo]; }",
+        parsed, error));
+    CHECK(!easypb_proto::parse_proto("value-dotted.proto",
+        "syntax = \"proto2\"; message M { optional int32 a = 1 [(myopt) = foo.bar]; }",
+        parsed, error));
+    CHECK(error.message.find("expected ']'") != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("value-dotted-statement.proto",
+        "syntax = \"proto2\"; option (myopt) = foo.bar;", parsed, error));
+    CHECK(error.message.find("expected ';'") != std::string::npos);
+
+    // U-24: `-` before an aggregate is ignored, in a statement and in a field
+    // bracket list; `+` is not a value sign and stays refused.
+    CHECK(easypb_proto::parse_proto("value-negative-aggregate.proto",
+        "syntax = \"proto2\"; message M { optional int32 a = 1; } "
+        "option (myopt) = -{ a: 1 };", parsed, error));
+    CHECK(easypb_proto::parse_proto("value-negative-aggregate-field.proto",
+        "syntax = \"proto2\"; message M { optional int32 a = 1 "
+        "[(myopt) = -{ a: 1 }]; }", parsed, error));
+    CHECK(!easypb_proto::parse_proto("value-positive-aggregate.proto",
+        "syntax = \"proto2\"; message M { optional int32 a = 1; } "
+        "option (myopt) = +{ a: 1 };", parsed, error));
+    CHECK(error.message.find("Expected option value") != std::string::npos);
+    // A known aggregate-valued option takes the same parser path: protoc
+    // accepts the signed body and validates the declaration inside it.
+    CHECK(easypb_proto::parse_proto("value-known-aggregate.proto",
+        "syntax = \"proto2\"; message M { extensions 100 to 199 "
+        "[declaration = -{ number: 100, full_name: \".p.M.f\", type: \"int32\" }]; }",
+        parsed, error));
+
+    // U-26: a second decimal point inside an aggregate is a tokenizer error; a
+    // trailing dot, an exponent and a leading dot are still single tokens.
+    CHECK(!easypb_proto::parse_proto("value-double-dot.proto",
+        "syntax = \"proto2\"; option (myopt) = { v: 1.2.3 };", parsed, error));
+    CHECK(error.message.find("another one") != std::string::npos);
+    CHECK(easypb_proto::parse_proto("value-number-forms.proto",
+        "syntax = \"proto2\"; option (a) = { v: 1. }; "
+        "option (b) = { v: 1e5 }; option (c) = { v: .5 };", parsed, error));
+
+    // U-47: a deep but balanced aggregate is accepted (the counter neither
+    // goes negative nor wraps), and an unterminated one still reports at the
+    // end of the input where the balance is decided.
+    const int depth = 4096;
+    std::string deep = "syntax = \"proto2\"; option (myopt) = ";
+    deep.append(static_cast<std::size_t>(depth), '{');
+    deep += "a: 1";
+    deep.append(static_cast<std::size_t>(depth), '}');
+    deep += ";";
+    CHECK(easypb_proto::parse_proto("value-deep-aggregate.proto", deep, parsed, error));
+
+    const std::string unbalanced =
+        "syntax = \"proto2\"; option (myopt) = { a: { b: 1 };";
+    CHECK(!easypb_proto::parse_proto("value-unbalanced.proto", unbalanced, parsed, error));
+    CHECK(error.message.find("unterminated aggregate option value") != std::string::npos);
+    CHECK(error.location.line == 1);
+    CHECK(error.location.column == static_cast<int>(unbalanced.size()) + 1);
 }
 
 } // namespace
@@ -2514,6 +2594,7 @@ int main()
     test_known_option_table_covers_47_rows();
     test_known_option_measured_cases();
     test_known_option_field_kind_rules();
+    test_option_value_grammar();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

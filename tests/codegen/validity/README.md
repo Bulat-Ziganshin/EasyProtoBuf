@@ -26,6 +26,10 @@ Step R07 adds the accepted lite-import pair (`U-15`, exception `E15`): a
 non-lite file importing a `LITE_RUNTIME` file, accepted on both doors with the
 same header and no diagnostic.
 
+Step R08 adds the accepted option-default pair (`U-08`): `lazy = false`,
+`unverified_lazy = false`, `jstype = JS_NORMAL` and `packed = false` on a map
+must emit the same header as the option-less control on both doors.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -121,6 +125,7 @@ same header and no diagnostic.
 | a field number of 536870912 (refused) | `.proto` only | `U-56` |
 | a custom `json_name` with an embedded NUL | `.proto` + crafted `.pbs` | `U-57` |
 | a non-lite file importing a `LITE_RUNTIME` file (accepted) | `.proto` + crafted `.pbs` | `U-15` |
+| the four option default values, with an option-less control (accepted) | `.proto` + `.pbs` | `U-08` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted

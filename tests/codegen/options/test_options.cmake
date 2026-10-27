@@ -72,6 +72,7 @@ set(accepted_fixtures
     accept-file-options
     accept-message-options
     accept-field-options
+    accept-value-defaults
     accept-enum-options
     accept-service-options
     accept-ext-range-options
@@ -140,6 +141,10 @@ expect_refusal(reject-lazy-enum
     "[lazy = true] can only be specified for submessage fields")
 expect_refusal(reject-map-entry
     "map_entry should not be set explicitly")
+# U-08: the default `packed = false` is accepted on a map (the accepted
+# fixture above), while the non-default `true` stays refused.
+expect_refusal(reject-map-packed
+    "map fields cannot have default or packed options")
 expect_refusal(reject-ext-range-unverified-declaration
     "cannot mark the extension range as UNVERIFIED")
 expect_refusal(reject-file-unknown-option

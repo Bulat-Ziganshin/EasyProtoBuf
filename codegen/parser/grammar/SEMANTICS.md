@@ -14,7 +14,9 @@ The grammar uses the intended lexical and syntactic forms directly:
   by productions that permit signed values;
 - a token that starts with zero is hex (`0x`) or octal, so `08` and `09` are
   lexical errors and an octal token has no fraction or exponent;
-- an exponent has its own optional sign followed by decimal digits;
+- an exponent has its own optional sign followed by decimal digits, and a
+  decimal number carries at most one decimal point or exponent (`1.2.3` is a
+  lexical error);
 - `\u` contains four hexadecimal digits and `\U` contains eight, bounded to
   `00[01]xxxxxx` as `protoc`'s tokenizer bounds it;
 - adjacent quoted strings form one string literal;
@@ -25,7 +27,9 @@ The grammar uses the intended lexical and syntactic forms directly:
 - proto2 ordinary fields have a label, while oneof fields do not;
 - proto3 ordinary fields are unlabeled, `optional`, or `repeated`;
 - keyword rules have identifier boundaries;
-- message-valued options use the protobuf Text Format aggregate surface.
+- message-valued options use the protobuf Text Format aggregate surface; an
+  option value that is not an aggregate is one identifier (never a dotted
+  path), and a leading `-` before an aggregate is ignored.
 
 ## Semantic rules implemented by the EasyPB parser
 

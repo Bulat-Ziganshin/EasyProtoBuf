@@ -18,6 +18,7 @@ CI contract is the recorded verdict.
 | `accept-file-options.proto` | `FileOptions` strings, bools and `OptimizeMode` |
 | `accept-message-options.proto` | `MessageOptions` bools, including `message_set_wire_format` on a field-less MessageSet |
 | `accept-field-options.proto` | `FieldOptions`: 64-bit `jstype`, message `lazy`/`unverified_lazy`, `ctype`, `weak`, `packed` both ways, `retention`, repeated `targets`, aggregate `feature_support`/`edition_defaults` |
+| `accept-value-defaults.proto` | the four `U-08` default spellings: `lazy = false` and `unverified_lazy = false` on an `int32`, `jstype = JS_NORMAL` on an `int32`, `packed = false` on a map |
 | `accept-enum-options.proto` | `EnumOptions.allow_alias` and enum-value bool/aggregate options |
 | `accept-service-options.proto` | `ServiceOptions.deprecated`, `MethodOptions.deprecated`/`idempotency_level` |
 | `accept-ext-range-options.proto` | repeated aggregate `declaration`, and `verification = UNVERIFIED` on a range without declarations |
@@ -28,6 +29,19 @@ The driver also reads the generated header of `accept-field-options.proto` and
 checks that `packed = true` and `packed = false` still select the packed and
 unpacked codecs. An option that is accepted but silently changes the emitter
 would otherwise pass this lane.
+
+## Policy: the value decides
+
+The field rules of D2-A are value rules (`U-08`). `lazy` and `unverified_lazy`
+are refused only as `true` on a non-message field, `jstype` only as a value
+other than `JS_NORMAL` on a non-64-bit field, and `packed` only as `true` on a
+field that is not packable. The four default spellings are therefore accepted
+on the same entity kinds where their non-default twin is refused:
+`accept-value-defaults.proto` pins `lazy = false`, `unverified_lazy = false`,
+`jstype = JS_NORMAL` (on an `int32`) and `packed = false` (on a map), while
+the `reject-*` rows pin the non-default values. The emitter proof - the four
+defaults emit the option-less header on both doors - is the `codegen.validity`
+row.
 
 ## Refused fixtures
 
@@ -46,6 +60,7 @@ stdout, and the expected sentence in stderr:
 | `reject-unverified-lazy-scalar.proto` | submessage fields |
 | `reject-lazy-enum.proto` | submessage fields, after the named type resolves to an enum |
 | `reject-map-entry.proto` | `map_entry should not be set explicitly` |
+| `reject-map-packed.proto` | `map fields cannot have default or packed options` (the non-default `packed = true`) |
 | `reject-ext-range-unverified-declaration.proto` | `UNVERIFIED` with declarations |
 | `reject-file-unknown-option.proto` | `Option "java_packages" unknown` |
 | `reject-file-option-placement.proto` | file option inside a message |

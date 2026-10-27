@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package options.demo;
+
+// U-08: an option's value decides acceptance, not the presence of the flag.
+// The four default spellings are accepted on the entity kinds where the
+// non-default value is refused:
+//   lazy = false / unverified_lazy = false -> any field kind;
+//   jstype = JS_NORMAL                     -> any field kind;
+//   packed = false                         -> a map (a repeated message).
+message ValueDefaults {
+  int32 lazy_false = 1 [lazy = false];
+  int32 unverified_false = 2 [unverified_lazy = false];
+  int32 js_normal = 3 [jstype = JS_NORMAL];
+  map<string, string> unpacked_map = 4 [packed = false];
+}

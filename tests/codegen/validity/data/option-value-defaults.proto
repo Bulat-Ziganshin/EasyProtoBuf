@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package option.values;
+
+// U-08: the value decides, not the presence of the flag. All four spellings
+// are default values that protoc 30.1 accepts, and none of them may change
+// the generated header compared with `option-value-defaults-control.proto`.
+message ValueDefaults {
+  int32 lazy_false = 1 [lazy = false];
+  int32 unverified_false = 2 [unverified_lazy = false];
+  int32 js_normal = 3 [jstype = JS_NORMAL];
+  map<string, string> unpacked_map = 4 [packed = false];
+}
