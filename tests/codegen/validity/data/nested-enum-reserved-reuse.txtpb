@@ -1,0 +1,15 @@
+# U-14: an enum value reuses a number the nested enum's own reserved range
+# covers. The enum range is inclusive at both ends, so [0, 0] reserves zero.
+file {
+  name: "nested-enum-reserved-reuse.proto"
+  package: "nestedenum"
+  syntax: "proto2"
+  message_type {
+    name: "Outer"
+    enum_type {
+      name: "Nested"
+      value { name: "ZERO" number: 0 }
+      reserved_range { start: 0 end: 0 }
+    }
+  }
+}

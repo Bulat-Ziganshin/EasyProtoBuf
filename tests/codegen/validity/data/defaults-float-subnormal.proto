@@ -1,0 +1,16 @@
+syntax = "proto2";
+
+// U-18: float defaults that narrow to a finite subnormal. protoc's
+// descriptor copy re-renders the value with SimpleFtoa, whose `safe_strtof`
+// round trip reports the ERANGE a subnormal sets and therefore widens the
+// six-digit text to the nine-digit one. Both doors must emit that literal.
+package subnormal;
+
+message FloatSubnormalDefaults
+{
+    optional float tiny = 1 [default = 1e-40];
+    optional float minimum = 2 [default = 1.4e-45];
+    // The double twin keeps the fifteen-digit form: protoc's DoubleToBuffer
+    // reads it through from_chars, which reports no ERANGE.
+    optional double tiny_double = 3 [default = 1e-320];
+}

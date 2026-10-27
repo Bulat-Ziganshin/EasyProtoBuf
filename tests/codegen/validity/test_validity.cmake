@@ -131,6 +131,7 @@ set(paired_fixtures
     defaults-inf
     defaults-nan
     defaults-float-overflow
+    defaults-float-subnormal
     defaults-bytes-upper-hex
     packages-deep-101
     enum-alias-same-number
@@ -143,7 +144,8 @@ set(paired_fixtures
     scope-easypb
     p3opt-ok
     oneof-contiguous
-    message-set-empty)
+    message-set-empty
+    reserved-range-end)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -197,6 +199,59 @@ foreach(name ${paired_fixtures})
     # runs, the comparison above proves its header is the same file, so it
     # compiles too.
 endforeach()
+
+# --- R06: canonical defaults and accepted boundaries (U-18, U-56) ------------
+#
+# U-18: the two subnormal float defaults are the value protoc stores. The
+# header literal is asserted by text (a regression to the six-digit spelling
+# would compile and still read as a subnormal, so the runtime check alone
+# cannot see it), and `--print-descriptor` must show the same default text on
+# both doors - the defect the review measured was the source door printing
+# six digits where the descriptor door and protoc printed nine.
+run_ok(subnormal_header subnormal_header_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/defaults-float-subnormal.pbs")
+require_empty(subnormal_header_err "The subnormal descriptor stderr")
+require_contains(subnormal_header "float tiny = 9.9999461e-41;"
+    "U-18: the subnormal float literal")
+require_contains(subnormal_header "float minimum = 1.40129846e-45;"
+    "U-18: the minimum subnormal float literal")
+require_contains(subnormal_header "double tiny_double = 9.99988867182683e-321;"
+    "U-18: the subnormal double literal keeps the fifteen-digit form")
+
+# U-56: a reserved declaration may name 536870912 (the exclusive end of the
+# last field-number range). The paired loop above proves both doors accept it
+# and emit the same header; these assertions name the messages, so a verdict
+# that accepted the schema but lost a message cannot pass.
+run_ok(reserved_end_out reserved_end_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/reserved-range-end.pbs")
+require_empty(reserved_end_err "The reserved-range-end descriptor stderr")
+require_contains(reserved_end_out "struct BigReservedValue"
+    "U-56: the single-number reserved declaration")
+require_contains(reserved_end_out "struct BigReservedRange"
+    "U-56: the range whose end is 536870912")
+
+if(FULL_BUILD)
+    run_ok(subnormal_desc_print subnormal_desc_print_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+        "${DATA_DIR}/defaults-float-subnormal.pbs")
+    require_empty(subnormal_desc_print_err
+        "The subnormal descriptor print stderr")
+    run_ok(subnormal_src_print subnormal_src_print_err
+        ${CODEGEN} --print-descriptor
+        "${DATA_DIR}/defaults-float-subnormal.proto")
+    require_empty(subnormal_src_print_err "The subnormal source print stderr")
+    # The `file` line spells the physical path on the source door and the
+    # logical name on the descriptor door; every default line is the same.
+    foreach(spelling
+            "default=9.9999461e-41"
+            "default=1.40129846e-45"
+            "default=9.99988867182683e-321")
+        require_contains(subnormal_desc_print "${spelling}"
+            "U-18: the descriptor print")
+        require_contains(subnormal_src_print "${spelling}"
+            "U-18: the source print")
+    endforeach()
+endif()
 
 # --- CR-01/02/05/17: the default-value pipeline family -----------------------
 #
@@ -890,3 +945,89 @@ require_contains(wire_type_err "wire type 5"
     "The wrong-wire-type refusal names the wire type it found")
 require_contains(wire_type_err "wire type 0 is required"
     "The wrong-wire-type refusal names the required wire type")
+
+# --- R06: semantic validation gaps (U-14, U-29, U-56, U-57) ------------------
+#
+# Every refused shape is driven through both doors when a source twin can
+# carry it: the descriptor half is crafted from the `.txtpb` beside the
+# `.proto` (protoc refuses the text, so it cannot write that descriptor).
+
+# U-14: the reserved declarations of an enum nested in a message. The
+# descriptor door used to skip `message.enum_type` entirely.
+run_fail(nested_range_out nested_range_err
+    ${CODEGEN} --descriptor-set
+    "${DATA_DIR}/nested-enum-reserved-invalid.pbs")
+require_empty(nested_range_out "The nested inverted-range refusal stdout")
+require_contains(nested_range_err "less than its start"
+    "The nested inverted-range refusal")
+if(FULL_BUILD)
+    run_fail(nested_range_src_out nested_range_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/nested-enum-reserved-invalid.proto")
+    require_empty(nested_range_src_out
+        "The nested inverted-range refusal stdout on the source path")
+    require_contains(nested_range_src_err
+        "reserved range end is smaller than its start"
+        "The nested inverted-range refusal on the source path")
+endif()
+
+run_fail(nested_reuse_out nested_reuse_err
+    ${CODEGEN} --descriptor-set
+    "${DATA_DIR}/nested-enum-reserved-reuse.pbs")
+require_empty(nested_reuse_out "The nested reserved-number refusal stdout")
+require_contains(nested_reuse_err "uses a number reserved"
+    "The nested reserved-number refusal")
+if(FULL_BUILD)
+    run_fail(nested_reuse_src_out nested_reuse_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/nested-enum-reserved-reuse.proto")
+    require_empty(nested_reuse_src_out
+        "The nested reserved-number refusal stdout on the source path")
+    require_contains(nested_reuse_src_err "enum value number is reserved"
+        "The nested reserved-number refusal on the source path")
+endif()
+
+# U-29: an integral default may not start with whitespace. The dedicated
+# sentence replaces the range diagnostic the finding reports, and the real
+# overflow keeps that range diagnostic (the schema unit test pins it).
+run_fail(space_int_out space_int_err
+    ${CODEGEN} --descriptor-set
+    "${DATA_DIR}/defaults-leading-space-int.pbs")
+require_empty(space_int_out "The leading-space integral refusal stdout")
+require_contains(space_int_err "leading whitespace is not permitted"
+    "The leading-space integral refusal")
+require_absent(space_int_err "does not fit"
+    "The leading-space integral refusal must not report a range overflow")
+
+# U-56: the reserved boundary does not widen a field number. The accepted
+# half is the reserved-range-end pair above; both doors refuse the field.
+run_fail(field_number_out field_number_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/field-number-too-large.pbs")
+require_empty(field_number_out "The oversized field-number descriptor stdout")
+require_contains(field_number_err "outside the valid range 1..536870911"
+    "The oversized field-number refusal on the descriptor path")
+if(FULL_BUILD)
+    run_fail(field_number_src_out field_number_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/field-number-too-large.proto")
+    require_empty(field_number_src_out
+        "The oversized field-number refusal stdout on the source path")
+    require_contains(field_number_src_err "field number must be in range 1..536870911"
+        "The oversized field-number refusal on the source path")
+endif()
+
+# U-57: a custom JSON name with an embedded NUL.
+run_fail(json_nul_out json_nul_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/json-name-nul.pbs")
+require_empty(json_nul_out "The NUL json_name refusal stdout")
+require_contains(json_nul_err "json_name cannot have embedded null characters"
+    "The NUL json_name refusal")
+if(FULL_BUILD)
+    run_fail(json_nul_src_out json_nul_src_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/json-name-nul.proto")
+    require_empty(json_nul_src_out
+        "The NUL json_name refusal stdout on the source path")
+    require_contains(json_nul_src_err
+        "json_name cannot have embedded null characters"
+        "The NUL json_name refusal on the source path")
+endif()

@@ -1414,6 +1414,25 @@ private:
         return static_cast<std::int32_t>(number);
     }
 
+    // U-56: a reserved declaration's inclusive endpoint may be 536870912.
+    // protoc stores the range as [start, end) and its builder asks only that
+    // start is positive and smaller than end (descriptor.cc:6906-6922), so
+    // the exclusive end kMaxNumber + 1 - the number that describes "up to
+    // max" - is a legal spelling; both ends of the source declaration use
+    // this bound. A *field* number keeps the 536870911 cap that
+    // positive_field_number enforces.
+    std::int32_t reserved_range_number()
+    {
+        if (current_.kind != TOKEN_INTEGER) fail("expected positive field number");
+        const SourceLocation where = current_.location;
+        std::uint64_t number = 0;
+        if (!easypb_schema::parse_unsigned_integer(current_.text, number) || number == 0 || number > 536870912ull) {
+            throw ParseFailure(where, "reserved range endpoint must be in range 1..536870912");
+        }
+        advance();
+        return static_cast<std::int32_t>(number);
+    }
+
     // SignedInteger <- Sign? IntegerToken, constrained to int32.
     std::int32_t signed_enum_number()
     {
@@ -2291,14 +2310,14 @@ private:
         for (;;) {
             NumberRange range;
             range.location = current_.location;
-            range.first = enum_context ? signed_enum_number() : field_range_number();
+            range.first = enum_context ? signed_enum_number() : reserved_range_number();
             range.last = range.first;
             if (accept_keyword("to")) {
                 if (accept_keyword("max")) {
                     range.last = enum_context ? static_cast<std::int64_t>(INT32_MAX)
                                               : static_cast<std::int64_t>(536870911);
                 } else {
-                    range.last = enum_context ? signed_enum_number() : field_range_number();
+                    range.last = enum_context ? signed_enum_number() : reserved_range_number();
                 }
             }
             add_range(ranges, range, "reserved");

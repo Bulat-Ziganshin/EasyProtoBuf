@@ -1,0 +1,18 @@
+syntax = "proto2";
+
+// U-56: a reserved declaration may name 536870912. protoc stores a message
+// reserved range as [start, end) and asks only that start is positive and
+// smaller than end, so the exclusive end of the last field number - the same
+// value "to max" describes - is a legal spelling. A *field* number stays
+// limited to 536870911.
+package reservedend;
+
+message BigReservedValue
+{
+    reserved 536870912;
+}
+
+message BigReservedRange
+{
+    reserved 536870911 to 536870912;
+}

@@ -1050,6 +1050,25 @@ void test_default_canonicalization_helpers()
                   float_cases[i].text, false) == float_cases[i].canonical);
     }
 
+    // U-18: a finite subnormal float takes the nine-digit form, which is the
+    // text protoc's SimpleFtoa writes (its `safe_strtof` round trip reports
+    // the ERANGE a subnormal sets), so the six-digit spelling is not
+    // canonical for the single-precision kind. The double twin keeps the
+    // fifteen-digit form: protoc's DoubleToBuffer reads the same finite
+    // subnormal through `from_chars`, which reports no ERANGE.
+    {
+        std::string canonical;
+        CHECK(easypb_schema::canonical_float_default("1e-40", true,
+                                                     canonical));
+        CHECK(canonical == "9.9999461e-41");
+        CHECK(easypb_schema::is_canonical_float_default(canonical, true));
+        CHECK(!easypb_schema::is_canonical_float_default("9.99995e-41",
+                                                         true));
+        CHECK(easypb_schema::canonical_float_default("1e-320", false,
+                                                     canonical));
+        CHECK(canonical == "9.99988867182683e-321");
+    }
+
     struct TokenCase {
         const char* text;
         bool ok;
@@ -1535,6 +1554,32 @@ void test_rule_default_validator_directly()
         CHECK(!easypb_schema::internal::validate_default(
             file, symbols, visible, field, false, false, field_path, error));
         CHECK(error.message.find("does not fit signed 32-bit field") !=
+              std::string::npos);
+    }
+    // U-29 (owner decision, variant B): an integral default whose stored text
+    // starts with a space is refused with the dedicated sentence instead of
+    // the range diagnostic the number parser used to produce.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_UINT64);
+        field.default_value = file.strings.save(" 8");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, false, field_path, error));
+        CHECK(error.message.find("leading whitespace is not permitted") !=
+              std::string::npos);
+    }
+    // ... and a real overflow keeps the range sentence.
+    {
+        FieldDescriptorProto field =
+            make_scalar_field(file, "a", 1, FieldDescriptorProto::TYPE_UINT64);
+        field.default_value = file.strings.save("18446744073709551616");
+        field.has_default_value = true;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::internal::validate_default(
+            file, symbols, visible, field, false, false, field_path, error));
+        CHECK(error.message.find("does not fit unsigned 64-bit field") !=
               std::string::npos);
     }
     // CR-02: the validator accepts exactly the canonical float text. The
@@ -2327,6 +2372,58 @@ void test_rule_reserved_declarations_directly()
         CHECK(!easypb_schema::validate_reserved_declarations(file, error));
         CHECK(error.message.find(".Outer.Inner") != std::string::npos);
     }
+    // U-14, shape 1: the enum nested in a message declares an inverted range.
+    // Before the recursion reached `enum_type`, the descriptor path accepted
+    // this descriptor while the source path and protoc refused the text.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto parent;
+        parent.name = file.strings.save("Outer");
+        parent.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("Nested");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "ZERO", 0);
+        EnumDescriptorProto_EnumReservedRange range;
+        range.start = 5;
+        range.has_start = true;
+        range.end = 3;
+        range.has_end = true;
+        enumeration.reserved_range.push_back(range);
+        parent.enum_type.push_back(enumeration);
+        file.file.message_type.push_back(parent);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_RESERVED_RANGE);
+        CHECK(error.message.find(".Outer.Nested") != std::string::npos);
+        CHECK(error.message.find("less than its start") != std::string::npos);
+    }
+    // U-14, shape 2: an enum value reuses a number its own nested enum
+    // reserves. The enum range is inclusive at both ends.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto parent;
+        parent.name = file.strings.save("Outer");
+        parent.has_name = true;
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("Nested");
+        enumeration.has_name = true;
+        add_enum_value(enumeration, file, "ZERO", 0);
+        EnumDescriptorProto_EnumReservedRange range;
+        range.start = 0;
+        range.has_start = true;
+        range.end = 0;
+        range.has_end = true;
+        enumeration.reserved_range.push_back(range);
+        parent.enum_type.push_back(enumeration);
+        file.file.message_type.push_back(parent);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_reserved_declarations(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_RESERVED_RANGE);
+        CHECK(error.message.find(".Outer.Nested") != std::string::npos);
+        CHECK(error.message.find("uses a number reserved") !=
+              std::string::npos);
+    }
     // Control: a reserved range and name no declaration uses, in a message
     // that also declares an extension range outside the reserved numbers.
     {
@@ -2363,6 +2460,47 @@ void test_rule_reserved_declarations_directly()
         file.file.enum_type.push_back(enumeration);
         easypb_schema::Diagnostic error;
         CHECK(easypb_schema::validate_reserved_declarations(file, error));
+    }
+}
+
+// U-57: a custom `json_name` carrying an embedded NUL is refused by the
+// reference-free JSON-name walk both doors share. A default name is computed
+// from a field name and cannot carry one, so only a custom spelling can.
+void test_rule_json_name_embedded_nul_directly()
+{
+    // A NUL in the middle of a custom name is refused.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto field = make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        const char with_nul[] = {'x', '\0', 'y'};
+        field.json_name = file.strings.save(with_nul, sizeof(with_nul));
+        field.has_json_name = true;
+        message.field.push_back(field);
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::validate_json_names(file, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_JSON_NAME);
+        CHECK(error.message.find("embedded null characters") !=
+              std::string::npos);
+    }
+    // Control: the same custom name without the NUL is accepted.
+    {
+        easypb_schema::SchemaFile file;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto field = make_scalar_field(
+            file, "a", 1, FieldDescriptorProto::TYPE_INT32);
+        field.json_name = file.strings.save("xyz");
+        field.has_json_name = true;
+        message.field.push_back(field);
+        file.file.message_type.push_back(message);
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::validate_json_names(file, error));
     }
 }
 
@@ -3266,6 +3404,7 @@ int main(int argc, char** argv)
     test_rule_message_symbol_names_directly();
     test_rule_message_enum_value_numbers_directly();
     test_rule_reserved_declarations_directly();
+    test_rule_json_name_embedded_nul_directly();
     test_rule_extension_bound_directly();
     test_rule_message_set_wire_format_directly();
     test_rule_message_set_proto3_directly();

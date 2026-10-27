@@ -1,0 +1,16 @@
+# U-14: an enum nested in a message declares an inverted reserved range.
+# protoc refuses the source text, so the descriptor half is the raw shape a
+# hand-written set may carry; the descriptor door used to accept it.
+file {
+  name: "nested-enum-reserved-invalid.proto"
+  package: "nestedenum"
+  syntax: "proto2"
+  message_type {
+    name: "Outer"
+    enum_type {
+      name: "Nested"
+      value { name: "ZERO" number: 0 }
+      reserved_range { start: 5 end: 3 }
+    }
+  }
+}

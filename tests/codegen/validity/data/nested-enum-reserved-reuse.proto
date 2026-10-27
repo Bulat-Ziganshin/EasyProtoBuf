@@ -1,0 +1,15 @@
+syntax = "proto2";
+
+// U-14: the source twin of nested-enum-reserved-reuse.txtpb. protoc refuses
+// the text ("Enum value \"ZERO\" uses reserved number 0"), so the descriptor
+// half is crafted from the .txtpb beside this file.
+package nestedenum;
+
+message Outer
+{
+    enum Nested
+    {
+        ZERO = 0;
+        reserved 0;
+    }
+}

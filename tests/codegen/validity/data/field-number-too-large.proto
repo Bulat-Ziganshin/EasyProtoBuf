@@ -1,0 +1,12 @@
+syntax = "proto2";
+
+// U-56: the reserved declaration may name 536870912, but a *field* number
+// may not. protoc refuses this text ("Field numbers cannot be greater than
+// 536870911."), so the descriptor half is crafted from the .txtpb beside this
+// file.
+package reservedend;
+
+message FieldNumberTooLarge
+{
+    optional int32 too_large = 536870912;
+}

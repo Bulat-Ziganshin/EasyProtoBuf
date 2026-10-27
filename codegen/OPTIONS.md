@@ -211,6 +211,28 @@ validation-only table: it is refused as an unknown name, while protoc accepts
 it. This stricter boundary is P1 exception E14 and is pinned by the same lane;
 the aggregate spelling `[feature_support = { ... }]` is the supported form.
 
+### Defaults and reserved numbers on both doors
+
+Two value rules are shared by the two doors and are not options of the
+validation table:
+
+- **A default value may not be introduced by whitespace.** A floating-point
+  default with a leading space is refused as `floating-point default value may
+  not have leading whitespace` (W-03); an integral default is refused as
+  `leading whitespace is not permitted in an integral default value` (`U-29`,
+  owner decision of 2026-10-27, variant B). Only the descriptor door can carry
+  the shape: the source lexer stores the token without surrounding whitespace.
+  The new sentence replaces the range diagnostic (`does not fit unsigned
+  64-bit field`) the numeric parser used to produce for `" 8"`; a real
+  overflow keeps that range sentence.
+- **A reserved range may end at 536 870 912.** `descriptor.proto` stores a
+  message reserved range as `[start, end)`, and the reference compiler asks
+  only that `start` is positive and smaller than `end`, so the exclusive end
+  of the last field number - the number `to max` describes - is a legal
+  spelling (`U-56`): `reserved 536870912;` and `reserved 536870911 to
+  536870912;` are accepted. A *field* number keeps the 536 870 911 limit
+  (`field number must be in range 1..536870911`).
+
 ## C++ type options
 
 `-s, --string-type arg (=::std::string)` selects the C++ type for all string and bytes fields. For decode-only messages, `std::string_view` or another non-owning view may be used when the decoded object never outlives the input buffer.

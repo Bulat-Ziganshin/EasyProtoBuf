@@ -1,0 +1,18 @@
+# U-57: a custom JSON name carrying an embedded NUL. The text format encodes
+# the `\000` escape as the byte, which is the shape protoc refuses
+# ("json_name cannot have embedded null characters").
+file {
+  name: "json-name-nul.proto"
+  package: "jsonnul"
+  syntax: "proto2"
+  message_type {
+    name: "JsonNul"
+    field {
+      name: "a"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      json_name: "x\000y"
+    }
+  }
+}

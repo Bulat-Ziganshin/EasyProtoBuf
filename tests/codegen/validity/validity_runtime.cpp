@@ -23,6 +23,7 @@
 #include "defaults-bytes-upper-hex.pb.hpp"
 #include "defaults-float-keywords.pb.hpp"
 #include "defaults-float-overflow.pb.hpp"
+#include "defaults-float-subnormal.pb.hpp"
 #include "defaults-inf.pb.hpp"
 #include "defaults-nan.pb.hpp"
 #include "defaults-newline.pb.hpp"
@@ -43,6 +44,7 @@
 #include "packages-deep-101.pb.hpp"
 #include "plus-controls.pb.hpp"
 #include "plus-descriptor-controls.pb.hpp"
+#include "reserved-range-end.pb.hpp"
 #include "scope-easypb.pb.hpp"
 #include "p3opt-ok.pb.hpp"
 #include "oneof-contiguous.pb.hpp"
@@ -140,6 +142,25 @@ int main()
         report("neg underflow", value.negative_underflow == 0 &&
                                    std::signbit(value.negative_underflow));
         report("subnormal", std::fpclassify(value.subnormal) == FP_SUBNORMAL);
+    }
+    // U-18: a float default that narrows to a finite subnormal. The header
+    // carries protoc's nine-digit spelling; the runtime proves the literal is
+    // the subnormal itself, not zero and not the next normal float.
+    {
+        subnormal::FloatSubnormalDefaults value;
+        report("subnormal f", std::fpclassify(value.tiny) == FP_SUBNORMAL);
+        report("subnormal fmin", value.minimum ==
+                                     std::numeric_limits<float>::denorm_min());
+        report("subnormal d",
+               std::fpclassify(value.tiny_double) == FP_SUBNORMAL);
+    }
+    // U-56: a reserved declaration may name 536870912. The two empty messages
+    // carry no fields, so the header compiling is the whole proof.
+    {
+        reservedend::BigReservedValue value;
+        reservedend::BigReservedRange range;
+        (void)value;
+        (void)range;
     }
     // R1 / CR-01 and CR-17: the numeric default spelling family. An integer
     // token on a float field is read with the octal/hex parser (so `010` is

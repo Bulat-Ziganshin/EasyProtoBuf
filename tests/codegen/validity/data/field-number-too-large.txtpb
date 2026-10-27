@@ -1,0 +1,17 @@
+# U-56: a field number at the reserved boundary. 536870912 may end a reserved
+# declaration but may not number a field; protoc refuses the source text, so
+# the descriptor half is the raw shape a hand-written set may carry.
+file {
+  name: "field-number-too-large.proto"
+  package: "reservedend"
+  syntax: "proto2"
+  message_type {
+    name: "FieldNumberTooLarge"
+    field {
+      name: "too_large"
+      number: 536870912
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+}

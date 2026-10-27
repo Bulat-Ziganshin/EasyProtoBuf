@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+// U-57: the source twin of json-name-nul.txtpb. protoc refuses the text
+// ("json_name cannot have embedded null characters"), so the descriptor half
+// is crafted from the .txtpb beside this file.
+package jsonnul;
+
+message JsonNul
+{
+    optional int32 a = 1 [json_name = "x\000y"];
+}

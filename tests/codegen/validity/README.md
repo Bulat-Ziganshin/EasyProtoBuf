@@ -16,6 +16,12 @@ refuses: an explicit proto3 `optional` field (one synthetic one-field oneof,
 proto2 MessageSet with no ordinary fields (`U-10`/`U-12`). Each pair is
 protoc-written and must emit the same header through both doors.
 
+Step R06 adds the subnormal-float and reserved-boundary accepted pairs
+(`U-18`, `U-56`) and the refusal twins of the nested-enum reserved rules, the
+leading-space integral default and the NUL `json_name` (`U-14`, `U-29`,
+`U-57`). The subnormal pair also carries the `--print-descriptor` parity row:
+the default text is the same on both doors.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -103,6 +109,13 @@ protoc-written and must emit the same header through both doors.
 | an explicit proto3 `optional` field (accepted) | `.proto` + `.pbs` | `U-11` |
 | adjacent members of one oneof (accepted) | `.proto` + `.pbs` | `U-21` |
 | a proto2 MessageSet with no fields (accepted) | `.proto` + `.pbs` | `U-10`/`U-12` |
+| finite subnormal float defaults (`1e-40`, `1.4e-45`) | `.proto` + `.pbs` | `U-18` |
+| a reserved declaration naming 536870912 (accepted) | `.proto` + `.pbs` | `U-56` |
+| an inverted reserved range in a message-nested enum | `.proto` + crafted `.pbs` | `U-14` |
+| an enum value reusing a nested enum's reserved number | `.proto` + crafted `.pbs` | `U-14` |
+| an integral default with a leading space (refused) | crafted `.pbs` | `U-29` |
+| a field number of 536870912 (refused) | `.proto` only | `U-56` |
+| a custom `json_name` with an embedded NUL | `.proto` + crafted `.pbs` | `U-57` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted

@@ -290,10 +290,20 @@ std::string format_canonical_float(double value, bool single_precision)
         std::string formatted =
             format_float(narrowed, std::numeric_limits<float>::digits10);
         char* parsed_end = 0;
+        // U-18: protoc's SimpleFtoa round-trips the six-digit text through
+        // `safe_strtof` (`io/strtod.cc:155-163`), which treats a set `errno`
+        // as a failed round trip. A subnormal result trips ERANGE, so the
+        // narrower text is replaced by the nine-digit one even when it
+        // converts back to the same value. A finite subnormal also widens on
+        // a CRT that leaves `errno` clear, because the reference rule is
+        // about the value the schema names, not one CRT's errno policy.
+        errno = 0;
         const float round_trip =
-            static_cast<float>(std::strtod(formatted.c_str(), &parsed_end));
+            std::strtof(formatted.c_str(), &parsed_end);
+        const bool subnormal =
+            std::fpclassify(narrowed) == FP_SUBNORMAL;
         if (parsed_end == formatted.c_str() || *parsed_end != '\0' ||
-            round_trip != narrowed) {
+            errno == ERANGE || subnormal || round_trip != narrowed) {
             formatted =
                 format_float(narrowed, std::numeric_limits<float>::digits10 + 3);
         }
@@ -2417,6 +2427,18 @@ bool validate_message_reserved(const SchemaFile& file,
             return false;
         }
     }
+    // U-14: the enums nested in this message are asked the same questions.
+    // `BuildEnum` runs the reserved checks for every enum a descriptor
+    // declares, top-level or nested (descriptor.cc:7060-7125), so the sweep
+    // must reach `enum_type` as well as `nested_type`.
+    for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
+        if (!validate_enum_reserved(
+                file, message.enum_type[i],
+                joined_name(qualified_name, message.enum_type[i].name),
+                message_enum_path(message_path, static_cast<int>(i)), error)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -2882,6 +2904,31 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
         return fail_at(file, "numeric default value may not start with '+'",
                        default_location(), field_path,
                        error);
+    }
+    // U-29 (owner decision, variant B): an integral default's stored text may
+    // not start with ASCII whitespace. The numeric parser skips it, so the
+    // old descriptor path answered `does not fit unsigned 64-bit field` for a
+    // spelling whose real defect is the space - the same shape W-03 refuses
+    // for a floating-point default, with its own sentence. The source path
+    // cannot produce it: the lexer stores the token without surrounding
+    // whitespace.
+    const bool integral_default_type =
+        field.type == FieldDescriptorProto::TYPE_INT32 ||
+        field.type == FieldDescriptorProto::TYPE_INT64 ||
+        field.type == FieldDescriptorProto::TYPE_UINT32 ||
+        field.type == FieldDescriptorProto::TYPE_UINT64 ||
+        field.type == FieldDescriptorProto::TYPE_SINT32 ||
+        field.type == FieldDescriptorProto::TYPE_SINT64 ||
+        field.type == FieldDescriptorProto::TYPE_FIXED32 ||
+        field.type == FieldDescriptorProto::TYPE_FIXED64 ||
+        field.type == FieldDescriptorProto::TYPE_SFIXED32 ||
+        field.type == FieldDescriptorProto::TYPE_SFIXED64;
+    if (integral_default_type && !value.empty() &&
+        is_ascii_whitespace(value[0])) {
+        return fail_at(
+            file,
+            "leading whitespace is not permitted in an integral default value",
+            default_location(), field_path, error);
     }
     std::int32_t signed32 = 0;
     std::int64_t signed64 = 0;
@@ -4170,6 +4217,17 @@ bool validate_message_json_names(SchemaFile& file,
             view_text(field.json_name) != default_name;
         const std::string effective =
             custom ? view_text(field.json_name) : default_name;
+        // U-57: protoc refuses a JSON name carrying an embedded NUL
+        // (`descriptor.cc:8040-8044`). Only a custom spelling can carry one:
+        // a default name comes from an identifier.
+        if (custom && effective.find('\0') != std::string::npos) {
+            const DescriptorPath field_path =
+                message_field_path(message_path, static_cast<int>(i));
+            return fail_at_code(
+                file, "json_name cannot have embedded null characters",
+                declaration_location(file, field_path), field_path,
+                DIAGNOSTIC_INVALID_JSON_NAME, error);
+        }
         // protoc's `JsonNameLooksLikeExtension`: the bracket spelling is the
         // extension form, so a CUSTOM name cannot use it (CR-22). Only a custom
         // name can reach this rule: a default name comes from a field name and

@@ -1,0 +1,20 @@
+# U-29 (owner decision, variant B): an integral descriptor default whose
+# stored text starts with a space. The number parser used to skip the space
+# and answer "does not fit unsigned 64-bit field"; the rule now names the real
+# defect. Only a descriptor can carry the shape: the source lexer stores the
+# token without surrounding whitespace.
+file {
+  name: "defaults-leading-space-int.proto"
+  package: "leadingspaceint"
+  syntax: "proto2"
+  message_type {
+    name: "LeadingSpaceIntegralDefaults"
+    field {
+      name: "u"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT64
+      default_value: " 8"
+    }
+  }
+}
