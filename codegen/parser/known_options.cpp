@@ -59,6 +59,10 @@ const KnownOption KNOWN_OPTIONS[] = {
     { OPTION_OWNER_MESSAGE, "map_entry", OPTION_CONSTANT_BOOL, 0, false,
       "map_entry should not be set explicitly. Use map<KeyType, ValueType> "
       "instead" },
+    // U-55 / SD-1 (2026-10-27): `descriptor.proto` marks this field
+    // `[deprecated = true]` and nothing reads it. The row stays so a migration
+    // leftover is accepted; the option is a documented no-op with an
+    // executable guard (`codegen.options.legacy_json_xfail`, OPTIONS.md).
     { OPTION_OWNER_MESSAGE, "deprecated_legacy_json_field_conflicts",
       OPTION_CONSTANT_BOOL, 0, false, 0 },
 
@@ -85,6 +89,7 @@ const KnownOption KNOWN_OPTIONS[] = {
     // EnumOptions
     { OPTION_OWNER_ENUM, "allow_alias", OPTION_CONSTANT_BOOL, 0, false, 0 },
     { OPTION_OWNER_ENUM, "deprecated", OPTION_CONSTANT_BOOL, 0, false, 0 },
+    // The enum owner of the same U-55 / SD-1 no-op row.
     { OPTION_OWNER_ENUM, "deprecated_legacy_json_field_conflicts",
       OPTION_CONSTANT_BOOL, 0, false, 0 },
 

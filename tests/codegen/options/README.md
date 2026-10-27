@@ -22,6 +22,7 @@ CI contract is the recorded verdict.
 | `accept-service-options.proto` | `ServiceOptions.deprecated`, `MethodOptions.deprecated`/`idempotency_level` |
 | `accept-ext-range-options.proto` | repeated aggregate `declaration`, and `verification = UNVERIFIED` on a range without declarations |
 | `accept-custom-options.proto` | parenthesized custom names at all nine owner scopes; the values are opaque (policy, see below) |
+| `accept-aggregate-bodies.proto` | the three aggregate-valued standard options with an unknown inner field; the bodies are brace-balanced only (policy, see below) |
 
 The driver also reads the generated header of `accept-field-options.proto` and
 checks that `packed = true` and `packed = false` still select the packed and
@@ -57,6 +58,7 @@ stdout, and the expected sentence in stderr:
 | `reject-file-option-duplicate.proto` | singular option set twice |
 | `reject-field-option-duplicate.proto` | singular field option set twice |
 | `reject-custom-leading-identifier.proto` | an ordinary leading name part is unknown |
+| `reject-aggregate-unterminated.proto` | `unterminated aggregate option value` |
 
 ## Policy: unresolved custom options stay opaque
 
@@ -80,6 +82,33 @@ The known table is closed at `protoc` 30.1. An option added by a later release
 is unknown until the table is refreshed; the doc comment in
 `known_options.cpp` names the source file and the exclusion rule
 (`uninterpreted_option` and the nine `features` fields).
+
+## Policy: aggregate option bodies are brace-balanced only
+
+`declaration`, `edition_defaults` and `feature_support` are the three
+aggregate-valued fields of the table. A body gets the same deliberate opacity
+as a parenthesized custom value (E13): the tokenizer runs and the braces are
+counted, but no field of the inner message is looked up. `[declaration =
+{ bogus: 5 }]` is therefore accepted where `protoc` refuses the unknown field.
+This is the owner decision of 2026-10-27 for `U-09` (variant Б), recorded in
+`codegen/OPTIONS.md` ("Aggregate option bodies are brace-balanced only"):
+`accept-aggregate-bodies.proto` pins the acceptance half and
+`reject-aggregate-unterminated.proto` pins the balance half.
+
+## The SD-1 xfail: `deprecated_legacy_json_field_conflicts`
+
+| Test | What it pins |
+| --- | --- |
+| `codegen.options.legacy_json_xfail` | the option is accepted on both owners (message and enum), and the two legacy behaviours it would enable - the bracketed `json_name` and the proto2 folded enum-name collision - stay refused |
+
+`descriptor.proto` marks the field on `MessageOptions` (11) and `EnumOptions`
+(6) `[deprecated = true]`. Stage decision SD-1 (2026-10-27) keeps both rows in
+the known table and makes the option a documented no-op: a migration leftover
+is accepted, nothing reads the value, and no warning is added. The driver
+re-drives the same three verdicts the stage decision names, so the option
+cannot be silently dropped again; if either refused shape starts to pass, the
+test fails and `codegen/OPTIONS.md` has to be updated before the assertion
+changes.
 
 ## Running
 

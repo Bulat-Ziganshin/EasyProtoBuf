@@ -211,6 +211,57 @@ validation-only table: it is refused as an unknown name, while protoc accepts
 it. This stricter boundary is P1 exception E14 and is pinned by the same lane;
 the aggregate spelling `[feature_support = { ... }]` is the supported form.
 
+### Aggregate option bodies are brace-balanced only
+
+`declaration`, `edition_defaults` and `feature_support` are the three
+aggregate-valued fields of the table. A source body gets the same deliberate
+opacity exception E13 describes for parenthesized values: the tokenizer runs
+and the braces are counted, but no field of the inner message is looked up.
+`[declaration = { bogus: 5 }]`, `[edition_defaults = { bogus: 5 }]` and
+`[feature_support = { bogus: 5 }]` are therefore accepted, where the reference
+compiler refuses the unknown field. This is the owner decision of 2026-10-27
+for `U-09` (variant Б): a nested option validator is out of scope, and the
+documented boundary is the executable one. Balance is still enforced - a body
+whose closing brace never arrives is refused with `unterminated aggregate
+option value` - and the `codegen.options` lane pins both halves
+(`accept-aggregate-bodies.proto`, `reject-aggregate-unterminated.proto`).
+
+### Lite files are accepted as imports (E15)
+
+`optimize_for` is validated as an `OptimizeMode` enumerator (`SPEED`,
+`CODE_SIZE`, `LITE_RUNTIME`) and then has no effect: EasyProtoBuf generates one
+runtime, so there is no lite build whose contract an import could violate. The
+reference compiler refuses a non-lite file that imports a file written with
+`optimize_for = LITE_RUNTIME` ("Files that do not use optimize_for =
+LITE_RUNTIME cannot import files which do use this option"); Codegen keeps
+accepting that pair on both doors and emits the ordinary header. This is the
+owner decision of 2026-10-27 for `U-15`, documented as exception **E15** and
+pinned by `nonlite-imports-lite` in the `codegen.validity` lane: the source and
+descriptor halves must produce the same header and no diagnostic.
+
+### `deprecated_legacy_json_field_conflicts` is a no-op
+
+`descriptor.proto` marks `deprecated_legacy_json_field_conflicts` on
+`MessageOptions` (field 11) and on `EnumOptions` (field 6) `[deprecated =
+true]`. Both rows stay in the known table, so a migration leftover is
+accepted, and nothing reads the value: the option is a documented no-op.
+SD-1, the stage decision of 2026-10-27 that implements the owner decision for
+`U-55` (variant Б), chose this over removing the rows or warning.
+The two legacy behaviours it would enable stay refused:
+
+- a custom `json_name` in the bracket form (`json_name = "[foo]"`) is refused
+  with `JSON names may not start with '[' and end with ']'`, where the
+  reference compiler accepts it while the option is set;
+- the proto2 folded enum-name collision (`E_FOO = 0; FOO = 1;`) stays an
+  error, where the reference compiler downgrades it to a warning while the
+  option is set.
+
+`codegen.options.legacy_json_xfail`
+([`test_legacy_json_xfail.cmake`](../tests/codegen/options/test_legacy_json_xfail.cmake))
+locks all three facts: acceptance on both owners, and both refusals. If either
+shape starts to pass, the no-op decision has to be re-evaluated and this
+section updated.
+
 ### Defaults and reserved numbers on both doors
 
 Two value rules are shared by the two doors and are not options of the

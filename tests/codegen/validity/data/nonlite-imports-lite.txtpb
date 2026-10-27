@@ -1,0 +1,27 @@
+# U-15 / E15: the descriptor half of the lite-import pair. protoc's source
+# path refuses the importing file, so the set is encoded from this text form
+# instead of compiled from the `.proto` beside it. Both entries mirror that
+# pair; the dependency keeps `optimize_for: LITE_RUNTIME`.
+file {
+  name: "lite-runtime-dep.proto"
+  package: "lite"
+  syntax: "proto2"
+  options { optimize_for: LITE_RUNTIME }
+  message_type {
+    name: "LiteMessage"
+    field { name: "value" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}
+file {
+  name: "nonlite-imports-lite.proto"
+  package: "lite"
+  syntax: "proto2"
+  dependency: "lite-runtime-dep.proto"
+  message_type {
+    name: "NonLiteMessage"
+    field {
+      name: "nested" number: 1 label: LABEL_OPTIONAL type: TYPE_MESSAGE
+      type_name: ".lite.LiteMessage"
+    }
+  }
+}

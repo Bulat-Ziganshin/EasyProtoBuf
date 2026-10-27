@@ -1,0 +1,15 @@
+syntax = "proto2";
+
+package lite;
+
+// U-15 / E15: the import target of `nonlite-imports-lite.proto`. The
+// reference compiler refuses the importing file because this one sets
+// `optimize_for = LITE_RUNTIME`; EasyProtoBuf has one runtime, so the option
+// is validated and ignored and the import is accepted. The descriptor half is
+// carried inside the crafted `nonlite-imports-lite.pbs` set, not as a
+// standalone file.
+option optimize_for = LITE_RUNTIME;
+
+message LiteMessage {
+  optional int32 value = 1;
+}

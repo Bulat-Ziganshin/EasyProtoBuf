@@ -1043,6 +1043,20 @@ if(BUILD_TESTING)
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/options/test_options.cmake)
 
+    # U-55 / SD-1: `deprecated_legacy_json_field_conflicts` is accepted and has
+    # no effect. This test asserts the CURRENT no-op direction - the option is
+    # accepted on both owners and the two legacy behaviours stay refused - so
+    # it must FAIL when either shape starts to pass; the failure message names
+    # SD-1 and OPTIONS.md. A separate ctest name because the SD-1 decision and
+    # `OPTIONS.md` cite it by name; `codegen.options` above stays the table's
+    # gate.
+    add_test(NAME codegen.options.legacy_json_xfail
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DDATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/codegen/options/data
+            -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/options/test_legacy_json_xfail.cmake)
+
     # Self-recursive std::vector<T> is already part of Codegen's practical
     # compiler/library baseline: descriptor.pb.hpp itself contains
     # std::vector<DescriptorProto> nested_type. Compile the generated repeated

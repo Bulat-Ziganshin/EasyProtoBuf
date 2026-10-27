@@ -1,0 +1,16 @@
+syntax = "proto2";
+
+package options.demo;
+
+// U-09: a known aggregate option body is brace-balanced only, so a field the
+// inner message does not define is accepted here where protoc refuses it.
+// This is the documented boundary (`OPTIONS.md`, "Aggregate option bodies are
+// brace-balanced only"), not a typo in the fixture.
+message AggregateBodies {
+  extensions 100 to 200 [declaration = { bogus: 5 }];
+
+  optional int32 value = 1 [
+    edition_defaults = { bogus: 5 },
+    feature_support = { bogus: 5 }
+  ];
+}

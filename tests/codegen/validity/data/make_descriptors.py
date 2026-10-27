@@ -67,6 +67,9 @@ from common.descriptor_fixtures import (build_fixtures,
 # The source-only fixtures: protoc refuses most of them, and a generated `.pbs`
 # would either fail the script or add an unintended descriptor twin. The
 # validity lane drives these from the `.proto` directly (W-15, W-40, W-41, B7).
+# `lite-runtime-dep` is source-only in a different sense: protoc refuses the
+# importing file (U-15), so the pair is encoded from `nonlite-imports-lite.txtpb`
+# and the dependency has no standalone descriptor of its own.
 SOURCE_ONLY_FIXTURES = (
     "bom",
     "bom-control",
@@ -81,6 +84,7 @@ SOURCE_ONLY_FIXTURES = (
     "grammar-option-plus-known",
     "grammar-repeated-default",
     "json-name-map-collision",
+    "lite-runtime-dep",
     "literals-aggregate-nul",
     "literals-nested-comment",
     "literals-octal-08",

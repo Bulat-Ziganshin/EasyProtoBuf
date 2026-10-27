@@ -1,0 +1,13 @@
+syntax = "proto2";
+
+package options.demo;
+
+// U-55 / SD-1: the second legacy behaviour the no-op option would enable - the
+// proto2 folded enum-name collision - stays an error. protoc downgrades this
+// exact text to a warning while the option is set; Codegen must not.
+enum E {
+  option deprecated_legacy_json_field_conflicts = true;
+
+  E_FOO = 0;
+  FOO = 1;
+}

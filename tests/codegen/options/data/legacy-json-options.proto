@@ -1,0 +1,20 @@
+syntax = "proto2";
+
+package options.demo;
+
+// U-55 / SD-1: `deprecated_legacy_json_field_conflicts` stays in the known
+// table for both owners and has no effect. This schema carries the option on a
+// message and on an enum; both statements must keep exiting 0 with no
+// diagnostic (`OPTIONS.md`, "deprecated_legacy_json_field_conflicts is a
+// no-op"). A refusal here means a catalog row was dropped.
+message LegacyJsonMessage {
+  option deprecated_legacy_json_field_conflicts = true;
+
+  optional int32 value = 1;
+}
+
+enum LegacyJsonEnum {
+  option deprecated_legacy_json_field_conflicts = true;
+
+  LEGACY_JSON_ZERO = 0;
+}

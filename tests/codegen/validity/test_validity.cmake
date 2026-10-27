@@ -1031,3 +1031,27 @@ if(FULL_BUILD)
         "json_name cannot have embedded null characters"
         "The NUL json_name refusal on the source path")
 endif()
+
+# --- R07: the owner-decided option exceptions (U-09, U-15, U-55) -------------
+#
+# U-15 / E15: EasyProtoBuf has one runtime, so `optimize_for = LITE_RUNTIME`
+# is validated and ignored and the reference compiler's ban on importing a
+# lite file is not modelled. The pair must be accepted on both doors, emit the
+# same header, and stay diagnostic-free: the exception is documentation, not a
+# new warning. The descriptor half is crafted because protoc refuses to
+# compile the source text it mirrors.
+run_ok(lite_import_desc_out lite_import_desc_err
+    ${CODEGEN} --descriptor-set --target nonlite-imports-lite.proto
+    "${DATA_DIR}/nonlite-imports-lite.pbs")
+require_empty(lite_import_desc_err "The lite-import descriptor stderr")
+require_contains(lite_import_desc_out "struct NonLiteMessage"
+    "U-15: the non-lite importer on the descriptor path")
+require_contains(lite_import_desc_out "#include \"lite-runtime-dep.pb.hpp\""
+    "U-15: the importer includes the lite dependency header")
+if(FULL_BUILD)
+    run_ok(lite_import_src_out lite_import_src_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/nonlite-imports-lite.proto")
+    require_empty(lite_import_src_err "The lite-import source stderr")
+    require_identical_headers(lite_import_desc_out lite_import_src_out
+        "The source and descriptor paths disagree for nonlite-imports-lite")
+endif()

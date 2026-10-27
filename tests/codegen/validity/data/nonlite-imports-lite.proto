@@ -1,0 +1,15 @@
+syntax = "proto2";
+
+package lite;
+
+// U-15 / E15: a non-lite file importing a `LITE_RUNTIME` file. protoc 30.1
+// refuses this text ("Files that do not use optimize_for = LITE_RUNTIME cannot
+// import files which do use this option"); EasyProtoBuf accepts it on both
+// doors because the option has no runtime to protect. The crafted
+// `nonlite-imports-lite.pbs` carries the same pair, so the source half and the
+// descriptor half must emit the same header and no diagnostic.
+import "lite-runtime-dep.proto";
+
+message NonLiteMessage {
+  optional LiteMessage nested = 1;
+}

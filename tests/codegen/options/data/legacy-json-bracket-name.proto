@@ -1,0 +1,12 @@
+syntax = "proto2";
+
+package options.demo;
+
+// U-55 / SD-1: the first legacy behaviour the no-op option would enable - a
+// bracketed custom JSON name - stays refused. protoc accepts this exact text
+// while the option is set; Codegen must not.
+message LegacyJsonBracketName {
+  option deprecated_legacy_json_field_conflicts = true;
+
+  optional int32 value = 1 [json_name = "[foo]"];
+}

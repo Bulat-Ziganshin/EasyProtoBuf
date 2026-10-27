@@ -1,0 +1,8 @@
+syntax = "proto2";
+
+package options.demo;
+
+// U-09: the documented boundary is brace balance, not "anything goes". This
+// body opens a brace it never closes, so it is still refused.
+message UnterminatedAggregate {
+  optional int32 value = 1 [feature_support = { edition_introduced: 2023 ];

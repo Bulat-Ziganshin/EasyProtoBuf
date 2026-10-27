@@ -64,7 +64,10 @@ endif()
 
 # The accepted fixtures. `accept-custom-options.proto` is accepted by policy:
 # unresolved custom options stay opaque (P1 exception E13), and the README
-# states why protoc would refuse the same text.
+# states why protoc would refuse the same text. `accept-aggregate-bodies.proto`
+# is the same boundary for the three aggregate-valued standard options
+# (`declaration`, `edition_defaults`, `feature_support`): brace balance only,
+# no nested field lookup (U-09, owner decision of 2026-10-27).
 set(accepted_fixtures
     accept-file-options
     accept-message-options
@@ -72,7 +75,8 @@ set(accepted_fixtures
     accept-enum-options
     accept-service-options
     accept-ext-range-options
-    accept-custom-options)
+    accept-custom-options
+    accept-aggregate-bodies)
 
 foreach(name ${accepted_fixtures})
     run_ok(accepted_out accepted_err
@@ -160,3 +164,11 @@ expect_refusal(reject-field-option-duplicate
     "Option \"deprecated\" was already set")
 expect_refusal(reject-custom-leading-identifier
     "Option \"file_scope.(vendor.file)\" unknown")
+
+# U-09: the documented boundary is brace balance, not "anything goes". The
+# accepted half is `accept-aggregate-bodies` above; a body that never closes
+# is still refused by the same parser. U-55/SD-1 has its own registration
+# (`codegen.options.legacy_json_xfail`), so the option stays out of these two
+# lists.
+expect_refusal(reject-aggregate-unterminated
+    "unterminated aggregate option value")

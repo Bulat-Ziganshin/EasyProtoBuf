@@ -22,6 +22,10 @@ leading-space integral default and the NUL `json_name` (`U-14`, `U-29`,
 `U-57`). The subnormal pair also carries the `--print-descriptor` parity row:
 the default text is the same on both doors.
 
+Step R07 adds the accepted lite-import pair (`U-15`, exception `E15`): a
+non-lite file importing a `LITE_RUNTIME` file, accepted on both doors with the
+same header and no diagnostic.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -116,11 +120,27 @@ the default text is the same on both doors.
 | an integral default with a leading space (refused) | crafted `.pbs` | `U-29` |
 | a field number of 536870912 (refused) | `.proto` only | `U-56` |
 | a custom `json_name` with an embedded NUL | `.proto` + crafted `.pbs` | `U-57` |
+| a non-lite file importing a `LITE_RUNTIME` file (accepted) | `.proto` + crafted `.pbs` | `U-15` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted
 because protoc canonicalizes or refuses the spelling they carry; the
 `.txtpb` beside each is the readable form `make_descriptors.py` encodes.
+
+## The lite-import exception (R07)
+
+`nonlite-imports-lite` is the accepted pair for `U-15` (exception `E15`): a
+non-lite file importing a file that sets `optimize_for = LITE_RUNTIME`. The
+reference compiler refuses it - a file that does not use lite semantics cannot
+import one that does; EasyProtoBuf has one runtime, so the option is validated
+and ignored. The driver asserts that both doors accept the pair, print no
+diagnostic, and emit the same header byte for byte, dependency include
+included.
+
+The descriptor half is crafted from `nonlite-imports-lite.txtpb` because
+protoc will not compile the source text it mirrors; `lite-runtime-dep.proto`
+is source-only for the generator for the same reason - its descriptor exists
+only inside that set.
 
 ## Path-restricted rows
 
@@ -265,11 +285,14 @@ source-only fixtures (`bom`, `bom-control`, `empty-syntax`,
 `grammar-field-option-plus`, `grammar-leading-semicolon`,
 `grammar-option-plus`, `grammar-option-plus-known`,
 `grammar-repeated-default`, `json-name-map-collision`,
+`lite-runtime-dep`,
 `literals-aggregate-nul`, `literals-nested-comment`, `literals-octal-08`,
 `literals-octal-09`, `literals-octal-enum`, `plus-int-default`,
 `plus-enum-value`, `plus-float-default`, `plus-inf-nan`)
 are skipped: protoc refuses most of them,
-and a generated `.pbs` would add an unintended twin.
+and a generated `.pbs` would add an unintended twin. `lite-runtime-dep` is
+skipped because protoc refuses its importer, so the pair is encoded from
+`nonlite-imports-lite.txtpb` and the dependency has no standalone descriptor.
 
 **One byte is not protoc's text format.** `field-type-unknown` declares
 `type: 99`, and the text format answers *"Unknown enumeration value of \"99\"
