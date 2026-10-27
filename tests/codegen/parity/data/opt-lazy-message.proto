@@ -1,0 +1,14 @@
+// U-13 accepted control: `lazy` is legal on a message field. The option is a
+// parsing hint and has no effect on the generated C++, so both doors accept it
+// and produce one header.
+syntax = "proto3";
+
+package opt;
+
+message Child {
+  int32 value = 1;
+}
+
+message Parent {
+  Child child = 1 [lazy = true];
+}

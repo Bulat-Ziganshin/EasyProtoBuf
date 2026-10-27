@@ -844,3 +844,22 @@ if(FULL_BUILD)
             "  descriptor: ${scope_desc_err}\n  source:     ${scope_src_err}")
     endif()
 endif()
+
+# --- U-58: the descriptor decoder is strict about wire types -----------------
+#
+# `ReservedRange.start` is a varint field. Written as FIXED32 it used to be
+# accepted and silently dropped from the model, so the range disappeared and
+# the schema generated a header describing something else. A converted value is
+# data loss, not a tolerance: the descriptor door must refuse the set, and no
+# header may escape. The message decoder keeps its documented conversions
+# (`wire.type.conversions` owns that contract), so the strictness is the
+# descriptor decoder's alone.
+run_fail(wire_type_out wire_type_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/descriptor-wire-fixed32.pbs")
+require_empty(wire_type_out "The wrong-wire-type refusal stdout")
+require_contains(wire_type_err "cannot decode descriptor set"
+    "The wrong-wire-type refusal")
+require_contains(wire_type_err "wire type 5"
+    "The wrong-wire-type refusal names the wire type it found")
+require_contains(wire_type_err "wire type 0 is required"
+    "The wrong-wire-type refusal names the required wire type")

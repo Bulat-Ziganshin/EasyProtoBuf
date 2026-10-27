@@ -566,6 +566,36 @@ struct Reader
         return true;
     }
 
+    // State the wire type the caller's schema declares for the field just read.
+    //
+    // The `parse_*` helpers keep the library's documented conversions: an
+    // integral field also accepts FIXED32/FIXED64 (see `parse_integer_value`
+    // and the `wire.type.conversions` contract). That tolerance is right for a
+    // user message, whose schema is the caller's own struct. A schema
+    // DEFINITION read through this cursor (the descriptor frontend) cannot use
+    // it: the converted value would silently describe a different schema
+    // instead of reporting that the bytes disagree with descriptor.proto. A
+    // caller that knows the declared type checks it here, before reading.
+    //
+    // The two-argument form adds the packed wire type a repeated numeric field
+    // may use instead of its element type.
+    void require_wire_type(WireType expected) const
+    {
+        if (wire_type == expected) return;
+        throw wiretype_mismatch("Field " + detail::number_to_string(field_num) +
+            " is encoded with wire type " + detail::number_to_string(wire_type) +
+            ", but wire type " + detail::number_to_string(expected) + " is required");
+    }
+
+    void require_wire_type(WireType expected, WireType alternative) const
+    {
+        if (wire_type == expected || wire_type == alternative) return;
+        throw wiretype_mismatch("Field " + detail::number_to_string(field_num) +
+            " is encoded with wire type " + detail::number_to_string(wire_type) +
+            ", but wire type " + detail::number_to_string(expected) + " or " +
+            detail::number_to_string(alternative) + " is required");
+    }
+
     // Skip the field value, can be called only after get_next_field() if we choose to ignore the field value
     void skip_field()
     {

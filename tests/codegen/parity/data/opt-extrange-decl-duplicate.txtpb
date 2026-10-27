@@ -1,0 +1,34 @@
+# U-22: the same extension number declared twice in one range. protoc refuses
+# it ("Extension declaration number 150 is declared multiple times."); the
+# source door keeps the aggregate option body opaque (E13), so this is a
+# descriptor-only refusal.
+file {
+  name: "opt-extrange-decl-duplicate.proto"
+  package: "opt"
+  syntax: "proto2"
+  message_type {
+    name: "Duplicate"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+    extension_range {
+      start: 100
+      end: 200
+      options {
+        declaration {
+          number: 150
+          full_name: ".opt.first"
+          type: ".opt.Duplicate"
+        }
+        declaration {
+          number: 150
+          full_name: ".opt.second"
+          type: ".opt.Duplicate"
+        }
+      }
+    }
+  }
+}

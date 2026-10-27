@@ -122,8 +122,52 @@ owner, and a wrong value kind are refusals; the value itself is discarded.
 
 This is validation, not feature support: no Java/C#/Go option changes the
 generated C++. Only `default`, `json_name`, `packed` and `(easypb.cpp).type`
-keep storage and behavior. The descriptor path trusts a protoc-written
-`FileDescriptorSet` and does not gain an options model in this stage.
+keep generated-code behavior. The descriptor door decodes the options whose
+rules change a verdict - `packed`, `jstype`, `lazy`/`unverified_lazy`,
+`message_set_wire_format`, `map_entry`, `allow_alias`, and the extension
+range's `verification`/`declaration` - and asks the same rules over the
+decoded values (`U-13`, `U-22`). Every other standard option is read as an
+unknown field on the `.pbs` door, which is what protoc does with an option it
+does not model here.
+
+### The descriptor door's `jstype` and `lazy` rules
+
+On `.pbs` input the values come from the decoded `FieldOptions`, not from a
+source spelling:
+
+- `jstype = JS_NORMAL` is the option's default and is accepted on every field
+  kind; `JS_STRING` and `JS_NUMBER` are accepted only on `int64`, `uint64`,
+  `sint64`, `fixed64` and `sfixed64` fields, and any other kind gets `jstype
+  is only allowed on int64, uint64, sint64, fixed64 or sfixed64 fields`.
+- `lazy = true` and `unverified_lazy = true` are accepted only on a message
+  field; a scalar field gets `[lazy = true] can only be specified for
+  submessage fields`. Either flag written as `false` is the default and is
+  accepted on every field.
+- An enumerator outside the enumerated `JSType` set is an unknown field, as in
+  protoc's closed proto2 decoder, so it reads as JS_NORMAL and changes no
+  verdict.
+
+The source door answers the same two rules from the option's source position;
+the descriptor door has no positions and reports the descriptor path.
+
+### The descriptor door's extension range options
+
+`ExtensionRangeOptions` is decoded too, and four combinations protoc refuses
+are refused (`U-22`):
+
+- an explicit `verification = UNVERIFIED` beside a non-empty `declaration`
+  list (`cannot be marked UNVERIFIED while it has extension declarations`);
+- a declaration number outside its own range;
+- the same number declared twice in one range;
+- a declaration that sets only one of `full_name`/`type` without being a
+  `reserved` tombstone.
+
+`descriptor.proto` marks `declaration` and `verification`
+`[retention = RETENTION_SOURCE]`, so a descriptor written by protoc
+`--descriptor_set_out` carries neither; the rules apply to a hand-written
+`.pbs`, which is the input shape they exist for. The source door keeps an
+aggregate option body opaque (exception `E13`), so these four are descriptor
+rules.
 
 A parenthesized custom option is deliberately opaque. Its defining extension
 lives in an import this frontend does not link, so the name grammar and the

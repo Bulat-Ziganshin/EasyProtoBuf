@@ -18,6 +18,12 @@ optional declaration names), plus the accepted `CR-25` xfail. The same rule
 applies: every shape is a verdict on both doors, and the pair of accepted
 controls (`ext-max`, `message-set-empty`) is compared byte for byte.
 
+Step R04 (`U-13`, `U-22`) adds the descriptor option rows: the two field
+options whose rules change a verdict (`jstype`, `lazy`/`unverified_lazy`) and
+the extension range's `verification`/`declaration` pair. They are the same
+kind of row - a rule that used to exist on the source door only, now asked on
+both - with the accepted controls compared byte for byte.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -80,6 +86,17 @@ controls (`ext-max`, `message-set-empty`) is compared byte for byte.
 | a MessageSet with no fields (accepted) | `data/message-set-empty.proto` / `.pbs` | `CR-23` |
 | a MessageSet that declares a field | `data/message-set-fields.pbs` | `CR-23` |
 | an unnamed field / message / service | `data/no-{field,message,service}-name.pbs` | `CR-46` |
+| a `jstype` on a 64-bit field (accepted) | `data/opt-jstype-int64.proto` / `.pbs` | `U-13` |
+| a `jstype` on an int32 field | `data/opt-jstype-int32.proto` / `.pbs` | `U-13` |
+| an undeclared `jstype` enumerator (accepted, reads as absent) | `data/opt-jstype-unknown.pbs` | `U-13` |
+| `lazy = true` on a message field (accepted) | `data/opt-lazy-message.proto` / `.pbs` | `U-13` |
+| `lazy = true` on a scalar | `data/opt-lazy-int32.proto` / `.pbs` | `U-13` |
+| `unverified_lazy = true` on a scalar | `data/opt-unverified-lazy-int32.proto` / `.pbs` | `U-13` |
+| an extension declaration list (accepted) | `data/opt-extrange-declaration.proto` / `.pbs` | `U-22` |
+| `UNVERIFIED` beside a declaration | `data/opt-extrange-unverified.proto` / `.pbs` | `U-22` |
+| a declaration number outside the range | `data/opt-extrange-decl-bad-number.pbs` | `U-22` |
+| one number declared twice | `data/opt-extrange-decl-duplicate.pbs` | `U-22` |
+| a declaration with only `full_name` | `data/opt-extrange-decl-partial.pbs` | `U-22` |
 | extension declarations are not validated (xfail) | `data/ext-member-*.pbs`, `data/ext-unvalidated.proto` | `CR-25`, E6 |
 | a thin set: the import is named but not carried | `data/w68-root.proto` / `.pbs` | `W-68` |
 | the imported file | `data/w68-dep.proto` / `.pbs` | `W-68` |
@@ -123,6 +140,34 @@ Two B5 shapes are descriptor-only by construction:
   field-less control is accepted on both paths and its header is unchanged.
 - **an unnamed field/message/service** (`CR-46`) — the source grammar cannot
   spell a nameless declaration; only a crafted descriptor can.
+
+The R04 rows (`U-13`, `U-22`) follow the same rule. The `jstype` and either
+lazy flag are decoded by the descriptor door and validated by the shared
+semantic pass, so the refused shapes exist on both doors with the same
+sentence, and the accepted controls (`opt-jstype-int64`, `opt-lazy-message`)
+are protoc-written pairs whose headers must be byte-identical. One accepted
+descriptor carries a byte the text format cannot spell: `opt-jstype-unknown`
+writes an enumerator that the pinned `descriptor.proto` does not declare,
+which protoc's closed-enum decoder routes to the unknown fields, so the schema
+is accepted; the `codegen.schema.semantics` unit test pins that the decoded
+option is absent rather than kept.
+
+`opt-extrange-declaration` is the accepted `U-22` control, and it is the one
+pair whose descriptor half is crafted although protoc accepts the source:
+`descriptor.proto` marks both `declaration` and `verification`
+`[retention = RETENTION_SOURCE]`, so a protoc-written descriptor carries
+neither option. The source half is an ordinary `.proto` protoc accepts, and the
+lane still compares the two headers byte for byte.
+
+Three `ExtensionRangeOptions` shapes are descriptor-only:
+
+- **a declaration number outside its range, the same number twice, and a
+  declaration with only one of `full_name`/`type`** (`opt-extrange-decl-*`) —
+  the source door keeps an aggregate option body opaque (P1 exception `E13`,
+  and the `codegen.options` lane pins the accepted aggregate spelling), so the
+  source half does not model the members. `opt-extrange-unverified` is the one
+  option conflict both doors model: the parser refuses it as text and the
+  descriptor sweep refuses the decoded pair.
 
 The accepted `CR-25` decision is the lane's one xfail, and it is a separate
 test: `codegen.parity.extensions_not_validated` asserts that an extension

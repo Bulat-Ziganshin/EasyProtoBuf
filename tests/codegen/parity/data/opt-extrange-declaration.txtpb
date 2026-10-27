@@ -1,0 +1,33 @@
+# U-22 accepted control: an extension range that declares its extension
+# numbers and asks for them to be verified. protoc accepts the source half
+# (`opt-extrange-declaration.proto`), but `descriptor.proto` marks BOTH the
+# `declaration` list and `verification` with `[retention = RETENTION_SOURCE]`,
+# so a `--descriptor_set_out` descriptor does not carry them. The descriptor
+# half is therefore encoded from this text, exactly like the refused shapes;
+# the source half stays the same schema, and both doors must emit one header.
+file {
+  name: "opt-extrange-declaration.proto"
+  package: "opt"
+  syntax: "proto2"
+  message_type {
+    name: "ExtensionTarget"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+    extension_range {
+      start: 100
+      end: 200
+      options {
+        declaration {
+          number: 150
+          full_name: ".opt.ext"
+          type: ".opt.ExtensionTarget"
+        }
+        verification: DECLARATION
+      }
+    }
+  }
+}

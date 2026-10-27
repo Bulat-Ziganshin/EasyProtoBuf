@@ -1,0 +1,19 @@
+// U-22 accepted control: an extension range that declares its extension
+// numbers and asks for them to be verified. protoc accepts the declaration
+// because the number lies inside the range and both `full_name` and `type` are
+// set; the source door keeps the aggregate option body opaque (E13) and
+// accepts it; the descriptor door decodes the options and accepts them too.
+// The declarations have no generated-code effect, so both doors emit one
+// header.
+syntax = "proto2";
+
+package opt;
+
+message ExtensionTarget {
+  optional int32 value = 1;
+
+  extensions 100 to 199 [
+    declaration = { number: 150 full_name: ".opt.ext" type: ".opt.ExtensionTarget" },
+    verification = DECLARATION
+  ];
+}

@@ -1,0 +1,17 @@
+// U-22 refused shape: an extension range that is marked UNVERIFIED while it
+// declares extension numbers. protoc refuses it ("Cannot mark the extension
+// range as UNVERIFIED when it has extension(s) declared.") and so does the
+// source door; the descriptor door must refuse it too. The `.pbs` half is
+// crafted from the `.txtpb` beside this file.
+syntax = "proto2";
+
+package opt;
+
+message UnverifiedRange {
+  optional int32 value = 1;
+
+  extensions 100 to 199 [
+    declaration = { number: 150 full_name: ".opt.ext" type: ".opt.UnverifiedRange" },
+    verification = UNVERIFIED
+  ];
+}

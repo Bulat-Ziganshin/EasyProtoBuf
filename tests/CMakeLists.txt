@@ -724,7 +724,11 @@ if(BUILD_TESTING)
         w36-enum-reserved-zero
         w36-default-decimal
         w68-root
-        w68-dep)
+        w68-dep
+        opt-jstype-int64
+        opt-jstype-unknown
+        opt-lazy-message
+        opt-extrange-declaration)
     set(codegen_parity_compile_sources)
     set(codegen_parity_headers)
     foreach(name ${codegen_parity_compile_fixtures})
@@ -1111,7 +1115,10 @@ if(BUILD_TESTING)
 
     add_executable(codegen_schema_semantics_test codegen/schema/test_semantics.cpp)
     target_link_libraries(codegen_schema_semantics_test PRIVATE easypb_schema)
-    add_test(NAME codegen.schema.semantics COMMAND codegen_schema_semantics_test)
+    # The R04 rows decode the tracked `.pbs` fixtures the parity and validity
+    # lanes own; the argument is the tests/ source directory.
+    add_test(NAME codegen.schema.semantics
+        COMMAND codegen_schema_semantics_test ${CMAKE_CURRENT_SOURCE_DIR})
 
     add_executable(codegen_imports_graph_test codegen/imports/test_graph.cpp)
     target_link_libraries(codegen_imports_graph_test PRIVATE easypb_schema)

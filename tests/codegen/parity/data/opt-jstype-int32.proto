@@ -1,0 +1,12 @@
+// U-13 refused shape: `jstype` on a 32-bit field. protoc refuses it
+// ("jstype is only allowed on int64, uint64, sint64, fixed64 or sfixed64
+// fields."), the source door refuses it with the same sentence, and the
+// descriptor door must refuse it too. The `.pbs` half is crafted from the
+// `.txtpb` beside this file, because protoc cannot build the descriptor.
+syntax = "proto3";
+
+package opt;
+
+message Small {
+  int32 value = 1 [jstype = JS_STRING];
+}

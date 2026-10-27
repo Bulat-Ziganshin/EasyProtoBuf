@@ -2,13 +2,24 @@
 // (codegen/schema_semantics.hpp/.cpp): symbol indexing and local/strict
 // field resolution. Descriptors are built by hand so this test links only
 // easypb_schema and keeps passing in descriptor-set-only builds.
+//
+// R04 adds the descriptor decode rows: a few of them read committed `.pbs`
+// fixtures (the parity and validity lanes own them) and decode them with the
+// production descriptor decoder, because the wire-type strictness and the
+// option presence bits cannot be observed through a hand-built struct. The
+// fixture directory is the tests/ source directory, passed by CTest.
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <set>
 #include <string>
 
+#include "descriptor.pb.hpp"
 #include "descriptor_adapter.hpp"
 #include "schema_semantics.hpp"
 #include "schema_semantics_internal.hpp"
@@ -2527,10 +2538,310 @@ void test_adapter_normalizes_the_package_presence_bit()
     }
 }
 
+// --- R04: the descriptor decoder is strict, and the decoded options reach the
+// --- rules the source door already applies ------------------------------------
+
+bool read_binary_file(const std::string& path, std::string& contents)
+{
+    std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
+    if (!input) return false;
+    contents.assign(std::istreambuf_iterator<char>(input),
+                    std::istreambuf_iterator<char>());
+    return input.good() || input.eof();
+}
+
+// Decode one committed `.pbs` fixture. The decoded views point into `bytes`,
+// which the caller must keep alive while it reads them.
+FileDescriptorSet decode_fixture(const std::string& path, std::string& bytes)
+{
+    CHECK(read_binary_file(path, bytes));
+    return easypb::decode<FileDescriptorSet>(bytes);
+}
+
+// U-58: the descriptor decoder states each field's wire type, so a
+// `ReservedRange.start` written as FIXED32 is a diagnostic instead of a value
+// the runtime quietly converts. The runtime's own tolerance is unchanged
+// (`wire.type.conversions` owns it); this is the descriptor door's rule.
+void test_descriptor_decode_rejects_a_wrong_wire_type(
+    const std::string& fixture_dir)
+{
+    std::string bytes;
+    CHECK(read_binary_file(
+        fixture_dir + "/codegen/validity/data/descriptor-wire-fixed32.pbs",
+        bytes));
+    bool refused = false;
+    std::string message;
+    try {
+        easypb::decode<FileDescriptorSet>(bytes);
+    } catch (const std::exception& problem) {
+        refused = true;
+        message = problem.what();
+    }
+    CHECK(refused);
+    CHECK(message.find("wire type 5") != std::string::npos);
+    CHECK(message.find("wire type 0 is required") != std::string::npos);
+}
+
+// U-13: `jstype`, `lazy` and `unverified_lazy` are decoded with presence bits,
+// and the shared pass refuses a non-normal `jstype` outside the 64-bit integral
+// kinds and either lazy flag on a non-message field. An enumerator the pinned
+// descriptor.proto does not declare is an unknown field, exactly as protoc's
+// closed proto2 decoder reads it, so it leaves `has_jstype` false.
+void test_descriptor_field_options_are_decoded(const std::string& fixture_dir)
+{
+    const std::string parity = fixture_dir + "/codegen/parity/data";
+
+    // `jstype = JS_STRING` on an int32 field: decoded, then refused.
+    {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(parity + "/opt-jstype-int32.pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() == 1 &&
+            !decoded.file[0].message_type.empty() &&
+            !decoded.file[0].message_type[0].field.empty()) {
+            const FieldOptions& options =
+                decoded.file[0].message_type[0].field[0].options;
+            CHECK(options.has_jstype);
+            CHECK(options.jstype == FieldOptions::JS_STRING);
+        }
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(
+            decoded.file, "opt-jstype-int32.pbs", set, error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            CHECK(!easypb_schema::validate_deferred_file(*set.files()[0],
+                                                         error));
+            CHECK(error.message.find("jstype is only allowed on int64") !=
+                  std::string::npos);
+        }
+    }
+
+    // `jstype = JS_STRING` on an int64 field: decoded and accepted.
+    {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(parity + "/opt-jstype-int64.pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() == 1 &&
+            !decoded.file[0].message_type.empty() &&
+            !decoded.file[0].message_type[0].field.empty()) {
+            const FieldOptions& options =
+                decoded.file[0].message_type[0].field[0].options;
+            CHECK(options.has_jstype);
+            CHECK(options.jstype == FieldOptions::JS_STRING);
+        }
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(
+            decoded.file, "opt-jstype-int64.pbs", set, error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            CHECK(easypb_schema::validate_deferred_file(*set.files()[0],
+                                                        error));
+        }
+    }
+
+    // An undeclared `jstype` enumerator reads as absent, not as a value the
+    // model accepts: the fixture is accepted and the option is not present.
+    {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(parity + "/opt-jstype-unknown.pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() == 1 &&
+            !decoded.file[0].message_type.empty() &&
+            !decoded.file[0].message_type[0].field.empty()) {
+            const FieldOptions& options =
+                decoded.file[0].message_type[0].field[0].options;
+            CHECK(!options.has_jstype);
+            CHECK(options.jstype == FieldOptions::JS_NORMAL);
+        }
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(
+            decoded.file, "opt-jstype-unknown.pbs", set, error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            CHECK(easypb_schema::validate_deferred_file(*set.files()[0],
+                                                        error));
+        }
+    }
+
+    // `lazy = true` and `unverified_lazy = true` on a scalar: decoded, then
+    // refused with the sentence protoc uses for either flag.
+    const char* const scalar_lazy[] = {"opt-lazy-int32",
+                                       "opt-unverified-lazy-int32"};
+    for (int i = 0; i < 2; ++i) {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(parity + "/" + scalar_lazy[i] + ".pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(
+            decoded.file, std::string(scalar_lazy[i]) + ".pbs", set, error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            CHECK(!easypb_schema::validate_deferred_file(*set.files()[0],
+                                                         error));
+            CHECK(error.message.find(
+                      "[lazy = true] can only be specified for submessage "
+                      "fields") != std::string::npos);
+        }
+    }
+
+    // `lazy = true` on a message field: decoded and accepted.
+    {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(parity + "/opt-lazy-message.pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() == 1 &&
+            decoded.file[0].message_type.size() == 2 &&
+            !decoded.file[0].message_type[1].field.empty()) {
+            const FieldDescriptorProto& field =
+                decoded.file[0].message_type[1].field[0];
+            CHECK(field.options.has_lazy);
+            CHECK(field.options.lazy);
+            CHECK(field.has_type);
+            CHECK(field.type == FieldDescriptorProto::TYPE_MESSAGE);
+        }
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(
+            decoded.file, "opt-lazy-message.pbs", set, error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            CHECK(easypb_schema::validate_deferred_file(*set.files()[0],
+                                                        error));
+        }
+    }
+}
+
+// U-22: the extension range's `verification` and `declaration` list are
+// decoded, and the four combinations protoc refuses are refused by
+// `validate_extension_ranges`. The accepted control also proves the adapter
+// interns the declaration strings: the decoded buffer is poisoned before the
+// owned copy is read.
+void test_descriptor_extension_range_options_are_decoded(
+    const std::string& fixture_dir)
+{
+    const std::string parity = fixture_dir + "/codegen/parity/data";
+
+    {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(parity + "/opt-extrange-declaration.pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        if (decoded.file.size() == 1 &&
+            !decoded.file[0].message_type.empty() &&
+            !decoded.file[0].message_type[0].extension_range.empty()) {
+            const DescriptorProto_ExtensionRange& range =
+                decoded.file[0].message_type[0].extension_range[0];
+            CHECK(range.has_options);
+            CHECK(range.options.has_verification);
+            CHECK(range.options.verification ==
+                  ExtensionRangeOptions::DECLARATION);
+            CHECK(range.options.declaration.size() == 1);
+            if (range.options.declaration.size() == 1) {
+                CHECK(text(range.options.declaration[0].full_name) ==
+                      ".opt.ext");
+                CHECK(text(range.options.declaration[0].type) ==
+                      ".opt.ExtensionTarget");
+                CHECK(range.options.declaration[0].has_full_name);
+                CHECK(range.options.declaration[0].has_type);
+            }
+        }
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(
+            decoded.file, "opt-extrange-declaration.pbs", set, error));
+        // D2: the declaration strings are owned by the schema file. Poison the
+        // decoded buffer before reading them through the adapter's copy.
+        if (!bytes.empty()) {
+            std::memset(&bytes[0], '\xA5', bytes.size());
+        }
+        bytes.clear();
+        bytes.shrink_to_fit();
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            const DescriptorProto& message =
+                set.files()[0]->file.message_type[0];
+            CHECK(message.extension_range.size() == 1);
+            if (message.extension_range.size() == 1 &&
+                message.extension_range[0].options.declaration.size() == 1) {
+                CHECK(text(message.extension_range[0]
+                               .options.declaration[0].full_name) ==
+                      ".opt.ext");
+                CHECK(text(message.extension_range[0]
+                               .options.declaration[0].type) ==
+                      ".opt.ExtensionTarget");
+            }
+            CHECK(easypb_schema::validate_extension_ranges(*set.files()[0],
+                                                           error));
+        }
+    }
+
+    struct Conflict
+    {
+        const char* stem;
+        const char* expected;
+    };
+    const Conflict conflicts[] = {
+        {"opt-extrange-unverified", "cannot be marked UNVERIFIED"},
+        {"opt-extrange-decl-bad-number", "names a number outside the range"},
+        {"opt-extrange-decl-duplicate", "is declared more than once"},
+        {"opt-extrange-decl-partial", "must set both"},
+    };
+    for (std::size_t i = 0; i < sizeof(conflicts) / sizeof(conflicts[0]); ++i) {
+        std::string bytes;
+        const FileDescriptorSet decoded =
+            decode_fixture(parity + "/" + conflicts[i].stem + ".pbs", bytes);
+        CHECK(decoded.file.size() == 1);
+        easypb_schema::SchemaSet set;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::append_descriptor_files(
+            decoded.file, std::string(conflicts[i].stem) + ".pbs", set, error));
+        CHECK(set.files().size() == 1);
+        if (set.files().size() == 1) {
+            CHECK(!easypb_schema::validate_extension_ranges(*set.files()[0],
+                                                            error));
+            CHECK(error.message.find(conflicts[i].expected) !=
+                  std::string::npos);
+            CHECK(error.code ==
+                  easypb_schema::DIAGNOSTIC_INVALID_EXTENSION_RANGE);
+        }
+    }
+}
+
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    if (argc < 2 || argv[1][0] == '\0') {
+        std::cerr << "usage: codegen_schema_semantics_test <tests-source-dir>\n"
+                  << "The argument is the tests/ source directory: the R04 rows\n"
+                  << "decode the tracked .pbs fixtures under codegen/*/data/.\n";
+        return EXIT_FAILURE;
+    }
+    const std::string fixture_dir = argv[1];
+    {
+        // Fail loudly on a wrong argument instead of letting every decode row
+        // read a bogus path.
+        std::string probe;
+        if (!read_binary_file(
+                fixture_dir +
+                    "/codegen/validity/data/descriptor-wire-fixed32.pbs",
+                probe)) {
+            std::cerr << "fixture directory lacks "
+                         "codegen/validity/data/descriptor-wire-fixed32.pbs: "
+                      << fixture_dir << '\n';
+            return EXIT_FAILURE;
+        }
+    }
+
     test_index_and_local_resolution();
     test_invalid_local_enum_default_fails_at_default_location();
     test_packed_rules_need_a_known_kind();
@@ -2569,6 +2880,9 @@ int main()
     test_rule_extension_bound_directly();
     test_rule_message_set_wire_format_directly();
     test_adapter_normalizes_the_package_presence_bit();
+    test_descriptor_decode_rejects_a_wrong_wire_type(fixture_dir);
+    test_descriptor_field_options_are_decoded(fixture_dir);
+    test_descriptor_extension_range_options_are_decoded(fixture_dir);
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

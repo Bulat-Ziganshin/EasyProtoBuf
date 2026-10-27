@@ -247,20 +247,24 @@ bool validate_json_names(SchemaFile& file, Diagnostic& error);
 
 // Validates every extension range the file's messages declare, top-level and
 // nested, over the available descriptor alone (plan 5 follow-up S5, W-45).
-// Six shapes share DIAGNOSTIC_INVALID_EXTENSION_RANGE, because they are one
+// The shapes share DIAGNOSTIC_INVALID_EXTENSION_RANGE, because they are one
 // category - the declaration does not describe usable extension numbers: a
 // range in a proto3 file, a non-positive start, an exclusive end that does not
 // exceed its start, an exclusive end above 536870912 (the protocol maximum
 // plus one, CR-07, unless the message declares MessageSet wire format), a
 // range that includes a declared field number, and two overlapping ranges.
-// protoc refuses all six while it builds a file (descriptor.cc:6884-6896,
-// :7898, :6426-6430, :6454-6482, :8395-8404) and the source path refuses every
-// one of them as text (proto_parser.cpp's extension-range parser), so this is
-// the descriptor-origin half of the same frontend parity rule. An unreferenced
-// message is still descriptor input, so the check is unconditional and runs
-// before any resolution, in both linking modes, beside the entry-shape and
-// enum-number sweeps (A26's precedent). Returns false and fills error at the
-// first offending range, in declaration order.
+// Step R04 (U-22) adds the range's options: an explicit `verification =
+// UNVERIFIED` beside any declaration, a declaration number outside its range,
+// the same number declared twice, and a declaration carrying only one of
+// `full_name`/`type` without being `reserved`. protoc refuses all ten while it
+// builds a file (descriptor.cc:6884-6896, :7898, :6426-6430, :6454-6482,
+// :8395-8404, :8377-8425) and the source path refuses the range shapes as text
+// (proto_parser.cpp's extension-range parser), so this is the descriptor-origin
+// half of the same frontend parity rule. An unreferenced message is still
+// descriptor input, so the check is unconditional and runs before any
+// resolution, in both linking modes, beside the entry-shape and enum-number
+// sweeps (A26's precedent). Returns false and fills error at the first
+// offending range, in declaration order.
 bool validate_extension_ranges(SchemaFile& file, Diagnostic& error);
 
 // Validates every message and enum `reserved` declaration the file carries,

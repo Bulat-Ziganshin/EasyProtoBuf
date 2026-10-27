@@ -1,0 +1,30 @@
+# U-22: an extension range marked UNVERIFIED beside a declaration. protoc
+# refuses the shape, so the descriptor is encoded from this text instead of
+# compiled. The source half (`opt-extrange-unverified.proto`) is the same
+# schema, and both doors must refuse it.
+file {
+  name: "opt-extrange-unverified.proto"
+  package: "opt"
+  syntax: "proto2"
+  message_type {
+    name: "UnverifiedRange"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+    extension_range {
+      start: 100
+      end: 200
+      options {
+        declaration {
+          number: 150
+          full_name: ".opt.ext"
+          type: ".opt.UnverifiedRange"
+        }
+        verification: UNVERIFIED
+      }
+    }
+  }
+}

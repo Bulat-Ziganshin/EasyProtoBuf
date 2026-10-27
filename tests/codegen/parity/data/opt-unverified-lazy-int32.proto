@@ -1,0 +1,11 @@
+// U-13 refused shape: `unverified_lazy` on a scalar field. protoc refuses it
+// with the same `[lazy = true]` sentence it uses for `lazy`, the source door
+// refuses it, and the descriptor door must refuse it too. The `.pbs` half is
+// crafted from the `.txtpb` beside this file.
+syntax = "proto3";
+
+package opt;
+
+message Unverified {
+  int32 value = 1 [unverified_lazy = true];
+}

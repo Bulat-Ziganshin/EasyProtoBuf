@@ -37,6 +37,13 @@ with `type: TYPE_SINT32`, both one-byte varints - asserts that the two
 encodings differ in exactly one byte, and writes 99 into that byte. The result
 is protoc's own encoding of the same descriptor with the unknown kind.
 
+A second crafted shape changes a WIRE TYPE, which the text format cannot spell
+either: `descriptor-wire-fixed32` writes `ReservedRange.start` as FIXED32
+instead of a varint (U-58). `patched_fixed32_bytes` keeps the total length
+identical - the value is a four-byte varint, the fixed32 payload width - so
+every enclosing length prefix stays correct and the only difference from
+protoc's encoding is the tag and the four value bytes.
+
 Usage:
 
     python tests/codegen/validity/data/make_descriptors.py [--protoc PATH] [--check]
@@ -125,6 +132,45 @@ def patched_kind_bytes(protoc, descriptor_dir, text):
 
 
 PATCHES = {PATCHED_TYPE_FIXTURE: patched_kind_bytes}
+
+
+# U-58: the one fixture whose WIRE TYPE the text format cannot spell.
+# `DescriptorProto.ReservedRange.start` is a varint field; this descriptor
+# writes it as FIXED32, which protoc routes to the unknown fields and a
+# converting decoder silently accepts (the range then disappears). The start
+# value is chosen so its varint is four bytes - the width of the fixed32
+# payload - so the replacement leaves every enclosing length prefix correct.
+WIRE_FIXTURE = "descriptor-wire-fixed32"
+WIRE_FIXTURE_START = 2097152
+
+
+def _varint(value):
+    out = b""
+    while value > 0x7F:
+        out += bytes([(value & 0x7F) | 0x80])
+        value >>= 7
+    return out + bytes([value])
+
+
+def patched_fixed32_bytes(protoc, descriptor_dir, text):
+    """The encoding of `text` with the reserved range start written as FIXED32."""
+    data = encode_textproto(protoc, descriptor_dir, text)
+    marker = b"\x08" + _varint(WIRE_FIXTURE_START)
+    occurrences = data.count(marker)
+    if occurrences != 1:
+        fail("%s: the start marker occurs %d times, expected exactly one"
+             % (WIRE_FIXTURE, occurrences))
+    index = data.index(marker)
+    patched = (data[:index] + b"\x0d" +
+               WIRE_FIXTURE_START.to_bytes(4, "little") +
+               data[index + len(marker):])
+    if len(patched) != len(data):
+        fail("%s: the fixed32 rewrite changed the set length (%d -> %d)"
+             % (WIRE_FIXTURE, len(data), len(patched)))
+    return patched
+
+
+PATCHES[WIRE_FIXTURE] = patched_fixed32_bytes
 
 
 def main():

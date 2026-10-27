@@ -1999,8 +1999,8 @@ bool validate_message_enum_value_numbers(const SchemaFile& file,
 }
 
 // W-45: the extension ranges a descriptor declares, over the descriptor alone.
-// Four shapes protoc refuses when it builds a file share one code, because
-// they are one category - the declaration does not describe usable extension
+// The shapes protoc refuses when it builds a file share one code, because they
+// are one category - the declaration does not describe usable extension
 // numbers:
 //
 //   * a range in a proto3 file (`Extension ranges are not allowed in proto3.`,
@@ -2010,6 +2010,14 @@ bool validate_message_enum_value_numbers(const SchemaFile& file,
 //   * an exclusive end that does not exceed its start (`:6892-6896`);
 //   * a range that includes a declared field number (:6426-6430), and two
 //     overlapping ranges (:6454-6482).
+//
+// U-22 adds the four shapes carried by the range's own options
+// (`ValidateExtensionRangeOptions`, descriptor.cc:8377-8425): an explicit
+// `verification = UNVERIFIED` beside any declaration, a declaration number
+// outside its range, the same number declared twice, and a declaration that
+// carries only one of `full_name`/`type` without being `reserved`. They are
+// the same category - the range does not describe usable extension numbers -
+// so they share the code.
 //
 // The source path refuses every one of them as text before it reaches the
 // model (`proto_parser.cpp`'s `parse_extensions`, `add_range` and
@@ -2110,6 +2118,73 @@ bool validate_message_extension_ranges(const SchemaFile& file,
                     number_text(earlier.end) + ")",
                 declaration_location(file, range_path), range_path,
                 DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+        }
+        // U-22: the range's own options, asked in protoc's order - the range
+        // shapes above come from `BuildMessage`, and the declarations are
+        // checked afterwards by `ValidateExtensionRangeOptions`
+        // (descriptor.cc:8377-8425). Four shapes are refused there: an
+        // explicit UNVERIFIED beside any declaration (`:8408-8419`), a
+        // declaration number outside its own range (`:8318-8326`), a number
+        // declared twice (`:8328-8334`), and a declaration that carries only
+        // one of `full_name`/`type` without being a reserved tombstone
+        // (`:8336-8348`).
+        const ExtensionRangeOptions& options = range.options;
+        if (!options.declaration.empty()) {
+            if (options.has_verification &&
+                options.verification == ExtensionRangeOptions::UNVERIFIED) {
+                return fail_at_code(
+                    file,
+                    "extension range " + bounds + " in message \"" +
+                        qualified_name +
+                        "\" cannot be marked UNVERIFIED while it has extension "
+                        "declarations",
+                    declaration_location(file, range_path), range_path,
+                    DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+            }
+            std::set<int32_t> declaration_numbers;
+            for (std::size_t j = 0; j < options.declaration.size(); ++j) {
+                const ExtensionRangeOptions_Declaration& declaration =
+                    options.declaration[j];
+                if (declaration.number < range.start ||
+                    declaration.number >= range.end) {
+                    return fail_at_code(
+                        file,
+                        "extension declaration " +
+                            number_text(declaration.number) + " in range " +
+                            bounds + " of message \"" + qualified_name +
+                            "\" names a number outside the range",
+                        declaration_location(file, range_path), range_path,
+                        DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+                }
+                if (!declaration_numbers.insert(declaration.number).second) {
+                    return fail_at_code(
+                        file,
+                        "extension declaration " +
+                            number_text(declaration.number) + " in range " +
+                            bounds + " of message \"" + qualified_name +
+                            "\" is declared more than once",
+                        declaration_location(file, range_path), range_path,
+                        DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+                }
+                // A declaration must name both the extension and its type, or
+                // be the `reserved` tombstone of a deleted extension
+                // (`:8336-8348`). Presence, not a non-empty value, is what
+                // protoc asks.
+                if (!declaration.has_full_name || !declaration.has_type) {
+                    if (declaration.has_full_name != declaration.has_type ||
+                        !declaration.reserved) {
+                        return fail_at_code(
+                            file,
+                            "extension declaration " +
+                                number_text(declaration.number) + " in range " +
+                                bounds + " of message \"" + qualified_name +
+                                "\" must set both \"full_name\" and \"type\", "
+                                "or be reserved",
+                            declaration_location(file, range_path), range_path,
+                            DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+                    }
+                }
+            }
         }
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
@@ -3339,6 +3414,26 @@ bool resolve_field_type(SchemaFile& file, const SymbolIndex& symbols,
     return true;
 }
 
+// The five kinds `jstype` may be declared on (`ValidateJSType`,
+// descriptor.cc:8589-8596).
+namespace {
+
+bool is_64_bit_integer_kind(int type)
+{
+    switch (type) {
+        case FieldDescriptorProto::TYPE_INT64:
+        case FieldDescriptorProto::TYPE_UINT64:
+        case FieldDescriptorProto::TYPE_SINT64:
+        case FieldDescriptorProto::TYPE_FIXED64:
+        case FieldDescriptorProto::TYPE_SFIXED64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+} // namespace
+
 // 3. the field rules that run after resolution - packed legality, the oneof
 // index and label checks, and default validation
 bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
@@ -3375,20 +3470,43 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
                            field_path, error);
         }
     }
-    // D2-A: `lazy`/`unverified_lazy` are legal only on a message field
-    // (`ValidateFieldOptions`, descriptor.cc:7968-7974). A scalar is refused
-    // by the parser already; a named type's kind is unknown until resolution,
-    // so the parser records the option and this pass answers with the kind the
-    // linker resolved. A descriptor-origin file has no provenance and this
-    // model decodes neither option, so only source text reaches the rule.
-    if (!unknown) {
+    // D2-A / U-13: `lazy` and `unverified_lazy` are legal only on a message
+    // field (`ValidateFieldOptions`, descriptor.cc:7968-7974). A scalar is
+    // refused by the parser already; a named type's kind is unknown until
+    // resolution, so the option is recorded and this pass answers with the kind
+    // the linker resolved. The source door keeps the spelling in the field's
+    // provenance (D2-A) while the descriptor door decodes the option value
+    // itself (U-13); either way one rule answers, and a field that carries no
+    // such option never reaches it.
+    if (!unknown && field.has_type &&
+        field.type != FieldDescriptorProto::TYPE_MESSAGE) {
         const FieldSource* source = find_field_source(file, field_path);
-        if (source != 0 && source->has_lazy && field.has_type &&
-            field.type != FieldDescriptorProto::TYPE_MESSAGE) {
+        if (source != 0 && source->has_lazy) {
             return fail_at(
                 file, "[lazy = true] can only be specified for submessage fields",
                 source->lazy_location, field_path, error);
         }
+        if ((field.options.has_lazy && field.options.lazy) ||
+            (field.options.has_unverified_lazy &&
+             field.options.unverified_lazy)) {
+            return fail_at(
+                file, "[lazy = true] can only be specified for submessage fields",
+                declaration_location(file, field_path), field_path, error);
+        }
+    }
+    // U-13: `jstype` is legal only on the five 64-bit integral kinds
+    // (`ValidateJSType`, descriptor.cc:8581-8617). JS_NORMAL is the option's
+    // default and every field accepts it, so the rule keys on the decoded
+    // value, not on presence. Only the descriptor door decodes the value; the
+    // source door's comparison is R08's (U-08).
+    if (field.options.has_jstype &&
+        field.options.jstype != FieldOptions::JS_NORMAL &&
+        (!field.has_type || !is_64_bit_integer_kind(field.type))) {
+        return fail_at(
+            file,
+            "jstype is only allowed on int64, uint64, sint64, fixed64 or "
+            "sfixed64 fields",
+            declaration_location(file, field_path), field_path, error);
     }
     if (field.has_oneof_index &&
         (field.oneof_index < 0 ||

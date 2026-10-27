@@ -147,6 +147,17 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         message.oneof_decl[i].name =
             intern_text(strings, message.oneof_decl[i].name);
     }
+    // U-22: an extension range's declarations carry the only retained strings
+    // in the range options (the extension's fully qualified name and type).
+    for (std::size_t i = 0; i < message.extension_range.size(); ++i) {
+        std::vector<ExtensionRangeOptions_Declaration>& declarations =
+            message.extension_range[i].options.declaration;
+        for (std::size_t j = 0; j < declarations.size(); ++j) {
+            declarations[j].full_name =
+                intern_text(strings, declarations[j].full_name);
+            declarations[j].type = intern_text(strings, declarations[j].type);
+        }
+    }
     // CR-06: the message's `reserved_name` entries are retained strings too.
     for (std::size_t i = 0; i < message.reserved_name.size(); ++i) {
         message.reserved_name[i] =
@@ -335,6 +346,21 @@ bool same_descriptor(const FieldDescriptorProto& left,
            // emitter computes it; presence alone would accept a proto3 pair
            // whose wire format depends on argument order.
            effective_packed(left, syntax) == effective_packed(right, syntax) &&
+           // U-13: `jstype`, `lazy` and `unverified_lazy` are compared at
+           // their effective value where absence is just the protobuf default
+           // (JS_NORMAL, false, false), so a copy that omits the field and one
+           // that spells the default are one definition of the field.
+           (left.options.has_jstype ? left.options.jstype
+                                    : FieldOptions::JS_NORMAL) ==
+               (right.options.has_jstype ? right.options.jstype
+                                         : FieldOptions::JS_NORMAL) &&
+           (left.options.has_lazy ? left.options.lazy : false) ==
+               (right.options.has_lazy ? right.options.lazy : false) &&
+           (left.options.has_unverified_lazy ? left.options.unverified_lazy
+                                             : false) ==
+               (right.options.has_unverified_lazy
+                    ? right.options.unverified_lazy
+                    : false) &&
            left.has_name == right.has_name &&
            left.has_number == right.has_number &&
            left.has_type == right.has_type &&
@@ -356,13 +382,54 @@ bool same_descriptor(const MessageOptions& left, const MessageOptions& right)
                     : false);
 }
 
+// U-22: the extension-range options are modeled content, so two copies of one
+// logical file that disagree about them are two different definitions.
+//
+// `verification` compares PRESENCE and value: an absent field means the
+// descriptor.proto default UNVERIFIED, but it is not the same declaration as
+// an explicit `verification = UNVERIFIED`, because protoc's refusal only fires
+// on the written field (`has_verification`, descriptor.cc:8408-8419). The
+// declarations compare by value; `full_name`/`type` presence is semantic too
+// (a declaration must have both or be reserved, :8339-8348).
+bool same_descriptor(const ExtensionRangeOptions_Declaration& left,
+                     const ExtensionRangeOptions_Declaration& right)
+{
+    return left.number == right.number && left.full_name == right.full_name &&
+           left.type == right.type &&
+           left.has_full_name == right.has_full_name &&
+           left.has_type == right.has_type &&
+           (left.has_reserved ? left.reserved : false) ==
+               (right.has_reserved ? right.reserved : false) &&
+           (left.has_repeated ? left.repeated : false) ==
+               (right.has_repeated ? right.repeated : false);
+}
+
+
+bool same_descriptor(const ExtensionRangeOptions& left,
+                     const ExtensionRangeOptions& right)
+{
+    if (left.has_verification != right.has_verification) return false;
+    if (left.has_verification && left.verification != right.verification) {
+        return false;
+    }
+    if (left.declaration.size() != right.declaration.size()) return false;
+    for (std::size_t i = 0; i < left.declaration.size(); ++i) {
+        if (!same_descriptor(left.declaration[i], right.declaration[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
 // A range endpoint is the stored value: an absent endpoint is the protobuf
 // default 0, and the linker reads that value, not the bit. Two copies that
 // spell one range with different presence are one file (U-07).
 bool same_descriptor(const DescriptorProto_ExtensionRange& left,
                      const DescriptorProto_ExtensionRange& right)
 {
-    return left.start == right.start && left.end == right.end;
+    return left.start == right.start && left.end == right.end &&
+           same_descriptor(left.options, right.options);
 }
 
 // CR-06: a reserved range is modeled content, so two copies of one logical

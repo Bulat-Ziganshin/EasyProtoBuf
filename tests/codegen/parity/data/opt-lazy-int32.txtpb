@@ -1,0 +1,18 @@
+# U-13: `lazy = true` on an int32 field. protoc refuses the shape, so the
+# descriptor is encoded from this text instead of compiled. The source half
+# (`opt-lazy-int32.proto`) is the same schema, and both doors must refuse it.
+file {
+  name: "opt-lazy-int32.proto"
+  package: "opt"
+  syntax: "proto3"
+  message_type {
+    name: "Scalar"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      options { lazy: true }
+    }
+  }
+}

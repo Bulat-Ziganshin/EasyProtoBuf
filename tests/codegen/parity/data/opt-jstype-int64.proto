@@ -1,0 +1,11 @@
+// U-13 accepted control: `jstype` is legal on a 64-bit integral field, and it
+// has no effect on the generated C++ (the option only selects a JavaScript
+// representation). protoc accepts it, the source door accepts it, and the
+// descriptor door decodes it and accepts it; all three produce one header.
+syntax = "proto3";
+
+package opt;
+
+message Big {
+  int64 value = 1 [jstype = JS_STRING];
+}

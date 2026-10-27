@@ -1,0 +1,11 @@
+// U-13 refused shape: `lazy` on a scalar field. protoc refuses it
+// ("[lazy = true] can only be specified for submessage fields."), the source
+// door refuses it with the same sentence, and the descriptor door must refuse
+// it too. The `.pbs` half is crafted from the `.txtpb` beside this file.
+syntax = "proto3";
+
+package opt;
+
+message Scalar {
+  int32 value = 1 [lazy = true];
+}

@@ -127,7 +127,10 @@ set(paired_fixtures
     enum-ok
     ext-ok
     ext-max
-    message-set-empty)
+    message-set-empty
+    opt-jstype-int64
+    opt-lazy-message
+    opt-extrange-declaration)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -494,6 +497,61 @@ expect_refusal("The descriptor path must refuse a message with no name"
 expect_refusal("The descriptor path must refuse a service with no name"
     "service in .parity has no name"
     ${CODEGEN} --descriptor-set "${DATA_DIR}/no-service-name.pbs")
+
+# --- U-13/U-22: the option rules on both descriptor doors -------------------
+#
+# The descriptor model decodes the option values whose rules change a verdict,
+# and the same rules answer on both doors. `jstype` on a 32-bit kind, either
+# lazy flag on a scalar, and `verification = UNVERIFIED` beside a declaration
+# are refused by protoc, by the source parser and (since R04) by the descriptor
+# decoder's semantic pass. The accepted controls are in `paired_fixtures`
+# above; each of them generates one header from both doors.
+#
+# An enumerator the pinned `descriptor.proto` does not declare is not a
+# modeled value: protoc's proto2 decoder routes it to the unknown fields, so
+# `jstype()` keeps its JS_NORMAL default. The schema must be accepted and its
+# field generated normally; the `codegen.schema.semantics` unit test pins the
+# stronger claim - the decoded option is absent, not a value the model keeps.
+run_ok(jstype_unknown_out jstype_unknown_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/opt-jstype-unknown.pbs")
+require_empty(jstype_unknown_err "The unknown-jstype stderr")
+require_contains(jstype_unknown_out "::int64_t value"
+    "The unknown-jstype header must carry the field")
+
+function(expect_option_refusal name descriptor_text source_text)
+    expect_refusal("The descriptor path must refuse ${name}" "${descriptor_text}"
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${name}.pbs")
+    if(FULL_BUILD)
+        expect_refusal("The source path must refuse ${name}" "${source_text}"
+            ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
+    endif()
+endfunction()
+
+expect_option_refusal(opt-jstype-int32
+    "jstype is only allowed on int64, uint64, sint64, fixed64 or sfixed64 fields"
+    "jstype is only allowed on int64, uint64, sint64, fixed64 or sfixed64 fields")
+expect_option_refusal(opt-lazy-int32
+    "[lazy = true] can only be specified for submessage fields"
+    "[lazy = true] can only be specified for submessage fields")
+expect_option_refusal(opt-unverified-lazy-int32
+    "[lazy = true] can only be specified for submessage fields"
+    "[lazy = true] can only be specified for submessage fields")
+expect_option_refusal(opt-extrange-unverified
+    "cannot be marked UNVERIFIED while it has extension declarations"
+    "cannot mark the extension range as UNVERIFIED")
+
+# The declaration member rules are descriptor-only: the source door keeps the
+# aggregate option body opaque (P1 exception E13), so a source file with a bad
+# declaration is accepted today. protoc refuses all three shapes.
+expect_refusal("The descriptor path must refuse a declaration outside its range"
+    "names a number outside the range"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/opt-extrange-decl-bad-number.pbs")
+expect_refusal("The descriptor path must refuse a number declared twice"
+    "is declared more than once"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/opt-extrange-decl-duplicate.pbs")
+expect_refusal("The descriptor path must refuse a declaration with one of full_name/type"
+    "must set both \"full_name\" and \"type\", or be reserved"
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/opt-extrange-decl-partial.pbs")
 
 # --- W-68: the import include -------------------------------------------------
 #

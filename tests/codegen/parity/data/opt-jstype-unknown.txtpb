@@ -1,0 +1,21 @@
+# U-13: an enumerator of the closed proto2 `FieldOptions.JSType` enum that
+# `descriptor.proto` does not declare. protoc's decoder routes it to the
+# unknown fields, which leaves `jstype()` at its JS_NORMAL default, so the
+# schema is accepted and the option has no effect. This fixture is accepted and
+# its verdict is the same as omitting the option; the generator writes 7 into
+# the value byte (the text format refuses an unknown enumerator number).
+file {
+  name: "opt-jstype-unknown.proto"
+  package: "opt"
+  syntax: "proto3"
+  message_type {
+    name: "Big"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT64
+      options { jstype: JS_NORMAL }
+    }
+  }
+}

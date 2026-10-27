@@ -14,17 +14,29 @@ of fixtures.
 Two kinds of fixtures:
 
 - the shapes protoc itself accepts (`methods-ok`, `map-ok`, `enum-ok`,
-  `ext-ok`, `ext-max`, `message-set-empty`, `w68-dep`, `w68-root`) are compiled
-  with `--descriptor_set_out`. `w68-root` is included even though its import is
+  `ext-ok`, `ext-max`, `message-set-empty`, `w68-dep`, `w68-root`, and the R04
+  accepted controls `opt-jstype-int64`, `opt-lazy-message`) are compiled with
+  `--descriptor_set_out`. `w68-root` is included even though its import is
   missing from the SET: protoc emits only the listed file, which is exactly
   the thin descriptor W-68 is about;
 - the shapes protoc refuses to build from source - duplicate method names, a
   method endpoint that does not exist, a reversed map entry, a proto3 enum
   whose first value is not zero, a proto3 or field-overlapping extension
-  range, and the W-36 containers - are the lane's `.txtpb` files; the helper
-  encodes every `.txtpb` beside the table with
-  `--encode=google.protobuf.FileDescriptorSet`. The text format does not
-  validate them; it only encodes the descriptor the fixture names.
+  range, the W-36 containers, and the R04 invalid `jstype`/`lazy`/extension
+  declaration shapes - are the lane's `.txtpb` files; the helper encodes every
+  `.txtpb` beside the table with `--encode=google.protobuf.FileDescriptorSet`.
+  The text format does not validate them; it only encodes the descriptor the
+  fixture names. `opt-extrange-declaration` is crafted even though protoc
+  accepts its source half: `descriptor.proto` marks `declaration` and
+  `verification` `[retention = RETENTION_SOURCE]`, so a protoc-written
+  descriptor carries neither.
+
+One accepted R04 shape needs a byte the text format will not spell:
+`opt-jstype-unknown` declares an enumerator of the closed `FieldOptions.JSType`
+enum that descriptor.proto does not define (7), which protoc's decoder routes
+to the unknown fields. The fixture is encoded twice - once with `JS_STRING`
+and once with `JS_NUMBER`, whose encodings differ in exactly the one value
+byte - and 7 is written into that byte (the `field-type-unknown` pattern).
 
 Usage:
 
@@ -43,8 +55,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 # Do not leave an untracked `common/__pycache__` in the repository.
 sys.dont_write_bytecode = True
 
-from common.descriptor_fixtures import (Fixture, build_fixtures,
-                                        parse_args)
+from common.descriptor_fixtures import (Fixture, build_fixtures, fail,
+                                        encode_textproto, parse_args)
 
 # The source fixtures protoc accepts. The others are intentional refusals and
 # have no compiled half: their `.pbs` twin is encoded from the `.txtpb` beside
@@ -58,12 +70,54 @@ FIXTURES = (
     Fixture.compile("message-set-empty"),
     Fixture.compile("w68-dep"),
     Fixture.compile("w68-root"),
+    # R04 accepted controls: a legal `jstype`, a legal `lazy`, and an extension
+    # declaration list protoc accepts.
+    Fixture.compile("opt-jstype-int64"),
+    Fixture.compile("opt-lazy-message"),
 )
+
+# The one R04 fixture whose single byte the text format cannot spell: an
+# enumerator outside descriptor.proto's closed JSType enum.
+PATCHED_JSTYPE_FIXTURE = "opt-jstype-unknown"
+PATCHED_JSTYPE_VALUE = 7
+PATCHED_JSTYPE_PROBES = ("JS_STRING", "JS_NUMBER")
+
+
+def patched_jstype_bytes(protoc, descriptor_dir, text):
+    """The encoding of `text` with the modeled enumerator replaced by 7.
+
+    The text format refuses an enumerator it does not know, so the fixture is
+    encoded with two declared enumerators whose value bytes are both one-byte
+    varints; they differ in exactly that byte, which is where 7 is written. The
+    assertion is the point: a second difference would make the patch a guess.
+    """
+    encodings = []
+    decoded = text.decode("utf-8")
+    for probe in PATCHED_JSTYPE_PROBES:
+        replaced = decoded.replace("jstype: JS_NORMAL", "jstype: %s" % probe)
+        if replaced == decoded:
+            fail("%s.txtpb does not declare 'jstype: JS_NORMAL'"
+                 % PATCHED_JSTYPE_FIXTURE)
+        encodings.append(encode_textproto(protoc, descriptor_dir,
+                                           replaced.encode("utf-8")))
+    first, second = encodings
+    if len(first) != len(second):
+        fail("the two encodings of %s differ in length" % PATCHED_JSTYPE_FIXTURE)
+    differences = [index for index in range(len(first))
+                   if first[index] != second[index]]
+    if len(differences) != 1:
+        fail("the two encodings of %s differ in %d bytes, expected exactly one"
+             % (PATCHED_JSTYPE_FIXTURE, len(differences)))
+    index = differences[0]
+    return first[:index] + bytes([PATCHED_JSTYPE_VALUE]) + first[index + 1:]
 
 
 def main():
     args = parse_args(__doc__.split("\n")[0])
-    return build_fixtures(HERE, FIXTURES, check=args.check, protoc=args.protoc)
+    return build_fixtures(HERE, FIXTURES,
+                          patches={PATCHED_JSTYPE_FIXTURE:
+                                   patched_jstype_bytes},
+                          check=args.check, protoc=args.protoc)
 
 
 if __name__ == "__main__":

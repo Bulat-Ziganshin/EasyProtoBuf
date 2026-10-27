@@ -1,0 +1,29 @@
+# U-22: a declaration whose number lies outside its own extension range. protoc
+# refuses it ("Extension declaration number 250 is not in the extension
+# range."); the source door keeps the aggregate option body opaque (E13), so
+# this is a descriptor-only refusal.
+file {
+  name: "opt-extrange-decl-bad-number.proto"
+  package: "opt"
+  syntax: "proto2"
+  message_type {
+    name: "BadNumber"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+    extension_range {
+      start: 100
+      end: 200
+      options {
+        declaration {
+          number: 250
+          full_name: ".opt.ext"
+          type: ".opt.BadNumber"
+        }
+      }
+    }
+  }
+}
