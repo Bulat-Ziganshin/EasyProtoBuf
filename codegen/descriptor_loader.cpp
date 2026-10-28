@@ -204,10 +204,12 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
                 if (!decoded.file[j].name.empty() &&
                     !validate_descriptor_file_name(decoded.file[j].name, path,
                                                    error)) {
+                    result.clear();
                     return false;
                 }
                 if (!validate_descriptor_field_labels(decoded.file[j], path,
                                                       error)) {
+                    result.clear();
                     return false;
                 }
             }

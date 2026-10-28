@@ -1156,6 +1156,18 @@ void test_adapter_rejects_an_unknown_label()
     CHECK(error.file == path);
     CHECK(error.message.find("label 99") != std::string::npos);
     CHECK(set.files().empty());
+
+    // A failure on a later container clears the files an earlier container
+    // already appended: the loader's all-or-nothing contract.
+    const std::string valid_path = "v42-label-valid.pbs";
+    CHECK(write_binary_file(valid_path, label_set(1, true)));
+    inputs.clear();
+    inputs.push_back(valid_path);
+    inputs.push_back(path);
+    CHECK(!easypb_schema::load_descriptor_sets(inputs, set, error));
+    CHECK(error.file == path);
+    CHECK(set.files().empty());
+    std::remove(valid_path.c_str());
     std::remove(path.c_str());
 
     // The control: an explicit LABEL_OPTIONAL and a protoc-shaped absent label
