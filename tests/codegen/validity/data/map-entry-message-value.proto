@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-// U-62: an aggregate (message-shaped) value is not the boolean kind the
-// `map_entry` row declares, so the value-kind rule names the defect before the
-// row's own refusal sentence.
+// V-30: an aggregate (message-shaped) value is not the boolean kind the
+// `map_entry` row declares, but the explicit-setting refusal wins for every
+// value shape because protoc validates the option before its value.
 message M
 {
     option map_entry = { };

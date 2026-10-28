@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package options.demo;
+
+// V-29: the same non-family name at message scope is unknown, not a field
+// option. The full-name match is what separates it from `(easypb.cpp)`.
+message Scoped {
+  option (easypb.cppfoo) = true;
+
+  int32 value = 1;
+}

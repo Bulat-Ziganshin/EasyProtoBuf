@@ -58,7 +58,7 @@ const KnownOption KNOWN_OPTIONS[] = {
     { OPTION_OWNER_MESSAGE, "deprecated", OPTION_CONSTANT_BOOL, 0, false, 0 },
     { OPTION_OWNER_MESSAGE, "map_entry", OPTION_CONSTANT_BOOL, 0, false,
       "map_entry should not be set explicitly. Use map<KeyType, ValueType> "
-      "instead" },
+      "instead." },
     // U-55 / SD-1 (2026-10-27): `descriptor.proto` marks this field
     // `[deprecated = true]` and nothing reads it. The row stays so a migration
     // leftover is accepted; the option is a documented no-op with an
@@ -174,10 +174,22 @@ std::string custom_option_scope_error(OptionOwnerKind owner,
     // parenthesized name stays opaque (E13). `(easypb.cpp).type` configures
     // one field's C++ storage, so a statement or bracket list at any other
     // scope is refused instead of being accepted and dropped (U-54).
+    //
+    // V-29: the family is matched by its full name - the bare `(easypb.cpp)`
+    // or a `.`-member of it. A longer extension name such as
+    // `(easypb.cppfoo)` is a different EasyPB-namespace extension, not this
+    // family, and is answered as an unknown option by the parser.
     if (owner == OPTION_OWNER_FIELD) return std::string();
-    if (name.compare(0, 12, "(easypb.cpp)") != 0) return std::string();
+    if (!is_easypb_cpp_option(name)) return std::string();
     return "Option \"" + name + "\" is a field option and cannot be set at " +
            option_owner_name(owner) + " scope";
+}
+
+
+bool is_easypb_cpp_option(const std::string& name)
+{
+    if (name == "(easypb.cpp)") return true;
+    return name.compare(0, 13, "(easypb.cpp).") == 0;
 }
 
 
@@ -205,6 +217,15 @@ std::string known_option_value_error(const KnownOption& option,
                                      const std::string& text,
                                      const OptionFieldKind& field)
 {
+    // V-30: the row's own refusal (currently only `map_entry` has one) is
+    // asked BEFORE the value-kind rule, which is where `protoc` answers it:
+    // `ValidateMessage` scans the message's uninterpreted options at the end of
+    // the block (`parser.cc:500-518`) and only the interpreter that runs after
+    // parsing would judge the value. The explicit-setting sentence therefore
+    // wins for every value shape, and the value-kind rule below only applies to
+    // rows without a refusal of their own.
+    if (option.refuse_reason != 0) return std::string(option.refuse_reason);
+
     switch (option.value_kind) {
         case OPTION_CONSTANT_STRING:
             if (value_kind != OPTION_CONSTANT_STRING) {
@@ -242,13 +263,6 @@ std::string known_option_value_error(const KnownOption& option,
         default:
             break;
     }
-
-    // U-62: the row's own refusal (currently only `map_entry` has one) is
-    // asked AFTER the value-kind rule. A value that is not the kind the
-    // option's field declares is a value-kind defect first; naming the row's
-    // refusal for it hid that rule. A well-typed value still gets the row's
-    // sentence, so the verdict is unchanged in both cases.
-    if (option.refuse_reason != 0) return std::string(option.refuse_reason);
 
     // The value-dependent rules. They only apply to a field-scoped option.
     if (option.owner != OPTION_OWNER_FIELD) return std::string();

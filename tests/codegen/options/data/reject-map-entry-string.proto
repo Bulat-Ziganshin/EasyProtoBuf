@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+// V-30: a string is not the boolean kind the `map_entry` row declares, but
+// the explicit-setting refusal still wins: protoc validates the message option
+// before interpreting its value.
+message M
+{
+    option map_entry = "x";
+}

@@ -65,9 +65,13 @@ stdout, and the expected sentence in stderr:
 | `reject-cpp-type-message.proto` | the same option at message scope |
 | `reject-cpp-type-enum.proto` | the same option at enum scope |
 | `reject-cpp-type-ext-range.proto` | the same option at extension range scope |
+| `reject-cpp-prefix-file.proto` | `(easypb.cppfoo)` is unknown, not a field option (`V-29`) |
+| `reject-cpp-prefix-message.proto` | the same non-family name at message scope |
 | `reject-proto3-extend-user.proto` | a proto3 `extend` of a user message: `extend declarations are allowed only in proto2` (`U-16`) |
 | `reject-map-entry.proto` | `map_entry should not be set explicitly` |
-| `reject-map-entry-kind.proto` | a non-boolean `map_entry` value names the value kind first (`U-62`) |
+| `reject-map-entry-kind.proto` | a non-boolean `map_entry` value still names the explicit-setting rule first (`V-30`) |
+| `reject-map-entry-string.proto` | the string value takes the same explicit-setting sentence |
+| `reject-map-entry-aggregate.proto` | the aggregate value takes the same explicit-setting sentence |
 | `reject-map-packed.proto` | `map fields cannot have default or packed options` (the non-default `packed = true`) |
 | `reject-ext-range-unverified-declaration.proto` | `UNVERIFIED` with declarations |
 | `reject-file-unknown-option.proto` | `Option "java_packages" unknown` |
@@ -96,7 +100,11 @@ one custom name with product semantics: it is a **field** option (`U-54`), so
 its `.type` member is accepted in a field bracket list and refused at every
 other declaration scope with a diagnostic that names the option and the scope
 (`reject-cpp-type-*`). The header check on `accept-cpp-type-spellings.proto`
-keeps the three accepted field spellings tied to the emitted members.
+keeps the three accepted field spellings tied to the emitted members. The
+family is matched by its full name (`V-29`): the bare `(easypb.cpp)` and its
+`.`-members are the family, while a longer name in EasyProtoBuf's own namespace
+such as `(easypb.cppfoo)` is an unknown option (`reject-cpp-prefix-*`) rather
+than an opaque third-party custom option.
 
 The table validates top-level option names only. A dotted sub-field assignment
 to a singular message-typed option (`[feature_support.edition_introduced =

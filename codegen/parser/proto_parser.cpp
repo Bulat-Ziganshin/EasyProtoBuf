@@ -1217,6 +1217,16 @@ private:
         return OPTION_CONSTANT_IDENTIFIER;
     }
 
+    // The table's "unknown" sentence for a name no row of the owner's message
+    // declares. It is also the answer for a reserved `(easypb.*)` custom name
+    // that is not the `(easypb.cpp)` family (V-29): this frontend owns that
+    // namespace, so no import can define such an extension.
+    static std::string unknown_option_error(const std::string& name)
+    {
+        return "Option \"" + name + "\" unknown; a known option may need the "
+               "import that defines it";
+    }
+
     // One door for the option table. A parenthesized (custom) name stays
     // opaque: its definition is an extension in an import this frontend does
     // not resolve, and D2-A deliberately does not implement typed custom
@@ -1234,6 +1244,14 @@ private:
         if (!name.empty() && name[0] == '(') {
             const std::string scope_error = custom_option_scope_error(owner, name);
             if (!scope_error.empty()) throw ParseFailure(where, scope_error);
+            // V-29: the exact family check must not let a longer
+            // `(easypb.*)` name through as opaque. Only `(easypb.cpp)` and
+            // its members exist in this frontend's own namespace, so another
+            // name there is unknown rather than a third-party custom option.
+            if (!is_easypb_cpp_option(name) &&
+                name.compare(0, 8, "(easypb.") == 0) {
+                throw ParseFailure(where, unknown_option_error(name));
+            }
             return;
         }
 
@@ -1243,9 +1261,7 @@ private:
             // proto definition file imports the proto which defines the
             // option.`; the verdict is the contract (E1/A3), so the text names
             // the option and the hint.
-            throw ParseFailure(where,
-                "Option \"" + name + "\" unknown; a known option may need the "
-                "import that defines it");
+            throw ParseFailure(where, unknown_option_error(name));
         }
         if (!option->repeated && !seen.insert(name).second) {
             throw ParseFailure(where,
@@ -1453,7 +1469,7 @@ private:
                 state.has_json_name = true;
                 state.json_name = std::move(value.text);
                 state.json_name_location = option_location;
-            } else if (name.compare(0, 12, "(easypb.cpp)") == 0 &&
+            } else if (is_easypb_cpp_option(name) &&
                        owner != OPTION_OWNER_FIELD) {
                 // R09 (U-54): EasyProtoBuf's C++ type option is a field
                 // option. The branch below would otherwise retain it in a

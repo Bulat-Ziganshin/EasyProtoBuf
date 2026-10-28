@@ -179,16 +179,28 @@ expect_refusal(reject-cpp-type-enum
     "Option \"(easypb.cpp).type\" is a field option and cannot be set at enum scope")
 expect_refusal(reject-cpp-type-ext-range
     "Option \"(easypb.cpp).type\" is a field option and cannot be set at extension range scope")
+# V-29: only the full `(easypb.cpp)` name and its `.`-members belong to the
+# scoped family. A longer extension name in EasyProtoBuf's namespace is an
+# unknown option, not a misplaced field option.
+expect_refusal(reject-cpp-prefix-file
+    "Option \"(easypb.cppfoo)\" unknown")
+expect_refusal(reject-cpp-prefix-message
+    "Option \"(easypb.cppfoo)\" unknown")
 # U-16: only the nine descriptor-option extendees are allowed in proto3; a
 # user message keeps the proto2-only refusal.
 expect_refusal(reject-proto3-extend-user
     "extend declarations are allowed only in proto2")
 expect_refusal(reject-map-entry
     "map_entry should not be set explicitly")
-# U-62: a non-boolean value is a value-kind defect first; the row's own
-# refusal sentence is reserved for a well-typed value.
+# V-30: protoc validates the message option before interpreting its value, so
+# the explicit-setting sentence wins for every value shape. The value-kind rule
+# still answers every other option row.
 expect_refusal(reject-map-entry-kind
-    "Value must be identifier for boolean option \"map_entry\"")
+    "map_entry should not be set explicitly")
+expect_refusal(reject-map-entry-string
+    "map_entry should not be set explicitly")
+expect_refusal(reject-map-entry-aggregate
+    "map_entry should not be set explicitly")
 # U-08: the default `packed = false` is accepted on a map (the accepted
 # fixture above), while the non-default `true` stays refused.
 expect_refusal(reject-map-packed

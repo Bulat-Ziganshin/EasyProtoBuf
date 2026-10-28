@@ -84,9 +84,16 @@ const char* option_owner_name(OptionOwnerKind owner);
 // Returns an empty string when the parenthesized custom `name` may be set at
 // `owner`, and the scoped refusal otherwise. Custom options are otherwise
 // opaque; `(easypb.cpp).type` is the one name with product semantics and is
-// meaningful only on a field, so every other scope refuses it (R09, U-54).
+// meaningful only on a field, so every other scope refuses it (R09, U-54). The
+// family is matched by its full name (V-29), not by a prefix.
 std::string custom_option_scope_error(OptionOwnerKind owner,
                                       const std::string& name);
+
+// True when `name` is exactly `(easypb.cpp)` or one of its `.`-members. The
+// rest of the `(easypb.*)` namespace is still this frontend's own, but no
+// extension with such a name exists, so the parser answers it as unknown
+// instead of treating it as an opaque third-party custom option (V-29).
+bool is_easypb_cpp_option(const std::string& name);
 
 // The table as a sequence, for the family test that covers every row.
 std::size_t known_option_count();

@@ -3101,37 +3101,79 @@ void test_folded_enum_name_message_always_has_the_alias_suffix()
     CHECK(aliased_error.message.find(suffix) != std::string::npos);
 }
 
-// R14 (U-62): the value-kind rule is asked before the row's own refusal, so a
-// message-shaped (aggregate) or integer value names the kind defect; a
-// well-typed `true` still gets the row's `map_entry` sentence.
-void test_map_entry_refusal_names_the_value_kind_first()
+// V-30: protoc's parser validates the message option before interpreting its
+// value (`ValidateMessage`, `parser.cc:500-518`), so the explicit-setting
+// sentence wins for every value shape. The value-kind rule still answers every
+// row that has no refusal of its own.
+void test_map_entry_refusal_names_the_explicit_setting_first()
 {
-    const char* wrong_kind[] = {
+    const char* shapes[] = {
+        "message M { option map_entry = true; }",
         "message M { option map_entry = { }; }",
         "message M { option map_entry = 5; }",
+        "message M { option map_entry = \"x\"; }",
     };
-    for (std::size_t i = 0; i < sizeof(wrong_kind) / sizeof(wrong_kind[0]); ++i) {
+    for (std::size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); ++i) {
         easypb_proto::ParsedProto parsed;
         easypb_proto::Diagnostic error;
         CHECK(!easypb_proto::parse_proto(
-            "map-entry-kind.proto",
-            std::string("syntax = \"proto3\";\n") + wrong_kind[i], parsed,
-            error));
-        CHECK(error.message.find(
-                  "Value must be identifier for boolean option \"map_entry\"") !=
+            "map-entry-shape.proto",
+            std::string("syntax = \"proto3\";\n") + shapes[i], parsed, error));
+        CHECK(error.message.find("map_entry should not be set explicitly") !=
               std::string::npos);
-        CHECK(error.message.find("map_entry should not be set explicitly") ==
-              std::string::npos);
+        CHECK(error.message.find("Value must be") == std::string::npos);
     }
 
+    // A different boolean row keeps the value-kind diagnostic: `map_entry` is
+    // the only row with a refusal reason, not a general reordering.
     easypb_proto::ParsedProto parsed;
     easypb_proto::Diagnostic error;
-    CHECK(!easypb_proto::parse_proto("map-entry-well-typed.proto",
-        "syntax = \"proto3\";\nmessage M { option map_entry = true; }\n",
-        parsed, error));
-    CHECK(error.message.find("map_entry should not be set explicitly") !=
+    CHECK(!easypb_proto::parse_proto("bool-kind.proto",
+        "syntax = \"proto3\";\noption java_multiple_files = 5;\n", parsed,
+        error));
+    CHECK(error.message.find(
+              "Value must be identifier for boolean option \"java_multiple_files\"") !=
           std::string::npos);
-    CHECK(error.message.find("Value must be identifier") == std::string::npos);
+}
+
+// V-29: the scoped family is matched by its full name. `(easypb.cpp)` and its
+// `.`-members are the family; a longer EasyPB-namespace name is not, and the
+// parser answers it as an unknown option instead of a misplaced field option.
+void test_easypb_cpp_option_name_matcher()
+{
+    using namespace easypb_proto;
+    CHECK(is_easypb_cpp_option("(easypb.cpp)"));
+    CHECK(is_easypb_cpp_option("(easypb.cpp).type"));
+    CHECK(is_easypb_cpp_option("(easypb.cpp).foo"));
+    CHECK(!is_easypb_cpp_option("(easypb.cppfoo)"));
+    CHECK(!is_easypb_cpp_option("(easypb.cp)"));
+    CHECK(!is_easypb_cpp_option("(vendor.easypb.cpp)"));
+
+    CHECK(custom_option_scope_error(OPTION_OWNER_FILE, "(easypb.cpp)") ==
+          "Option \"(easypb.cpp)\" is a field option and cannot be set at file scope");
+    CHECK(custom_option_scope_error(OPTION_OWNER_MESSAGE, "(easypb.cpp).type") ==
+          "Option \"(easypb.cpp).type\" is a field option and cannot be set at message scope");
+    CHECK(custom_option_scope_error(OPTION_OWNER_FIELD, "(easypb.cpp).type").empty());
+    CHECK(custom_option_scope_error(OPTION_OWNER_FILE, "(easypb.cppfoo)").empty());
+    CHECK(custom_option_scope_error(OPTION_OWNER_FILE, "(vendor.option)").empty());
+
+    const char* non_family[] = {
+        "syntax = \"proto3\"; option (easypb.cppfoo) = true;",
+        "syntax = \"proto3\"; message M { option (easypb.cppfoo) = true; }",
+        "syntax = \"proto3\"; message M { int32 x = 1 [(easypb.cppfoo) = 1]; }",
+        "syntax = \"proto3\"; enum E { ZERO = 0 [(easypb.cppfoo) = 1]; }",
+    };
+    for (std::size_t i = 0; i < sizeof(non_family) / sizeof(non_family[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        const bool ok = easypb_proto::parse_proto(
+            "cpp-prefix.proto", non_family[i], parsed, error);
+        if (ok) std::cerr << "accepted: " << non_family[i] << '\n';
+        CHECK(!ok);
+        CHECK(error.message.find("(easypb.cppfoo)") != std::string::npos);
+        CHECK(error.message.find("unknown") != std::string::npos);
+        CHECK(error.message.find("is a field option") == std::string::npos);
+    }
 }
 
 // R08: the option *value* grammar. A value is one identifier (U-23), a leading
@@ -3283,7 +3325,8 @@ int main()
     test_enum_value_bracket_options_are_table_rules();
     test_reserved_non_identifier_warns();
     test_folded_enum_name_message_always_has_the_alias_suffix();
-    test_map_entry_refusal_names_the_value_kind_first();
+    test_map_entry_refusal_names_the_explicit_setting_first();
+    test_easypb_cpp_option_name_matcher();
     test_option_value_grammar();
 
     if (failures != 0) {

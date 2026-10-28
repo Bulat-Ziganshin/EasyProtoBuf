@@ -1,7 +1,8 @@
 syntax = "proto3";
 
-// U-62: an integer is not the boolean kind the `map_entry` row declares, so
-// the value-kind rule names the defect before the row's own refusal sentence.
+// V-30: an integer is not the boolean kind the `map_entry` row declares, but
+// the explicit-setting refusal wins over the value-kind rule for every value
+// shape, as protoc 30.1 answers it.
 message M
 {
     option map_entry = 5;

@@ -1536,19 +1536,20 @@ if(FULL_BUILD)
         "U-50: a legal identifier must not warn")
 endif()
 
-# U-62: the two diagnostics are distinct. A message-shaped (aggregate) value is
-# a value-kind defect first, while a well-typed primitive value still gets the
-# row's own refusal sentence.
+# V-30: the explicit-setting sentence wins for every value shape, because
+# protoc validates the message option before interpreting the value. The
+# value-kind rule still answers rows without a refusal of their own.
 if(FULL_BUILD)
     run_fail(map_entry_message_out map_entry_message_err
         ${CODEGEN} -I "${DATA_DIR}"
         "${DATA_DIR}/map-entry-message-value.proto")
     require_empty(map_entry_message_out "The map_entry message-value stdout")
     require_contains(map_entry_message_err
-        "Value must be identifier for boolean option \"map_entry\""
-        "U-62: the message-value diagnostic names the value kind")
-    require_absent(map_entry_message_err "map_entry should not be set explicitly"
-        "U-62: the message value must not name the row's refusal")
+        "map_entry should not be set explicitly"
+        "V-30: the message value gets the row's refusal")
+    require_absent(map_entry_message_err
+        "Value must be identifier for boolean option"
+        "V-30: the message value must not name the value-kind rule")
 
     run_fail(map_entry_primitive_out map_entry_primitive_err
         ${CODEGEN} -I "${DATA_DIR}"
@@ -1556,10 +1557,10 @@ if(FULL_BUILD)
     require_empty(map_entry_primitive_out "The map_entry primitive-value stdout")
     require_contains(map_entry_primitive_err
         "map_entry should not be set explicitly"
-        "U-62: the primitive value gets the row's refusal")
+        "V-30: the primitive value gets the row's refusal")
     require_absent(map_entry_primitive_err
         "Value must be identifier for boolean option"
-        "U-62: the primitive value must not name the value-kind rule")
+        "V-30: the primitive value must not name the value-kind rule")
 endif()
 
 # --- S05 (V-25): print mode runs the MessageSet check -----------------------

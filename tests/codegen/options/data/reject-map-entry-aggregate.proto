@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+// V-30: an aggregate value is not a boolean either, and the explicit-setting
+// refusal still wins over the value-kind rule, as protoc 30.1 answers it.
+message M
+{
+    option map_entry = { };
+}

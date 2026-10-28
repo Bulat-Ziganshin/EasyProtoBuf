@@ -122,7 +122,9 @@ method, extension range), the value kind, a second assignment of a singular
 option, and the value-dependent rules protoc applies: `jstype` values other
 than `JS_NORMAL` only on 64-bit integers, `lazy = true`/`unverified_lazy = true`
 only on message fields (a named type is checked after linking), `packed = true`
-only on repeated primitive or enum fields, `map_entry` refused in source text,
+only on repeated primitive or enum fields, `map_entry` refused in source text
+(whatever its value, and before the value-kind rule: the explicit-setting
+sentence is protoc's answer for `option map_entry = 5;`, `"x"` and `{ }` too),
 `allow_alias` only on enums, `optimize_for` only on its enumerators,
 `message_set_wire_format` only on messages, and `verification = UNVERIFIED`
 refused beside a non-empty extension `declaration` list. An unknown
@@ -280,7 +282,9 @@ the owner decision D2-A (2026-10-25), recorded as P1 exception E13 in
 **field** option (`U-54`). A field accepts the plain `(easypb.cpp).type`, the
 fully-qualified `(.easypb.cpp).type` and the spaced `( easypb.cpp ).type`
 spelling - all normalize to one option name and the emitter reads the same
-value, so the generated header is unchanged. The whole `(easypb.cpp)` family is
+value, so the generated header is unchanged. The family is matched by its exact
+name (`V-29`): the bare `(easypb.cpp)` and its `.`-members, nothing else. The
+whole `(easypb.cpp)` family is
 field-only: a statement at file, message, oneof, enum, enum value, extension
 range, service or method scope is refused, including the aggregate
 `option (easypb.cpp) = { ... };` form and an unknown sub-field, with `Option
@@ -290,7 +294,10 @@ is written); the reference compiler refuses the same text with `Option field
 "(easypb.cpp)" is not a field or extension of message "<Owner>Options"`. In a
 field bracket list only `(easypb.cpp).type` is meaningful: the bare
 `(easypb.cpp)` is refused with a message that asks for `.type`, and any other
-sub-field is refused as `unknown EasyProtoBuf C++ field option`. Other
+sub-field is refused as `unknown EasyProtoBuf C++ field option`. EasyProtoBuf's
+namespace is reserved: a longer name such as `(easypb.cppfoo)` is not the
+family, so it is refused as an unknown option rather than accepted as an opaque
+third-party custom option (`V-29`). Other
 parenthesized custom options, statement or bracket form, are not part of this
 family: they stay opaque and are accepted under E13. The descriptor door
 models the option in `FieldOptions` only, so the other scopes have no

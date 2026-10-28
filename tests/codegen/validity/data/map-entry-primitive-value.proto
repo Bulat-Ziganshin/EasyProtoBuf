@@ -1,7 +1,7 @@
 syntax = "proto3";
 
-// U-62: a primitive value of the declared kind gets the row's own refusal
-// sentence, not the value-kind rule.
+// V-30: a well-typed primitive value gets the row's own refusal sentence, and
+// the value-kind rule must not be named.
 message M
 {
     option map_entry = true;

@@ -47,11 +47,12 @@ Step R14 adds the reserved-name warning pair (`U-50`) and the two `map_entry`
 diagnostics (`U-62`), and extends the W-42 rows with the unconditional
 `allow_alias` suffix (`U-51`). The warning fixture is source-only: the rule is
 the parser's, and a descriptor carries no source text; `reserved "ok"` in the
-same file is the silent control, while the header must still be written. The
-two `map_entry` fixtures split the value-kind rule from the row's own refusal:
-an aggregate (message-shaped) value names the kind defect, and a well-typed
-`true` keeps the `map_entry` sentence. The W-42 suffix is asserted on both
-doors and in both `allow_alias` branches.
+same file is the silent control, while the header must still be written. Step
+S11 (`V-30`) keeps both `map_entry` fixtures on the explicit-setting sentence:
+protoc validates the message option before the value, so the aggregate shape
+and the well-typed `true` get the row's refusal, and neither names the
+value-kind rule. The W-42 suffix is asserted on both doors and in both
+`allow_alias` branches.
 
 Step S03 adds the map value-enum rule (`V-06`) and the descriptor-door
 extension member rules (`V-09`): a proto2 map whose value enum does not start
@@ -224,8 +225,8 @@ refused on both the generation and the print door.
 | an extension `json_name` that differs from the derived name (refused) | `.proto` only | `U-25` |
 | an extension `json_name` equal to the derived name (accepted) | `.proto` only | `U-25` |
 | a reserved name that is not an identifier (accepted, warning) | `.proto` only | `U-50` |
-| `map_entry` with a message-shaped value (refused: value kind) | `.proto` only | `U-62` |
-| `map_entry` with a well-typed primitive value (refused: `map_entry`) | `.proto` only | `U-62` |
+| `map_entry` with a message-shaped value (refused: `map_entry`) | `.proto` only | `V-30` |
+| `map_entry` with a well-typed primitive value (refused: `map_entry`) | `.proto` only | `V-30` |
 | the embedded-NUL default under `--no-class` and a custom string type (accepted) | `defaults-nul.proto` / `.pbs` | `U-20` |
 
 The first eight paired fixtures and the accepted controls exist twice as
