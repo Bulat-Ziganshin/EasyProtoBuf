@@ -79,6 +79,8 @@ SOURCE_ONLY_FIXTURES = (
     "empty-syntax",
     "ext-json-name",
     "ext-json-name-equal",
+    "extend-empty",
+    "extend-semicolon",
     "grammar-allow-alias-false",
     "grammar-allow-alias-false-aliased",
     "grammar-allow-alias-useless",
@@ -97,10 +99,13 @@ SOURCE_ONLY_FIXTURES = (
     "literals-octal-enum",
     "map-entry-message-value",
     "map-entry-primitive-value",
+    "oneof-empty-statement",
+    "package-extend-options",
     "plus-enum-value",
     "plus-float-default",
     "plus-inf-nan",
     "plus-int-default",
+    "proto3-package-extend",
     "reserved-non-identifier",
 )
 

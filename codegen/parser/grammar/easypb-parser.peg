@@ -21,8 +21,8 @@ MessageElement        <- EmptyStatement / Message / Enum / Oneof / MapField /
 
 Field                 <- Label? TypeName Identifier "=" FieldNumber
                          FieldOptions? ";"
-Oneof                 <- K_ONEOF Identifier "{" (EmptyStatement /
-                         OptionStatement / OneofField)* "}"
+Oneof                 <- K_ONEOF Identifier "{" (OptionStatement /
+                         OneofField)* "}"
 OneofField            <- TypeName Identifier "=" FieldNumber
                          FieldOptions? ";"
 MapField              <- K_MAP &"<" "<" MapKeyType "," TypeName ">"
@@ -43,7 +43,7 @@ EnumRange             <- SignedInteger (K_TO (SignedInteger / K_MAX))?
 ReservedNames         <- StringSequence ("," StringSequence)*
 
 Extensions            <- K_EXTENSIONS MessageRanges FieldOptions? ";"
-Extend                <- K_EXTEND TypeName "{" (EmptyStatement / Field)* "}"
+Extend                <- K_EXTEND TypeName "{" Field+ "}"
 
 Service               <- K_SERVICE Identifier "{" ServiceElement* "}"
 ServiceElement        <- EmptyStatement / OptionStatement / Rpc

@@ -1,0 +1,18 @@
+syntax = "proto2";
+
+// V-03: a reserved declaration's endpoints may reach INT32_MAX - 1. protoc
+// stores the range as [start, end) and asks only that the start is positive
+// and below the end (descriptor.cc:6906-6922), so 2147483646 is the largest
+// spellable endpoint. The descriptor door already accepted these bounds; the
+// source parser capped them at 536870912.
+package reservedwide;
+
+message SingleHigh
+{
+    reserved 536870913;
+}
+
+message RangeHigh
+{
+    reserved 1 to 2147483646;
+}

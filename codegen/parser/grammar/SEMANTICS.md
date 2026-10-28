@@ -45,8 +45,13 @@ The grammar uses the intended lexical and syntactic forms directly:
 - at most one package declaration is accepted;
 - proto2 ordinary fields require `optional`, `required`, or `repeated`;
 - proto3 rejects `required`, explicit defaults and extension ranges; an
-  `extend` declaration is accepted only when its extendee is one of the nine
-  `google.protobuf.*Options` messages, and is otherwise refused;
+  `extend` declaration is accepted only when its extendee resolves to one of
+  the nine `google.protobuf.*Options` messages (the spelling is qualified with
+  the file's package before the comparison, so a relative `FileOptions` in
+  `package google.protobuf` is the allowed name), and is otherwise refused;
+- an `extend` body contains at least one field; an empty or semicolon-only
+  body is a syntax error (`Expected "required", "optional", or "repeated".`),
+  and the E6 warning describes only a non-empty valid block;
 - proto2 groups are outside the EasyPB parser;
 - service/RPC declarations are accepted at top level, including unary and streaming endpoints;
 - service and RPC options are validated and consumed; service names and method
@@ -55,6 +60,14 @@ The grammar uses the intended lexical and syntactic forms directly:
 - map keys must be an allowed scalar key type;
 - map and oneof fields reject invalid labels and field options;
 - field numbers are 1..536870911, excluding 19000..19999;
+- reserved range endpoints are 1..2147483646 (`INT32_MAX - 1`), the largest
+  number a `[start, end)` declaration can spell; the `to max` expansion stays
+  at 536870911 (the MessageSet-specific reserved-range expansion is not part
+  of this rule);
+- extension range endpoints are 1..2147483646; an ordinary message keeps the
+  536870911 cap, while a message with `message_set_wire_format = true`
+  accepts ranges and extension tags up to 2147483646, and its `to max`
+  expands to 2147483646 (the option may follow the range it widens);
 - every enum contains at least one value, and enum values fit signed 32 bits;
 - the first value of a proto3 enum is zero;
 - duplicate enum numbers require `option allow_alias = true`; the option itself
@@ -104,8 +117,9 @@ The EasyPB parser therefore:
   parts at any dotted position and leading dots inside parentheses, but
   materializes only fields present in the trimmed descriptor model, including
   `default`, `packed`, `allow_alias`, map-entry information, and oneof indices;
-- parses proto2 and descriptor-option proto3 `extend` bodies and emits a
-  warning instead of storing extension declarations;
+- parses proto2 and descriptor-option proto3 `extend` bodies (each body needs at
+  least one field) and emits a warning instead of storing extension
+  declarations;
 - validates reserved and extension ranges without serializing them.
 
 ## Additional syntax in the complete grammar

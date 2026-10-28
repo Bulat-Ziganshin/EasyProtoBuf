@@ -34,6 +34,7 @@
 #include "defaults-trigraph.pb.hpp"
 #include "empty-syntax-descriptor.pb.hpp"
 #include "enum-alias-same-number.pb.hpp"
+#include "enum-keyword-default.pb.hpp"
 #include "json-name-custom-vs-default-proto2.pb.hpp"
 #include "json-name-proto2-warning.pb.hpp"
 #include "json-names-distinct.pb.hpp"
@@ -45,11 +46,13 @@
 #include "plus-controls.pb.hpp"
 #include "plus-descriptor-controls.pb.hpp"
 #include "reserved-range-end.pb.hpp"
+#include "reserved-range-wide.pb.hpp"
 #include "scope-easypb.pb.hpp"
 #include "scope-nested-reserved.pb.hpp"
 #include "p3opt-ok.pb.hpp"
 #include "oneof-contiguous.pb.hpp"
 #include "message-set-empty.pb.hpp"
+#include "message-set-extensions.pb.hpp"
 
 // W-38's accepted boundary: the 101-component package compiles and its
 // message can be named.
@@ -162,6 +165,28 @@ int main()
         reservedend::BigReservedRange range;
         (void)value;
         (void)range;
+    }
+    // V-03 and V-05: the widened reserved and MessageSet extension bounds are
+    // schema-level rules. The renamed structs carry no fields, so compiling
+    // and naming them is the proof; the enum defaults below read a value.
+    {
+        reservedwide::SingleHigh single;
+        reservedwide::RangeHigh range;
+        messagesetwide::ToMax to_max;
+        messagesetwide::ExplicitWide explicit_wide;
+        (void)single;
+        (void)range;
+        (void)to_max;
+        (void)explicit_wide;
+    }
+    // V-04: the four literal spellings are legal enum value names and legal
+    // defaults for them; the member initializer names the emitted enumerator.
+    {
+        enumkw::M value;
+        report("enum literals", value.a == enumkw::E::true_ &&
+                                    value.b == enumkw::E::false_ &&
+                                    value.c == enumkw::E::inf &&
+                                    value.d == enumkw::E::nan);
     }
     // R1 / CR-01 and CR-17: the numeric default spelling family. An integer
     // token on a float field is read with the octal/hex parser (so `010` is

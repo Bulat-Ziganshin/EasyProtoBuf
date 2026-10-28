@@ -146,6 +146,12 @@ doors and in both `allow_alias` branches.
 | a proto2 MessageSet with no fields (accepted) | `.proto` + `.pbs` | `U-10`/`U-12` |
 | finite subnormal float defaults (`1e-40`, `1.4e-45`) | `.proto` + `.pbs` | `U-18` |
 | a reserved declaration naming 536870912 (accepted) | `.proto` + `.pbs` | `U-56` |
+| a reserved number above 536870912 and a range to 2147483646 (accepted) | `.proto` + `.pbs` | `V-03` |
+| enum values named `true`/`false`/`inf`/`nan` used as defaults (accepted) | `.proto` + `.pbs` | `V-04` |
+| MessageSet extension ranges above 536870911 (accepted) | `.proto` + `.pbs` | `V-05` |
+| a bare `;` inside a oneof (refused) | `.proto` only | `V-08` |
+| a package-local proto3 `extend FileOptions` (accepted) | `.proto` only | `V-12` |
+| an empty and a semicolon-only `extend` body (refused) | `.proto` only | `V-17` |
 | an inverted reserved range in a message-nested enum | `.proto` + crafted `.pbs` | `U-14` |
 | an enum value reusing a nested enum's reserved number | `.proto` + crafted `.pbs` | `U-14` |
 | an integral default with a leading space (refused) | crafted `.pbs` | `U-29` |
@@ -194,6 +200,15 @@ only inside that set.
   from a `.pbs` (the descriptor door counts extension members without reading
   them, exception E6), so both the refusal and the equal-spelling control exist
   only as `.proto` text.
+- `V-08`, `V-17`: a bare `;` inside a oneof and an empty or semicolon-only
+  `extend` body are statement-grammar shapes. protoc refuses them, so it cannot
+  write a descriptor, and a `.pbs` has no statement grammar to carry them; the
+  source door owns both refusals.
+- `V-12`: the proto3 `extend` allowlist compares the resolved extendee name
+  (`ValidateProto3Field`, `descriptor.cc:7907-7911`). The trimmed model neither
+  stores nor decodes extension members (E6), so a `.pbs` cannot carry the
+  declaration; the fixture uses an imported stand-in for
+  `google.protobuf.FileOptions` and is driven through the source door only.
 
 ## The default-value family (B3)
 
@@ -317,12 +332,11 @@ The source-only list, the patched fixture and the patch itself are in that
 script; the protoc lookup, the `descriptor.proto` lookup, the text-format
 encoder and the writer are shared with the other descriptor lanes in
 `tests/codegen/common/descriptor_fixtures.py`.
-
 The crafted fixtures come from `.txtpb` with
 `--encode=google.protobuf.FileDescriptorSet`. A `.txtpb` wins over the
 `.proto` of the same stem, because the raw spelling is the point. The
 source-only fixtures (`bom`, `bom-control`, `empty-syntax`,
-`ext-json-name`, `ext-json-name-equal`,
+`ext-json-name`, `ext-json-name-equal`, `extend-empty`, `extend-semicolon`,
 `grammar-allow-alias-false`, `grammar-allow-alias-false-aliased`,
 `grammar-allow-alias-useless`, `grammar-enum-json-name`,
 `grammar-field-option-plus`, `grammar-leading-semicolon`,
@@ -331,13 +345,16 @@ source-only fixtures (`bom`, `bom-control`, `empty-syntax`,
 `lite-runtime-dep`,
 `literals-aggregate-nul`, `literals-nested-comment`, `literals-octal-08`,
 `literals-octal-09`, `literals-octal-enum`, `map-entry-message-value`,
-`map-entry-primitive-value`, `plus-int-default`,
+`map-entry-primitive-value`, `oneof-empty-statement`,
+`package-extend-options`, `plus-int-default`,
 `plus-enum-value`, `plus-float-default`, `plus-inf-nan`,
-`reserved-non-identifier`)
+`proto3-package-extend`, `reserved-non-identifier`)
 are skipped: protoc refuses most of them,
 and a generated `.pbs` would add an unintended twin. `lite-runtime-dep` is
 skipped because protoc refuses its importer, so the pair is encoded from
 `nonlite-imports-lite.txtpb` and the dependency has no standalone descriptor.
+`package-extend-options` is the stand-in extendee `proto3-package-extend`
+imports; both are source-only because neither shape travels in a descriptor.
 `ext-json-name*` are skipped for the opposite reason: the descriptor model
 does not decode extension members (E6), so only the source half carries the
 `U-25` rule.

@@ -1,0 +1,23 @@
+syntax = "proto2";
+
+// V-05: a MessageSet's extension numbers are plain int32s, so its ranges may
+// exceed FieldDescriptor::kMaxNumber up to INT32_MAX - 1, and `to max`
+// expands to 2147483646 (protoc's `AdjustExtensionRangesWithMaxEndNumber`,
+// parser.cc:827-837, and `ValidateExtensionRangeOptions`,
+// descriptor.cc:8385-8404). An ordinary message keeps the 536870911 cap.
+// The extension members themselves are outside the trimmed model (E6).
+package messagesetwide;
+
+message ToMax
+{
+    // The option follows the range on purpose: the expansion is a post-body
+    // rule because the widened endpoint depends on the final option value.
+    extensions 100 to max;
+    option message_set_wire_format = true;
+}
+
+message ExplicitWide
+{
+    option message_set_wire_format = true;
+    extensions 600000000 to 600000001;
+}

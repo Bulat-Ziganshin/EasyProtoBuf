@@ -684,14 +684,37 @@ struct FieldProvenance
     FieldProvenance() : has_default(false), has_packed(false), has_lazy(false) {}
 };
 
+// V-12: one proto3 `extend` statement whose allowlist verdict waits for the
+// end of the file. The extendee is compared by its resolved full name, and the
+// package it resolves in may be declared after the statement, so the check
+// cannot run while the statement is on the cursor.
+struct Proto3ExtendCheck
+{
+    std::string spelling;
+    SourceLocation location;
+};
+
 struct NumberRange
 {
     std::int64_t first;
     std::int64_t last;
     SourceLocation location;
+    // V-05: an extension range written as `N to max` is expanded after the
+    // message body, because its value depends on `message_set_wire_format`,
+    // which may be declared after the range (protoc's
+    // `AdjustExtensionRangesWithMaxEndNumber`, parser.cc:827-837). `last`
+    // carries the widest value meanwhile so overlap detection never sees a
+    // hole; `max_end` marks the range for the substitution.
+    bool max_end;
 
-    NumberRange() : first(0), last(0) {}
+    NumberRange() : first(0), last(0), max_end(false) {}
 };
+
+// V-05: the largest inclusive extension number a MessageSet may declare.
+// protoc's parser refuses an explicit INT32_MAX endpoint ("Field number out of
+// bounds.", parser.cc:1636-1640) and expands `to max` to INT32_MAX as the
+// exclusive end (`:830-837`), so the last spellable number is INT32_MAX - 1.
+const std::int32_t kMaxMessageSetNumber = 2147483646;
 
 bool range_contains(const NumberRange& range, std::int64_t value)
 {
@@ -705,10 +728,15 @@ bool ranges_overlap(const NumberRange& left, const NumberRange& right)
 
 // U-16: protoc's `AllowedExtendeeInProto3` list (`descriptor.cc:1105-1131`).
 // Declaration options are the one extension surface proto3 allows, and the
-// reference compiler compares the extendee's full name with these nine names
-// rather than resolving the import. A leading dot is the package separator of
-// a fully-qualified spelling, not part of the name.
-bool allowed_proto3_extendee(const std::string& name)
+// reference compiler compares the *resolved* extendee's full name with these
+// nine names (`ValidateProto3Field`, descriptor.cc:7907-7911) after its symbol
+// lookup. V-12: the comparison therefore takes the file's package into
+// account. A relative spelling is tried in the package scope and in the global
+// scope, the two candidates protoc's `LookupSymbol` reaches for a file-scope
+// name; a leading dot is the package separator of an already absolute name.
+// An absolute spelling is compared as written.
+bool allowed_proto3_extendee(const std::string& spelling,
+                             const std::string& package)
 {
     static const char* const kOptionMessages[] = {
         "FileOptions",
@@ -721,12 +749,24 @@ bool allowed_proto3_extendee(const std::string& name)
         "OneofOptions",
         "ExtensionRangeOptions"
     };
-    const std::string full_name =
-        !name.empty() && name[0] == '.' ? name.substr(1) : name;
-    for (std::size_t i = 0;
-         i < sizeof(kOptionMessages) / sizeof(kOptionMessages[0]); ++i) {
-        if (full_name == std::string("google.protobuf.") + kOptionMessages[i]) {
-            return true;
+    std::string candidates[2];
+    std::size_t candidate_count = 0;
+    const bool absolute = !spelling.empty() && spelling[0] == '.';
+    if (absolute) {
+        candidates[candidate_count++] = spelling.substr(1);
+    } else {
+        candidates[candidate_count++] = spelling;
+        if (!package.empty()) {
+            candidates[candidate_count++] = package + "." + spelling;
+        }
+    }
+    for (std::size_t c = 0; c < candidate_count; ++c) {
+        for (std::size_t i = 0;
+             i < sizeof(kOptionMessages) / sizeof(kOptionMessages[0]); ++i) {
+            if (candidates[c] ==
+                std::string("google.protobuf.") + kOptionMessages[i]) {
+                return true;
+            }
         }
     }
     return false;
@@ -818,6 +858,7 @@ public:
             else fail("expected a top-level .proto statement");
         }
 
+        validate_proto3_extends();
         run_semantic_passes();
     }
 
@@ -831,6 +872,9 @@ private:
     bool seen_package_;
     bool defer_type_resolution_;
     easypb_schema::FileSyntax syntax_;
+    // V-12: the proto3 `extend` statements of this file, validated once the
+    // final package spelling is known.
+    std::vector<Proto3ExtendCheck> proto3_extends_;
     // D2-A: file-scope options already seen, for protoc's
     // `Option "x" was already set.` rule. Every nested scope keeps its own
     // set beside its parse loop.
@@ -1473,34 +1517,65 @@ private:
         return static_cast<std::int32_t>(number);
     }
 
-    // FieldRangeNumber <- IntegerToken.  Unlike an actual field
-    // number, a range endpoint may include the protoc-reserved 19000..19999.
+    // FieldRangeNumber <- IntegerToken.  Unlike an actual field number,
+    // a range endpoint may include the protoc-reserved 19000..19999, and an
+    // extension range of a MessageSet may reach INT32_MAX - 1 (V-05). The
+    // ordinary-message cap is applied after the message body, where
+    // `message_set_wire_format` is known.
     std::int32_t field_range_number()
     {
         if (current_.kind != TOKEN_INTEGER) fail("expected positive field number");
         const SourceLocation where = current_.location;
         std::uint64_t number = 0;
-        if (!easypb_schema::parse_unsigned_integer(current_.text, number) || number == 0 || number > 536870911ull) {
-            throw ParseFailure(where, "field number must be in range 1..536870911");
+        if (!easypb_schema::parse_unsigned_integer(current_.text, number) || number == 0 ||
+            number > static_cast<std::uint64_t>(kMaxMessageSetNumber)) {
+            throw ParseFailure(where,
+                "extension range endpoint must be in range 1..2147483646");
         }
         advance();
         return static_cast<std::int32_t>(number);
     }
 
-    // U-56: a reserved declaration's inclusive endpoint may be 536870912.
-    // protoc stores the range as [start, end) and its builder asks only that
-    // start is positive and smaller than end (descriptor.cc:6906-6922), so
-    // the exclusive end kMaxNumber + 1 - the number that describes "up to
-    // max" - is a legal spelling; both ends of the source declaration use
-    // this bound. A *field* number keeps the 536870911 cap that
-    // positive_field_number enforces.
+    // V-05: an extension field's tag is not capped at
+    // FieldDescriptor::kMaxNumber. protoc's descriptor builder skips that
+    // bound for extension fields (`descriptor.cc:6807-6822`) and validates the
+    // number against the extendee's own extension ranges instead (`:7451-7463`),
+    // and a MessageSet declares ranges up to INT32_MAX - 1. The trimmed model
+    // discards the member (E6), so the parser keeps the widest int32 bound a
+    // tag can carry.
+    std::int32_t extension_field_number()
+    {
+        if (current_.kind != TOKEN_INTEGER) fail("expected positive field number");
+        const SourceLocation where = current_.location;
+        std::uint64_t number = 0;
+        if (!easypb_schema::parse_unsigned_integer(current_.text, number) || number == 0 ||
+            number > static_cast<std::uint64_t>(kMaxMessageSetNumber)) {
+            throw ParseFailure(where,
+                "extension number must be in range 1..2147483646");
+        }
+        if (number >= 19000ull && number <= 19999ull) {
+            throw ParseFailure(where, "field numbers 19000..19999 are reserved by Protocol Buffers");
+        }
+        advance();
+        return static_cast<std::int32_t>(number);
+    }
+
+    // U-56 / V-03: a reserved declaration's inclusive endpoints may reach
+    // INT32_MAX - 1 (2147483646). protoc stores the range as [start, end) and
+    // its builder asks only that start is positive and smaller than end
+    // (descriptor.cc:6906-6922), so 2147483646 is the largest spellable
+    // endpoint - "2147483647" would overflow the exclusive end. The descriptor
+    // door already accepts this bound. A *field* number keeps the 536870911
+    // cap that positive_field_number enforces.
     std::int32_t reserved_range_number()
     {
         if (current_.kind != TOKEN_INTEGER) fail("expected positive field number");
         const SourceLocation where = current_.location;
         std::uint64_t number = 0;
-        if (!easypb_schema::parse_unsigned_integer(current_.text, number) || number == 0 || number > 536870912ull) {
-            throw ParseFailure(where, "reserved range endpoint must be in range 1..536870912");
+        if (!easypb_schema::parse_unsigned_integer(current_.text, number) || number == 0 ||
+            number > static_cast<std::uint64_t>(kMaxMessageSetNumber)) {
+            throw ParseFailure(where,
+                "reserved range endpoint must be in range 1..2147483646");
         }
         advance();
         return static_cast<std::int32_t>(number);
@@ -1643,7 +1718,19 @@ private:
                                    "invalid floating-point default");
             }
         } else if (field.has_type_name) {
-            if (value.kind != Constant::IDENTIFIER_VALUE) {
+            // V-04: protoc's enum-default branch accepts any identifier token
+            // (`ParseDefaultAssignment`, parser.cc:1330-1340); its tokenizer
+            // has no separate `true`/`false`/`inf`/`nan` token kind, so those
+            // spellings are legal enum value names and legal defaults for
+            // them. EasyPB's Constant classifies the four literals as
+            // BOOL_VALUE/FLOAT_VALUE, so the enum branch admits those two
+            // shapes and keeps the identifier rule for every other kind
+            // (a numeric float stays refused, and so does a signed literal).
+            const bool keyword_constant =
+                value.kind == Constant::BOOL_VALUE ||
+                (value.kind == Constant::FLOAT_VALUE &&
+                 (value.text == "inf" || value.text == "nan"));
+            if (value.kind != Constant::IDENTIFIER_VALUE && !keyword_constant) {
                 throw ParseFailure(value.location, "enum default must be an identifier");
             }
             stored = value.text;
@@ -1766,7 +1853,8 @@ private:
         field.name = out_.strings.save(name);
         field.has_name = true;
         expect_symbol('=');
-        field.number = positive_field_number();
+        field.number = extension_field ? extension_field_number()
+                                       : positive_field_number();
         field.has_number = true;
 
         // D2-A: the field options are validated against the table once the
@@ -2136,10 +2224,14 @@ private:
     }
 
     // Oneof <- "oneof" Identifier "{"
-    //          (EmptyStatement / OptionStatement / OneofField)* "}"
+    //          (OptionStatement / OneofField)* "}"
     // The caller has consumed "oneof".  Fields are appended to message.field
     // and linked to the newly appended declaration through oneof_index.
     // message_path is the owning message's descriptor path.
+    //
+    // V-08: the body has no EmptyStatement production. protoc's `ParseOneof`
+    // (parser.cc:2022-2085) parses every non-option statement as a field, so a
+    // bare `;` fails as `Expected type name.`; EasyPB used to skip it.
     void parse_oneof(DescriptorProto& message,
                      const DescriptorPath& message_path)
     {
@@ -2162,10 +2254,12 @@ private:
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated oneof body");
 
-            // Oneof body alternatives: EmptyStatement, OptionStatement, or
-            // OneofField.  MapField is recognized explicitly to produce a
-            // more useful diagnostic than the generic field parser would.
-            if (accept_symbol(';')) continue;
+            if (current_.kind == TOKEN_SYMBOL && current_.symbol == ';') {
+                fail("Expected type name.");
+            }
+            // Oneof body alternatives: OptionStatement or OneofField.
+            // MapField is recognized explicitly to produce a more useful
+            // diagnostic than the generic field parser would.
             if (accept_keyword("option"))
                 parse_option_statement(OPTION_OWNER_ONEOF, option_names);
             else if (is_keyword("map") && next_is_symbol('<')) {
@@ -2435,6 +2529,10 @@ private:
     // Extensions <- "extensions" MessageRanges FieldOptions? ";"
     // The caller has consumed "extensions".  Ranges are retained temporarily
     // for conflict checks because the trimmed descriptor has no range field.
+    // V-05: `N to max` keeps the widest inclusive endpoint until the message
+    // body ends, because a MessageSet's `to max` is 2147483646 while an
+    // ordinary message's is 536870911 (protoc's
+    // `AdjustExtensionRangesWithMaxEndNumber`, parser.cc:827-837).
     void parse_extensions(std::vector<NumberRange>& ranges)
     {
         if (syntax_ != easypb_schema::FILE_SYNTAX_PROTO2) fail("extensions ranges are allowed only in proto2");
@@ -2444,8 +2542,12 @@ private:
             range.first = field_range_number();
             range.last = range.first;
             if (accept_keyword("to")) {
-                range.last = accept_keyword("max") ? static_cast<std::int64_t>(536870911)
-                                                   : field_range_number();
+                if (accept_keyword("max")) {
+                    range.last = static_cast<std::int64_t>(kMaxMessageSetNumber);
+                    range.max_end = true;
+                } else {
+                    range.last = field_range_number();
+                }
             }
             add_range(ranges, range, "extension");
             if (!accept_symbol(',')) break;
@@ -2485,10 +2587,35 @@ private:
             return;
         }
 
+        // V-05: resolve `to max` now that the whole message body has been
+        // parsed, and apply the ordinary-message cap. A MessageSet's extension
+        // numbers are plain int32s (`max_extension_range`,
+        // descriptor.cc:8385-8389), so its ranges may reach INT32_MAX - 1;
+        // every other message keeps FieldDescriptor::kMaxNumber. protoc's
+        // parser accepts an explicit INT32_MAX - 1 endpoint for any message and
+        // refuses only the expanded range at build time, which is why the check
+        // lives here rather than beside `field_range_number`.
+        std::vector<NumberRange> resolved_ranges = extension_ranges;
+        const bool message_set = message.options.message_set_wire_format;
+        for (std::size_t i = 0; i < resolved_ranges.size(); ++i) {
+            NumberRange& range = resolved_ranges[i];
+            if (range.max_end) {
+                range.last = message_set ? static_cast<std::int64_t>(kMaxMessageSetNumber)
+                                         : static_cast<std::int64_t>(536870911);
+            }
+            if (!message_set && range.last > 536870911) {
+                // The sentence CR-07's parity pair already pins: the ordinary
+                // message cap is unchanged, only the verdict's position moved
+                // from the token to the end of the body.
+                throw ParseFailure(range.location,
+                    "field number must be in range 1..536870911");
+            }
+        }
+
         for (std::size_t i = 0; i < reserved_ranges.size(); ++i) {
-            for (std::size_t j = 0; j < extension_ranges.size(); ++j) {
-                if (ranges_overlap(reserved_ranges[i], extension_ranges[j])) {
-                    throw ParseFailure(extension_ranges[j].location,
+            for (std::size_t j = 0; j < resolved_ranges.size(); ++j) {
+                if (ranges_overlap(reserved_ranges[i], resolved_ranges[j])) {
+                    throw ParseFailure(resolved_ranges[j].location,
                         "reserved and extension ranges overlap");
                 }
             }
@@ -2519,8 +2646,8 @@ private:
                         "field number is reserved");
                 }
             }
-            for (std::size_t j = 0; j < extension_ranges.size(); ++j) {
-                if (range_contains(extension_ranges[j], field.number)) {
+            for (std::size_t j = 0; j < resolved_ranges.size(); ++j) {
+                if (range_contains(resolved_ranges[j], field.number)) {
                     throw ParseFailure(field_location,
                         "field number lies inside an extension range");
                 }
@@ -2528,26 +2655,39 @@ private:
         }
     }
 
-    // Extend <- "extend" TypeName "{" (EmptyStatement / Field)* "}"
+    // D-01: an `extend` body must contain at least one field. protoc's
+    // `ParseExtend` is a `do { ... } while (!TryConsumeEndOfDeclaration("}"))`
+    // loop (parser.cc:1979-2010), so an immediate `}` or `;` is parsed as a
+    // field and fails with `Expected "required", "optional", or "repeated".`
+    // (parser.cc:996-997). The E6 warning below therefore describes only a
+    // non-empty, valid block.
+    //
+    // Extend <- "extend" TypeName "{" Field+ "}"
     // The syntax is validated, but fields are not retained because the trimmed
-    // FileDescriptorProto has no extension collection. U-16: proto3 accepts
-    // this declaration only for the nine descriptor-option extendees protoc's
-    // `AllowedExtendeeInProto3` names; every other extendee keeps the proto2
-    // refusal. The accepted body is discarded with the E6 warning, exactly as
-    // the proto2 path discards it.
+    // FileDescriptorProto has no extension collection. U-16/V-12: proto3
+    // accepts this declaration only for the nine descriptor-option extendees
+    // protoc's `AllowedExtendeeInProto3` names after resolving the spelling;
+    // every other extendee keeps the proto2 refusal. The verdict is recorded
+    // for `validate_proto3_extends`, because the package that qualifies the
+    // name may be declared later in the file. The accepted body is discarded
+    // with the E6 warning, exactly as the proto2 path discards it.
     void parse_extend()
     {
         const SourceLocation where = current_.location;
         const std::string extendee = full_identifier(true);
-        if (syntax_ != easypb_schema::FILE_SYNTAX_PROTO2 &&
-            !allowed_proto3_extendee(extendee)) {
-            throw ParseFailure(where,
-                "extend declarations are allowed only in proto2");
+        if (syntax_ != easypb_schema::FILE_SYNTAX_PROTO2) {
+            Proto3ExtendCheck check;
+            check.spelling = extendee;
+            check.location = where;
+            proto3_extends_.push_back(std::move(check));
         }
         expect_symbol('{');
+        if (current_.kind == TOKEN_SYMBOL &&
+            (current_.symbol == '}' || current_.symbol == ';')) {
+            fail("Expected \"required\", \"optional\", or \"repeated\".");
+        }
         while (!accept_symbol('}')) {
             if (current_.kind == TOKEN_END) fail("unterminated extend body");
-            if (accept_symbol(';')) continue;
             (void)parse_field(false, 0, 0, true);
         }
         Diagnostic warning;
@@ -2556,6 +2696,21 @@ private:
         warning.warning = true;
         warning.message = "extend declaration parsed but not stored by the trimmed FileDescriptorProto model";
         out_.warnings.push_back(std::move(warning));
+    }
+
+    // V-12: runs once the file body is complete, because `package` may follow
+    // the `extend` statement it qualifies.
+    void validate_proto3_extends()
+    {
+        if (proto3_extends_.empty()) return;
+        const std::string package =
+            out_.file.has_package ? view_text(out_.file.package) : std::string();
+        for (std::size_t i = 0; i < proto3_extends_.size(); ++i) {
+            if (!allowed_proto3_extendee(proto3_extends_[i].spelling, package)) {
+                throw ParseFailure(proto3_extends_[i].location,
+                    "extend declarations are allowed only in proto2");
+            }
+        }
     }
 
     // Semantic driver after ProtoFile has been consumed. Both modes index

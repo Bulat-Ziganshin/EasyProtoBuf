@@ -1,0 +1,14 @@
+syntax = "proto2";
+
+// V-12: the stand-in `google.protobuf.FileOptions` that
+// `proto3-package-extend.proto` extends. The proto3 allowlist compares the
+// resolved full name, so the fixture needs a type with that name and an
+// extension range, not the real descriptor.proto option message. Source-only:
+// the pair reaches the descriptor door as part of the same schema only when
+// the source file is loaded; no standalone descriptor is needed.
+package google.protobuf;
+
+message FileOptions
+{
+    extensions 1000 to max;
+}

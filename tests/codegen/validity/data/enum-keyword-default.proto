@@ -1,0 +1,23 @@
+syntax = "proto2";
+
+// V-04: protoc's tokenizer has no separate true/false/inf/nan kind, so an
+// enum value may carry one of those names and a field default may name it.
+// The descriptor door already accepted the shape and emits `::E::true_`; the
+// source parser classified the spellings as literals and refused the default.
+package enumkw;
+
+enum E
+{
+    true = 0;
+    false = 1;
+    inf = 2;
+    nan = 3;
+}
+
+message M
+{
+    optional E a = 1 [default = true];
+    optional E b = 2 [default = false];
+    optional E c = 3 [default = inf];
+    optional E d = 4 [default = nan];
+}

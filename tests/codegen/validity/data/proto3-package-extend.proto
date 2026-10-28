@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+// V-12: the proto3 `extend` allowlist is a comparison of the *resolved*
+// extendee name (protoc's `ValidateProto3Field`, descriptor.cc:7907-7911), so
+// `FileOptions` in `package google.protobuf` is the allowed
+// `google.protobuf.FileOptions` even though it is spelled relatively. The
+// imported stand-in carries the name and the extension range; no descriptor
+// half exists for this fixture because the trimmed model neither stores nor
+// decodes extension members (E6).
+package google.protobuf;
+
+import "package-extend-options.proto";
+
+message Holder
+{
+    int32 x = 1;
+}
+
+extend FileOptions
+{
+    optional int32 local = 50000;
+}

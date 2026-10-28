@@ -166,6 +166,15 @@ one reference-free sweep answers both doors (`U-10`, `U-12`):
 - a field-less proto2 MessageSet is accepted, exactly as `protoc` accepts it.
   The option has no effect on the generated C++, so both doors emit an ordinary
   (empty) structure.
+- a MessageSet's extension numbers are plain `int32` values, so its extension
+  ranges may exceed `FieldDescriptor::kMaxNumber` up to `INT32_MAX - 1`
+  (`2147483646`) and `to max` expands to that number (`V-05`; protoc's
+  `AdjustExtensionRangesWithMaxEndNumber`, `parser.cc:827-837`, and
+  `ValidateExtensionRangeOptions`, `descriptor.cc:8385-8404`). An ordinary
+  message keeps the `536870911` cap, and the source door applies it after the
+  message body because the option may follow the range it widens. Extension
+  *members* inside `extend` stay outside the model (E6), so their tags are
+  accepted up to `2147483646` without resolving the extendee's ranges.
 
 The source door records the option statement's position, so its refusal points
 at the declaration that contradicts the rule; the descriptor door has no
@@ -256,16 +265,24 @@ the aggregate spelling `[feature_support = { ... }]` is the supported form.
 A proto3 file may declare `extend` only for the nine descriptor-option
 messages: `google.protobuf.FileOptions`, `MessageOptions`, `FieldOptions`,
 `EnumOptions`, `EnumValueOptions`, `ServiceOptions`, `MethodOptions`,
-`OneofOptions` and `ExtensionRangeOptions`. The extendee is compared by name,
-with a leading dot accepted, exactly as protoc's `AllowedExtendeeInProto3`
-compares it (`descriptor.cc:1105-1131`); every other extendee keeps the source
-parser's proto2 refusal (`extend declarations are allowed only in proto2`).
-A whitelisted declaration is parsed, its fields are validated and discarded,
-and the run emits the recorded E6 warning `extend declaration parsed but not
-stored by the trimmed FileDescriptorProto model`; generation continues, as it
-always has on the proto2 path. The descriptor door counts extension members
-without decoding them (E6), so no verdict depends on the declaration's
-content.
+`OneofOptions` and `ExtensionRangeOptions`. The extendee is compared after
+resolution, exactly as protoc's `ValidateProto3Field` compares the resolved
+full name (`descriptor.cc:7907-7911`): the spelling is qualified with the
+file's package, and a fully-qualified spelling (with or without a leading dot)
+is compared as written. A package-local `extend FileOptions` in
+`package google.protobuf`, or `extend google.protobuf.FileOptions` from
+another package, is therefore accepted (`V-12`); every other extendee keeps
+the source parser's proto2 refusal (`extend declarations are allowed only in
+proto2`).
+A whitelisted declaration must contain at least one field (owner decision
+D-01): an empty or semicolon-only body is a syntax error with protoc's
+sentence `Expected "required", "optional", or "repeated".`, and only a
+non-empty valid block emits the recorded E6 warning `extend declaration
+parsed but not stored by the trimmed FileDescriptorProto model`; generation
+continues, as it always has on the proto2 path. The descriptor door counts
+extension members without decoding them (E6), so no verdict depends on the
+declaration's content, and an extension tag is accepted up to
+`2147483646` (`V-05`) because the extendee's ranges are not resolved here.
 
 A `json_name` on an extension field must equal the name derived from the field
 name (`custom_name` -> `customName`). A different spelling is refused with the
@@ -338,13 +355,17 @@ validation table:
   The new sentence replaces the range diagnostic (`does not fit unsigned
   64-bit field`) the numeric parser used to produce for `" 8"`; a real
   overflow keeps that range sentence.
-- **A reserved range may end at 536 870 912.** `descriptor.proto` stores a
+- **A reserved range may end at 2 147 483 646.** `descriptor.proto` stores a
   message reserved range as `[start, end)`, and the reference compiler asks
-  only that `start` is positive and smaller than `end`, so the exclusive end
-  of the last field number - the number `to max` describes - is a legal
-  spelling (`U-56`): `reserved 536870912;` and `reserved 536870911 to
-  536870912;` are accepted. A *field* number keeps the 536 870 911 limit
-  (`field number must be in range 1..536870911`).
+  only that `start` is positive and smaller than `end`, so `INT32_MAX - 1`
+  (`2147483646`) is the largest endpoint the text can spell - `2147483647`
+  would overflow the exclusive end (`V-03`). The `536870912` boundary the
+  earlier U-56 round established stays accepted: `reserved 536870913;` and
+  `reserved 1 to 2147483646;` are accepted on both doors, and so are
+  `reserved 536870912;` and `reserved 536870911 to 536870912;`. A *field*
+  number keeps the 536 870 911 limit (`field number must be in range
+  1..536870911`), and a `reserved` declaration's `to max` still expands to
+  536 870 911.
 
 ## C++ type options
 

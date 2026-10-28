@@ -35,8 +35,8 @@ Field2                <- Label FieldType Identifier "=" FieldNumber
                          FieldOptions? ";"
 Field3                <- (K_OPTIONAL / K_REPEATED)? FieldType Identifier "="
                          FieldNumber FieldOptions? ";"
-Oneof                 <- K_ONEOF Identifier "{" (EmptyStatement /
-                         OptionStatement / OneofField)* "}"
+Oneof                 <- K_ONEOF Identifier "{" (OptionStatement /
+                         OneofField)* "}"
 OneofField            <- FieldType Identifier "=" FieldNumber
                          FieldOptions? ";"
 MapField              <- K_MAP &"<" "<" MapKeyType "," FieldType ">"
@@ -54,8 +54,7 @@ EnumValueOptions      <- "[" OptionAssignment
 Extensions            <- K_EXTENSIONS FieldRanges ExtensionRangeOptions? ";"
 ExtensionRangeOptions <- "[" OptionAssignment
                          ("," OptionAssignment)* "]"
-Extend                <- K_EXTEND TypeName "{" (EmptyStatement / Group /
-                         Field2)* "}"
+Extend                <- K_EXTEND TypeName "{" (Group / Field2)+ "}"
 ReservedMessage       <- K_RESERVED (FieldRanges / ReservedNames) ";"
 ReservedEnum          <- K_RESERVED (EnumRanges / ReservedNames) ";"
 FieldRanges           <- FieldRange ("," FieldRange)*

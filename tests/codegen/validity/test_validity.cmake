@@ -146,7 +146,10 @@ set(paired_fixtures
     p3opt-ok
     oneof-contiguous
     message-set-empty
+    message-set-extensions
     reserved-range-end
+    reserved-range-wide
+    enum-keyword-default
     option-value-defaults
     option-value-defaults-control)
 
@@ -232,6 +235,75 @@ require_contains(reserved_end_out "struct BigReservedValue"
     "U-56: the single-number reserved declaration")
 require_contains(reserved_end_out "struct BigReservedRange"
     "U-56: the range whose end is 536870912")
+
+# --- V-03/V-04/V-05: reserved bounds, keyword defaults, MessageSet ranges -----
+#
+# The paired loop above proves both doors accept the three fixtures and emit
+# identical headers; these assertions name the emitted declarations, so a run
+# that accepted the schema but lost one cannot pass.
+run_ok(reserved_wide_out reserved_wide_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/reserved-range-wide.pbs")
+require_empty(reserved_wide_err "The reserved-range-wide descriptor stderr")
+require_contains(reserved_wide_out "struct SingleHigh"
+    "V-03: the single reserved number above 536870912")
+require_contains(reserved_wide_out "struct RangeHigh"
+    "V-03: the reserved range up to 2147483646")
+
+run_ok(enum_keyword_out enum_keyword_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/enum-keyword-default.pbs")
+require_empty(enum_keyword_err "The enum-keyword-default descriptor stderr")
+require_contains(enum_keyword_out "true_ = 0"
+    "V-04: the C++-escaped enumerator name")
+require_contains(enum_keyword_out "::enumkw::E a = ::enumkw::E::true_;"
+    "V-04: the true default")
+require_contains(enum_keyword_out "::enumkw::E c = ::enumkw::E::inf;"
+    "V-04: the inf default")
+require_contains(enum_keyword_out "::enumkw::E d = ::enumkw::E::nan;"
+    "V-04: the nan default")
+
+run_ok(message_set_ext_out message_set_ext_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/message-set-extensions.pbs")
+require_empty(message_set_ext_err "The message-set-extensions descriptor stderr")
+require_contains(message_set_ext_out "struct ToMax"
+    "V-05: the MessageSet whose range expands to 2147483646")
+require_contains(message_set_ext_out "struct ExplicitWide"
+    "V-05: the MessageSet with an explicit wide range")
+
+# V-08, V-12 and V-17 are source-only. protoc refuses the two grammar shapes,
+# so it cannot write their descriptor; the trimmed model neither stores nor
+# decodes extension members (E6), so a `.pbs` cannot carry the `extend`
+# declaration either. The source door owns the verdict in all three cases.
+if(FULL_BUILD)
+    run_fail(oneof_statement_out oneof_statement_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/oneof-empty-statement.proto")
+    require_empty(oneof_statement_out "The oneof empty-statement stdout")
+    require_contains(oneof_statement_err "Expected type name."
+        "V-08: the bare semicolon is a missing type name")
+
+    run_fail(extend_empty_out extend_empty_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/extend-empty.proto")
+    require_empty(extend_empty_out "The empty extend stdout")
+    require_contains(extend_empty_err
+        "Expected \"required\", \"optional\", or \"repeated\"."
+        "V-17: the empty extend body")
+
+    run_fail(extend_semicolon_out extend_semicolon_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/extend-semicolon.proto")
+    require_empty(extend_semicolon_out "The semicolon-only extend stdout")
+    require_contains(extend_semicolon_err
+        "Expected \"required\", \"optional\", or \"repeated\"."
+        "V-17: the semicolon-only extend body")
+
+    run_ok(proto3_extend_out proto3_extend_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/proto3-package-extend.proto")
+    require_contains(proto3_extend_out "struct Holder"
+        "V-12: the package-local proto3 extend keeps generating")
+    require_contains(proto3_extend_err
+        "extend declaration parsed but not stored by the trimmed FileDescriptorProto model"
+        "V-12: the accepted extend keeps the E6 warning")
+endif()
 
 if(FULL_BUILD)
     run_ok(subnormal_desc_print subnormal_desc_print_err

@@ -1,0 +1,17 @@
+syntax = "proto2";
+
+// D-01 / V-17: an `extend` body must contain at least one field. protoc's
+// `ParseExtend` parses the first token as a field and refuses an immediate
+// `}` with `Expected "required", "optional", or "repeated".`
+// (parser.cc:996-997, :1979-2010). Source-only: a `.pbs` has no statement
+// grammar, so no descriptor twin can carry the shape.
+package extendempty;
+
+message M
+{
+    extensions 100 to 200;
+}
+
+extend M
+{
+}

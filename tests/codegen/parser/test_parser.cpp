@@ -695,6 +695,81 @@ void test_rejects_extension_range_conflicts()
     CHECK(error.message.find("overlap") != std::string::npos);
 }
 
+// V-03: a reserved declaration's endpoints may reach INT32_MAX - 1. protoc
+// stores the range as [start, end) and asks only that the start is positive
+// and below the exclusive end (descriptor.cc:6906-6922), so 2147483646 is the
+// largest spellable endpoint ("2147483647" overflows the exclusive end). The
+// descriptor door already accepted this bound; the source parser capped it at
+// 536870912.
+void test_reserved_range_reaches_the_int32_bound()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    CHECK(easypb_proto::parse_proto("reserved-wide-single.proto",
+        "syntax=\"proto2\"; message M { reserved 536870913; }", parsed, error));
+    CHECK(easypb_proto::parse_proto("reserved-wide-range.proto",
+        "syntax=\"proto2\"; message M { reserved 1 to 2147483646; }", parsed, error));
+    CHECK(easypb_proto::parse_proto("reserved-wide-open.proto",
+        "syntax=\"proto2\"; message M { reserved 536870912 to 2147483646; }",
+        parsed, error));
+
+    CHECK(!easypb_proto::parse_proto("reserved-over-int32.proto",
+        "syntax=\"proto2\"; message M { reserved 2147483647; }", parsed, error));
+    CHECK(error.message.find("reserved range endpoint must be in range "
+                             "1..2147483646") != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("reserved-zero-wide.proto",
+        "syntax=\"proto2\"; message M { reserved 0; }", parsed, error));
+    CHECK(error.message.find("reserved range endpoint must be in range "
+                             "1..2147483646") != std::string::npos);
+}
+
+// V-05: a MessageSet's extension ranges and tags are plain int32 numbers, so
+// `to max` expands to 2147483646 and an explicit endpoint may reach it
+// (protoc's `AdjustExtensionRangesWithMaxEndNumber`, parser.cc:827-837, and
+// `ValidateExtensionRangeOptions`, descriptor.cc:8385-8404). An ordinary
+// message keeps the 536870911 cap. The option may follow the range it widens,
+// which is why the expansion is a post-body rule.
+void test_message_set_extension_bounds()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    CHECK(easypb_proto::parse_proto("messageset-max.proto",
+        "syntax=\"proto2\";\n"
+        "message M { extensions 100 to max;"
+        " option message_set_wire_format = true; }\n"
+        "extend M { optional M ext = 600000000; }\n",
+        parsed, error));
+    CHECK(easypb_proto::parse_proto("messageset-wide.proto",
+        "syntax=\"proto2\";\n"
+        "message M { option message_set_wire_format = true;"
+        " extensions 600000000 to 600000001; }\n",
+        parsed, error));
+
+    // The ordinary message keeps both caps: an explicit endpoint above
+    // 536870911 is refused after the body, where the option is known.
+    CHECK(!easypb_proto::parse_proto("ordinary-wide-range.proto",
+        "syntax=\"proto2\"; message M { extensions 1 to 599999999; }",
+        parsed, error));
+    CHECK(error.message.find("field number must be in range 1..536870911") !=
+          std::string::npos);
+    CHECK(!easypb_proto::parse_proto("ordinary-wide-single.proto",
+        "syntax=\"proto2\"; message M { extensions 600000000; }",
+        parsed, error));
+    CHECK(error.message.find("field number must be in range 1..536870911") !=
+          std::string::npos);
+
+    // A MessageSet's range may still be refused for its shape.
+    CHECK(!easypb_proto::parse_proto("messageset-inverted.proto",
+        "syntax=\"proto2\";\n"
+        "message M { option message_set_wire_format = true;"
+        " extensions 600000001 to 600000000; }\n",
+        parsed, error));
+    CHECK(error.message.find("extension range end is smaller") !=
+          std::string::npos);
+}
+
 void test_rejects_reserved_enum_values()
 {
     easypb_proto::ParsedProto parsed;
@@ -745,6 +820,168 @@ void test_rejects_invalid_enum_defaults()
         "message M { optional E e = 1 [default = B]; }",
         parsed, error));
     CHECK(error.message.find("no value named B") != std::string::npos);
+}
+
+// V-04: protoc's enum-default branch accepts any identifier token
+// (`ParseDefaultAssignment`, parser.cc:1330-1340), and its tokenizer has no
+// separate true/false/inf/nan kind, so `enum E { true = 0; }` with
+// `[default = true]` is legal and the descriptor door already emits
+// `::E::true_`. EasyPB's Constant classifies the four literals, so the parser
+// has to admit exactly those shapes and keep the identifier rule for every
+// other constant kind.
+void test_keyword_enum_defaults()
+{
+    const std::string source =
+        "syntax=\"proto2\";\n"
+        "enum E { true = 0; false = 1; inf = 2; nan = 3; }\n"
+        "message M {\n"
+        "  optional E a = 1 [default = true];\n"
+        "  optional E b = 2 [default = false];\n"
+        "  optional E c = 3 [default = inf];\n"
+        "  optional E d = 4 [default = nan];\n"
+        "}\n";
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("keyword-enum-default.proto", source,
+                                   parsed, error));
+    if (parsed.file.message_type.size() == 1) {
+        const DescriptorProto& message = parsed.file.message_type[0];
+        CHECK(message.field.size() == 4);
+        if (message.field.size() == 4) {
+            CHECK(text(message.field[0].default_value) == "true");
+            CHECK(text(message.field[1].default_value) == "false");
+            CHECK(text(message.field[2].default_value) == "inf");
+            CHECK(text(message.field[3].default_value) == "nan");
+        }
+    } else {
+        CHECK(parsed.file.message_type.size() == 1);
+    }
+
+    // The identifier rule is not weakened: a numeric float, a signed literal
+    // and a string stay refused on an enum field.
+    CHECK(!easypb_proto::parse_proto("enum-default-float.proto",
+        "syntax=\"proto2\"; enum E { A = 0; } "
+        "message M { optional E e = 1 [default = 1.5]; }",
+        parsed, error));
+    CHECK(error.message.find("enum default must be an identifier") !=
+          std::string::npos);
+    CHECK(!easypb_proto::parse_proto("enum-default-signed.proto",
+        "syntax=\"proto2\"; enum E { A = 0; } "
+        "message M { optional E e = 1 [default = -inf]; }",
+        parsed, error));
+    CHECK(error.message.find("enum default must be an identifier") !=
+          std::string::npos);
+    CHECK(!easypb_proto::parse_proto("enum-default-string.proto",
+        "syntax=\"proto2\"; enum E { A = 0; } "
+        "message M { optional E e = 1 [default = \"A\"]; }",
+        parsed, error));
+    CHECK(error.message.find("enum default must be an identifier") !=
+          std::string::npos);
+}
+
+// V-08: protoc's oneof body has no EmptyStatement production; a bare `;` is
+// the start of a field and fails as `Expected type name.`
+// (parser.cc:2022-2085).
+void test_oneof_rejects_empty_statement()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto("oneof-semicolon.proto",
+        "syntax=\"proto2\"; message M { oneof o { ; string a = 1; } }",
+        parsed, error));
+    CHECK(error.message.find("Expected type name.") != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("oneof-semicolon-after.proto",
+        "syntax=\"proto2\"; message M { oneof o { string a = 1; ; } }",
+        parsed, error));
+    CHECK(error.message.find("Expected type name.") != std::string::npos);
+}
+
+// D-01 / V-17: protoc's `ParseExtend` is a do-while that parses the first
+// token as a field (parser.cc:1979-2010), so an empty or semicolon-only body
+// fails with `Expected "required", "optional", or "repeated".`
+// (parser.cc:996-997). The E6 warning describes only non-empty valid blocks.
+void test_extend_requires_a_field()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    const char* const expected =
+        "Expected \"required\", \"optional\", or \"repeated\".";
+
+    CHECK(!easypb_proto::parse_proto("extend-empty.proto",
+        "syntax=\"proto2\"; message M { extensions 100 to 200; } "
+        "extend M { }", parsed, error));
+    CHECK(error.message.find(expected) != std::string::npos);
+    CHECK(!easypb_proto::parse_proto("extend-semicolon.proto",
+        "syntax=\"proto2\"; message M { extensions 100 to 200; } "
+        "extend M { ; }", parsed, error));
+    CHECK(error.message.find(expected) != std::string::npos);
+
+    CHECK(easypb_proto::parse_proto("extend-one-field.proto",
+        "syntax=\"proto2\"; message M { extensions 100 to 200; } "
+        "extend M { optional int32 e = 100; }", parsed, error));
+    bool saw_extend_warning = false;
+    for (std::size_t i = 0; i < parsed.warnings.size(); ++i) {
+        if (parsed.warnings[i].message.find(
+                "extend declaration parsed but not stored") !=
+            std::string::npos) {
+            saw_extend_warning = true;
+        }
+    }
+    CHECK(saw_extend_warning);
+}
+
+// V-12: protoc compares the *resolved* extendee name with the proto3
+// allowlist (`ValidateProto3Field`, descriptor.cc:7907-7911), so a relative
+// spelling in `package google.protobuf` names an allowed extendee. The package
+// may be declared after the `extend` statement, which is why the verdict is
+// decided at the end of the file.
+void test_proto3_extendee_is_resolved_before_the_allowlist()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+
+    CHECK(easypb_proto::parse_proto("proto3-package-extend.proto",
+        "syntax=\"proto3\";\n"
+        "package google.protobuf;\n"
+        "import \"descriptor-stub.proto\";\n"
+        "message Holder { int32 x = 1; }\n"
+        "extend FileOptions { optional int32 local = 50000; }\n",
+        parsed, error));
+    CHECK(parsed.file.message_type.size() == 1);
+
+    // The package may follow the statement it qualifies.
+    CHECK(easypb_proto::parse_proto("proto3-package-after.proto",
+        "syntax=\"proto3\";\n"
+        "import \"descriptor-stub.proto\";\n"
+        "extend FileOptions { optional int32 local = 50000; }\n"
+        "package google.protobuf;\n",
+        parsed, error));
+
+    // Absolute spellings and the global-scope fallback keep working from a
+    // different package.
+    CHECK(easypb_proto::parse_proto("proto3-absolute-extend.proto",
+        "syntax=\"proto3\";\n"
+        "package local;\n"
+        "import \"descriptor-stub.proto\";\n"
+        "extend .google.protobuf.FileOptions { optional int32 local = 50000; }\n",
+        parsed, error));
+    CHECK(easypb_proto::parse_proto("proto3-global-spelling.proto",
+        "syntax=\"proto3\";\n"
+        "package local;\n"
+        "import \"descriptor-stub.proto\";\n"
+        "extend google.protobuf.FileOptions { optional int32 local = 50000; }\n",
+        parsed, error));
+
+    // A name that resolves outside the nine descriptor-option messages keeps
+    // the proto2 refusal.
+    CHECK(!easypb_proto::parse_proto("proto3-user-extend.proto",
+        "syntax=\"proto3\";\n"
+        "package local;\n"
+        "import \"descriptor-stub.proto\";\n"
+        "extend FileOptions { optional int32 local = 50000; }\n",
+        parsed, error));
+    CHECK(error.message.find("extend declarations are allowed only in proto2") !=
+          std::string::npos);
 }
 
 // D-32 (fix round r16): the source half of the empty-enum rule. The parser
@@ -2910,9 +3147,15 @@ int main()
     test_edition_statement_is_refused_by_name();
     test_rejects_reserved_conflicts();
     test_rejects_extension_range_conflicts();
+    test_reserved_range_reaches_the_int32_bound();
+    test_message_set_extension_bounds();
     test_rejects_reserved_enum_values();
     test_rejects_enum_scope_name_collisions();
     test_rejects_invalid_enum_defaults();
+    test_keyword_enum_defaults();
+    test_oneof_rejects_empty_statement();
+    test_extend_requires_a_field();
+    test_proto3_extendee_is_resolved_before_the_allowlist();
     test_rejects_empty_enums();
     test_post_body_refusals_point_inside_the_declaration();
     test_rejects_duplicate_oneof_names();

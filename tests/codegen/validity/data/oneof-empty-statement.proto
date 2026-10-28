@@ -1,0 +1,16 @@
+syntax = "proto2";
+
+// V-08: protoc's oneof body has no EmptyStatement production. A bare `;` is
+// the start of a field and fails as `Expected type name.`
+// (parser.cc:2022-2085); EasyPB used to skip it. Source-only: a `.pbs` has no
+// statement grammar, so no descriptor twin can carry the shape.
+package oneofstmt;
+
+message M
+{
+    oneof choice
+    {
+        ;
+        string text = 1;
+    }
+}

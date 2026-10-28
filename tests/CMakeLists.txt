@@ -285,6 +285,7 @@ if(BUILD_TESTING)
         defaults-float-keywords
         packages-deep-101
         enum-alias-same-number
+        enum-keyword-default
         json-names-distinct
         json-name-custom-vs-default-proto2
         json-name-proto2-warning
@@ -301,7 +302,9 @@ if(BUILD_TESTING)
         p3opt-ok
         oneof-contiguous
         message-set-empty
+        message-set-extensions
         reserved-range-end
+        reserved-range-wide
         option-value-defaults)
 
     foreach(name ${codegen_validity_fixtures})
@@ -335,6 +338,7 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/defaults-float-keywords.pb.hpp
             ${codegen_validity_descriptor_dir}/packages-deep-101.pb.hpp
             ${codegen_validity_descriptor_dir}/enum-alias-same-number.pb.hpp
+            ${codegen_validity_descriptor_dir}/enum-keyword-default.pb.hpp
             ${codegen_validity_descriptor_dir}/json-names-distinct.pb.hpp
             ${codegen_validity_descriptor_dir}/json-name-custom-vs-default-proto2.pb.hpp
             ${codegen_validity_descriptor_dir}/json-name-proto2-warning.pb.hpp
@@ -351,7 +355,9 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/p3opt-ok.pb.hpp
             ${codegen_validity_descriptor_dir}/oneof-contiguous.pb.hpp
             ${codegen_validity_descriptor_dir}/message-set-empty.pb.hpp
+            ${codegen_validity_descriptor_dir}/message-set-extensions.pb.hpp
             ${codegen_validity_descriptor_dir}/reserved-range-end.pb.hpp
+            ${codegen_validity_descriptor_dir}/reserved-range-wide.pb.hpp
             ${codegen_validity_descriptor_dir}/option-value-defaults.pb.hpp)
 
     add_executable(codegen_validity_runtime_test

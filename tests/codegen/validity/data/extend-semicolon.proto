@@ -1,0 +1,15 @@
+syntax = "proto2";
+
+// D-01 / V-17: the empty-statement spelling of an empty `extend` body is the
+// same refusal as `extend-empty.proto`. Source-only for the same reason.
+package extendsemicolon;
+
+message M
+{
+    extensions 100 to 200;
+}
+
+extend M
+{
+    ;
+}
