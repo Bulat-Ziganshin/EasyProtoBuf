@@ -1,0 +1,19 @@
+# V-24: a bool default a raw descriptor can carry and the source grammar
+# cannot. protoc's text format accepts any string in default_value, so the
+# descriptor door is the only path to the stale shape the review measured:
+# `bool flag = yes;` in an otherwise successful header.
+file {
+  name: "bool-default-invalid.proto"
+  package: "bools"
+  syntax: "proto2"
+  message_type {
+    name: "BadBoolDefault"
+    field {
+      name: "flag"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_BOOL
+      default_value: "yes"
+    }
+  }
+}

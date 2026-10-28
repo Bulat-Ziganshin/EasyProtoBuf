@@ -990,7 +990,19 @@ std::string default_value_str(const FieldDescriptorProto& field,
             return string_default_str(field, context);
         }
         if (field.type == FieldDescriptorProto::TYPE_BOOL) {
-            return myformat(" = {0}", field.default_value);
+            // V-24: the emitter does not trust the model it is given. A `.pbs`
+            // is bytes on disk and `generate_header` is public, so a bool
+            // default reaches this function without the semantic layer having
+            // necessarily run; the two spellings the language has are checked
+            // here, where the literal is written.
+            const std::string spelling = view_text(field.default_value);
+            if (spelling != "true" && spelling != "false") {
+                throw std::runtime_error(
+                    myformat("bool default \"{0}\" for field '{1}' must be "
+                             "true or false",
+                             spelling, field.name));
+            }
+            return myformat(" = {0}", spelling);
         }
         return integral_default_str(field);
     } else {

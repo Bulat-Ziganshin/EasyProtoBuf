@@ -24,14 +24,16 @@ struct GenerationOptions
     std::string cpp_map_type = "::std::map";
 };
 
-// Apply the derived behavior every frontend shares and reject contradictory
-// option sets. Returns false and fills `error` for the caller to report; on
-// success `options` is normalized (for example a repeated-type template
-// without a placeholder gains "<{}>").
+// Apply the derived behavior every frontend shares and reject option sets the
+// emitter cannot honor: the contradictory flags and a container template whose
+// brackets do not match or that does not use every placeholder argument.
+// Returns false and fills `error` for the caller to report; on success
+// `options` is normalized (for example a repeated-type template without a
+// placeholder gains "<{}>").
 //
-// On failure the object is untouched: the contradiction is checked before any
-// normalization, so a caller that ignores the false return cannot keep using a
-// half-normalized set.
+// On failure the object is untouched: every check runs before the normalized
+// copy is assigned back, so a caller that ignores the false return cannot keep
+// using a half-normalized set.
 //
 // The generation entry points call this themselves on a copy (W-11): a
 // caller that never touches the CLI may pass a default-constructed set, and

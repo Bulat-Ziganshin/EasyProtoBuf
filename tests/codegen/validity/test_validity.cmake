@@ -152,7 +152,8 @@ set(paired_fixtures
     reserved-range-wide
     enum-keyword-default
     option-value-defaults
-    option-value-defaults-control)
+    option-value-defaults-control
+    bool-default)
 
 foreach(name ${paired_fixtures})
     # The descriptor path.
@@ -373,6 +374,28 @@ if(FULL_BUILD)
     require_identical_headers(ext_valid_out ext_valid_src_out
         "V-09: the accepted extension set emits one header on both doors")
 endif()
+
+# --- S04 (V-24): the bool default spelling ----------------------------------
+#
+# The accepted pair is in the paired loop above: both doors emit the same
+# header for `true` and `false`. The crafted `.pbs` carries the spelling a raw
+# descriptor can hold and the source grammar cannot; the emitter must refuse it
+# instead of writing `bool flag = yes;`.
+run_ok(bool_default_out bool_default_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/bool-default.pbs")
+require_empty(bool_default_err "The bool-default descriptor stderr")
+require_contains(bool_default_out "bool enabled = true;"
+    "V-24 the true default")
+require_contains(bool_default_out "bool disabled = false;"
+    "V-24 the false default")
+
+run_fail(bool_default_bad_out bool_default_bad_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/bool-default-invalid.pbs")
+require_empty(bool_default_bad_out "The invalid bool default writes no header")
+require_contains(bool_default_bad_err "bool default"
+    "V-24 the refusal names the rule")
+require_contains(bool_default_bad_err "must be true or false"
+    "V-24 the refusal names the accepted spellings")
 
 if(FULL_BUILD)
     run_ok(subnormal_desc_print subnormal_desc_print_err

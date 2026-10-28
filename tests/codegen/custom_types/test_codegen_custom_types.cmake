@@ -210,6 +210,33 @@ require_contains(template_cases_global_out
     "ReorderedMap<MyString, ::int32_t> swapped;"
     "Scalar/string map placeholders preserve global string customization")
 
+# V-10: the documented global templates are a grammar, and an accepted spelling
+# must produce a header the C++11 compiler accepts formally. The build compiles
+# the header this run generates as `codegen_custom_types_template_check`
+# (-std=c++11 -pedantic-errors), so "the tool exited 0" is not the verdict.
+set(template_globals_pbs "${DATA_DIR}/template_globals.pbs")
+run_ok(template_globals_out template_globals_err
+    ${CODEGEN} --descriptor-set
+    --repeated-type "::std::deque<{}>"
+    --map-type "::std::map<{0}, {1}>"
+    ${template_globals_pbs})
+require_contains(template_globals_out "::std::deque< ::int32_t> values;"
+    "V-10 the documented repeated template")
+require_contains(template_globals_out "::std::map< ::std::string, ::int32_t> lookup;"
+    "V-10 the documented map template")
+
+# A bare container name keeps the documented normalization: the placeholders
+# are appended, so the documented shortcut is never refused as "unused".
+run_ok(template_globals_bare_out template_globals_bare_err
+    ${CODEGEN} --descriptor-set
+    --repeated-type "::std::deque"
+    --map-type "::std::map"
+    ${template_globals_pbs})
+require_contains(template_globals_bare_out "::std::deque< ::int32_t> values;"
+    "V-10 a bare repeated container gains <{}>")
+require_contains(template_globals_bare_out "::std::map< ::std::string,::int32_t> lookup;"
+    "V-10 a bare map container gains <{0},{1}>")
+
 if(FULL_BUILD)
     run_ok(source_out source_err ${CODEGEN} ${custom_type_roots} ${proto})
     normalize_source_comment(default_out pbs_normalized)
@@ -306,7 +333,11 @@ if(FULL_BUILD)
         "syntax=\"proto3\"; message M { repeated int32 x=1; }\n")
     run_fail(global_placeholder_out global_placeholder_err
         ${CODEGEN} -I "${tmp_dir}" --repeated-type "Bad<{1}>" "${tmp_dir}/bad-global-placeholder.proto")
-    if(NOT global_placeholder_err MATCHES "Not enough arguments for myformat")
+    # V-10: the global template is checked when its option is parsed, so the
+    # placeholder past the single argument is named there. The per-field row
+    # above keeps the myformat error: a `.proto` value is schema text, not a
+    # command-line option, and its owner is the parser.
+    if(NOT global_placeholder_err MATCHES "--repeated-type .*argument 2")
         message(FATAL_ERROR "Global placeholder diagnostic is unexpected: ${global_placeholder_err}")
     endif()
 

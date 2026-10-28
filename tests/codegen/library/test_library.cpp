@@ -270,6 +270,59 @@ void test_w11(const std::string& data_dir)
         CHECK(normalized.cpp_map_type == "::std::map<{0},{1}>");
     }
 
+    // V-10: the container templates are a grammar, and the validator owns it
+    // for both options. `std::map<{0}>` lost the value type and
+    // `std::vector<int` left a bracket open; both used to reach a header the
+    // compiler refuses while the run exited 0.
+    {
+        struct TemplateCase
+        {
+            const char* repeated;
+            const char* map;
+            const char* expected;  // empty: the pair must be accepted
+        };
+        static const TemplateCase cases[] = {
+            { "::std::vector", "::std::map", "" },
+            { "::std::deque<{}>", "::std::map<{0}, {1}>", "" },
+            { "::std::deque<{0}>", "::std::map<{1}, {0}>", "" },
+            { "::std::deque<{}>", "::std::map<{},{}>", "" },
+            { "Bad<{1}>", "::std::map", "argument 2" },
+            { "::std::vector<int", "::std::map", "is never closed" },
+            { "::std::vector<int>", "::std::map<{0}>", "the value type" },
+            { "::std::vector<int>", "::std::map<{{0}},{1}>",
+              "not a placeholder escape" },
+            { "::std::vector<int>", "::std::map<{0},{1}> extra",
+              "follows the end of the template" },
+            { "::std::vector<int>", "::std::map<{0},{1})",
+              "does not close the '<'" },
+            { "::std::vector<{0},{1}>", "::std::map",
+              "argument 2 at position" },
+        };
+        for (std::size_t index = 0;
+             index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            const TemplateCase& item = cases[index];
+            easypb_codegen::GenerationOptions settings;
+            settings.cpp_repeated_type = item.repeated;
+            settings.cpp_map_type = item.map;
+            std::string template_error;
+            const bool accepted =
+                easypb_codegen::finalize_generation_options(settings,
+                                                            template_error);
+            if (item.expected[0] == '\0') {
+                CHECK(accepted);
+                CHECK(template_error.empty());
+            } else {
+                CHECK(!accepted);
+                CHECK(contains(template_error, item.expected));
+                // The failed call leaves the caller's object untouched, so a
+                // caller that ignores the false return cannot read a
+                // half-normalized set.
+                CHECK(settings.cpp_repeated_type == item.repeated);
+                CHECK(settings.cpp_map_type == item.map);
+            }
+        }
+    }
+
     // W-35: an empty view may carry a null data(), and myformat must not call
     // append(nullptr, 0).
     CHECK(easypb_codegen::myformat("[{0}]", str_view()) == "[]");
@@ -717,6 +770,23 @@ void test_r1_emitter_refuses_non_canonical_defaults()
     } catch (const std::exception& problem) {
         threw = true;
         CHECK(contains(problem.what(), "non-canonical integral default"));
+    }
+    CHECK(threw);
+
+    // V-24: the same last line of defence for a bool default. The semantic
+    // layer refuses this spelling on both doors, so only a caller that builds
+    // the linked schema itself reaches the emitter with it - and the emitter
+    // must name the field and the value instead of writing `bool d = yes;`.
+    field.type = FieldDescriptorProto::TYPE_BOOL;
+    field.default_value = schema.strings.save("yes");
+    threw = false;
+    try {
+        (void)easypb_codegen::generate_header(
+            schema, linked, easypb_codegen::GenerationOptions());
+    } catch (const std::exception& problem) {
+        threw = true;
+        CHECK(contains(problem.what(),
+                       "bool default \"yes\" for field 'd' must be true or false"));
     }
     CHECK(threw);
 }

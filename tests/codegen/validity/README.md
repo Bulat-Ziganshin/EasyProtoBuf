@@ -60,6 +60,13 @@ is accepted, a legal extension member is accepted on both doors with the E6
 warning, and a member whose tag is inside the protocol-reserved block is
 refused with the source door's own sentence.
 
+Step S04 adds the bool default spelling (`V-24`): the paired `bool-default`
+fixture proves both doors emit `true` and `false` through the same header, and
+the crafted `bool-default-invalid.pbs` - a spelling only a raw descriptor can
+carry - proves the refusal. The emitter repeats the check on the text it
+writes, so a caller that links the core and builds the schema itself is
+refused there too (`codegen.library`).
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -160,6 +167,8 @@ refused with the source door's own sentence.
 | a proto2 map whose enum value type starts at 1 (refused) | `.proto` + crafted `.pbs` | `V-06` |
 | an extension member with a protocol-reserved tag (refused on both paths) | `.proto` + crafted `.pbs` | `V-09` |
 | a valid extension member (accepted on both paths, E6 warning) | `.proto` + `.pbs` | `V-09` |
+| `true`/`false` bool defaults (accepted on both paths) | `.proto` + `.pbs` | `V-24` |
+| a bool default spelled `yes` (refused) | crafted `.pbs` | `V-24` |
 | a bare `;` inside a oneof (refused) | `.proto` only | `V-08` |
 | a package-local proto3 `extend FileOptions` (accepted) | `.proto` only | `V-12` |
 | an empty and a semicolon-only `extend` body (refused) | `.proto` only | `V-17` |

@@ -8,8 +8,10 @@ the semantic check used by the tests.
 ## Ordinary fixtures
 
 `data/custom_types.pbs` and `data/template_cases.pbs` are generated from their
-same-named `.proto` files. Use `data` and the repository's `codegen` directory
-as include roots, for example:
+same-named `.proto` files, and `data/template_globals.pbs` from
+`data/template_globals.proto` (the global `--repeated-type` / `--map-type`
+compile proof). Use `data` and the repository's `codegen` directory as include
+roots, for example:
 
 ```sh
 protoc \

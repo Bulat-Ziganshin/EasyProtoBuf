@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+package bools;
+
+// V-24: the only two bool default spellings the language has. Both doors
+// accept them and emit the same initializer; the emitter refuses anything
+// else even when the model reaches it without the semantic layer.
+message BoolDefaults {
+  optional bool enabled = 1 [default = true];
+  optional bool disabled = 2 [default = false];
+}

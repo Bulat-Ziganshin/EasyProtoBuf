@@ -409,6 +409,11 @@ validation table:
   number keeps the 536 870 911 limit (`field number must be in range
   1..536870911`), and a `reserved` declaration's `to max` still expands to
   536 870 911.
+- **A `bool` default is exactly `true` or `false`.** The source grammar has no
+  other spelling, and the semantic layer refuses a descriptor that carries one
+  (`bool default must be true or false`). The emitter checks the stored text
+  again where it writes the initializer, naming the field and the value, so a
+  crafted `.pbs` cannot produce `bool f = yes;` (`V-24`).
 
 ## C++ type options
 
@@ -416,7 +421,16 @@ validation table:
 
 `-r, --repeated-type arg (=::std::vector)` selects the container for repeated fields. `{}` or `{0}` is replaced by the element type. If no placeholder is present, `<{}>` is appended. For example, `--repeated-type 'std::deque<{}>'` produces `std::deque<int32_t>`. Include the corresponding container header before the generated header.
 
-`-m, --map-type arg (=::std::map)` selects the container for map fields. `{0}` and `{1}` are replaced by the key and value types. If no placeholders are present, `<{0},{1}>` is appended. Include the corresponding container header before the generated header.
+`-m, --map-type arg (=::std::map)` selects the container for map fields. `{0}` and `{1}` are replaced by the key and value types, in either order (`std::map<{1}, {0}>` is accepted). If no placeholders are present, `<{0},{1}>` is appended. Include the corresponding container header before the generated header.
+
+Both templates are validated while the option is parsed, before any input is read or output written. A template is one C++ type expression and must satisfy all of:
+
+- brackets nest and match: `< >`, `( )`, `[ ]`, `{ }`;
+- only whitespace may follow the outermost closing bracket;
+- braces are placeholders only: `{}` names the next argument and `{N}` argument N; there is no `{{`/`}}` escape, so a doubled brace is refused;
+- every argument the option supplies is used at least once: `--repeated-type` supplies the element type and `--map-type` the key and the value type; a placeholder past the last argument is refused.
+
+A malformed template is a command-line error - exit 1, empty stdout, and a diagnostic that quotes the option, the spelling and the offending character position - because the emitter would otherwise write a declaration that does not compile. `--map-type 'std::map<{0}>'` (no value placeholder) and `--repeated-type 'std::vector<int'` (unbalanced) are refused on both counts, while the bare container names and the documented templates above keep working.
 
 C++ types can also be specified per field with the `(easypb.cpp).type` custom option. See [C++ field type generation](GENERATED_CODE.md#c-field-type-generation) for details.
 

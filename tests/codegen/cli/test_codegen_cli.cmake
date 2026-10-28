@@ -1784,3 +1784,102 @@ if(NOT r13_lf_text STREQUAL r13_lf_published)
     message(FATAL_ERROR
         "R13 U-36 redirected stdout and --out-dir bytes differ")
 endif()
+
+# --- S04: the container templates are validated before emission (V-10) ------
+#
+# V-10: `--map-type "std::map<{0}>"` lost the value type and
+# `--repeated-type "std::vector<int"` left a bracket open, yet the tool exited
+# 0 and wrote a header the compiler refuses. The template is part of the
+# generated declaration, so both are refused while the option is parsed now:
+# exit 1, empty stdout, the option and the offending character named. The
+# documented templates and the bare-container shortcut keep working.
+#
+# Row                     codegen after S04               protoc 30.1
+# map without {1}         names --map-type, the value      no such option
+#                         type and the argument
+# repeated unbalanced     names --repeated-type and the    no such option
+#                         position of the open bracket
+# doubled brace           names the position as an escape  no such option
+# placeholder past last   names the argument and position  no such option
+# text after the group    names the stray character        no such option
+# documented templates    rc 0, the documented declaration n/a (same flags)
+# bare container name     rc 0, placeholders appended      n/a
+
+set(s04 "${WORK_DIR}/s04")
+file(MAKE_DIRECTORY "${s04}")
+
+# The review's reproductions plus the three sibling shapes the validator owns.
+# `run_fail` proves the nonzero exit; the loop pins the exact code and the
+# three message facts (option, spelling, defect), because the whole point is
+# that the caller is told which option and which character are wrong.
+foreach(s04_case
+        "map-missing-value|--map-type|std::map<{0}>|the value type"
+        "repeated-unbalanced|--repeated-type|std::vector<int|position 12"
+        "map-unbalanced|--map-type|std::map<{0},{1}|position 9"
+        "doubled-brace|--map-type|std::map<{{0}},{1}>|not a placeholder escape"
+        "repeated-past-last|--repeated-type|Bad<{1}>|argument 2"
+        "trailing-text|--map-type|std::map<{0},{1}> extra|follows the end")
+    string(REPLACE "|" ";" s04_parts "${s04_case}")
+    list(GET s04_parts 0 s04_label)
+    list(GET s04_parts 1 s04_option)
+    list(GET s04_parts 2 s04_value)
+    list(GET s04_parts 3 s04_expected)
+
+    execute_process(
+        COMMAND ${CODEGEN} --descriptor-set ${s04_option} "${s04_value}"
+                "${single}"
+        RESULT_VARIABLE s04_result
+        OUTPUT_VARIABLE s04_out
+        ERROR_VARIABLE s04_err)
+    if(NOT s04_result EQUAL 1)
+        message(FATAL_ERROR
+            "S04 ${s04_label}: expected exit 1, got ${s04_result}\nstderr:\n${s04_err}")
+    endif()
+    if(NOT "${s04_out}" STREQUAL "")
+        message(FATAL_ERROR
+            "S04 ${s04_label}: a refused template must leave stdout empty, got:\n${s04_out}")
+    endif()
+    require_contains(s04_err "${s04_option}"
+        "S04 ${s04_label}: the diagnostic names the option")
+    require_contains(s04_err "${s04_value}"
+        "S04 ${s04_label}: the diagnostic quotes the spelling")
+    require_contains(s04_err "${s04_expected}"
+        "S04 ${s04_label}: the diagnostic names the defect")
+endforeach()
+
+# The documented templates and the bare container name are the positive
+# controls: the validator refuses only a template the emitter cannot write.
+run_ok(s04_map_documented_out s04_map_documented_err
+    ${CODEGEN} --descriptor-set --map-type "std::map<{0},{1}>" "${single}")
+require_contains(s04_map_documented_out
+    "std::map< ::std::string,::int32_t> counts;"
+    "S04 the documented map template still expands")
+require_empty(s04_map_documented_err "S04 documented map stderr")
+
+run_ok(s04_repeated_documented_out s04_repeated_documented_err
+    ${CODEGEN} --descriptor-set --repeated-type "std::deque<{}>" "${single}")
+require_contains(s04_repeated_documented_out
+    "std::deque< ::int32_t> packed_values;"
+    "S04 the documented repeated template still expands")
+require_empty(s04_repeated_documented_err "S04 documented repeated stderr")
+
+run_ok(s04_bare_out s04_bare_err
+    ${CODEGEN} --descriptor-set
+            --map-type "std::map" --repeated-type "std::vector" "${single}")
+require_contains(s04_bare_out "std::map< ::std::string,::int32_t> counts;"
+    "S04 a bare map container keeps the appended placeholders")
+require_contains(s04_bare_out "std::vector< ::int32_t> packed_values;"
+    "S04 a bare repeated container keeps the appended placeholder")
+require_empty(s04_bare_err "S04 bare container stderr")
+
+# The option is validated before the input format is even inferred, so the
+# source door answers the same way. The row exists because the emitter input
+# is the same declaration whichever frontend produced the schema.
+if(FULL_BUILD)
+    run_fail(s04_source_out s04_source_err
+        ${CODEGEN} -I "${DATA_DIR}" --map-type "std::map<{0}>"
+                "${DATA_DIR}/integration-proto2.proto")
+    require_empty(s04_source_out "S04 source-door refusal stdout")
+    require_contains(s04_source_err "--map-type"
+        "S04 the source door names the option")
+endif()

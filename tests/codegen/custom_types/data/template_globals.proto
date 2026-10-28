@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+package templateglobals;
+
+// V-10: the documented `--repeated-type` / `--map-type` templates are applied
+// to both fields, because this file sets no per-field `(easypb.cpp).type`.
+// The generated header is the compile proof of the accepted grammar.
+message TemplateGlobals {
+  repeated int32 values = 1;
+  map<string, int32> lookup = 2;
+}

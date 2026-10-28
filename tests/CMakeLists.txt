@@ -199,6 +199,55 @@ if(BUILD_TESTING)
     add_test(NAME codegen.custom_types.runtime
         COMMAND codegen_custom_types_runtime_test)
 
+    # V-10: the accepted global templates must produce a header the C++11
+    # compiler accepts formally, not merely a run that exits 0. The generated
+    # header uses only the standard containers, so the compile unit needs no
+    # fixture-defined alias; the templates are the documented spellings.
+    set(codegen_custom_types_template_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/codegen-custom-types-template)
+    file(MAKE_DIRECTORY ${codegen_custom_types_template_dir})
+    set(codegen_custom_types_template_header
+        ${codegen_custom_types_template_dir}/template-globals.pb.hpp)
+    add_custom_command(
+        OUTPUT ${codegen_custom_types_template_header}
+        COMMAND ${CMAKE_COMMAND}
+            -DCODEGEN=$<TARGET_FILE:easypb_codegen>
+            -DINPUT=${codegen_custom_types_data_dir}/template_globals.pbs
+            -DOUTPUT=${codegen_custom_types_template_header}
+            -DREPEATED_TYPE=::std::deque<{}>
+            "-DMAP_TYPE=::std::map<{0}, {1}>"
+            -P ${codegen_custom_types_dir}/generate_runtime_header.cmake
+        DEPENDS
+            easypb_codegen
+            ${codegen_custom_types_data_dir}/template_globals.pbs
+            ${codegen_custom_types_dir}/generate_runtime_header.cmake
+        VERBATIM)
+    add_custom_target(codegen_custom_types_template_generated
+        DEPENDS ${codegen_custom_types_template_header})
+
+    set(codegen_custom_types_template_source
+        ${codegen_custom_types_template_dir}/compile-template-globals.cpp)
+    file(WRITE ${codegen_custom_types_template_source}
+        "#include <cstdint>\n"
+        "#include <deque>\n"
+        "#include <map>\n"
+        "#include <string>\n"
+        "#include \"template-globals.pb.hpp\"\n")
+    add_library(codegen_custom_types_template_check STATIC
+        ${codegen_custom_types_template_source})
+    add_dependencies(codegen_custom_types_template_check
+        codegen_custom_types_template_generated)
+    set_source_files_properties(${codegen_custom_types_template_source}
+        PROPERTIES OBJECT_DEPENDS ${codegen_custom_types_template_header})
+    set_target_properties(codegen_custom_types_template_check PROPERTIES
+        CXX_STANDARD 11
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF)
+    target_include_directories(codegen_custom_types_template_check PRIVATE
+        ${easypb_test_include_dir} ${codegen_custom_types_template_dir})
+    target_compile_options(codegen_custom_types_template_check PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-pedantic-errors>)
+
     set(codegen_enums_dir
         ${CMAKE_CURRENT_SOURCE_DIR}/codegen/enums)
     set(codegen_enums_data_dir ${codegen_enums_dir}/data)
@@ -306,7 +355,8 @@ if(BUILD_TESTING)
         map-enum-zero
         reserved-range-end
         reserved-range-wide
-        option-value-defaults)
+        option-value-defaults
+        bool-default)
 
     foreach(name ${codegen_validity_fixtures})
         add_custom_command(
@@ -360,7 +410,8 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/map-enum-zero.pb.hpp
             ${codegen_validity_descriptor_dir}/reserved-range-end.pb.hpp
             ${codegen_validity_descriptor_dir}/reserved-range-wide.pb.hpp
-            ${codegen_validity_descriptor_dir}/option-value-defaults.pb.hpp)
+            ${codegen_validity_descriptor_dir}/option-value-defaults.pb.hpp
+            ${codegen_validity_descriptor_dir}/bool-default.pb.hpp)
 
     add_executable(codegen_validity_runtime_test
         ${codegen_validity_dir}/validity_runtime.cpp)
@@ -419,7 +470,8 @@ if(BUILD_TESTING)
             defaults-float-keywords-nohas
             defaults-float-subnormal
             grammar-table
-            option-value-defaults)
+            option-value-defaults
+            bool-default)
         set(source ${codegen_validity_pedantic_dir}/compile-${header}.cpp)
         file(WRITE ${source} "#include \"${header}.pb.hpp\"\n")
         list(APPEND codegen_validity_pedantic_sources ${source})
