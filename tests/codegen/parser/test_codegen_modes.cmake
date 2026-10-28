@@ -579,6 +579,70 @@ if(FULL_BUILD)
         message(FATAL_ERROR
             "R13 U-61 generation still needs --target: ${r13_multi_generate_err}")
     endif()
+    # --- S05: the print mode runs the MessageSet check (V-25) ---------------
+    #
+    # `--print-descriptor` used to print whatever the frontend built, while the
+    # generation path refused the same shape. The MessageSet rule is
+    # reference-free, so print mode runs that pass before it writes anything
+    # and refuses with the generation path's sentence; the accepted MessageSet
+    # still prints on both doors.
+    set(s05_parity "${DATA_DIR}/../../parity/data")
+    run_fail(s05_ms_fields_pbs_out s05_ms_fields_pbs_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+                "${s05_parity}/message-set-fields.pbs")
+    if(NOT s05_ms_fields_pbs_out STREQUAL "")
+        message(FATAL_ERROR
+            "V-25 the refused .pbs print wrote stdout: ${s05_ms_fields_pbs_out}")
+    endif()
+    if(NOT s05_ms_fields_pbs_err MATCHES "message-set-fields[.]proto")
+        message(FATAL_ERROR
+            "V-25 the .pbs print does not name the logical file: ${s05_ms_fields_pbs_err}")
+    endif()
+    if(NOT s05_ms_fields_pbs_err MATCHES
+            "a MessageSet cannot have fields, only extensions")
+        message(FATAL_ERROR
+            "V-25 the .pbs print lacks the generation sentence: ${s05_ms_fields_pbs_err}")
+    endif()
+
+    run_fail(s05_ms_fields_src_out s05_ms_fields_src_err
+        ${CODEGEN} --print-descriptor
+                "${s05_parity}/message-set-fields.proto")
+    if(NOT s05_ms_fields_src_out STREQUAL "")
+        message(FATAL_ERROR
+            "V-25 the refused source print wrote stdout: ${s05_ms_fields_src_out}")
+    endif()
+    if(NOT s05_ms_fields_src_err MATCHES
+            "message-set-fields[.]proto:[0-9]+:[0-9]+:")
+        message(FATAL_ERROR
+            "V-25 the source print does not position the declaration: ${s05_ms_fields_src_err}")
+    endif()
+    if(NOT s05_ms_fields_src_err MATCHES
+            "a MessageSet cannot have fields, only extensions")
+        message(FATAL_ERROR
+            "V-25 the source print lacks the generation sentence: ${s05_ms_fields_src_err}")
+    endif()
+
+    run_ok(s05_ms_valid_pbs_out s05_ms_valid_pbs_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+                "${DATA_DIR}/print-declarations.pbs")
+    if(NOT s05_ms_valid_pbs_err STREQUAL "")
+        message(FATAL_ERROR
+            "V-25 the valid MessageSet .pbs print wrote stderr: ${s05_ms_valid_pbs_err}")
+    endif()
+    if(NOT s05_ms_valid_pbs_out MATCHES
+            "message Legacy \\[message_set_wire_format\\]")
+        message(FATAL_ERROR
+            "V-25 the valid MessageSet no longer prints: ${s05_ms_valid_pbs_out}")
+    endif()
+    run_ok(s05_ms_valid_src_out s05_ms_valid_src_err
+        ${CODEGEN} --print-descriptor
+                "${DATA_DIR}/print-declarations.proto")
+    if(NOT s05_ms_valid_src_out MATCHES
+            "message Legacy \\[message_set_wire_format\\]")
+        message(FATAL_ERROR
+            "V-25 the valid source MessageSet no longer prints: ${s05_ms_valid_src_out}")
+    endif()
+
 else()
     run_fail(source_out source_err ${CODEGEN} ${proto2})
     if(NOT source_err MATCHES "no .proto parser")

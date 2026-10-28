@@ -699,16 +699,20 @@ if(FULL_BUILD)
         "W-23 -I=DIR searches DIR")
     require_empty(w23_i_dir_err "W-23 -I=DIR stderr")
 
-    # B9/CR-33: -I/--proto_path is the one option whose explicit empty value is
-    # meaningful: it names the working directory, exactly as the reference
+    # B9/CR-33: -I/--proto_path is the one option whose explicitly empty value
+    # is meaningful when it is written as the next token or as the long inline
+    # form; both name the working directory, exactly as the reference
     # compiler's --proto_path= does. The empty-value refusal stays for the
-    # options where the value is a name (`-s=`, `--out-dir=` above), and the B9
-    # family row proves an empty -I is used as a root rather than dropped.
-    run_ok_in("${w23}" w23_i_empty_out w23_i_empty_err
+    # options where the value is a name (`-s=`, `--out-dir=` above). The short
+    # inline spelling `-I=` is the exception: the reference compiler refuses it
+    # (V-46), and B9 below drives both the refusal and the next-token control.
+    run_fail_in("${w23}" w23_i_empty_out w23_i_empty_err
         ${CODEGEN} -I= tiny.proto)
-    require_contains(w23_i_empty_out "// Source: tiny.proto"
-        "W-23 an empty -I value names the working directory (CR-33)")
-    require_empty(w23_i_empty_err "W-23 -I= stderr")
+    require_empty(w23_i_empty_out "W-23 -I= prints nothing on stdout")
+    require_contains(w23_i_empty_err "-I="
+        "W-23/V-46 the refusal names the short spelling")
+    require_contains(w23_i_empty_err "empty directory name"
+        "W-23/V-46 the refusal carries the reference sentence")
 endif()
 
 # The value position is not inspected: `--nope=` there is a directory name,
@@ -935,7 +939,8 @@ require_not_contains(w66_pbs_err "Exception:"
 # "f.proto -"                refusal naming "-", rc 1       rc 1, same
 # existing file out of roots rc 0, the rooted file's header rc 0, same file
 # absolute file out of roots refusal, rc 1                 rc 1, "reside within ..."
-# empty -I value             rc 0, the cwd joins the roots  rc 0, same
+# empty -I "" value          rc 0, the cwd joins the roots  rc 0, same
+# "-I=" short inline empty    refusal naming -I=, rc 1       same sentence, rc 1
 # --out-dir //server         refusal, rc 1, nothing created rc 1, nothing created
 # --out-dir //server/share   refusal at the write, rc 1     rc 1, nothing created
 # trailing separator         refusal naming the spelling, rc 1  rc 1
@@ -1132,10 +1137,16 @@ if(FULL_BUILD)
         "B9 an empty next-token -I value adds the working directory")
     require_empty(b9_empty_short_err "B9 -I \"\" stderr")
 
-    run_ok_in("${b9_empty}" b9_empty_inline_out b9_empty_inline_err
+    # V-46: the short inline empty value is refused with the reference
+    # compiler's sentence, even beside a valid root; the next-token empty
+    # value above keeps the working-directory meaning.
+    run_fail_in("${b9_empty}" b9_empty_inline_out b9_empty_inline_err
         ${CODEGEN} -I root -I= main.proto)
-    require_contains(b9_empty_inline_out "struct Main"
-        "B9 -I= adds the working directory")
+    require_empty(b9_empty_inline_out "V-46 -I= stdout")
+    require_contains(b9_empty_inline_err "-I="
+        "V-46 the refusal names the short spelling")
+    require_contains(b9_empty_inline_err "empty directory name"
+        "V-46 the refusal carries the reference sentence")
 endif()
 
 # CR-32: a network spelling that names a server but no share is refused before
@@ -1882,4 +1893,64 @@ if(FULL_BUILD)
     require_empty(s04_source_out "S04 source-door refusal stdout")
     require_contains(s04_source_err "--map-type"
         "S04 the source door names the option")
+endif()
+
+# --- S05: the CLI error context and help precedence (V-11, V-23, V-46) ------
+#
+# V-46 is driven by the W-23 and B9 rows above: the short inline empty search
+# root is refused, while the next-token and long inline empty values still name
+# the working directory. V-25's print half lives in codegen.modes and
+# codegen.validity.
+set(s05 "${WORK_DIR}/s05")
+file(MAKE_DIRECTORY "${s05}")
+
+function(s05_require_normal_help label out_var err_var)
+    require_contains(${out_var} "Usage: codegen" "V-23 --help wins (${label})")
+    require_contains(${out_var} "Allowed options:"
+        "V-23 --help prints the normal help (${label})")
+    require_empty(${err_var} "V-23 help stderr (${label})")
+endfunction()
+
+set(s05_broken_pbs "${s05}/broken.pbs")
+file(WRITE "${s05_broken_pbs}" "not a descriptor set")
+
+if(FULL_BUILD)
+    # V-11: a corrupt container under --print-descriptor keeps the decoder's
+    # sentence and adds the container path, exactly like the generation path.
+    run_fail(s05_broken_out s05_broken_err
+        ${CODEGEN} --print-descriptor "${s05_broken_pbs}")
+    require_empty(s05_broken_out "V-11 corrupt container stdout")
+    require_contains(s05_broken_err "${s05_broken_pbs}: "
+        "V-11 the decode refusal names the container")
+    require_contains(s05_broken_err "Unsupported wire type"
+        "V-11 the decode refusal keeps the decoder's text")
+
+    # V-23: --help is the first dispatch, so it beats both output modes and
+    # prints the normal help in either order. Each mode alone still emits its
+    # own output.
+    run_ok(s05_help_groff_out s05_help_groff_err
+        ${CODEGEN} --help --groff)
+    s05_require_normal_help("--help --groff" s05_help_groff_out
+        s05_help_groff_err)
+    run_ok(s05_help_groff_first_out s05_help_groff_first_err
+        ${CODEGEN} --groff --help)
+    s05_require_normal_help("--groff --help" s05_help_groff_first_out
+        s05_help_groff_first_err)
+    run_ok(s05_help_bash_out s05_help_bash_err
+        ${CODEGEN} --help --bash)
+    s05_require_normal_help("--help --bash" s05_help_bash_out
+        s05_help_bash_err)
+    run_ok(s05_help_bash_first_out s05_help_bash_first_err
+        ${CODEGEN} --bash --help)
+    s05_require_normal_help("--bash --help" s05_help_bash_first_out
+        s05_help_bash_first_err)
+
+    run_ok(s05_groff_out s05_groff_err ${CODEGEN} --groff)
+    require_contains(s05_groff_out ".SS Allowed options:"
+        "V-23 --groff alone still emits groff output")
+    require_empty(s05_groff_err "V-23 --groff stderr")
+    run_ok(s05_bash_out s05_bash_err ${CODEGEN} --bash)
+    require_contains(s05_bash_out "_codegen()"
+        "V-23 --bash alone still emits the completion script")
+    require_empty(s05_bash_err "V-23 --bash stderr")
 endif()

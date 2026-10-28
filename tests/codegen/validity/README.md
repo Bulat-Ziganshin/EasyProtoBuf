@@ -67,6 +67,16 @@ carry - proves the refusal. The emitter repeats the check on the text it
 writes, so a caller that links the core and builds the schema itself is
 refused there too (`codegen.library`).
 
+Step S05 adds the print-mode half of the MessageSet rule (`V-25`):
+`--print-descriptor` used to print a `message_set_wire_format` message that also
+declares ordinary fields and exit 0, while the generation path refused it. The
+row drives the canonical refused pair from the parity lane
+(`../parity/data/message-set-fields.proto` and `.pbs`) through generation and
+print on both doors: the descriptor-door diagnostics are compared byte for byte,
+and the source-door pair must agree on the sentence and the declaration
+position. The accepted control is the paired `message-set-empty` fixture, which
+still prints with exit 0.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path

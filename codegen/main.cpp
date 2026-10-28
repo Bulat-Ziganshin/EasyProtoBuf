@@ -20,6 +20,7 @@
 #include "generation_options.hpp"
 #include "header_output.hpp"
 #include "schema_linker.hpp"
+#include "schema_semantics.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -155,7 +156,16 @@ FileDescriptorSet decode_descriptor_set(const std::string& filename,
                                                      error)) {
         throw std::runtime_error(filename + ": " + error.message);
     }
-    const FileDescriptorSet set = easypb::decode<FileDescriptorSet>(contents);
+    // V-11: the decode used to throw the codec's sentence alone, which names
+    // no input when several containers are inspected in one call. The
+    // generation path already prefixes its container, so the print refusal
+    // does the same and keeps the codec's text unchanged.
+    FileDescriptorSet set;
+    try {
+        set = easypb::decode<FileDescriptorSet>(contents);
+    } catch (const std::exception& problem) {
+        throw std::runtime_error(filename + ": " + problem.what());
+    }
     if (set.file.empty()) {
         throw std::runtime_error(filename +
             ": descriptor set contains no FileDescriptorProto");
@@ -317,6 +327,74 @@ bool has_pbs_suffix(const std::string& name)
     return true;
 }
 
+// V-46: `-I=` writes an empty short-form value, while `-I ""` writes the same
+// empty value as the next token. popl records both as one empty value, so the
+// spelling is read from the argument list. The walk follows the parser's own
+// consumption rules: a first `--` ends option parsing, and the next token
+// after an option that requires a value is that option's value whatever it
+// looks like (W-22), so `--out-dir -I=` still names a directory.
+bool long_option_takes_value(const std::string& argument)
+{
+    static const char* const names[] = {
+        "--proto_path", "--target", "--out-dir", "--benchmark-ms",
+        "--string-type", "--repeated-type", "--map-type"
+    };
+    for (std::size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (argument == names[i]) return true;
+    }
+    return false;
+}
+
+bool short_option_takes_next(const std::string& argument)
+{
+    if (argument.size() < 2 || argument[0] != '-' || argument[1] == '-') {
+        return false;
+    }
+    for (std::size_t i = 1; i < argument.size(); ++i) {
+        // The four short options that require a value. The rest of the token
+        // is the value unless the option is its last character; an unknown
+        // letter belongs to neither group and consumes nothing.
+        if (argument[i] == 'I' || argument[i] == 's' ||
+            argument[i] == 'r' || argument[i] == 'm') {
+            return i + 1 == argument.size();
+        }
+    }
+    return false;
+}
+
+bool short_inline_empty_proto_path(const std::string& argument)
+{
+    if (argument.size() < 3 || argument[0] != '-' || argument[1] == '-') {
+        return false;
+    }
+    for (std::size_t i = 1; i < argument.size(); ++i) {
+        if (argument[i] == 'I' || argument[i] == 's' ||
+            argument[i] == 'r' || argument[i] == 'm') {
+            // The first value-taking letter owns the rest of the token, so
+            // only a leading -I can be the empty search root; `-sI=` names a
+            // string type. One '=' is the separator, so a value that is
+            // exactly "=" is the empty value; `-I==` keeps its literal '='
+            // value.
+            return argument[i] == 'I' &&
+                   argument.compare(i + 1, std::string::npos, "=") == 0;
+        }
+    }
+    return false;
+}
+
+bool has_empty_short_proto_path(const std::vector<std::string>& arguments)
+{
+    for (std::size_t i = 1; i < arguments.size(); ++i) {
+        if (arguments[i] == "--") return false;
+        if (short_inline_empty_proto_path(arguments[i])) return true;
+        if (long_option_takes_value(arguments[i]) ||
+            short_option_takes_next(arguments[i])) {
+            ++i;  // the next token is this option's value
+        }
+    }
+    return false;
+}
+
 CommandLine parse_cmdline(const std::vector<std::string>& arguments)
 {
     using namespace popl;
@@ -431,7 +509,14 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         throw;
     }
 
-    // print auto-generated help message
+    // V-23: `--help` is the first dispatch, so it wins over the two output
+    // modes as it already wins over an unknown flag (owner decision U-45).
+    // `--groff`/`--bash` shape the help text only when help was not asked for.
+    if (help_option->count() || arguments.size() <= 1) {
+        std::cout << usage_text() << '\n' << parser << '\n';
+        command.exit_after_help = true;
+        return command;
+    }
     if (groff_option->is_set()) {
         GroffOptionPrinter printer(&parser);
         std::cout << printer.print();
@@ -441,11 +526,6 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     if (bash_option->is_set()) {
         BashCompletionOptionPrinter printer(&parser, "codegen");
         std::cout << printer.print();
-        command.exit_after_help = true;
-        return command;
-    }
-    if (help_option->count() || arguments.size() <= 1) {
-        std::cout << usage_text() << '\n' << parser << '\n';
         command.exit_after_help = true;
         return command;
     }
@@ -462,6 +542,16 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     if (!parser.unknown_options().empty()) {
         throw std::runtime_error("Unknown flag: " +
                                  parser.unknown_options()[0]);
+    }
+
+    // V-46: `-I=` is the one short inline empty spelling the reference
+    // compiler refuses ("--proto_path passed empty directory name.  (Use \".\"
+    // for current directory.)", measured on libprotoc 30.1). The next-token
+    // and long inline spellings keep the working-directory meaning below.
+    if (has_empty_short_proto_path(arguments)) {
+        throw std::runtime_error(
+            "-I=: --proto_path passed empty directory name.  (Use \".\" for "
+            "current directory.)");
     }
 
     // A truly empty argv is help; options that name no input are an error.
@@ -514,10 +604,12 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     }
 
     for (std::size_t i = 0; i < proto_path_option->count(); ++i) {
-        // An explicitly empty value names the working directory, exactly as
+        // An explicitly empty value names the working directory when it is
+        // written as the next token or as the long inline form, exactly as
         // the reference compiler's --proto_path= does; the loader normalizes
-        // it (load_source_files: an empty root entry is "."). Every other
-        // string option still refuses an empty value in the parser.
+        // it (load_source_files: an empty root entry is "."). The short inline
+        // spelling `-I=` is refused above, and every other string option still
+        // refuses an empty value in the parser.
         command.proto_paths.push_back(proto_path_option->value(i));
     }
     for (std::size_t i = 0; i < target_option->count(); ++i) {
@@ -644,10 +736,26 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
 }
 
 #if EASYPB_CODEGEN_WITH_PROTO_PARSER
-// Descriptor printing keeps its standalone, permissive path: no linking and no
-// reading of the new generation-only options (they are refused before this
-// runs). The function exists only in the parser-enabled profile, like the
-// action that reaches it.
+// V-25: the print mode used to show whatever the parser or decoder built, so a
+// MessageSet shape the generation path refuses printed and exited 0. The rule
+// is reference-free - the option and the field list are in the descriptor
+// alone - so the same pass `link_schema` runs answers the print mode without
+// linking, and the refusal is the generation path's own sentence.
+bool validate_printed_message_set(easypb_schema::SchemaFile& file)
+{
+    easypb_schema::Diagnostic error;
+    if (easypb_schema::validate_message_set_wire_format(file, error)) {
+        return true;
+    }
+    report_schema_diagnostic(error);
+    return false;
+}
+
+// Descriptor printing keeps its standalone path: no linking, no import
+// resolution and no reading of the new generation-only options (they are
+// refused before this runs). The one semantic question it asks is the
+// reference-free MessageSet rule (V-25). The function exists only in the
+// parser-enabled profile, like the action that reaches it.
 //
 // U-34: the dump is assembled in memory and reaches stdout only after every
 // input has been read, decoded and parsed. The old loop wrote each tree as it
@@ -676,6 +784,14 @@ int run_print_descriptor(const CommandLine& command)
                 dump << "== " << filename << " ==\n";
             }
             for (std::size_t j = 0; j < set.file.size(); ++j) {
+                // V-25: the decoded tree borrows its strings from `contents`,
+                // which lives for the whole loop; the view therefore carries
+                // exactly the label and option the generation path validates.
+                easypb_schema::SchemaFile view;
+                view.file = set.file[j];
+                view.physical_name = filename;
+                view.from_descriptor_set = true;
+                if (!validate_printed_message_set(view)) return 1;
                 easypb_proto::print_descriptor(set.file[j], dump);
             }
             continue;
@@ -683,6 +799,7 @@ int run_print_descriptor(const CommandLine& command)
 
         easypb_proto::ParsedProto parsed;
         if (!parse_source_file(filename, contents, parsed)) return 1;
+        if (!validate_printed_message_set(parsed)) return 1;
         if (command.filenames.size() > 1) {
             dump << "== " << filename << " ==\n";
         }

@@ -1442,3 +1442,68 @@ if(FULL_BUILD)
         "Value must be identifier for boolean option"
         "U-62: the primitive value must not name the value-kind rule")
 endif()
+
+# --- S05 (V-25): print mode runs the MessageSet check -----------------------
+#
+# The generation path refuses a message that declares
+# `message_set_wire_format` and ordinary fields; `--print-descriptor` used to
+# print the same tree and exit 0. The rule is reference-free, so print mode runs
+# the same pass without linking and both doors must answer the same sentence.
+# The accepted twin (`message-set-empty`, paired above) is the control: it still
+# prints on both doors.
+set(s05_parity "${DATA_DIR}/../../parity/data")
+
+run_fail(s05_ms_gen_desc_out s05_ms_gen_desc_err
+    ${CODEGEN} --descriptor-set "${s05_parity}/message-set-fields.pbs")
+require_empty(s05_ms_gen_desc_out "V-25 generation stdout (descriptor)")
+require_contains(s05_ms_gen_desc_err
+    "a MessageSet cannot have fields, only extensions"
+    "V-25 the generation refusal (descriptor)")
+
+if(FULL_BUILD)
+    # The print mode needs the parser profile; the lite profile keeps the
+    # generation half above and has no print mode to compare against.
+    run_fail(s05_ms_print_desc_out s05_ms_print_desc_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+        "${s05_parity}/message-set-fields.pbs")
+    require_empty(s05_ms_print_desc_out "V-25 print stdout (descriptor)")
+    if(NOT s05_ms_gen_desc_err STREQUAL s05_ms_print_desc_err)
+        message(FATAL_ERROR
+            "V-25 generation and print disagree on the .pbs:\ngeneration:\n${s05_ms_gen_desc_err}\nprint:\n${s05_ms_print_desc_err}")
+    endif()
+
+    run_fail(s05_ms_gen_src_out s05_ms_gen_src_err
+        ${CODEGEN} -I "${s05_parity}"
+        "${s05_parity}/message-set-fields.proto")
+    require_empty(s05_ms_gen_src_out "V-25 generation stdout (source)")
+    run_fail(s05_ms_print_src_out s05_ms_print_src_err
+        ${CODEGEN} --print-descriptor
+        "${s05_parity}/message-set-fields.proto")
+    require_empty(s05_ms_print_src_out "V-25 print stdout (source)")
+    # The sentence and the position agree; the label does not, because the
+    # source print mode has always named the input as typed while generation
+    # names the logical file (V-25 fixes the verdict, not that spelling).
+    foreach(s05_ms_src_err s05_ms_gen_src_err s05_ms_print_src_err)
+        if(NOT "${${s05_ms_src_err}}" MATCHES
+                "message-set-fields[.]proto:[0-9]+:[0-9]+:")
+            message(FATAL_ERROR
+                "V-25 the source refusal carries no position: ${${s05_ms_src_err}}")
+        endif()
+        require_contains(${s05_ms_src_err}
+            "a MessageSet cannot have fields, only extensions"
+            "V-25 the source refusal carries the generation sentence")
+    endforeach()
+
+    run_ok(s05_ms_empty_pbs_out s05_ms_empty_pbs_err
+        ${CODEGEN} --descriptor-set --print-descriptor
+        "${DATA_DIR}/message-set-empty.pbs")
+    require_empty(s05_ms_empty_pbs_err "V-25 valid MessageSet print stderr")
+    require_contains(s05_ms_empty_pbs_out "message EmptyMessageSet"
+        "V-25 the valid MessageSet still prints")
+    run_ok(s05_ms_empty_src_out s05_ms_empty_src_err
+        ${CODEGEN} --print-descriptor "${DATA_DIR}/message-set-empty.proto")
+    require_empty(s05_ms_empty_src_err
+        "V-25 valid source MessageSet print stderr")
+    require_contains(s05_ms_empty_src_out "message EmptyMessageSet"
+        "V-25 the valid source MessageSet still prints")
+endif()

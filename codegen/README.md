@@ -18,9 +18,9 @@ The generated data types do not inherit from runtime classes and do not require 
 
 ## Command-line contract
 
-- `--help` always wins: `codegen --help --nope` prints the help text and exits 0, while an unknown flag on its own is refused with a nonzero exit. A first `--` ends option parsing, so a later `--help` is an input spelling.
+- `--help` always wins: `codegen --help --nope`, `codegen --help --groff` and `codegen --help --bash` print the normal help text and exit 0, while an unknown flag on its own is refused with a nonzero exit. A first `--` ends option parsing, so a later `--help` is an input spelling.
 - The whole result of a successful run goes to stdout, and a failure leaves stdout empty. A redirected stdout uses LF line endings on every platform, so it is byte-identical to the same header written with `--out-dir`.
-- `--print-descriptor` is pure inspection: it prints every file of a descriptor set, including imports, `reserved` declarations, extension ranges and the modeled message/enum options, and it never links or generates C++.
+- `--print-descriptor` is inspection, not generation: it prints every file of a descriptor set, including imports, `reserved` declarations, extension ranges and the modeled message/enum options, and it never links or generates C++. The one semantic check it runs is the reference-free MessageSet rule: a message that declares `message_set_wire_format` and ordinary fields (or the option in a proto3 file) is refused with the generation path's sentence and exit 1 instead of being printed with exit 0.
 - `--benchmark-parser` benchmarks `.proto` source only; descriptor-set input is refused.
 
 See [Command-line options](OPTIONS.md) for the full rules.
