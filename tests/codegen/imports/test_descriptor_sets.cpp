@@ -167,6 +167,40 @@ std::string mixed_unnamed_file_set()
     return set;
 }
 
+// V-14: one named file whose dependency list is always the same three names,
+// with the public and weak index lists written in the requested order. The
+// storage order of the index lists carries no meaning; one logical file may be
+// carried by two containers that spelled it differently.
+std::string dependency_merge_set(bool reversed_public, bool different_weak)
+{
+    std::string file = wire_text_field(1, "deps-merge.proto");
+    file += wire_text_field(3, "a.proto");
+    file += wire_text_field(3, "b.proto");
+    file += wire_text_field(3, "c.proto");
+    file += wire_uint_field(10, reversed_public ? 2 : 0);
+    file += wire_uint_field(10, reversed_public ? 0 : 2);
+    file += wire_uint_field(11, different_weak ? 0 : 1);
+    return wire_message_field(1, file);
+}
+
+// V-42: one named file with a single int32 field, and the label written in the
+// requested value. `with_label = false` is protoc's own shape for a field whose
+// label was routed to the unknown fields; a crafted container can spell 99.
+std::string label_set(std::uint64_t label, bool with_label)
+{
+    std::string field = wire_text_field(1, "a");
+    field += wire_uint_field(3, 1);
+    if (with_label) field += wire_uint_field(4, label);
+    field += wire_uint_field(5, 5);  // TYPE_INT32
+    std::string message = wire_text_field(1, "M");
+    message += wire_message_field(2, field);
+    std::string file = wire_text_field(1, "label-merge.proto");
+    file += wire_text_field(2, "p");
+    file += wire_message_field(4, message);
+    file += wire_text_field(12, "proto2");
+    return wire_message_field(1, file);
+}
+
 // `package p; message M { repeated int32 f = 1; }` spelled with the presence
 // bits a hand-encoded copy may write differently from protoc's own encoding.
 // The loader's identity test must read the effective content, not these bits
@@ -985,6 +1019,206 @@ void test_loader_custom_type_strings_survive_the_container(
     }
 }
 
+// V-14: `public_dependency` and `weak_dependency` are indexes into
+// `dependency`, and the index lists are sets: the storage order carries no
+// meaning. Two containers of one logical file may spell the same index set in
+// different orders; the merge must accept both orders and keep the first
+// copy's stored order, because the dependency includes and the print dump
+// follow that order. A different index is a real difference and stays a
+// conflict.
+void test_identity_compares_dependency_indexes_as_multisets()
+{
+    const std::string ordered = dependency_merge_set(false, false);
+    const std::string reversed = dependency_merge_set(true, false);
+    const FileDescriptorSet a = easypb::decode<FileDescriptorSet>(ordered);
+    const FileDescriptorSet b = easypb::decode<FileDescriptorSet>(reversed);
+    CHECK(a.file.size() == 1);
+    CHECK(b.file.size() == 1);
+    CHECK(easypb_schema::same_descriptor_file(a.file[0], b.file[0]));
+    CHECK(easypb_schema::same_descriptor_file(b.file[0], a.file[0]));
+
+    // The comparator never rewrites the model it reads.
+    CHECK(a.file[0].public_dependency[0] == 0);
+    CHECK(a.file[0].public_dependency[1] == 2);
+    CHECK(b.file[0].public_dependency[0] == 2);
+    CHECK(b.file[0].public_dependency[1] == 0);
+
+    const std::string different = dependency_merge_set(false, true);
+    const FileDescriptorSet c = easypb::decode<FileDescriptorSet>(different);
+    CHECK(!easypb_schema::same_descriptor_file(a.file[0], c.file[0]));
+    CHECK(!easypb_schema::same_descriptor_file(c.file[0], a.file[0]));
+
+    // A multiset, not a set: a repeated index is a malformed list the linker
+    // refuses, and two lists that disagree about multiplicity are not one file.
+    FileDescriptorProto duplicate = a.file[0];
+    duplicate.public_dependency[1] = 0;
+    CHECK(!easypb_schema::same_descriptor_file(a.file[0], duplicate));
+}
+
+// The merge path, not only the comparator: two containers whose index lists
+// disagree only in order load as one file, and a genuinely different weak index
+// is still refused in both argument orders.
+void test_loader_merges_dependency_index_order()
+{
+    const std::string first = "v14-ordered.pbs";
+    const std::string second = "v14-reversed.pbs";
+    const std::string different = "v14-different.pbs";
+    CHECK(write_binary_file(first, dependency_merge_set(false, false)));
+    CHECK(write_binary_file(second, dependency_merge_set(true, false)));
+    CHECK(write_binary_file(different, dependency_merge_set(false, true)));
+
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    std::vector<std::string> inputs;
+    inputs.push_back(first);
+    inputs.push_back(second);
+    CHECK(easypb_schema::load_descriptor_sets(inputs, set, error));
+    CHECK(set.files().size() == 1);
+    CHECK(set.find_file("deps-merge.proto") != 0);
+    // The first container is the copy the set keeps, with its stored order.
+    if (set.files().size() == 1) {
+        const std::vector<std::int32_t>& indexes =
+            set.files()[0]->file.public_dependency;
+        CHECK(indexes.size() == 2);
+        if (indexes.size() == 2) {
+            CHECK(indexes[0] == 0);
+            CHECK(indexes[1] == 2);
+        }
+    }
+
+    for (int order = 0; order < 2; ++order) {
+        inputs.clear();
+        inputs.push_back(order == 0 ? first : different);
+        inputs.push_back(order == 0 ? different : first);
+        CHECK(!easypb_schema::load_descriptor_sets(inputs, set, error));
+        CHECK(error.code == easypb_schema::DIAGNOSTIC_DUPLICATE_SYMBOL);
+        CHECK(error.message.find("\"deps-merge.proto\"") != std::string::npos);
+        CHECK(set.files().empty());
+    }
+    std::remove(first.c_str());
+    std::remove(second.c_str());
+    std::remove(different.c_str());
+}
+
+// V-18/V-35: the adapter's standalone name rule is the publisher's rule plus
+// the control-character class, so the two input doors cannot disagree about a
+// name. `../escape.proto` and DEL are refused; a valid relative name is
+// accepted.
+void test_adapter_name_rule_refuses_dotdot_and_del()
+{
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_schema::validate_descriptor_file_name("../escape.proto",
+                                                        "c.pbs", error));
+    CHECK(error.file == "c.pbs");
+    CHECK(error.message.find("'..' components") != std::string::npos);
+
+    std::string del_name = "name";
+    del_name.push_back('\x7f');
+    del_name += ".proto";
+    CHECK(!easypb_schema::validate_descriptor_file_name(del_name, "c.pbs",
+                                                        error));
+    CHECK(error.message.find("control character") != std::string::npos);
+    CHECK(error.message.find("0x7f") != std::string::npos);
+
+    std::string valid = "dir/name.proto";
+    error = easypb_schema::Diagnostic();
+    CHECK(easypb_schema::validate_descriptor_file_name(valid, "c.pbs", error));
+    CHECK(error.message.empty());
+}
+
+// V-42, the chosen contract: a label outside the three descriptor.proto
+// enumerators is refused at ingestion, with a diagnostic that names the field,
+// its message scope and the value. protoc's decoder routes the value to the
+// unknown fields instead, so this is a deliberate strictness: the model must
+// not carry a value the emitter ignores but the merge would compare.
+void test_adapter_rejects_an_unknown_label()
+{
+    const std::string bytes = label_set(99, true);
+    const FileDescriptorSet decoded = easypb::decode<FileDescriptorSet>(bytes);
+
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_schema::append_descriptor_files(decoded.file, "label-99.pbs",
+                                                  set, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_GENERIC);
+    CHECK(error.file == "label-99.pbs");
+    CHECK(error.message.find("field \"a\"") != std::string::npos);
+    CHECK(error.message.find(".p.M") != std::string::npos);
+    CHECK(error.message.find("label 99") != std::string::npos);
+    CHECK(set.files().empty());
+
+    // The container path refuses the same bytes with the container as the
+    // diagnostic's file.
+    const std::string path = "v42-label-99.pbs";
+    CHECK(write_binary_file(path, bytes));
+    std::vector<std::string> inputs(1, path);
+    CHECK(!easypb_schema::load_descriptor_sets(inputs, set, error));
+    CHECK(error.file == path);
+    CHECK(error.message.find("label 99") != std::string::npos);
+    CHECK(set.files().empty());
+    std::remove(path.c_str());
+
+    // The control: an explicit LABEL_OPTIONAL and a protoc-shaped absent label
+    // are accepted, and two identical copies still merge as one file.
+    const FileDescriptorSet explicit_optional =
+        easypb::decode<FileDescriptorSet>(label_set(1, true));
+    CHECK(easypb_schema::append_descriptor_files(explicit_optional.file,
+                                                 "label-ok.pbs", set, error));
+    CHECK(set.files().size() == 1);
+    const std::string same = "v42-identical.pbs";
+    CHECK(write_binary_file(same, label_set(1, true)));
+    std::vector<std::string> twice(2, same);
+    CHECK(easypb_schema::load_descriptor_sets(twice, set, error));
+    CHECK(set.files().size() == 1);
+    const FileDescriptorSet absent =
+        easypb::decode<FileDescriptorSet>(label_set(0, false));
+    easypb_schema::SchemaSet absent_set;
+    CHECK(easypb_schema::append_descriptor_files(absent.file, "label-absent.pbs",
+                                                 absent_set, error));
+    CHECK(absent_set.files().size() == 1);
+    std::remove(same.c_str());
+}
+
+// V-42, the merge half: the identity reads the EFFECTIVE label. protoc's
+// decoder routes an unknown enumerator to the unknown fields, so a
+// protoc-written copy carries no label and a crafted raw 99 is the same
+// effective LABEL_OPTIONAL. Ingestion refuses the crafted copy before the merge
+// (the test above); this pins the comparator's own rule for a library caller
+// that compares raw descriptors, so a raw unknown value can never decide
+// identity.
+void test_identity_reads_an_unknown_label_as_optional()
+{
+    FileDescriptorProto protoc_written;
+    protoc_written.name = "label-merge.proto";
+    protoc_written.package = "p";
+    DescriptorProto message;
+    message.name = "M";
+    FieldDescriptorProto field;
+    field.name = "a";
+    field.number = 1;
+    field.has_number = true;
+    field.label = FieldDescriptorProto::LABEL_OPTIONAL;
+    field.has_label = true;
+    field.type = FieldDescriptorProto::TYPE_INT32;
+    field.has_type = true;
+    message.field.push_back(field);
+    protoc_written.message_type.push_back(message);
+
+    FileDescriptorProto crafted = protoc_written;
+    crafted.message_type[0].field[0].label = 99;
+
+    CHECK(easypb_schema::same_descriptor_file(protoc_written, crafted));
+    CHECK(easypb_schema::same_descriptor_file(crafted, protoc_written));
+    const FileDescriptorProto identical = crafted;
+    CHECK(easypb_schema::same_descriptor_file(crafted, identical));
+
+    // A declared label is still modeled content: required is another file.
+    FileDescriptorProto required = protoc_written;
+    required.message_type[0].field[0].label =
+        FieldDescriptorProto::LABEL_REQUIRED;
+    CHECK(!easypb_schema::same_descriptor_file(protoc_written, required));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -1026,6 +1260,11 @@ int main(int argc, char** argv)
     test_loader_merges_duplicate_names_across_containers(fixture_dir);
     test_loader_merges_semantically_equal_copies();
     test_identity_compares_the_edition_carrier();
+    test_identity_compares_dependency_indexes_as_multisets();
+    test_loader_merges_dependency_index_order();
+    test_adapter_name_rule_refuses_dotdot_and_del();
+    test_adapter_rejects_an_unknown_label();
+    test_identity_reads_an_unknown_label_as_optional();
     test_loader_custom_type_strings_survive_the_container(fixture_dir);
 
     if (failures != 0) {

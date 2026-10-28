@@ -191,6 +191,26 @@ bool load_descriptor_sets(const std::vector<std::string>& input_paths,
                 return false;
             }
         } else {
+            // V-18/V-42: the input rules are asked BEFORE the cross-container
+            // merge compares this file with a stored copy. The merge is a
+            // content question ("is this the same file?"), not an ingestion
+            // gate: a crafted copy that carries an escaping name or an
+            // out-of-range label must be refused with its own diagnostic, not
+            // reported as a conflict with (or silently merged into) the copy a
+            // first container contributed. append_descriptor_files below asks
+            // the same two rules again, so a library caller that does not use
+            // this loader gets them too.
+            for (std::size_t j = 0; j < decoded.file.size(); ++j) {
+                if (!decoded.file[j].name.empty() &&
+                    !validate_descriptor_file_name(decoded.file[j].name, path,
+                                                   error)) {
+                    return false;
+                }
+                if (!validate_descriptor_field_labels(decoded.file[j], path,
+                                                      error)) {
+                    return false;
+                }
+            }
             // `W-36`: a file several containers carry is one file, not a
             // collision. protoc merges the copies and keeps the first
             // (measured 2026-10-22, the G4b probe pair), and so does this:

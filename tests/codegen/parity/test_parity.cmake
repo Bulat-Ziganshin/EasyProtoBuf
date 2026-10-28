@@ -123,6 +123,11 @@ file(MAKE_DIRECTORY "${WORK_DIR}/w68")
 #                accepts and whose option has no header effect (CR-23);
 #   retained-ranges  `reserved` ranges/names and an extension range, the
 #                declarations the source print used to drop (V-15).
+#   labels-ok    all three descriptor.proto labels, the accepted side of V-42:
+#                the source grammar can spell every one, and both doors must
+#                accept them and emit one header. The out-of-range value (99)
+#                has no source spelling; the validity lane refuses it on the
+#                descriptor door alone.
 set(paired_fixtures
     methods-ok
     map-ok
@@ -131,6 +136,7 @@ set(paired_fixtures
     ext-max
     message-set-empty
     retained-ranges
+    labels-ok
     opt-jstype-int64
     opt-lazy-message
     opt-extrange-declaration)

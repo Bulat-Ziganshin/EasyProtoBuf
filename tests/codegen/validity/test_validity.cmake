@@ -860,6 +860,86 @@ run_fail(name_out name_err
 require_empty(name_out "The control-character refusal stdout")
 require_contains(name_err "control character" "The control-character refusal")
 
+# V-35: DEL belongs to the control-character class. The sentence still spells
+# the byte and its position, exactly like the newline row above, and the print
+# door applies the same name rule.
+run_fail(del_out del_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/descriptor-name-del.pbs")
+require_empty(del_out "The DEL-name refusal stdout")
+require_contains(del_err "control character" "The DEL-name refusal")
+require_contains(del_err "0x7f" "The DEL-name byte")
+
+run_fail(del_print_out del_print_err
+    ${CODEGEN} --descriptor-set --print-descriptor
+    "${DATA_DIR}/descriptor-name-del.pbs")
+require_empty(del_print_out "The DEL-name print refusal stdout")
+require_contains(del_print_err "0x7f" "The DEL-name print byte")
+
+# V-18: a descriptor-set name that escapes the output root. `--out-dir` refused
+# it before this row; stdout generation and `--print-descriptor` used to accept
+# it because neither writes a path. The shared logical-path rule now runs at
+# ingestion, so every input mode refuses the same spelling with the same rule.
+run_fail(dotdot_out dotdot_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/descriptor-name-dotdot.pbs")
+require_empty(dotdot_out "The dotdot-name refusal stdout")
+require_contains(dotdot_err "../escape.proto" "The dotdot-name refusal spelling")
+require_contains(dotdot_err "is not a valid logical path"
+    "The dotdot-name refusal rule")
+
+run_fail(dotdot_print_out dotdot_print_err
+    ${CODEGEN} --descriptor-set --print-descriptor
+    "${DATA_DIR}/descriptor-name-dotdot.pbs")
+require_empty(dotdot_print_out "The dotdot-name print refusal stdout")
+require_contains(dotdot_print_err "../escape.proto"
+    "The dotdot-name print spelling")
+require_contains(dotdot_print_err "is not a valid logical path"
+    "The dotdot-name print rule")
+
+run_fail(dotdot_dir_out dotdot_dir_err
+    ${CODEGEN} --descriptor-set --out-dir "${WORK_DIR}/dotdot"
+    "${DATA_DIR}/descriptor-name-dotdot.pbs")
+require_empty(dotdot_dir_out "The dotdot-name --out-dir refusal stdout")
+require_contains(dotdot_dir_err "../escape.proto"
+    "The dotdot-name --out-dir spelling")
+require_contains(dotdot_dir_err "is not a valid logical path"
+    "The dotdot-name --out-dir rule")
+
+# V-42: an out-of-range label. protoc routes the value to the unknown fields and
+# the field keeps its LABEL_OPTIONAL default; this project's chosen contract is
+# a refusal that names the field, its message and the value. The print door
+# reads the same bytes and answers the same way.
+run_fail(label_out label_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/label-unknown.pbs")
+require_empty(label_out "The label-99 refusal stdout")
+require_contains(label_err "field \"a\"" "The label-99 field")
+require_contains(label_err ".M" "The label-99 message scope")
+require_contains(label_err "label 99" "The label-99 value")
+
+run_fail(label_print_out label_print_err
+    ${CODEGEN} --descriptor-set --print-descriptor
+    "${DATA_DIR}/label-unknown.pbs")
+require_empty(label_print_out "The label-99 print refusal stdout")
+require_contains(label_print_err "label 99" "The label-99 print value")
+
+# V-42 control: the label rule rejects only the out-of-range value. Two
+# DISTINCT containers carrying one identical valid file still merge into one
+# header (the same path twice would be deduplicated by the CLI before the
+# loader sees it, which is not the merge rule).
+file(MAKE_DIRECTORY "${WORK_DIR}/label-merge")
+execute_process(
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${DATA_DIR}/bool-default.pbs" "${WORK_DIR}/label-merge/copy.pbs"
+    RESULT_VARIABLE label_copy_result)
+if(NOT label_copy_result EQUAL 0)
+    message(FATAL_ERROR "cannot stage the identical-copy control")
+endif()
+run_ok(label_merge_out label_merge_err
+    ${CODEGEN} --descriptor-set
+    "${DATA_DIR}/bool-default.pbs" "${WORK_DIR}/label-merge/copy.pbs")
+require_empty(label_merge_err "The identical-copy merge stderr")
+require_contains(label_merge_out "BoolDefaults"
+    "The identical-copy merge header")
+
 # A default value with an embedded NUL cannot travel in a C++ string literal:
 # it needs the two-argument form std::string(literal, length), and only
 # std::string can be built from a literal and a length. With another string

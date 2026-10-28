@@ -1,0 +1,14 @@
+// V-42: every label the source grammar can spell, so the source door and the
+// descriptor door have one accepted verdict for all three enumerators. The
+// out-of-range value (99) has no source spelling at all; it is refused on the
+// descriptor door by the validity lane, and this pair keeps the accepted side
+// of the rule byte-identical.
+syntax = "proto2";
+
+package parity;
+
+message Labels {
+  optional int32 a = 1;
+  required int32 b = 2;
+  repeated int32 c = 3;
+}

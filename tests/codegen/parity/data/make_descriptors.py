@@ -71,6 +71,9 @@ FIXTURES = (
     # V-15: an accepted schema whose reserved names/ranges and extension range
     # must appear in the source print exactly as in protoc's `.pbs` print.
     Fixture.compile("retained-ranges"),
+    # V-42: a proto2 message with all three labels, so the source and
+    # descriptor doors agree on every label the source grammar can spell.
+    Fixture.compile("labels-ok"),
     Fixture.compile("w68-dep"),
     Fixture.compile("w68-root"),
     # R04 accepted controls: a legal `jstype`, a legal `lazy`, and an extension

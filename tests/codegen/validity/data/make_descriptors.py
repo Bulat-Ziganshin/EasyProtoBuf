@@ -190,6 +190,43 @@ def patched_fixed32_bytes(protoc, descriptor_dir, text):
 
 PATCHES[WIRE_FIXTURE] = patched_fixed32_bytes
 
+# V-42: the one fixture whose LABEL enumerator the text format will not parse.
+# `label: 99` is "Unknown enumeration value of "99" for field "label"", so the
+# fixture is encoded twice - LABEL_OPTIONAL (1) and LABEL_REQUIRED (2), both
+# one-byte varints - and the single byte the two encodings disagree on is
+# replaced with 99. The assertion is the point: a second difference would make
+# the patch a guess.
+PATCHED_LABEL_FIXTURE = "label-unknown"
+PATCHED_LABEL_VALUE = 99
+PATCHED_LABEL_PROBES = ("LABEL_REQUIRED", "LABEL_REPEATED")
+
+
+def patched_label_bytes(protoc, descriptor_dir, text):
+    """The encoding of `text` with one field's label enumerator replaced."""
+    encodings = []
+    decoded = text.decode("utf-8")
+    for probe in PATCHED_LABEL_PROBES:
+        replaced = decoded.replace("label: LABEL_OPTIONAL", "label: %s" % probe)
+        if replaced == decoded:
+            fail("%s.txtpb does not declare 'label: LABEL_OPTIONAL'"
+                 % PATCHED_LABEL_FIXTURE)
+        encodings.append(encode_textproto(protoc, descriptor_dir,
+                                          replaced.encode("utf-8")))
+    first, second = encodings
+    if len(first) != len(second):
+        fail("the two encodings of %s differ in length" % PATCHED_LABEL_FIXTURE)
+    differences = [index for index in range(len(first))
+                   if first[index] != second[index]]
+    if len(differences) != 1:
+        fail("the two encodings of %s differ in %d bytes, expected exactly one"
+             % (PATCHED_LABEL_FIXTURE, len(differences)))
+    patched = bytearray(first)
+    patched[differences[0]] = PATCHED_LABEL_VALUE
+    return bytes(patched)
+
+
+PATCHES[PATCHED_LABEL_FIXTURE] = patched_label_bytes
+
 
 def main():
     args = parse_args(__doc__.split("\n")[0])

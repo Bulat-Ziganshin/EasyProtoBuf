@@ -70,6 +70,10 @@ Descriptor-set input is useful when descriptor files are already available or wh
 
 Without `--descriptor-set`, Codegen infers the common input mode from file extensions: an invocation containing both `.pbs` and non-`.pbs` names is rejected. The `.pbs` suffix is compared case-insensitively (`SET.PBS` and `set.Pbs` are descriptor sets), because a case-insensitive filesystem makes those spellings natural. `--descriptor-set` forces every positional input to be decoded as a binary descriptor set; it does not enable mixing descriptor sets with `.proto` source files.
 
+Every logical file name a descriptor set carries is validated at ingestion with the same logical-path rule `--out-dir` applies: a relative `/`-separated UTF-8 name with no drive or absolute prefix, no backslashes or quotes, no `.`/`..` components, no control characters (DEL included) and at most 100 components. stdout generation and `--print-descriptor` therefore refuse `../escape.proto` with the publisher's rule instead of accepting a name they never turn into a path (`V-18`, `V-35`).
+
+A field `label` that is not one of `LABEL_OPTIONAL` (1), `LABEL_REQUIRED` (2) or `LABEL_REPEATED` (3) is refused on the descriptor door with a diagnostic that names the field, its message scope and the value (`V-42`). `protoc`'s decoder instead routes an unknown `Label` enumerator to the unknown fields and leaves the field without a label, so this is a deliberate Codegen strictness: the model must not carry a value the emitter ignores but the merge comparison would read. A descriptor set `protoc` itself wrote never carries such a value.
+
 ## Option syntax
 
 Options may appear before or after the positional inputs. A first `--` ends option parsing: every later token is an input spelling, even if it starts with `-`, and `--help` after it is a file name rather than the help switch (`protoc` has no such separator; this is a Codegen extension).

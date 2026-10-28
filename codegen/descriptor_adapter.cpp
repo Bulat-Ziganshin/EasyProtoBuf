@@ -5,6 +5,7 @@
 #include <sstream>
 #include <string>
 
+#include "logical_paths.hpp"
 #include "schema_semantics.hpp"
 
 namespace easypb_schema {
@@ -250,14 +251,17 @@ void copy_descriptor(const FileDescriptorProto& source, SchemaFile& slot,
     slot.file.has_package = !slot.file.package.empty();
 }
 
-// True when the byte is a C0 control character. A logical Protobuf file name
-// never carries one: the name is a path the user spelled, and the generator
-// writes it into the "// Source:" line of the header, so a newline in it
-// would inject arbitrary lines into the generated file.
+// True when the byte is a C0 control character or DEL. A logical Protobuf file
+// name never carries one: the name is a path the user spelled, and the
+// generator writes it into the "// Source:" line of the header, so a newline in
+// it would inject arbitrary lines into the generated file. DEL is a control
+// character in the ASCII sense (`iscntrl`), and the logical-path rule already
+// refuses it; the class here must name it too, so a name validated by this
+// helper alone cannot accept it (V-35).
 bool is_control_character(char c)
 {
     const unsigned char byte = static_cast<unsigned char>(c);
-    return byte < 0x20u;
+    return byte < 0x20u || byte == 0x7Fu;
 }
 
 // The control character the name carries, spelled for a diagnostic.
@@ -288,6 +292,123 @@ bool fail(const std::string& label, const std::string& message,
     return false;
 }
 
+// The same diagnostic without a set to clear: the standalone validators below
+// do not own a SchemaSet, and their callers clear their own result.
+bool reject(const std::string& label, const std::string& message,
+            DiagnosticCode code, Diagnostic& error)
+{
+    error = Diagnostic();
+    error.file = label;
+    error.location = unknown_location();
+    error.message = message;
+    error.code = code;
+    return false;
+}
+
+// --- V-42: a field label must name a descriptor.proto enumerator -----------
+
+std::string message_scope(const std::string& parent,
+                          const DescriptorProto& message)
+{
+    std::string scope = parent;
+    scope += '.';
+    if (message.name.empty()) {
+        scope += "?";
+    } else {
+        scope += view_text(message.name);
+    }
+    return scope;
+}
+
+bool validate_field_label(const FieldDescriptorProto& field,
+                          const std::string& field_scope, std::size_t position,
+                          const std::string& file_name,
+                          const std::string& diagnostic_label,
+                          Diagnostic& error)
+{
+    if (!field.has_label) return true;
+    if (field.label == FieldDescriptorProto::LABEL_OPTIONAL ||
+        field.label == FieldDescriptorProto::LABEL_REQUIRED ||
+        field.label == FieldDescriptorProto::LABEL_REPEATED) {
+        return true;
+    }
+    std::ostringstream message;
+    message << "field ";
+    if (field.name.empty()) {
+        message << '#' << position;
+    } else {
+        message << '"' << view_text(field.name) << '"';
+    }
+    if (!field_scope.empty()) {
+        message << " in message \"" << field_scope << '"';
+    }
+    message << " of descriptor file \"" << file_name << "\" carries label "
+            << field.label
+            << ", which descriptor.proto does not declare (LABEL_OPTIONAL is "
+               "1, LABEL_REQUIRED is 2, LABEL_REPEATED is 3)";
+    // V-42: the chosen contract is a refusal. protoc's decoder routes an
+    // unknown enumerator of the closed Label enum to the unknown fields, so
+    // its descriptor simply carries no label; this project refuses the value
+    // instead of silently generating a field whose declared repetition the
+    // model cannot see. The identity comparator below still reads the
+    // EFFECTIVE value, because a library caller may hand it a raw descriptor.
+    return reject(diagnostic_label, message.str(), DIAGNOSTIC_GENERIC, error);
+}
+
+bool validate_message_labels(const DescriptorProto& message,
+                             const std::string& parent_scope,
+                             const std::string& file_name,
+                             const std::string& diagnostic_label,
+                             Diagnostic& error)
+{
+    const std::string scope = message_scope(parent_scope, message);
+    for (std::size_t i = 0; i < message.field.size(); ++i) {
+        if (!validate_field_label(message.field[i], scope, i, file_name,
+                                  diagnostic_label, error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < message.extension.size(); ++i) {
+        if (!validate_field_label(message.extension[i], scope, i, file_name,
+                                  diagnostic_label, error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_labels(message.nested_type[i], scope, file_name,
+                                     diagnostic_label, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_file_labels(const FileDescriptorProto& file,
+                          const std::string& diagnostic_label,
+                          Diagnostic& error)
+{
+    const std::string file_name = view_text(file.name);
+    std::string package_scope;
+    if (!file.package.empty()) {
+        package_scope = "." + view_text(file.package);
+    }
+    for (std::size_t i = 0; i < file.message_type.size(); ++i) {
+        if (!validate_message_labels(file.message_type[i], package_scope,
+                                     file_name, diagnostic_label, error)) {
+            return false;
+        }
+    }
+    // File-scope extension members (FileDescriptorProto field 7) carry a label
+    // like any other field; they have no message scope.
+    for (std::size_t i = 0; i < file.extension.size(); ++i) {
+        if (!validate_field_label(file.extension[i], std::string(), i,
+                                  file_name, diagnostic_label, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // --- structural equality of two modeled descriptors -------------------------
 //
 // `W-36` makes two containers that carry the same logical file a merge instead
@@ -311,10 +432,23 @@ bool fail(const std::string& label, const std::string& message,
 
 // An absent label is LABEL_OPTIONAL. The raw member defaults to 0, which is
 // not a label at all, so the raw value and the presence bit cannot decide
-// identity (U-07).
+// identity (U-07). The same holds for a present value outside the three
+// enumerators descriptor.proto declares: protoc's decoder routes such a value
+// to the unknown fields and the field keeps its LABEL_OPTIONAL default, so the
+// identity reads that effective value rather than the raw unknown one (V-42).
+// Ingestion refuses the value (validate_descriptor_field_labels), but this
+// comparator is public and a library caller may hand it a raw descriptor.
 int effective_label(const FieldDescriptorProto& field)
 {
-    return field.has_label ? field.label : FieldDescriptorProto::LABEL_OPTIONAL;
+    if (!field.has_label) return FieldDescriptorProto::LABEL_OPTIONAL;
+    switch (field.label) {
+        case FieldDescriptorProto::LABEL_OPTIONAL:
+        case FieldDescriptorProto::LABEL_REQUIRED:
+        case FieldDescriptorProto::LABEL_REPEATED:
+            return field.label;
+        default:
+            return FieldDescriptorProto::LABEL_OPTIONAL;
+    }
 }
 
 // A custom type is a request only when the extension group AND its `type`
@@ -594,7 +728,68 @@ bool same_descriptor(const ServiceDescriptorProto& left,
     return true;
 }
 
+// V-14: `public_dependency` and `weak_dependency` are SETS of indexes into
+// `dependency`; descriptor.proto calls them "Indexes of the public imported
+// files" and protoc writes them in whatever order the declaration produced.
+// The two containers of one logical file may therefore list the same indexes
+// in different orders without describing different files. The comparison is a
+// multiset, not a set: a repeated index is a malformed declaration the linker
+// refuses (schema.cpp), and two lists that disagree about multiplicity must
+// not look identical. The stored vectors are never sorted: their order is what
+// `--print-descriptor`, the dependency includes and the import graph read.
+bool same_dependency_indexes(const std::vector<std::int32_t>& left,
+                             const std::vector<std::int32_t>& right)
+{
+    if (left.size() != right.size()) return false;
+    const std::multiset<std::int32_t> left_indexes(left.begin(), left.end());
+    const std::multiset<std::int32_t> right_indexes(right.begin(), right.end());
+    return left_indexes == right_indexes;
+}
+
 } // namespace
+
+bool validate_descriptor_file_name(str_view name,
+                                   const std::string& diagnostic_label,
+                                   Diagnostic& error)
+{
+    const std::string logical = view_text(name);
+    // V-35: the control-character class includes DEL. The message spells the
+    // byte, so a caller that pastes a generated name into a header learns
+    // which character was refused.
+    for (std::size_t position = 0; position < logical.size(); ++position) {
+        if (!is_control_character(logical[position])) continue;
+        return reject(diagnostic_label,
+                      "logical file name \"" + logical +
+                          "\" in descriptor source \"" + diagnostic_label +
+                          "\" carries a control character (" +
+                          control_character_name(logical[position]) +
+                          " at position " +
+                          easypb::detail::number_to_string(
+                              static_cast<uint64_t>(position)) +
+                          "); a logical name cannot contain one",
+                      DIAGNOSTIC_GENERIC, error);
+    }
+    // V-18: the same rule the output publisher applies. A descriptor set is a
+    // foreign container, and its file name is used for the generated header
+    // name, the "// Source:" line and the include set; a name the publisher
+    // refuses must not pass on stdout just because stdout writes no path.
+    std::string reason;
+    if (!validate_logical_path(logical, reason)) {
+        return reject(diagnostic_label,
+                      "logical file name \"" + logical +
+                          "\" in descriptor source \"" + diagnostic_label +
+                          "\" is not a valid logical path: " + reason,
+                      DIAGNOSTIC_GENERIC, error);
+    }
+    return true;
+}
+
+bool validate_descriptor_field_labels(const FileDescriptorProto& file,
+                                     const std::string& diagnostic_label,
+                                     Diagnostic& error)
+{
+    return validate_file_labels(file, diagnostic_label, error);
+}
 
 // The syntax class the linker reads, compared by classification: an absent
 // string, an empty one and an explicit `"proto2"` are one proto2 file to
@@ -630,17 +825,20 @@ bool same_descriptor_file(const FileDescriptorProto& left,
     const FileSyntax syntax = classify_file_syntax(left);
     if (left.name != right.name || left.package != right.package ||
         !same_file_syntax(left, right) ||
-        left.dependency.size() != right.dependency.size() ||
-        left.public_dependency != right.public_dependency ||
-        left.weak_dependency != right.weak_dependency ||
+        // The import NAMES stay order-sensitive: the emitter writes one include
+        // per dependency in this order (I1), so two copies that order them
+        // differently produce different headers. Only the index lists below
+        // are sets (V-14).
+        left.dependency != right.dependency ||
+        !same_dependency_indexes(left.public_dependency,
+                                 right.public_dependency) ||
+        !same_dependency_indexes(left.weak_dependency,
+                                 right.weak_dependency) ||
         left.message_type.size() != right.message_type.size() ||
         left.enum_type.size() != right.enum_type.size() ||
         left.service.size() != right.service.size() ||
         left.extension.size() != right.extension.size()) {
         return false;
-    }
-    for (std::size_t i = 0; i < left.dependency.size(); ++i) {
-        if (left.dependency[i] != right.dependency[i]) return false;
     }
     for (std::size_t i = 0; i < left.message_type.size(); ++i) {
         if (!same_descriptor(left.message_type[i], right.message_type[i],
@@ -698,23 +896,15 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
                         DIAGNOSTIC_DUPLICATE_SYMBOL, result, error);
         }
         // The name is a logical Protobuf name, and it reaches the "// Source:"
-        // line of the generated header. A control character in it would
-        // inject arbitrary lines into that header, so the name is refused
-        // here - at the same place the empty and the duplicate names are
-        // refused, and before anything is appended, so a failed call never
-        // leaves a partial batch behind.
-        for (std::size_t position = 0; position < logical.size(); ++position) {
-            if (!is_control_character(logical[position])) continue;
-            return fail(diagnostic_label,
-                        "logical file name \"" + logical +
-                            "\" in descriptor source \"" + diagnostic_label +
-                            "\" carries a control character (" +
-                            control_character_name(logical[position]) +
-                            " at position " +
-                            easypb::detail::number_to_string(
-                                static_cast<uint64_t>(position)) +
-                            "); a logical name cannot contain one",
-                        DIAGNOSTIC_GENERIC, result, error);
+        // line of the generated header (and the output path under --out-dir).
+        // The shared rule validates it here - at the same place the empty and
+        // the duplicate names are refused, and before anything is appended, so
+        // a failed call never leaves a partial batch behind. The control-
+        // character sentence still comes from this layer, because it can name
+        // the byte and its position (V-18, V-35).
+        if (!validate_descriptor_file_name(raw_name, diagnostic_label, error)) {
+            result.clear();
+            return false;
         }
         // The nesting of the messages the file declares is bounded here, before
         // the file is copied: the copy interns every string of the tree and
@@ -722,9 +912,19 @@ bool append_descriptor_files(const std::vector<FileDescriptorProto>& files,
         // nests deeper than the limit would overflow the stack inside the
         // copy - and the copy is what a library caller hands this project.
         // The rule is the reference compiler's own (descriptor.h:3045) and the
-        // sentence is the one it uses.
+        // sentence is the one it uses. The label walk below is recursive too,
+        // so this bound must run first.
         if (!easypb_schema::validate_message_nesting_depth(files[i], logical,
                                                             error)) {
+            result.clear();
+            return false;
+        }
+        // V-42: a label outside the three descriptor.proto enumerators never
+        // enters the model. protoc's decoder routes it to the unknown fields;
+        // this project refuses it, so the generator and the merge comparator
+        // can never read one model two ways.
+        if (!validate_descriptor_field_labels(files[i], diagnostic_label,
+                                              error)) {
             result.clear();
             return false;
         }
@@ -752,7 +952,16 @@ bool append_unnamed_descriptor(const FileDescriptorProto& file,
     // StringPool::save and never enters the name index (W-57, W-18); the copy
     // is the same deep copy the named path uses, with the name rule switched
     // off.
+    //
+    // V-42 applies to this path too: the descriptor carries no name to
+    // validate, but its fields still carry labels the model must not accept
+    // out of range. The nesting bound runs first for the same reason as the
+    // named path: both the bound and the label walk are recursive.
     if (!validate_message_nesting_depth(file, identity, error)) {
+        result.clear();
+        return false;
+    }
+    if (!validate_descriptor_field_labels(file, identity, error)) {
         result.clear();
         return false;
     }

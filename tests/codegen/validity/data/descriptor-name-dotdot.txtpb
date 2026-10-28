@@ -1,0 +1,12 @@
+# A descriptor whose logical file name escapes the output root. The name is a
+# foreign container's claim, and `--out-dir` refuses it; stdout generation and
+# `--print-descriptor` must refuse it with the same rule instead of accepting
+# the name because neither writes an output path (V-18).
+file {
+  name: "../escape.proto"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    field { name: "a" number: 1 label: LABEL_OPTIONAL type: TYPE_INT32 }
+  }
+}

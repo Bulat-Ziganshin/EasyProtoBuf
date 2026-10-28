@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "popl.hpp"
+#include "descriptor_adapter.hpp"
 #include "descriptor_loader.hpp"
 #include "file_paths.hpp"
 #include "generation.hpp"
@@ -174,6 +175,25 @@ FileDescriptorSet decode_descriptor_set(const std::string& filename,
     // Refusing a multi-file set here made `--print-descriptor` unable to look
     // at the bundles protoc writes with --include_imports, while the
     // generation path never used this helper.
+    //
+    // V-18/V-42: the print door reads the same bytes the generation door
+    // reads, so it asks the same input rules. The name rule is what makes
+    // `--print-descriptor` refuse `../escape.proto` exactly as `--out-dir`
+    // does, and the label rule keeps a crafted out-of-range label from being
+    // printed as part of a model the generation door would refuse. An unnamed
+    // file has no name to validate; its label rule still applies.
+    easypb_schema::Diagnostic input_error;
+    for (std::size_t i = 0; i < set.file.size(); ++i) {
+        if (!set.file[i].name.empty() &&
+            !easypb_schema::validate_descriptor_file_name(
+                set.file[i].name, filename, input_error)) {
+            throw std::runtime_error(filename + ": " + input_error.message);
+        }
+        if (!easypb_schema::validate_descriptor_field_labels(
+                set.file[i], filename, input_error)) {
+            throw std::runtime_error(filename + ": " + input_error.message);
+        }
+    }
     return set;
 }
 #endif

@@ -84,6 +84,18 @@ keeps the explicit `false` and that the two doors print the same tree. The
 generated headers already had to be equal (the R08 row above); this row pins
 the model fact the header cannot show.
 
+Step S07 adds the descriptor-door input rules (`V-18`, `V-35`, `V-42`). The
+`descriptor-name-dotdot` row drives a logical file name that escapes the
+output root through stdout generation, `--print-descriptor` and `--out-dir`:
+all three refuse it with the shared logical-path rule, where only `--out-dir`
+used to. `descriptor-name-del` extends the control-character row to DEL
+(`0x7F`). `label-unknown` carries the label 99 a crafted descriptor can spell;
+the chosen contract is a refusal that names the field, its message scope and
+the value (protoc routes an unknown `Label` enumerator to the unknown fields),
+and the row is driven through generation and print. The accepted control is
+the `bool-default` pair used twice: two identical copies still merge into one
+header, so the label rule rejects only the out-of-range value.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -124,6 +136,9 @@ the model fact the header cannot show.
 | a field that declares no type | crafted `.pbs` | `W-10` |
 | a group field | crafted `.pbs` | `W-10` |
 | a logical name with a newline | crafted `.pbs` | `W-12` |
+| a logical name carrying DEL (`0x7F`) | crafted `.pbs` | `V-35` |
+| a logical name escaping the output root (`../escape.proto`) | crafted `.pbs` | `V-18` |
+| a field label of 99 | crafted `.pbs` | `V-42` |
 | the ERANGE float family (`1e400`, `1e-400`, `-1e-400`, `1e-320`) | `.proto` + raw `.pbs` | `W-04` |
 | numeric default spellings (`010`, `0x10`, `-0`, 64-bit extremes) | `.proto` + `.pbs` | `CR-01`/`05`/`17` |
 | descriptor float keywords (`INF`, `Infinity`, `NAN`, `nan(0x1)`) | crafted `.pbs` | `CR-02` |
@@ -404,6 +419,12 @@ with `type: TYPE_INT32` and once with `type: TYPE_SINT32`, both one-byte
 varints - asserts that the two encodings differ in exactly one byte, and
 writes 99 into that byte. The result is protoc's own encoding of the same
 descriptor with the unknown kind.
+
+`label-unknown` needs the same treatment for the closed `Label` enum
+(`V-42`): the script encodes it with `LABEL_REQUIRED` and `LABEL_REPEATED`
+(both one-byte varints), asserts the one-byte difference, and writes 99. The
+committed `.pbs` is protoc's own encoding of the same descriptor with the
+unknown label.
 
 `--check` rebuilds every fixture in memory and fails on any byte that differs
 from the committed file.

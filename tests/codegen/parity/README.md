@@ -94,6 +94,7 @@ twins live in the validity lane.
 | an enum value using a reserved name | `data/enum-reserved-name.proto` / `.pbs` | `CR-06` |
 | a MessageSet with no fields (accepted) | `data/message-set-empty.proto` / `.pbs` | `CR-23`, `U-10`/`U-12` |
 | reserved ranges/names and an extension range (accepted) | `data/retained-ranges.proto` / `.pbs` | `V-15` |
+| all three field labels (accepted) | `data/labels-ok.proto` / `.pbs` | `V-42` |
 | a MessageSet that declares a field | `data/message-set-fields.proto` / `.pbs` | `CR-23`, `U-10` |
 | a MessageSet in a proto3 file | `data/message-set-proto3.proto` / `.pbs` | `U-12` |
 | `proto3_optional` with no oneof | `data/p3opt-no-oneof.pbs` | `U-11` |
@@ -163,6 +164,14 @@ accepted pair for that rule; its two dumps must be the same bytes, and the
 driver names each declaration the source dump used to drop. The pair is also in
 the accepted-header loop, so the model change is proven not to affect the
 generated header.
+
+Step S07 adds `labels-ok` (`V-42`): a proto2 message with `optional`,
+`required` and `repeated` fields, so the accepted side of the label rule is one
+verdict on both doors and the descriptor header is compiled by the lane's
+compile check. The out-of-range value (99) has no source spelling at all:
+protoc routes it to the unknown fields, this project refuses it at ingestion,
+and the descriptor-only row that proves the refusal lives in the validity lane
+(`data/label-unknown.pbs`).
 
 Two B5 shapes were descriptor-only when the rule was written:
 
