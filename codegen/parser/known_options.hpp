@@ -49,6 +49,7 @@ enum OptionConstantKind
 // R09 (U-44): the struct carries no `repeated`/`named` flag. Those were
 // written by the parser and never read by a rule - repeatedness is decided by
 // the field provenance and a named type's kind by the shared semantic pass.
+// The `parser.unit.option_field_kind` CTest guards the absence of `repeated`.
 struct OptionFieldKind
 {
     bool has_type;

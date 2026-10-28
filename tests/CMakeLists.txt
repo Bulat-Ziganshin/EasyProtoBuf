@@ -1135,6 +1135,15 @@ if(BUILD_TESTING)
             ${PROJECT_SOURCE_DIR}/codegen/parser)
         target_link_libraries(parser_tests PRIVATE easypb_proto_parser)
         add_test(NAME parser.unit COMMAND parser_tests)
+
+        # R09 (U-44): textual guard for the removed OptionFieldKind::repeated
+        # flag. A compile-time detector was not portable to the GCC 4.7 full
+        # matrix (run 40600916122, job 122528516148); the script records why
+        # this reads the declaration instead.
+        add_test(NAME parser.unit.option_field_kind
+            COMMAND ${CMAKE_COMMAND}
+                -DHEADER=${PROJECT_SOURCE_DIR}/codegen/parser/known_options.hpp
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/codegen/parser/check_option_field_kind.cmake)
     endif()
 
     add_executable(codegen_schema_storage_test codegen/schema/test_storage.cpp)

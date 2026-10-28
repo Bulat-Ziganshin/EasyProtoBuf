@@ -34,23 +34,12 @@ const FieldDescriptorProto* find_field(const DescriptorProto& message, const cha
     return 0;
 }
 
-// R09 (U-44): `OptionFieldKind` carried a `repeated` flag that the parser
-// wrote and no rule read. The member is gone; this compile-time guard fails if
-// a write-only field-kind flag comes back.
-template <typename T, typename = void>
-struct has_repeated_member
-{
-    static const bool value = false;
-};
-
-template <typename T>
-struct has_repeated_member<T, decltype((void)T::repeated)>
-{
-    static const bool value = true;
-};
-
-static_assert(!has_repeated_member<easypb_proto::OptionFieldKind>::value,
-              "OptionFieldKind::repeated is dead machinery (R09, U-44)");
+// R09 (U-44): the removed `OptionFieldKind::repeated` flag is guarded by the
+// `parser.unit.option_field_kind` CTest, not by a compile-time detector. GCC
+// 4.7.4 does not SFINAE out the `decltype((void)T::repeated)` form, so the
+// full-matrix job failed on a detector that reported the member of a struct
+// that no longer had one (run 40600916122, job 122528516148). The guard reads
+// the declaration in `codegen/parser/known_options.hpp` instead.
 
 void test_complex_proto3()
 {
