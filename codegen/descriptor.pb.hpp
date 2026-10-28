@@ -3,6 +3,7 @@
 #ifndef EASYPB_DESCRIPTOR_PB_HPP_INCLUDED
 #define EASYPB_DESCRIPTOR_PB_HPP_INCLUDED
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -368,6 +369,39 @@ struct ServiceDescriptorProto
 // Single .proto file
 struct FileDescriptorProto
 {
+    // The complete `Edition` enum of the pinned `descriptor.proto`
+    // (descriptor.proto:68-104). Wire field 14 is a closed proto2 enum:
+    // protoc's decoder keeps a declared enumerator and routes every other
+    // value to the unknown fields (`V-26`). The test-only placeholders and
+    // `EDITION_MAX` are part of that set even though a source file cannot
+    // spell them; a crafted descriptor set can carry them, and protoc models
+    // them, so the decoder must model them too.
+    enum {
+        EDITION_UNKNOWN = 0,
+        EDITION_LEGACY = 900,
+        EDITION_PROTO2 = 998,
+        EDITION_PROTO3 = 999,
+        EDITION_2023 = 1000,
+        EDITION_2024 = 1001,
+        EDITION_1_TEST_ONLY = 1,
+        EDITION_2_TEST_ONLY = 2,
+        EDITION_99997_TEST_ONLY = 99997,
+        EDITION_99998_TEST_ONLY = 99998,
+        EDITION_99999_TEST_ONLY = 99999,
+        EDITION_MAX = 0x7FFFFFFF,
+    };
+
+    static bool is_known_edition(int32_t value)
+    {
+        return value == EDITION_UNKNOWN || value == EDITION_LEGACY ||
+               value == EDITION_PROTO2 || value == EDITION_PROTO3 ||
+               value == EDITION_2023 || value == EDITION_2024 ||
+               value == EDITION_1_TEST_ONLY || value == EDITION_2_TEST_ONLY ||
+               value == EDITION_99997_TEST_ONLY ||
+               value == EDITION_99998_TEST_ONLY ||
+               value == EDITION_99999_TEST_ONLY || value == EDITION_MAX;
+    }
+
     str_view name;
     str_view package;
     std::vector<DescriptorProto> message_type;
@@ -379,7 +413,9 @@ struct FileDescriptorProto
     // classifier consults it FIRST, mirroring `BuildFileImpl`
     // (descriptor.cc:5952-5971), so a crafted set that carries the field with
     // no syntax string is classified like the reference and not downgraded to
-    // proto2 (ledger `D-52`).
+    // proto2 (ledger `D-52`). An enumerator the pinned `descriptor.proto`
+    // does not declare never reaches this member: like protoc, the decoder
+    // routes it to the unknown fields and leaves `has_edition` false (`V-26`).
     int32_t edition = 0;
     std::vector<str_view> dependency;
     std::vector<int32_t> public_dependency;
@@ -434,6 +470,71 @@ struct DescriptorDecoder : easypb::Decoder
     explicit DescriptorDecoder(easypb::string_view view)
         : easypb::Decoder(view)
     {
+    }
+
+    // protoc's decoder bounds unknown-group nesting with the stream's recursion
+    // budget: the default is 100 levels (`CodedInputStream`,
+    // io/coded_stream.cc:87), and every START_GROUP spends one level
+    // (`WireFormat::SkipField`, wire_format.cc:98). A skipped group has no
+    // schema to bound it, so the descriptor decoder applies the same bound
+    // itself. The counter is local to ONE skip call (`V-28`): two unknown
+    // fields of one message cannot share, leak or reset each other's budget.
+    enum { MAX_SKIP_GROUP_DEPTH = 100 };
+
+    // A descriptor set has no end-of-message tag: the only legitimate end is
+    // the end of the buffer. protoc rejects field number 0 wherever the tag
+    // appears (`WireFormat::SkipField` answers "Field number 0 is illegal.",
+    // wire_format.cc:66-70), and a zero tag used to be skipped as an unknown
+    // field in the middle of a message here (`V-41`). The sentence below is
+    // protoc's own, so a script that matched the reference still matches.
+    bool get_next_field()
+    {
+        if (!easypb::Decoder::get_next_field()) return false;
+        if (field_num == 0) throw easypb::invalid_fieldnum("Invalid field number.");
+        return true;
+    }
+
+    // `Reader::skip_field` already walks an unknown group on an explicit stack
+    // instead of the C++ call stack, but the stack is unbounded (`V-28`). This
+    // override keeps that shape and adds protoc's 100-level bound. It also
+    // reads the fields INSIDE a skipped group through the tag rule above,
+    // which the runtime's own loop cannot see through `Reader::get_next_field`.
+    void skip_field()
+    {
+        if (wire_type != easypb::WIRETYPE_START_GROUP) {
+            easypb::Decoder::skip_field();
+            return;
+        }
+
+        std::vector<uint32_t> open_groups(1, field_num);
+        while (!open_groups.empty()) {
+            if (!get_next_field()) {
+                throw easypb::unexpected_eof(
+                    "Unexpected end of buffer in group field " +
+                    easypb::detail::number_to_string(open_groups.back()));
+            }
+            if (wire_type == easypb::WIRETYPE_START_GROUP) {
+                if (open_groups.size() >=
+                    static_cast<std::size_t>(MAX_SKIP_GROUP_DEPTH)) {
+                    throw easypb::invalid_fieldnum(
+                        "group nesting depth exceeds the maximum of " +
+                        easypb::detail::number_to_string(
+                            MAX_SKIP_GROUP_DEPTH) + " levels");
+                }
+                open_groups.push_back(field_num);
+            } else if (wire_type == easypb::WIRETYPE_END_GROUP) {
+                if (field_num != open_groups.back()) {
+                    throw easypb::wiretype_mismatch(
+                        "Group field " +
+                        easypb::detail::number_to_string(open_groups.back()) +
+                        " ended by field " +
+                        easypb::detail::number_to_string(field_num));
+                }
+                open_groups.pop_back();
+            } else {
+                skip_field();
+            }
+        }
     }
 
     void get_int32(int32_t* field, bool* has_field = 0)
@@ -780,7 +881,22 @@ inline void decode(DescriptorDecoder pb, FileDescriptorProto &x)
             case 10: pb.get_repeated_int32(&x.public_dependency); break;
             case 11: pb.get_repeated_int32(&x.weak_dependency); break;
             case 12: pb.get_string(&x.syntax, &x.has_syntax); break;
-            case 14: pb.get_enum  (&x.edition, &x.has_edition); break;
+            // Field 14 is a closed proto2 enum. An enumerator outside the
+            // pinned descriptor.proto's `Edition` set is an unknown field for
+            // protoc's decoder: the value stays out of the model and the file
+            // is classified from `syntax` instead (`V-26`). A declared value -
+            // including the test-only placeholders and EDITION_UNKNOWN - is
+            // modeled exactly as before.
+            case 14:
+            {
+                int32_t edition = FileDescriptorProto::EDITION_UNKNOWN;
+                pb.get_enum(&edition);
+                if (FileDescriptorProto::is_known_edition(edition)) {
+                    x.edition = edition;
+                    x.has_edition = true;
+                }
+                break;
+            }
             default: pb.skip_field();
         }
     }

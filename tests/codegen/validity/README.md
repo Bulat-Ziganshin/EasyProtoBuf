@@ -96,6 +96,16 @@ and the row is driven through generation and print. The accepted control is
 the `bool-default` pair used twice: two identical copies still merge into one
 header, so the label rule rejects only the out-of-range value.
 
+Step S08 adds the decoder's wire-level contract (`V-26`, `V-28`, `V-41`). The
+five `descriptor-wire-*` fixtures are RAW: `common/descriptor_wire.py` writes
+the bytes, because the text format validates a closed enum and has no unknown
+fields. An undeclared `edition` enumerator reads as absent and the file as
+proto2, a skipped unknown group is bounded at protoc's 100 levels, and a tag
+with field number 0 is refused with protoc's `Invalid field number.` sentence.
+All five declare the same logical file, so the accepted three must generate one
+header and print one tree, while the 101-level nest and the zero tag are
+refused on both the generation and the print door.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path

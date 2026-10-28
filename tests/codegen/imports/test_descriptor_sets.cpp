@@ -183,6 +183,37 @@ std::string dependency_merge_set(bool reversed_public, bool different_weak)
     return wire_message_field(1, file);
 }
 
+// S08 (V-26, V-28, V-41): one named proto2 file with a single optional int32
+// field. `with_edition` writes FileDescriptorProto.edition (wire field 14)
+// with `edition`; `unknown_groups` adds that many nested START_GROUP/END_GROUP
+// pairs under an undeclared FileDescriptorProto field (15), which the decoder
+// must skip; `tag_zero` writes a tag whose field number is 0 between the name
+// and the package, the mid-body shape V-41 names. The accepted spellings
+// differ only in bytes the decoder must ignore, so they decode to one model.
+std::string descriptor_wire_set(bool with_edition, std::uint64_t edition,
+                                int unknown_groups, bool tag_zero)
+{
+    std::string field = wire_text_field(1, "a");
+    field += wire_uint_field(3, 1);  // number
+    field += wire_uint_field(4, 1);  // LABEL_OPTIONAL
+    field += wire_uint_field(5, 5);  // TYPE_INT32
+    std::string message = wire_text_field(1, "M");
+    message += wire_message_field(2, field);
+
+    std::string file = wire_text_field(1, "descriptor-wire.proto");
+    if (with_edition) file += wire_uint_field(14, edition);
+    if (tag_zero) {
+        // Field number 0, varint wire type, and a zero payload.
+        file += char(0);
+        file += char(0);
+    }
+    for (int i = 0; i < unknown_groups; ++i) file += wire_tag(15, 3);
+    for (int i = 0; i < unknown_groups; ++i) file += wire_tag(15, 4);
+    file += wire_text_field(2, "p");
+    file += wire_message_field(4, message);
+    return wire_message_field(1, file);
+}
+
 // V-42: one named file with a single int32 field, and the label written in the
 // requested value. `with_label = false` is protoc's own shape for a field whose
 // label was routed to the unknown fields; a crafted container can spell 99.
@@ -1233,6 +1264,134 @@ void test_identity_reads_an_unknown_label_as_optional()
     CHECK(!easypb_schema::same_descriptor_file(protoc_written, required));
 }
 
+// S08: the decoder's wire-level contract.
+//
+// protoc's decoder treats an undeclared enumerator of the closed `Edition`
+// enum as an unknown field (V-26), bounds unknown-group nesting at 100 levels
+// (V-28), and rejects a tag with field number 0 wherever it appears (V-41).
+// The raw shapes below are the same bytes the parity and validity lanes ship,
+// written without protoc's text format (which validates the enum and has no
+// unknown fields).
+void test_decoder_wire_contract()
+{
+    // V-26: 99 is not an Edition enumerator, so it is an unknown field and the
+    // file is classified from its (absent) syntax as proto2. 2023 is not an
+    // enumerator either - the year is spelled EDITION_2023 = 1000.
+    const FileDescriptorSet edition_unknown = easypb::decode<FileDescriptorSet>(
+        descriptor_wire_set(true, 99, 0, false));
+    CHECK(edition_unknown.file.size() == 1);
+    if (edition_unknown.file.size() == 1) {
+        CHECK(!edition_unknown.file[0].has_edition);
+        CHECK(easypb_schema::classify_file_syntax(edition_unknown.file[0]) ==
+              easypb_schema::FILE_SYNTAX_PROTO2);
+    }
+
+    // The declared enumerators keep their old handling: proto2/proto3
+    // classify as themselves and EDITION_2023 stays an unsupported edition.
+    const FileDescriptorSet proto2_edition = easypb::decode<FileDescriptorSet>(
+        descriptor_wire_set(true, 998, 0, false));
+    CHECK(proto2_edition.file.size() == 1);
+    if (proto2_edition.file.size() == 1) {
+        CHECK(proto2_edition.file[0].has_edition);
+        CHECK(easypb_schema::classify_file_syntax(proto2_edition.file[0]) ==
+              easypb_schema::FILE_SYNTAX_PROTO2);
+    }
+    const FileDescriptorSet edition_2023 = easypb::decode<FileDescriptorSet>(
+        descriptor_wire_set(true, 1000, 0, false));
+    CHECK(edition_2023.file.size() == 1);
+    if (edition_2023.file.size() == 1) {
+        CHECK(edition_2023.file[0].has_edition);
+        CHECK(easypb_schema::classify_file_syntax(edition_2023.file[0]) ==
+              easypb_schema::FILE_SYNTAX_UNSUPPORTED);
+    }
+    const FileDescriptorSet year_spelling = easypb::decode<FileDescriptorSet>(
+        descriptor_wire_set(true, 2023, 0, false));
+    CHECK(year_spelling.file.size() == 1);
+    if (year_spelling.file.size() == 1) {
+        CHECK(!year_spelling.file[0].has_edition);
+        CHECK(easypb_schema::classify_file_syntax(year_spelling.file[0]) ==
+              easypb_schema::FILE_SYNTAX_PROTO2);
+    }
+
+    // The container loader accepts the unknown enumerator and keeps the model.
+    const std::string edition_path = "s08-edition-99.pbs";
+    CHECK(write_binary_file(edition_path,
+                            descriptor_wire_set(true, 99, 0, false)));
+    easypb_schema::SchemaSet set;
+    easypb_schema::Diagnostic error;
+    std::vector<std::string> inputs(1, edition_path);
+    CHECK(easypb_schema::load_descriptor_sets(inputs, set, error));
+    CHECK(set.files().size() == 1);
+    if (set.files().size() == 1) {
+        CHECK(!set.files()[0]->file.has_edition);
+        CHECK(set.files()[0]->file.message_type.size() == 1);
+    }
+    std::remove(edition_path.c_str());
+
+    // V-28: 100 open groups are the accepted boundary ...
+    const FileDescriptorSet groups_100 = easypb::decode<FileDescriptorSet>(
+        descriptor_wire_set(false, 0, 100, false));
+    CHECK(groups_100.file.size() == 1);
+    if (groups_100.file.size() == 1) {
+        CHECK(groups_100.file[0].message_type.size() == 1);
+    }
+    const std::string groups_100_path = "s08-groups-100.pbs";
+    CHECK(write_binary_file(groups_100_path,
+                            descriptor_wire_set(false, 0, 100, false)));
+    inputs.assign(1, groups_100_path);
+    set.clear();
+    error = easypb_schema::Diagnostic();
+    CHECK(easypb_schema::load_descriptor_sets(inputs, set, error));
+    CHECK(set.files().size() == 1);
+    std::remove(groups_100_path.c_str());
+
+    // ... and the 101st is refused with a sentence that names the bound.
+    bool depth_refused = false;
+    try {
+        easypb::decode<FileDescriptorSet>(
+            descriptor_wire_set(false, 0, 101, false));
+    } catch (const easypb::exception& problem) {
+        const std::string message(problem.what());
+        depth_refused = message.find(
+            "group nesting depth exceeds the maximum of 100 levels") !=
+            std::string::npos;
+    }
+    CHECK(depth_refused);
+
+    const std::string groups_101_path = "s08-groups-101.pbs";
+    CHECK(write_binary_file(groups_101_path,
+                            descriptor_wire_set(false, 0, 101, false)));
+    inputs.assign(1, groups_101_path);
+    error = easypb_schema::Diagnostic();
+    CHECK(!easypb_schema::load_descriptor_sets(inputs, set, error));
+    CHECK(set.files().empty());
+    CHECK(error.message.find(
+              "group nesting depth exceeds the maximum of 100 levels") !=
+          std::string::npos);
+    std::remove(groups_101_path.c_str());
+
+    // V-41: a zero field number in the middle of the file is a decode error,
+    // not an unknown field, and the sentence is protoc's own.
+    bool tag_refused = false;
+    try {
+        easypb::decode<FileDescriptorSet>(
+            descriptor_wire_set(false, 0, 0, true));
+    } catch (const easypb::exception& problem) {
+        tag_refused = std::string(problem.what()) == "Invalid field number.";
+    }
+    CHECK(tag_refused);
+
+    const std::string tag_path = "s08-tag-zero.pbs";
+    CHECK(write_binary_file(tag_path,
+                            descriptor_wire_set(false, 0, 0, true)));
+    inputs.assign(1, tag_path);
+    error = easypb_schema::Diagnostic();
+    CHECK(!easypb_schema::load_descriptor_sets(inputs, set, error));
+    CHECK(set.files().empty());
+    CHECK(error.message.find("Invalid field number.") != std::string::npos);
+    std::remove(tag_path.c_str());
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -1279,6 +1438,7 @@ int main(int argc, char** argv)
     test_adapter_name_rule_refuses_dotdot_and_del();
     test_adapter_rejects_an_unknown_label();
     test_identity_reads_an_unknown_label_as_optional();
+    test_decoder_wire_contract();
     test_loader_custom_type_strings_survive_the_container(fixture_dir);
 
     if (failures != 0) {

@@ -356,7 +356,12 @@ if(BUILD_TESTING)
         reserved-range-end
         reserved-range-wide
         option-value-defaults
-        bool-default)
+        bool-default
+        # S08: the accepted wire-crafted controls, generated and compiled beside
+        # the other accepted descriptor-path headers.
+        descriptor-wire-base
+        descriptor-wire-edition-unknown
+        descriptor-wire-groups-100)
 
     foreach(name ${codegen_validity_fixtures})
         add_custom_command(
@@ -411,7 +416,10 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/reserved-range-end.pb.hpp
             ${codegen_validity_descriptor_dir}/reserved-range-wide.pb.hpp
             ${codegen_validity_descriptor_dir}/option-value-defaults.pb.hpp
-            ${codegen_validity_descriptor_dir}/bool-default.pb.hpp)
+            ${codegen_validity_descriptor_dir}/bool-default.pb.hpp
+            ${codegen_validity_descriptor_dir}/descriptor-wire-base.pb.hpp
+            ${codegen_validity_descriptor_dir}/descriptor-wire-edition-unknown.pb.hpp
+            ${codegen_validity_descriptor_dir}/descriptor-wire-groups-100.pb.hpp)
 
     add_executable(codegen_validity_runtime_test
         ${codegen_validity_dir}/validity_runtime.cpp)
@@ -471,7 +479,10 @@ if(BUILD_TESTING)
             defaults-float-subnormal
             grammar-table
             option-value-defaults
-            bool-default)
+            bool-default
+            descriptor-wire-base
+            descriptor-wire-edition-unknown
+            descriptor-wire-groups-100)
         set(source ${codegen_validity_pedantic_dir}/compile-${header}.cpp)
         file(WRITE ${source} "#include \"${header}.pb.hpp\"\n")
         list(APPEND codegen_validity_pedantic_sources ${source})
@@ -806,7 +817,13 @@ if(BUILD_TESTING)
         opt-jstype-int64
         opt-jstype-unknown
         opt-lazy-message
-        opt-extrange-declaration)
+        opt-extrange-declaration
+        # S08: the wire-crafted accepted controls. All three declare the same
+        # logical file and differ only in bytes the decoder must ignore, so
+        # the compile check covers the shape once per spelling.
+        descriptor-wire-base
+        descriptor-wire-edition-unknown
+        descriptor-wire-groups-100)
     set(codegen_parity_compile_sources)
     set(codegen_parity_headers)
     foreach(name ${codegen_parity_compile_fixtures})

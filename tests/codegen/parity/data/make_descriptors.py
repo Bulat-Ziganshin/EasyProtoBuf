@@ -38,6 +38,13 @@ to the unknown fields. The fixture is encoded twice - once with `JS_STRING`
 and once with `JS_NUMBER`, whose encodings differ in exactly the one value
 byte - and 7 is written into that byte (the `field-type-unknown` pattern).
 
+The S08 wire rows are the RAW fixtures: an undeclared `edition` enumerator,
+100 and 101 nested unknown groups, and a mid-message tag with field number 0.
+None of them can be spelled in the text format (a closed enum is validated,
+and the format has no unknown fields), so `common.descriptor_wire` writes the
+bytes directly. All of them declare the same logical file, so the accepted
+ones must produce one header and one print.
+
 Usage:
 
     python tests/codegen/parity/data/make_descriptors.py [--protoc PATH] [--check]
@@ -56,7 +63,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 sys.dont_write_bytecode = True
 
 from common.descriptor_fixtures import (Fixture, build_fixtures, fail,
-                                        encode_textproto, parse_args)
+                                        encode_textproto, parse_args, write)
+from common.descriptor_wire import descriptor_wire_set
 
 # The source fixtures protoc accepts. The others are intentional refusals and
 # have no compiled half: their `.pbs` twin is encoded from the `.txtpb` beside
@@ -118,8 +126,24 @@ def patched_jstype_bytes(protoc, descriptor_dir, text):
     return first[:index] + bytes([PATCHED_JSTYPE_VALUE]) + first[index + 1:]
 
 
+# S08 (V-26, V-28, V-41): the wire-level decode shapes the text format cannot
+# carry. `descriptor-wire-base`, `descriptor-wire-edition-unknown` and
+# `descriptor-wire-groups-100` differ only in unknown bytes, so they must
+# generate one header and print one tree; the 101-level nest and the zero tag
+# are refused before generation.
+RAW_FIXTURES = (
+    ("descriptor-wire-base", descriptor_wire_set()),
+    ("descriptor-wire-edition-unknown", descriptor_wire_set(edition=99)),
+    ("descriptor-wire-groups-100", descriptor_wire_set(unknown_groups=100)),
+    ("descriptor-wire-groups-101", descriptor_wire_set(unknown_groups=101)),
+    ("descriptor-wire-tag-zero", descriptor_wire_set(tag_zero=True)),
+)
+
+
 def main():
     args = parse_args(__doc__.split("\n")[0])
+    for stem, data in RAW_FIXTURES:
+        write(os.path.join(HERE, stem + ".pbs"), data, args.check)
     return build_fixtures(HERE, FIXTURES,
                           patches={PATCHED_JSTYPE_FIXTURE:
                                    patched_jstype_bytes},

@@ -124,6 +124,11 @@ twins live in the validity lane.
 | the source `extend` of an unknown type (accepted, E6) | `data/ext-unvalidated.proto` | `CR-25`, E6 |
 | a thin set: the import is named but not carried | `data/w68-root.proto` / `.pbs` | `W-68` |
 | the imported file | `data/w68-dep.proto` / `.pbs` | `W-68` |
+| an undeclared `edition` enumerator (accepted, reads as absent) | `data/descriptor-wire-edition-unknown.pbs` | `V-26` |
+| 100 nested unknown groups (accepted) | `data/descriptor-wire-groups-100.pbs` | `V-28` |
+| 101 nested unknown groups | `data/descriptor-wire-groups-101.pbs` | `V-28` |
+| a mid-message tag with field number 0 | `data/descriptor-wire-tag-zero.pbs` | `V-41` |
+| the accepted wire control | `data/descriptor-wire-base.pbs` | S08 |
 
 The merge rows (`U-04`, `U-07`, `U-52`) are descriptor-only by construction:
 the source path reads one definition of a file, so only two containers can
@@ -132,6 +137,14 @@ orders and must produce the same header as either single container; each
 refused pair must answer "two containers carry different definitions of one
 logical file" in both orders. The `.proto` fixture cannot carry the pair, so
 the driver does not run a source half for these rows.
+
+The S08 wire rows (`descriptor-wire-*`) are RAW fixtures: they are not a
+`.proto`/`.txtpb` pair but bytes written by `common/descriptor_wire.py`, because
+the text format validates a closed enum and has no unknown fields. All five
+declare the same logical file, so the accepted three must generate one header
+and print one tree; the undeclared `edition` enumerator must be absent from the
+print (protoc routes it to the unknown fields), and the 101-level nest and the
+zero tag are refused on both the generation and the print door.
 
 Two shapes cannot be written as `.proto` source at all, and the driver says so
 where it skips the source half:

@@ -44,6 +44,13 @@ identical - the value is a four-byte varint, the fixed32 payload width - so
 every enclosing length prefix stays correct and the only difference from
 protoc's encoding is the tag and the four value bytes.
 
+The S08 wire rows are RAW fixtures: an undeclared `edition` enumerator, 100 and
+101 nested unknown groups, and a mid-message tag with field number 0. The text
+format validates a closed enum and has no unknown fields, so
+`common.descriptor_wire` writes the bytes directly. All of them declare the
+same logical file, so the accepted ones must generate one header and print one
+tree.
+
 Usage:
 
     python tests/codegen/validity/data/make_descriptors.py [--protoc PATH] [--check]
@@ -62,7 +69,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 sys.dont_write_bytecode = True
 
 from common.descriptor_fixtures import (build_fixtures,
-                                        encode_textproto, fail, parse_args)
+                                        encode_textproto, fail, parse_args,
+                                        write)
+from common.descriptor_wire import descriptor_wire_set
 
 # The source-only fixtures: protoc refuses most of them, and a generated `.pbs`
 # would either fail the script or add an unintended descriptor twin. The
@@ -228,8 +237,23 @@ def patched_label_bytes(protoc, descriptor_dir, text):
 PATCHES[PATCHED_LABEL_FIXTURE] = patched_label_bytes
 
 
+# S08 (V-26, V-28, V-41): the wire-level decode shapes the text format cannot
+# carry. The accepted copies differ only in unknown bytes, so they generate one
+# header and print one tree; the 101-level nest and the zero tag are refused on
+# both the generation and the print door.
+RAW_FIXTURES = (
+    ("descriptor-wire-base", descriptor_wire_set()),
+    ("descriptor-wire-edition-unknown", descriptor_wire_set(edition=99)),
+    ("descriptor-wire-groups-100", descriptor_wire_set(unknown_groups=100)),
+    ("descriptor-wire-groups-101", descriptor_wire_set(unknown_groups=101)),
+    ("descriptor-wire-tag-zero", descriptor_wire_set(tag_zero=True)),
+)
+
+
 def main():
     args = parse_args(__doc__.split("\n")[0])
+    for stem, data in RAW_FIXTURES:
+        write(os.path.join(HERE, stem + ".pbs"), data, args.check)
     return build_fixtures(HERE, source_only=SOURCE_ONLY_FIXTURES,
                           patches=PATCHES, check=args.check,
                           protoc=args.protoc)

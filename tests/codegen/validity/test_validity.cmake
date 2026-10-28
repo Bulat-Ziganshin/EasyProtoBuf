@@ -1626,3 +1626,91 @@ if(FULL_BUILD)
     require_contains(s05_ms_empty_src_out "message EmptyMessageSet"
         "V-25 the valid source MessageSet still prints")
 endif()
+
+# --- S08: the decoder's wire-level contract ---------------------------------
+#
+# Three shapes protoc's text format cannot spell: an `edition` enumerator the
+# pinned descriptor.proto does not declare, unknown group nests of 100 and 101
+# levels, and a tag with field number 0 in the middle of a message. The bytes
+# are built by `data/make_descriptors.py` from `common/descriptor_wire.py`; the
+# accepted fixtures declare the same logical file, so they must generate one
+# header and print one tree. The generation and the print door must agree on
+# the verdict of every copy: protoc routes an undeclared edition enumerator to
+# the unknown fields (the file then reads as proto2) and aborts on a 101st
+# group level and on field number 0 (`WireFormat::SkipField`).
+
+run_ok(wire_base_out wire_base_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/descriptor-wire-base.pbs")
+require_empty(wire_base_err "The wire-base generation stderr")
+
+foreach(name descriptor-wire-edition-unknown descriptor-wire-groups-100)
+    run_ok(wire_out wire_err
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${name}.pbs")
+    require_empty(wire_err "The ${name} generation stderr")
+    if(NOT wire_out STREQUAL wire_base_out)
+        message(FATAL_ERROR
+            "${name}: the ignored wire bytes changed the generated header")
+    endif()
+endforeach()
+
+execute_process(
+    COMMAND ${CODEGEN} --descriptor-set --print-descriptor
+        "${DATA_DIR}/descriptor-wire-base.pbs"
+    RESULT_VARIABLE wire_base_print_result
+    OUTPUT_VARIABLE wire_base_print
+    ERROR_VARIABLE wire_base_print_err)
+if(NOT wire_base_print_result EQUAL 0)
+    message(FATAL_ERROR
+        "The wire-base print failed (${wire_base_print_result}): ${wire_base_print_err}")
+endif()
+require_empty(wire_base_print_err "The wire-base print stderr")
+
+foreach(name descriptor-wire-edition-unknown descriptor-wire-groups-100)
+    execute_process(
+        COMMAND ${CODEGEN} --descriptor-set --print-descriptor
+            "${DATA_DIR}/${name}.pbs"
+        RESULT_VARIABLE wire_print_result
+        OUTPUT_VARIABLE wire_print_out
+        ERROR_VARIABLE wire_print_err)
+    if(NOT wire_print_result EQUAL 0)
+        message(FATAL_ERROR
+            "The ${name} print failed (${wire_print_result}): ${wire_print_err}")
+    endif()
+    require_empty(wire_print_err "The ${name} print stderr")
+    if(NOT wire_print_out STREQUAL wire_base_print)
+        message(FATAL_ERROR
+            "${name}: the ignored wire bytes changed the printed tree")
+    endif()
+    if(name STREQUAL "descriptor-wire-edition-unknown")
+        require_absent(wire_print_out "edition="
+            "The undeclared edition enumerator reached the printed model")
+    endif()
+endforeach()
+
+run_fail(wire_deep_out wire_deep_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/descriptor-wire-groups-101.pbs")
+require_empty(wire_deep_out "The 101-level generation stdout")
+require_contains(wire_deep_err
+    "group nesting depth exceeds the maximum of 100 levels"
+    "The 101-level generation refusal")
+
+run_fail(wire_deep_print_out wire_deep_print_err
+    ${CODEGEN} --descriptor-set --print-descriptor
+    "${DATA_DIR}/descriptor-wire-groups-101.pbs")
+require_empty(wire_deep_print_out "The 101-level print stdout")
+require_contains(wire_deep_print_err
+    "group nesting depth exceeds the maximum of 100 levels"
+    "The 101-level print refusal")
+
+run_fail(wire_tag_out wire_tag_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/descriptor-wire-tag-zero.pbs")
+require_empty(wire_tag_out "The tag-zero generation stdout")
+require_contains(wire_tag_err "Invalid field number."
+    "The tag-zero generation refusal")
+
+run_fail(wire_tag_print_out wire_tag_print_err
+    ${CODEGEN} --descriptor-set --print-descriptor
+    "${DATA_DIR}/descriptor-wire-tag-zero.pbs")
+require_empty(wire_tag_print_out "The tag-zero print stdout")
+require_contains(wire_tag_print_err "Invalid field number."
+    "The tag-zero print refusal")
