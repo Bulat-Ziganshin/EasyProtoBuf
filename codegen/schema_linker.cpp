@@ -386,6 +386,14 @@ bool link_compatibility(SchemaSet& files, LinkedSchema& result,
         return false;
     }
 
+    // V-09: extension members decoded from the set are validated against the
+    // resolved extendee. The source door still discards its bodies with the
+    // E6 warning; this is the descriptor half of the same frontend parity.
+    if (!validate_extension_fields(file, linked.symbols,
+                                   linked.visible_files[&file], error)) {
+        return false;
+    }
+
     // W-58: the flag names the one thing a link result can say about its
     // input - whether the link rested on local information alone. Any
     // null-target edge produced above or any permitted external reference
@@ -523,6 +531,19 @@ bool link_schema(SchemaSet& files, LinkMode mode,
         if (!resolve_file(*ordered[i], linked.symbols,
                           linked.visible_files[ordered[i]],
                           /*allow_unresolved=*/false, error)) {
+            return false;
+        }
+    }
+
+    // Stage 5a (V-09): extension members decoded from a descriptor are
+    // validated after resolution, because their rules read the resolved
+    // extendee (its declared ranges and its MessageSet option). The source door
+    // keeps extension bodies out of the model with the E6 warning, so a file
+    // carrying no member is untouched.
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        if (!validate_extension_fields(*ordered[i], linked.symbols,
+                                       linked.visible_files[ordered[i]],
+                                       error)) {
             return false;
         }
     }

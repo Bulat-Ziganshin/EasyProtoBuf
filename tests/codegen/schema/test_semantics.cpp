@@ -2023,6 +2023,66 @@ void test_rule_resolve_field_type_out_parameters()
     }
 }
 
+void test_rule_map_value_enum_must_start_at_zero()
+{
+    // V-06: protoc's `ValidateMapEntry` value clause
+    // (descriptor.cc:8506-8512) requires the map value enum's first value to be
+    // zero. The check needs the resolved kind, so it rides the field-encoding
+    // pass; both the refusal and the zero-first control are asked here.
+    for (int first_value = 0; first_value < 2; ++first_value) {
+        easypb_schema::SchemaFile file;
+        file.file.package = file.strings.save("p");
+        file.file.has_package = true;
+
+        EnumDescriptorProto enumeration;
+        enumeration.name = file.strings.save("E");
+        enumeration.has_name = true;
+        EnumValueDescriptorProto zero;
+        zero.name = file.strings.save("FOO");
+        zero.has_name = true;
+        zero.number = first_value;
+        zero.has_number = true;
+        enumeration.value.push_back(zero);
+        file.file.enum_type.push_back(enumeration);
+
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto entry;
+        entry.name = file.strings.save("MEntry");
+        entry.has_name = true;
+        entry.options.has_map_entry = true;
+        entry.options.map_entry = true;
+        entry.has_options = true;
+        entry.field.push_back(make_scalar_field(
+            file, "key", 1, FieldDescriptorProto::TYPE_STRING));
+        FieldDescriptorProto value = make_scalar_field(
+            file, "value", 2, FieldDescriptorProto::TYPE_ENUM);
+        value.type_name = file.strings.save(".p.E");
+        value.has_type_name = true;
+        entry.field.push_back(value);
+        message.nested_type.push_back(entry);
+        message.field.push_back(
+            make_named_field(file, "m", 1, ".p.M.MEntry", true));
+        file.file.message_type.push_back(message);
+
+        easypb_schema::SymbolIndex symbols;
+        easypb_schema::Diagnostic error;
+        CHECK(easypb_schema::index_file(file, symbols, error));
+        std::set<const easypb_schema::SchemaFile*> visible;
+        visible.insert(&file);
+        const bool accepted = easypb_schema::resolve_file(
+            file, symbols, visible, true, error);
+        CHECK(accepted == (first_value == 0));
+        if (!accepted) {
+            CHECK(error.message.find(
+                      "Enum value in map must define 0 as the first value.") !=
+                  std::string::npos);
+        }
+    }
+}
+
+
 void test_rule_message_map_entries_directly()
 {
     // A map-entry message with no key/value fields is refused.
@@ -3153,6 +3213,95 @@ void test_descriptor_field_options_are_decoded(const std::string& fixture_dir)
     }
 }
 
+// V-09: extension members decoded from a descriptor are validated after
+// resolution. The three shapes protoc refuses are asked here; the valid set is
+// accepted and records the E6 warning the source door already emits.
+void test_rule_extension_members_are_validated()
+{
+    // (a) No extendee: protoc's own sentence.
+    {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = set.add_file("no-extendee.pbs");
+        file.physical_name.clear();
+        file.from_descriptor_set = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        FieldDescriptorProto member;
+        member.name = file.strings.save("e");
+        member.has_name = true;
+        member.number = 100;
+        member.has_number = true;
+        member.label = FieldDescriptorProto::LABEL_OPTIONAL;
+        member.has_label = true;
+        member.type = FieldDescriptorProto::TYPE_INT32;
+        member.has_type = true;
+        message.extension.push_back(member);
+        file.file.message_type.push_back(message);
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        CHECK(!easypb_schema::link_schema(
+            set, easypb_schema::LINK_COMPLETE, linked, error));
+        CHECK(error.message.find(
+                  "FieldDescriptorProto.extendee not set for extension field.") !=
+              std::string::npos);
+    }
+    // (b) One tag outside the extendee's range, and (c) the accepted control
+    // with the tag inside it. The same file shape differs only in the number.
+    for (int valid = 0; valid < 2; ++valid) {
+        easypb_schema::SchemaSet set;
+        easypb_schema::SchemaFile& file = set.add_file("ext-member.pbs");
+        file.physical_name.clear();
+        file.from_descriptor_set = true;
+        DescriptorProto message;
+        message.name = file.strings.save("M");
+        message.has_name = true;
+        DescriptorProto_ExtensionRange range;
+        range.start = 100;
+        range.end = 200;
+        range.has_start = true;
+        range.has_end = true;
+        message.extension_range.push_back(range);
+        FieldDescriptorProto member;
+        member.name = file.strings.save("e");
+        member.has_name = true;
+        member.number = valid ? 100 : 5;
+        member.has_number = true;
+        member.label = FieldDescriptorProto::LABEL_OPTIONAL;
+        member.has_label = true;
+        member.type = FieldDescriptorProto::TYPE_INT32;
+        member.has_type = true;
+        member.extendee = file.strings.save(".p.M");
+        member.has_extendee = true;
+        message.extension.push_back(member);
+        file.file.message_type.push_back(message);
+        file.file.package = file.strings.save("p");
+        file.file.has_package = true;
+
+        easypb_schema::LinkedSchema linked;
+        easypb_schema::Diagnostic error;
+        const bool accepted = easypb_schema::link_schema(
+            set, easypb_schema::LINK_COMPLETE, linked, error);
+        CHECK(accepted == (valid != 0));
+        if (!accepted) {
+            CHECK(error.message.find(
+                      "\"p.M\" does not declare 5 as an extension number.") !=
+                  std::string::npos);
+        } else {
+            bool warned = false;
+            for (std::size_t i = 0; i < file.warnings.size(); ++i) {
+                if (file.warnings[i].message ==
+                    "extend declaration parsed but not stored by the trimmed "
+                    "FileDescriptorProto model") {
+                    warned = true;
+                }
+            }
+            CHECK(warned);
+        }
+    }
+}
+
 // U-22: the extension range's `verification` and `declaration` list are
 // decoded, and the four combinations protoc refuses are refused by
 // `validate_extension_ranges`. The accepted control also proves the adapter
@@ -3227,6 +3376,16 @@ void test_descriptor_extension_range_options_are_decoded(
         {"opt-extrange-decl-bad-number", "names a number outside the range"},
         {"opt-extrange-decl-duplicate", "is declared more than once"},
         {"opt-extrange-decl-partial", "must set both"},
+        // V-07: the four clauses U-22 left out.
+        {"opt-extrange-decl-name-duplicate",
+         "Extension field name \".opt.ext\" is declared multiple times."},
+        {"opt-extrange-decl-name-no-dot",
+         "\"opt.ext\" must have a leading dot to indicate the fully-qualified "
+         "scope."},
+        {"opt-extrange-decl-name-invalid",
+         "\".opt ext\" contains invalid identifiers."},
+        {"opt-extrange-decl-type-invalid",
+         "\".opt Ext\" contains invalid identifiers."},
     };
     for (std::size_t i = 0; i < sizeof(conflicts) / sizeof(conflicts[0]); ++i) {
         std::string bytes;
@@ -3401,6 +3560,7 @@ int main(int argc, char** argv)
     test_rule_method_endpoint_kinds();
     test_rule_resolve_field_type_out_parameters();
     test_rule_message_map_entries_directly();
+    test_rule_map_value_enum_must_start_at_zero();
     test_rule_message_symbol_names_directly();
     test_rule_message_enum_value_numbers_directly();
     test_rule_reserved_declarations_directly();
@@ -3413,6 +3573,7 @@ int main(int argc, char** argv)
     test_descriptor_decode_rejects_a_wrong_wire_type(fixture_dir);
     test_descriptor_field_options_are_decoded(fixture_dir);
     test_descriptor_extension_range_options_are_decoded(fixture_dir);
+    test_rule_extension_members_are_validated();
     test_descriptor_optional_and_oneof_rules(fixture_dir);
 
     if (failures != 0) {

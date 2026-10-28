@@ -87,16 +87,25 @@ void intern_enum(StringPool& strings, EnumDescriptorProto& enum_type)
     }
 }
 
+void intern_field(StringPool& strings, FieldDescriptorProto& field)
+{
+    field.name = intern_text(strings, field.name);
+    field.type_name = intern_text(strings, field.type_name);
+    // V-09: the extendee is a retained string like the type name. An
+    // extension member is the only field that carries one, and the extension
+    // sweep reads it after the caller's decode buffer is gone.
+    field.extendee = intern_text(strings, field.extendee);
+    field.default_value = intern_text(strings, field.default_value);
+    field.json_name = intern_text(strings, field.json_name);
+    field.options.cpp.type = intern_text(strings, field.options.cpp.type);
+}
+
 void intern_message(StringPool& strings, DescriptorProto& message)
 {
     message.name = intern_text(strings, message.name);
     for (std::size_t i = 0; i < message.field.size(); ++i) {
         FieldDescriptorProto& field = message.field[i];
-        field.name = intern_text(strings, field.name);
-        field.type_name = intern_text(strings, field.type_name);
-        field.default_value = intern_text(strings, field.default_value);
-        field.json_name = intern_text(strings, field.json_name);
-        field.options.cpp.type = intern_text(strings, field.options.cpp.type);
+        intern_field(strings, field);
 
         // W-04: the reference compiler's descriptor builder rewrites the
         // out-of-range spellings `strtod` reports, so a hand-written `.pbs`
@@ -142,6 +151,11 @@ void intern_message(StringPool& strings, DescriptorProto& message)
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
         intern_message(strings, message.nested_type[i]);
     }
+    // V-09: the extension members decoded from field 6 are retained strings
+    // too, including their extendee.
+    for (std::size_t i = 0; i < message.extension.size(); ++i) {
+        intern_field(strings, message.extension[i]);
+    }
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
         intern_enum(strings, message.enum_type[i]);
     }
@@ -181,6 +195,10 @@ void intern_file_descriptor(StringPool& strings, FileDescriptorProto& file)
     }
     for (std::size_t i = 0; i < file.message_type.size(); ++i) {
         intern_message(strings, file.message_type[i]);
+    }
+    // V-09: file-scope extension members (FileDescriptorProto field 7).
+    for (std::size_t i = 0; i < file.extension.size(); ++i) {
+        intern_field(strings, file.extension[i]);
     }
     for (std::size_t i = 0; i < file.enum_type.size(); ++i) {
         intern_enum(strings, file.enum_type[i]);
@@ -334,6 +352,7 @@ bool same_descriptor(const FieldDescriptorProto& left,
            effective_label(left) == effective_label(right) &&
            left.type == right.type &&
            left.type_name == right.type_name &&
+           left.extendee == right.extendee &&
            canonical_default_text(left) == canonical_default_text(right) &&
            left.oneof_index == right.oneof_index &&
            effective_json_name(left) == effective_json_name(right) &&
@@ -367,6 +386,7 @@ bool same_descriptor(const FieldDescriptorProto& left,
            left.has_number == right.has_number &&
            left.has_type == right.has_type &&
            left.has_type_name == right.has_type_name &&
+           left.has_extendee == right.has_extendee &&
            left.has_default_value == right.has_default_value &&
            left.has_oneof_index == right.has_oneof_index;
 }
@@ -497,13 +517,13 @@ bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right,
                      FileSyntax syntax)
 {
     if (left.name != right.name || left.has_name != right.has_name ||
-        left.extension_count != right.extension_count ||
         !same_descriptor(left.options, right.options) ||
         left.field.size() != right.field.size() ||
         left.nested_type.size() != right.nested_type.size() ||
         left.enum_type.size() != right.enum_type.size() ||
         left.oneof_decl.size() != right.oneof_decl.size() ||
         left.extension_range.size() != right.extension_range.size() ||
+        left.extension.size() != right.extension.size() ||
         left.reserved_range.size() != right.reserved_range.size() ||
         left.reserved_name.size() != right.reserved_name.size()) {
         return false;
@@ -524,6 +544,11 @@ bool same_descriptor(const DescriptorProto& left, const DescriptorProto& right,
     }
     for (std::size_t i = 0; i < left.extension_range.size(); ++i) {
         if (!same_descriptor(left.extension_range[i], right.extension_range[i])) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < left.extension.size(); ++i) {
+        if (!same_descriptor(left.extension[i], right.extension[i], syntax)) {
             return false;
         }
     }
@@ -610,7 +635,8 @@ bool same_descriptor_file(const FileDescriptorProto& left,
         left.weak_dependency != right.weak_dependency ||
         left.message_type.size() != right.message_type.size() ||
         left.enum_type.size() != right.enum_type.size() ||
-        left.service.size() != right.service.size()) {
+        left.service.size() != right.service.size() ||
+        left.extension.size() != right.extension.size()) {
         return false;
     }
     for (std::size_t i = 0; i < left.dependency.size(); ++i) {
@@ -627,6 +653,11 @@ bool same_descriptor_file(const FileDescriptorProto& left,
     }
     for (std::size_t i = 0; i < left.service.size(); ++i) {
         if (!same_descriptor(left.service[i], right.service[i])) return false;
+    }
+    for (std::size_t i = 0; i < left.extension.size(); ++i) {
+        if (!same_descriptor(left.extension[i], right.extension[i], syntax)) {
+            return false;
+        }
     }
     return true;
 }

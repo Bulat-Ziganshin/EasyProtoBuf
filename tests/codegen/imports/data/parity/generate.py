@@ -853,9 +853,10 @@ EXTRA_CASES = [
                       'LABEL_OPTIONAL type: TYPE_INT32 extendee: ".p.Plain" }'
                       '\n  }\n'),
         note="protoc REFUSES this shape (the extendee declares no such "
-             "extension number) and this linker LINKS it: clause 12 keeps "
-             "extension metadata out of the model, so the disagreement has no "
-             "kind and cannot be a row - fix round r26, recorded divergence"),
+             "extension number) and, since V-09, the linker refuses it too; "
+             "the refusal answers DIAGNOSTIC_GENERIC, so it stays a probe "
+             "rather than a row - fix round r26 recorded divergence, closed "
+             "by V-09"),
     descriptor_probe_case(
         "probe-descriptor-bytes-default-unknown-escape",
         file_block("root.proto",

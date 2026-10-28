@@ -1,6 +1,5 @@
-# CR-25 (accepted, E6): an extension member with no extendee. The model counts
-# DescriptorProto.extension and decodes no member, so nothing asks whether the
-# extendee is present; protoc 30.1 refuses the bytes
+# V-09: an extension member with no extendee. The decoder now reads the member
+# and both linking modes refuse it; protoc 30.1 refuses the same bytes
 # ("FieldDescriptorProto.extendee not set for extension field.").
 file {
   name: "ext-member-no-extendee.proto"

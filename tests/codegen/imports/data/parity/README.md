@@ -260,13 +260,14 @@ Nothing is asserted about message text.
   proto3 group, a repeated field's explicit default and a repeated or required
   member of a oneof are refused here with `DIAGNOSTIC_GENERIC` - a
   kind-independent answer, and a row may not name `GENERIC` - while `protoc`
-  refuses them too. The sixth, `probe-descriptor-plain-extension-member`, is
-  the one measured shape whose disagreement has **no code at all**: `protoc`
-  refuses an extension number the extendee does not declare, and this linker
-  links it (clause 12 keeps extension metadata out of the model). The last
-  four are `r25`'s bytes-default escape shapes (`D-58`): an unknown letter, a
-  trailing backslash and an octal escape over 255 are refused by both sides
-  (the refusal here answering `DIAGNOSTIC_GENERIC`), and
+  refuses them too. The sixth, `probe-descriptor-plain-extension-member`, used
+  to be the one measured shape whose disagreement had no code at all: `protoc`
+  refused an extension number the extendee did not declare while this linker
+  linked it. Since `V-09` the member is decoded and validated, so both readers
+  refuse it (still with `DIAGNOSTIC_GENERIC`, so it remains a probe rather than
+  a row). The last four are `r25`'s bytes-default escape shapes (`D-58`): an
+  unknown letter, a trailing backslash and an octal escape over 255 are refused
+  by both sides (the refusal here answering `DIAGNOSTIC_GENERIC`), and
   `probe-descriptor-bytes-default-string-twin` is their accept control - a
   STRING default is not C-unescaped on either side. Each probe is measured by
   the builder on every run and re-encoded by `run.py`'s probe sweep, so the

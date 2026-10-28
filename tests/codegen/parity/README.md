@@ -109,11 +109,17 @@ twins live in the validity lane.
 | `lazy = true` on a scalar | `data/opt-lazy-int32.proto` / `.pbs` | `U-13` |
 | `unverified_lazy = true` on a scalar | `data/opt-unverified-lazy-int32.proto` / `.pbs` | `U-13` |
 | an extension declaration list (accepted) | `data/opt-extrange-declaration.proto` / `.pbs` | `U-22` |
+| the same declaration `full_name` in two ranges | `data/opt-extrange-decl-name-duplicate.pbs` | `V-07` |
+| a declaration `full_name` without the leading dot | `data/opt-extrange-decl-name-no-dot.pbs` | `V-07` |
+| a declaration `full_name` with an invalid identifier | `data/opt-extrange-decl-name-invalid.pbs` | `V-07` |
+| a declaration `type` with an invalid identifier | `data/opt-extrange-decl-type-invalid.pbs` | `V-07` |
 | `UNVERIFIED` beside a declaration | `data/opt-extrange-unverified.proto` / `.pbs` | `U-22` |
 | a declaration number outside the range | `data/opt-extrange-decl-bad-number.pbs` | `U-22` |
 | one number declared twice | `data/opt-extrange-decl-duplicate.pbs` | `U-22` |
 | a declaration with only `full_name` | `data/opt-extrange-decl-partial.pbs` | `U-22` |
-| extension declarations are not validated (xfail) | `data/ext-member-*.pbs`, `data/ext-unvalidated.proto` | `CR-25`, E6 |
+| an extension member with no extendee | `data/ext-member-no-extendee.pbs` | `V-09` |
+| an extension member outside the declared range | `data/ext-member-out-of-range.pbs` | `V-09` |
+| the source `extend` of an unknown type (accepted, E6) | `data/ext-unvalidated.proto` | `CR-25`, E6 |
 | a thin set: the import is named but not carried | `data/w68-root.proto` / `.pbs` | `W-68` |
 | the imported file | `data/w68-dep.proto` / `.pbs` | `W-68` |
 
@@ -194,12 +200,21 @@ Three `ExtensionRangeOptions` shapes are descriptor-only:
   option conflict both doors model: the parser refuses it as text and the
   descriptor sweep refuses the decoded pair.
 
-The accepted `CR-25` decision is the lane's one xfail, and it is a separate
-test: `codegen.parity.extensions_not_validated` asserts that an extension
-member with no extendee, one outside the declared range, and a source
-`extend` of an unknown type are still accepted. It passes while the accepted
-decision stands and fails when extensions become validated, which is the
-re-evaluation trigger in `triage.md`.
+The `V-07` declaration clauses are descriptor-only by construction: `U-22`'s
+accepted control already explains why the source door keeps the aggregate
+option body opaque (E13), so protoc's four extra declaration checks run only on
+the decoded list. The accepted control stays `opt-extrange-declaration`.
+
+`V-09` moved the descriptor door's extension members out of the accepted
+register. The decoder reads `DescriptorProto.extension` and
+`FileDescriptorProto.extension`, and the link validates each member: a missing
+extendee and a tag outside the extendee's declared range are refused with
+protoc's sentence, an extension of a MessageSet is an optional message, and a
+valid set records the E6 warning. The source door still parses an `extend` body
+as text and discards it, so `ext-unvalidated.proto` (an unknown extendee)
+remains the accepted `CR-25`/E6 row. The separate test
+`codegen.parity.extensions_validated` asserts both halves: the two descriptor
+refusals and the source acceptance.
 
 ## The documented divergences
 

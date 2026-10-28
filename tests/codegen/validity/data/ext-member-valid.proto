@@ -1,0 +1,15 @@
+// V-09 accept control: a proto2 extension whose tag is inside its extendee's
+// declared range and whose shape is legal. Both doors accept it and emit the
+// recorded E6 warning, because extension members are validated but still not
+// emitted.
+syntax = "proto2";
+
+package extvalid;
+
+message M {
+  extensions 100 to 200;
+}
+
+extend M {
+  optional int32 e = 100;
+}

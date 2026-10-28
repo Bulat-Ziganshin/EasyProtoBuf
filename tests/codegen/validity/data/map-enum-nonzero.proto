@@ -1,0 +1,17 @@
+// V-06: a proto2 map whose enum value type starts at 1. protoc 30.1 refuses
+// it with "Enum value in map must define 0 as the first value." because a
+// missing map entry is materialized as value{}. The descriptor twin is crafted
+// from map-enum-nonzero.txtpb: protoc cannot write a descriptor for a schema
+// it refuses.
+syntax = "proto2";
+
+package mapenum;
+
+enum E {
+  FOO = 1;
+  BAR = 2;
+}
+
+message M {
+  map<string, E> m = 1;
+}

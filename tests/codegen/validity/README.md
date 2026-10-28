@@ -53,6 +53,13 @@ an aggregate (message-shaped) value names the kind defect, and a well-typed
 `true` keeps the `map_entry` sentence. The W-42 suffix is asserted on both
 doors and in both `allow_alias` branches.
 
+Step S03 adds the map value-enum rule (`V-06`) and the descriptor-door
+extension member rules (`V-09`): a proto2 map whose value enum does not start
+at zero is refused on both doors with protoc's sentence, the zero-first control
+is accepted, a legal extension member is accepted on both doors with the E6
+warning, and a member whose tag is inside the protocol-reserved block is
+refused with the source door's own sentence.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -149,6 +156,10 @@ doors and in both `allow_alias` branches.
 | a reserved number above 536870912 and a range to 2147483646 (accepted) | `.proto` + `.pbs` | `V-03` |
 | enum values named `true`/`false`/`inf`/`nan` used as defaults (accepted) | `.proto` + `.pbs` | `V-04` |
 | MessageSet extension ranges above 536870911 (accepted) | `.proto` + `.pbs` | `V-05` |
+| a proto2 map with a zero-first enum value (accepted) | `.proto` + `.pbs` | `V-06` |
+| a proto2 map whose enum value type starts at 1 (refused) | `.proto` + crafted `.pbs` | `V-06` |
+| an extension member with a protocol-reserved tag (refused on both paths) | `.proto` + crafted `.pbs` | `V-09` |
+| a valid extension member (accepted on both paths, E6 warning) | `.proto` + `.pbs` | `V-09` |
 | a bare `;` inside a oneof (refused) | `.proto` only | `V-08` |
 | a package-local proto3 `extend FileOptions` (accepted) | `.proto` only | `V-12` |
 | an empty and a semicolon-only `extend` body (refused) | `.proto` only | `V-17` |
@@ -196,19 +207,20 @@ only inside that set.
 - `W-07`: a source field always declares a type (or a deferred type name), so
   the absent-type shape is descriptor-only; `W-10`'s decision is the rule that
   refuses it.
-- `U-25`: an extension field is a source construct this model does not decode
-  from a `.pbs` (the descriptor door counts extension members without reading
-  them, exception E6), so both the refusal and the equal-spelling control exist
-  only as `.proto` text.
+- `U-25`: the extension `json_name` rule is a source-text option rule. The
+  descriptor door decodes extension members since `V-09`, but it validates
+  their extendee/tag/MessageSet shape, not their options, so both the refusal
+  and the equal-spelling control exist only as `.proto` text.
 - `V-08`, `V-17`: a bare `;` inside a oneof and an empty or semicolon-only
   `extend` body are statement-grammar shapes. protoc refuses them, so it cannot
   write a descriptor, and a `.pbs` has no statement grammar to carry them; the
   source door owns both refusals.
 - `V-12`: the proto3 `extend` allowlist compares the resolved extendee name
-  (`ValidateProto3Field`, `descriptor.cc:7907-7911`). The trimmed model neither
-  stores nor decodes extension members (E6), so a `.pbs` cannot carry the
-  declaration; the fixture uses an imported stand-in for
-  `google.protobuf.FileOptions` and is driven through the source door only.
+  (`ValidateProto3Field`, `descriptor.cc:7907-7911`). The descriptor door
+  decodes extension members since `V-09`, but the allowlist remains a
+  source-text rule there, so a `.pbs` cannot witness it; the fixture uses an
+  imported stand-in for `google.protobuf.FileOptions` and is driven through the
+  source door only.
 
 ## The default-value family (B3)
 

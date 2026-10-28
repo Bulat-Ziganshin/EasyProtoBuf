@@ -173,8 +173,28 @@ one reference-free sweep answers both doors (`U-10`, `U-12`):
   `ValidateExtensionRangeOptions`, `descriptor.cc:8385-8404`). An ordinary
   message keeps the `536870911` cap, and the source door applies it after the
   message body because the option may follow the range it widens. Extension
-  *members* inside `extend` stay outside the model (E6), so their tags are
-  accepted up to `2147483646` without resolving the extendee's ranges.
+  *members* are still discarded by the source parser (E6), so a source tag is
+  accepted up to `2147483646` without resolving the extendee's ranges; the
+  descriptor door decodes and validates the member (`V-09`), so a MessageSet
+  extension there must be an optional message and its tag must lie inside a
+  declared range.
+
+### The map value enum rule on both doors (V-06)
+
+protoc refuses a map whose value type is an enum that does not define `0` as
+its first value (`ValidateMapEntry`, `descriptor.cc:8506-8512`):
+
+```text
+Enum value in map must define 0 as the first value.
+```
+
+The reason is the runtime shape: a missing map entry is materialized as
+`value{}`, and zero is the only enum value guaranteed to exist. EasyProtoBuf
+asks the same question after the value field's type resolves, on both doors,
+and refuses the schema with protoc's sentence. The first-value rule is about
+the enum definition, not about its syntax: a proto2 map over a zero-first
+proto2 enum is accepted, and the `codegen.validity` lane pins the accepted
+control and the refusal.
 
 The source door records the option statement's position, so its refusal points
 at the declaration that contradicts the rule; the descriptor door has no
@@ -208,21 +228,32 @@ refused, so `packed = false` on a map is accepted (`U-08`).
 
 ### The descriptor door's extension range options
 
-`ExtensionRangeOptions` is decoded too, and four combinations protoc refuses
-are refused (`U-22`):
+`ExtensionRangeOptions` is decoded too, and the combinations protoc refuses
+are refused (`U-22`, `V-07`):
 
 - an explicit `verification = UNVERIFIED` beside a non-empty `declaration`
   list (`cannot be marked UNVERIFIED while it has extension declarations`);
 - a declaration number outside its own range;
 - the same number declared twice in one range;
 - a declaration that sets only one of `full_name`/`type` without being a
-  `reserved` tombstone.
+  `reserved` tombstone;
+- the same `full_name` in two declarations of one message, even across two
+  different ranges (`Extension field name "..." is declared multiple times.`);
+- a `full_name` without the leading dot (`"..." must have a leading dot to
+  indicate the fully-qualified scope.`);
+- a `full_name` whose components are not valid identifiers (`"..." contains
+  invalid identifiers.`);
+- a named `type` whose spelling is not a valid fully-qualified identifier
+  (same sentence). The scalar spellings `double`, `float`, `int32`, `int64`,
+  `uint32`, `uint64`, `sint32`, `sint64`, `fixed32`, `fixed64`, `sfixed32`,
+  `sfixed64`, `bool`, `string`, `bytes` and `enum` are exempt without a dot,
+  exactly as protoc's `IsNonMessageType` exempts them.
 
 `descriptor.proto` marks `declaration` and `verification`
 `[retention = RETENTION_SOURCE]`, so a descriptor written by protoc
 `--descriptor_set_out` carries neither; the rules apply to a hand-written
 `.pbs`, which is the input shape they exist for. The source door keeps an
-aggregate option body opaque (exception `E13`), so these four are descriptor
+aggregate option body opaque (exception `E13`), so these are descriptor
 rules.
 
 A parenthesized custom option is deliberately opaque. Its defining extension
@@ -279,16 +310,28 @@ D-01): an empty or semicolon-only body is a syntax error with protoc's
 sentence `Expected "required", "optional", or "repeated".`, and only a
 non-empty valid block emits the recorded E6 warning `extend declaration
 parsed but not stored by the trimmed FileDescriptorProto model`; generation
-continues, as it always has on the proto2 path. The descriptor door counts
-extension members without decoding them (E6), so no verdict depends on the
-declaration's content, and an extension tag is accepted up to
-`2147483646` (`V-05`) because the extendee's ranges are not resolved here.
+continues, as it always has on the proto2 path.
+
+The two doors no longer share one blind spot (`V-09`). The source parser still
+validates an `extend` body as text and discards it, so a source tag is accepted
+up to `2147483646` (`V-05`), an unknown extendee stays accepted with the E6
+warning, and no range, duplicate or MessageSet question can be asked. The
+descriptor door decodes every member now (`DescriptorProto.extension` and
+`FileDescriptorProto.extension`) and validates it after resolution:
+the extendee is present and resolves to a message, the tag lies inside one of
+that extendee's declared extension ranges, the tag is neither `0` nor inside
+`19000..19999`, one extendee cannot use the same tag twice in one file, and an
+extension of a MessageSet must be an optional message. A valid descriptor set
+is still not emitted, so it records the same E6 warning the source door
+records; an invalid one is refused with protoc's sentence (or with the source
+parser's tag sentences where the two doors share one rule).
 
 A `json_name` on an extension field must equal the name derived from the field
 name (`custom_name` -> `customName`). A different spelling is refused with the
 reference compiler's sentence `option json_name is not allowed on extension
-fields.`; the equal spelling stays accepted. This is a source-text rule, because
-the descriptor door does not decode extension fields.
+fields.`; the equal spelling stays accepted. This is a source-text rule: the
+descriptor door decodes extension members for the V-09 rules above, but it does
+not validate their options.
 
 ### Aggregate option bodies are brace-balanced only
 

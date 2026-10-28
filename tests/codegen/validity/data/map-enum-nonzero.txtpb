@@ -1,0 +1,40 @@
+# V-06: the descriptor twin of map-enum-nonzero.proto. The enum's first value
+# is 1, not 0, so both doors must refuse the map value type with protoc's
+# sentence "Enum value in map must define 0 as the first value.".
+file {
+  name: "map-enum-nonzero.proto"
+  package: "mapenum"
+  syntax: "proto2"
+  enum_type {
+    name: "E"
+    value { name: "FOO" number: 1 }
+    value { name: "BAR" number: 2 }
+  }
+  message_type {
+    name: "M"
+    nested_type {
+      name: "MEntry"
+      field {
+        name: "key"
+        number: 1
+        label: LABEL_OPTIONAL
+        type: TYPE_STRING
+      }
+      field {
+        name: "value"
+        number: 2
+        label: LABEL_OPTIONAL
+        type: TYPE_ENUM
+        type_name: ".mapenum.E"
+      }
+      options { map_entry: true }
+    }
+    field {
+      name: "m"
+      number: 1
+      label: LABEL_REPEATED
+      type: TYPE_MESSAGE
+      type_name: ".mapenum.MEntry"
+    }
+  }
+}

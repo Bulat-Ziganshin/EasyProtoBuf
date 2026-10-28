@@ -1,0 +1,15 @@
+// V-06 accept control: the same proto2 map with a zero-first enum. protoc
+// accepts it, so the descriptor twin is protoc's own encoding; both doors must
+// accept the schema and emit the same header.
+syntax = "proto2";
+
+package mapenum;
+
+enum E {
+  ZERO = 0;
+  ONE = 1;
+}
+
+message M {
+  map<string, E> m = 1;
+}

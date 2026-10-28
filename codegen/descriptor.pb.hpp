@@ -167,6 +167,11 @@ struct FieldDescriptorProto
     int32_t label = 0;
     int32_t type = 0;
     str_view type_name;
+    // Wire field 2: the extended message of an extension member. Modelled
+    // since `V-09`, because the descriptor door now validates the members it
+    // used to skip; an ordinary field never carries it, and the extension
+    // sweep is the only reader.
+    str_view extendee;
     str_view default_value;
     FieldOptions options;
     int32_t oneof_index = 0;
@@ -183,6 +188,7 @@ struct FieldDescriptorProto
     bool has_label = false;
     bool has_type = false;
     bool has_type_name = false;
+    bool has_extendee = false;
     bool has_default_value = false;
     bool has_options = false;
     bool has_oneof_index = false;
@@ -302,12 +308,13 @@ struct DescriptorProto
     // Wire field 5: the extension ranges themselves, decoded since `W-45`
     // (the proto3 and field-overlap rules need their numbers).
     std::vector<DescriptorProto_ExtensionRange> extension_range;
-    // Wire field 6 (`extension`). Still counted, not decoded: no component
-    // reads extension members, and the only question asked about them is
-    // whether a synthetic map entry declares any (protoc's `ValidateMapEntry`,
-    // `descriptor.cc:8448-8452`, ledger `D-62`). A count cannot throw on a
-    // required member of a shape nothing else reads.
-    int32_t extension_count = 0;        // field 6, occurrence count
+    // Wire field 6 (`extension`): the extension members declared inside this
+    // message. Decoded since `V-09`: the descriptor door used to count the
+    // occurrences and skip the bytes, so extension tags, extendee ranges,
+    // duplicates and MessageSet constraints were never validated. The members
+    // are still not emitted (E6), but the semantic pass now answers protoc's
+    // rules for them.
+    std::vector<FieldDescriptorProto> extension;  // field 6
     // Wire fields 9 and 10: the message's `reserved` ranges and names. The
     // reference-free reserved sweep answers protoc's five message questions
     // about them (`BuildMessage`, descriptor.cc:6396-6478) whether or not the
@@ -377,6 +384,11 @@ struct FileDescriptorProto
     std::vector<str_view> dependency;
     std::vector<int32_t> public_dependency;
     std::vector<int32_t> weak_dependency;
+    // Wire field 7 (`extension`): file-scope extension members. Decoded since
+    // `V-09` for the same reason as `DescriptorProto.extension`; the rows a
+    // descriptor can carry but the source parser discards are still not
+    // emitted (E6).
+    std::vector<FieldDescriptorProto> extension;  // field 7
 
     bool has_name = false;
     bool has_package = false;
@@ -621,6 +633,7 @@ inline void decode(DescriptorDecoder pb, FieldDescriptorProto &x)
         switch(pb.field_num)
         {
             case 1: pb.get_string(&x.name,          &x.has_name); break;
+            case 2: pb.get_string(&x.extendee,      &x.has_extendee); break;
             case 3: pb.get_int32 (&x.number,        &x.has_number); break;
             case 4: pb.get_enum  (&x.label,         &x.has_label); break;
             case 5: pb.get_enum  (&x.type,          &x.has_type); break;
@@ -696,13 +709,9 @@ inline void decode(DescriptorDecoder pb, DescriptorProto &x)
             case 3: pb.get_repeated_message(&x.nested_type); break;
             case 4: pb.get_repeated_message(&x.enum_type); break;
             case 5: pb.get_repeated_message(&x.extension_range); break;
-            // Field 6 is counted, not decoded (see the struct): the skip is
-            // the whole read, and the count is what A26's sweep asks
-            // (ledger `D-62`). It is still a message field, so the wire type
-            // is stated before the count trusts the field.
-            case 6:
-                pb.require_wire_type(easypb::WIRETYPE_LENGTH_DELIMITED);
-                ++x.extension_count; pb.skip_field(); break;
+            // Field 6 is a message field: the members are decoded by the
+            // schema model since `V-09` and validated by the extension sweep.
+            case 6: pb.get_repeated_message(&x.extension); break;
             case 8: pb.get_repeated_message(&x.oneof_decl); break;
             case 7: pb.get_message(&x.options, &x.has_options); break;
             case 9: pb.get_repeated_message(&x.reserved_range); break;
@@ -766,6 +775,8 @@ inline void decode(DescriptorDecoder pb, FileDescriptorProto &x)
             case 4: pb.get_repeated_message(&x.message_type); break;
             case 5: pb.get_repeated_message(&x.enum_type); break;
             case 6: pb.get_repeated_message(&x.service); break;
+            // Field 7: file-scope extension members (since `V-09`).
+            case 7: pb.get_repeated_message(&x.extension); break;
             case 10: pb.get_repeated_int32(&x.public_dependency); break;
             case 11: pb.get_repeated_int32(&x.weak_dependency); break;
             case 12: pb.get_string(&x.syntax, &x.has_syntax); break;

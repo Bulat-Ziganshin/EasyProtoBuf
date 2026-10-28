@@ -303,6 +303,24 @@ bool validate_reserved_declarations(SchemaFile& file, Diagnostic& error);
 // at the first offending message, in declaration order.
 bool validate_message_set_wire_format(SchemaFile& file, Diagnostic& error);
 
+// Validates the extension members a descriptor set carries (`V-09`). The
+// source parser validates an `extend` body as text and discards it with the E6
+// warning; the descriptor door used to count `DescriptorProto.extension` and
+// skip `FileDescriptorProto.extension` without reading a member, so an
+// extension tag, an extendee range, a duplicate tag and the MessageSet shape
+// were never checked. The members are decoded now, and this pass asks protoc's
+// own questions over them: the extendee is present and resolves to a message,
+// the tag lies inside one of that message's declared extension ranges, the tag
+// is neither 0 nor inside 19000..19999, no tag is declared twice for one
+// extendee in this file, and an extension of a MessageSet is an optional
+// message. Every failure names the field's descriptor path. A valid set is
+// still not emitted, so it records the same E6 warning the source door emits.
+// Runs after resolution (the extendee is a symbol) in both linking modes, like
+// the service pass; a file that carries no extension member is untouched.
+bool validate_extension_fields(
+    SchemaFile& file, const SymbolIndex& symbols,
+    const std::set<const SchemaFile*>& visible_files, Diagnostic& error);
+
 // Validates the message nesting of one descriptor: no message may be nested
 // deeper than easypb_schema::max_message_nesting_depth() levels, which is
 // the reference compiler's own limit (MaxMessageDeclarationNestingDepth(),

@@ -1,0 +1,22 @@
+# V-09: the descriptor twin of ext-member-tag-reserved.proto. The member's tag
+# is 19000, inside the protocol-reserved block; both doors must refuse it with
+# the source door's sentence.
+file {
+  name: "ext-member-tag-reserved.proto"
+  package: "exttag"
+  syntax: "proto2"
+  message_type {
+    name: "M"
+    extension_range {
+      start: 18999
+      end: 20000
+    }
+    extension {
+      name: "e"
+      number: 19000
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+      extendee: ".exttag.M"
+    }
+  }
+}

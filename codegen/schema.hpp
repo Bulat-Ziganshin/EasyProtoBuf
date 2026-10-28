@@ -596,6 +596,26 @@ inline DescriptorPath message_extension_range_path(
     return path;
 }
 
+// `DescriptorProto.extension` is field 6 and `FileDescriptorProto.extension`
+// is field 7. The members are decoded since `V-09`, so an extension field can
+// be located by its descriptor path like every other declaration.
+inline DescriptorPath message_extension_path(const DescriptorPath& message_path,
+                                             int extension_index)
+{
+    DescriptorPath path = message_path;
+    path.push_back(6);
+    path.push_back(extension_index);
+    return path;
+}
+
+inline DescriptorPath file_extension_path(int extension_index)
+{
+    DescriptorPath path;
+    path.push_back(7);
+    path.push_back(extension_index);
+    return path;
+}
+
 // `DescriptorProto.reserved_range` is field 9 and `DescriptorProto.reserved_name`
 // is field 10. Both are modeled since step B5 (CR-06), so a reserved
 // declaration can be named by a descriptor path like every other one.

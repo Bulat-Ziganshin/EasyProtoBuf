@@ -147,6 +147,7 @@ set(paired_fixtures
     oneof-contiguous
     message-set-empty
     message-set-extensions
+    map-enum-zero
     reserved-range-end
     reserved-range-wide
     enum-keyword-default
@@ -303,6 +304,74 @@ if(FULL_BUILD)
     require_contains(proto3_extend_err
         "extend declaration parsed but not stored by the trimmed FileDescriptorProto model"
         "V-12: the accepted extend keeps the E6 warning")
+endif()
+
+# --- S03 (V-06, V-09): map enum zero and descriptor extension members -------
+#
+# V-06: protoc refuses a map whose enum value type does not start at zero
+# (descriptor.cc:8506-8512), because a missing entry is materialized as
+# value{}. Both doors must answer the same sentence; the descriptor half is
+# crafted from the .txtpb because protoc cannot write a descriptor for the
+# schema it refuses.
+run_fail(map_enum_nonzero_out map_enum_nonzero_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/map-enum-nonzero.pbs")
+require_empty(map_enum_nonzero_out "The map-enum-nonzero descriptor stdout")
+require_contains(map_enum_nonzero_err
+    "Enum value in map must define 0 as the first value."
+    "V-06: the map value enum starts at 1")
+if(FULL_BUILD)
+    run_fail(map_enum_nonzero_src_out map_enum_nonzero_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/map-enum-nonzero.proto")
+    require_empty(map_enum_nonzero_src_out
+        "The map-enum-nonzero source stdout")
+    require_contains(map_enum_nonzero_src_err
+        "Enum value in map must define 0 as the first value."
+        "V-06: the source door answers the same sentence")
+endif()
+# The zero-first control is in the paired loop above: both doors accept it and
+# emit one header.
+
+# V-09: the descriptor door decodes extension members now, so a tag in the
+# protocol-reserved block is refused with the source door's own sentence. The
+# source half is refused by the parser; the descriptor half is crafted from the
+# .txtpb, because protoc refuses the source too.
+run_fail(ext_tag_out ext_tag_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/ext-member-tag-reserved.pbs")
+require_empty(ext_tag_out "The ext-member-tag-reserved descriptor stdout")
+require_contains(ext_tag_err
+    "field numbers 19000..19999 are reserved by Protocol Buffers"
+    "V-09: the descriptor-door extension tag rule")
+if(FULL_BUILD)
+    run_fail(ext_tag_src_out ext_tag_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/ext-member-tag-reserved.proto")
+    require_empty(ext_tag_src_out "The ext-member-tag-reserved source stdout")
+    require_contains(ext_tag_src_err
+        "field numbers 19000..19999 are reserved by Protocol Buffers"
+        "V-09: the source door answers the same sentence")
+endif()
+
+# V-09 accept control: a legal extension set is accepted by both doors and
+# emits the recorded E6 warning. The extension members are validated but still
+# not emitted, so the warning is the accepted-surface statement, not a defect.
+run_ok(ext_valid_out ext_valid_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/ext-member-valid.pbs")
+require_contains(ext_valid_out "struct M"
+    "V-09: the accepted extension set keeps generating")
+require_contains(ext_valid_err
+    "extend declaration parsed but not stored by the trimmed FileDescriptorProto model"
+    "V-09: the descriptor-door E6 warning")
+if(FULL_BUILD)
+    run_ok(ext_valid_src_out ext_valid_src_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/ext-member-valid.proto")
+    require_contains(ext_valid_src_out "struct M"
+        "V-09: the source half of the accepted extension set")
+    require_contains(ext_valid_src_err
+        "extend declaration parsed but not stored by the trimmed FileDescriptorProto model"
+        "V-09: the source-door E6 warning")
+    require_identical_headers(ext_valid_out ext_valid_src_out
+        "V-09: the accepted extension set emits one header on both doors")
 endif()
 
 if(FULL_BUILD)

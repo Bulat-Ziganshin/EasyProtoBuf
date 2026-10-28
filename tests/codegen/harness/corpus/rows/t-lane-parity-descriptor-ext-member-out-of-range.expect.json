@@ -1,13 +1,13 @@
 {
-  "cr": "CR-25",
-  "exception": "E6",
+  "cr": null,
+  "exception": null,
   "id": "t-lane-parity-descriptor-ext-member-out-of-range",
   "include_roots": [],
   "input": "tests/codegen/parity/data/ext-member-out-of-range.pbs",
   "kind": "descriptor",
   "mandatory": false,
-  "note": "CR-25 accepted (E6): extension declarations are not validated",
-  "p1_expect": "divergent",
+  "note": "cross-path parity lane fixture",
+  "p1_expect": "parity",
   "p2_expect": "n/a",
   "properties": [
     "P1"

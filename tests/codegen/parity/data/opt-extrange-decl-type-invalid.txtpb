@@ -1,0 +1,23 @@
+# V-07: a declaration type with an invalid identifier. The type is not one of
+# protoc's scalar spellings (IsNonMessageType, descriptor.cc:6307-6316), so
+# ValidateSymbolForDeclaration checks it and refuses the space with
+# "\".opt Ext\" contains invalid identifiers.".
+file {
+  name: "opt-extrange-decl-type-invalid.proto"
+  package: "opt"
+  syntax: "proto2"
+  message_type {
+    name: "ExtensionTarget"
+    extension_range {
+      start: 100
+      end: 200
+      options {
+        declaration {
+          number: 150
+          full_name: ".opt.ext"
+          type: ".opt Ext"
+        }
+      }
+    }
+  }
+}

@@ -883,6 +883,14 @@ const std::int32_t kReservedFieldNumberLast = 19999;
 // plain int32s (step B5, CR-07).
 const std::int32_t kMaxExtensionEnd = kMaxFieldNumber + 1;
 
+// The largest extension NUMBER a MessageSet may declare, and the largest tag
+// the source parser accepts for an extension member (`extension_field_number`,
+// proto_parser.cpp:1546-1561): INT32_MAX - 1, because the descriptor stores
+// the exclusive range end in an int32. An ordinary message's ranges are capped
+// by `kMaxExtensionEnd` instead; the number rule is shared so the two doors
+// name the same bound.
+const std::int32_t kMaxMessageSetNumber = 2147483646;
+
 std::string number_text(std::int32_t number)
 {
     std::ostringstream output;
@@ -1409,6 +1417,48 @@ bool is_identifier(const std::string& text)
     return true;
 }
 
+// `ValidateQualifiedName` (descriptor.cc:5134-5153), the dotted-identifier
+// half of `ValidateSymbolForDeclaration` (descriptor.cc:8294-8310): letters,
+// digits, underscores and single dots, no empty component and no trailing
+// dot. A leading dot is allowed here; the caller asks for it separately
+// because protoc states the leading-dot error first.
+bool is_qualified_identifier(const std::string& text)
+{
+    bool last_was_period = false;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char character = text[i];
+        const bool letter = (character >= 'a' && character <= 'z') ||
+                            (character >= 'A' && character <= 'Z');
+        const bool digit = character >= '0' && character <= '9';
+        if (letter || digit || character == '_') {
+            last_was_period = false;
+        } else if (character == '.') {
+            if (last_was_period) return false;
+            last_was_period = true;
+        } else {
+            return false;
+        }
+    }
+    return !text.empty() && !last_was_period;
+}
+
+// `IsNonMessageType` (descriptor.cc:6307-6316): the spellings a declaration's
+// `type` may use without naming a message. protoc skips the fully-qualified
+// symbol check for exactly these strings, so `type: "int32"` is accepted
+// while a named message type must carry a leading dot.
+bool is_non_message_type_spelling(const std::string& text)
+{
+    static const char* const spellings[] = {
+        "double", "float",   "int64",   "uint64",  "int32",  "fixed32",
+        "fixed64", "bool",   "string",  "bytes",   "uint32", "enum",
+        "sfixed32", "sfixed64", "sint32", "sint64"};
+    for (std::size_t i = 0; i < sizeof(spellings) / sizeof(spellings[0]);
+         ++i) {
+        if (text == spellings[i]) return true;
+    }
+    return false;
+}
+
 // every kind reports the same category with the same code (E1/A3). The message
 // mirrors protoc's two wordings - an empty name is "missing", an illegal
 // character is "not a valid identifier" - while the code stays DIAGNOSTIC_
@@ -1768,7 +1818,7 @@ bool validate_message_map_entries(const SchemaFile& file,
                                         "no nested messages or enums", error);
         }
         if (!message.extension_range.empty() ||
-            message.extension_count != 0) {
+            !message.extension.empty()) {
             return fail_map_entry_shape(file, qualified_name,
                                         "no extension ranges or extension "
                                         "fields",
@@ -2039,6 +2089,13 @@ bool validate_message_extension_ranges(const SchemaFile& file,
                                        const DescriptorPath& message_path,
                                        bool is_proto3, Diagnostic& error)
 {
+    // V-07: protoc keeps ONE full-name set per message across every range
+    // (`declaration_full_name_set`, `ValidateExtensionRangeOptions`,
+    // descriptor.cc:8393-8401) and asks each declaration's own shape in
+    // `ValidateExtensionDeclaration` (:8311-8375). The set lives outside the
+    // range loop for that reason; a nested message starts its own call and
+    // therefore its own set.
+    std::set<str_view> declared_full_names;
     for (std::size_t i = 0; i < message.extension_range.size(); ++i) {
         const DescriptorProto_ExtensionRange& range = message.extension_range[i];
         const DescriptorPath range_path =
@@ -2191,6 +2248,65 @@ bool validate_message_extension_ranges(const SchemaFile& file,
                                 "or be reserved",
                             declaration_location(file, range_path), range_path,
                             DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+                    }
+                } else {
+                    // V-07: the four clauses of `ValidateExtensionDeclaration`
+                    // that U-22 left out (`descriptor.cc:8349-8375`): one
+                    // `full_name` per message across every range, a leading
+                    // dot, a valid dotted identifier, and - for a named type
+                    // only - the same two checks on `type`. protoc skips the
+                    // `type` shape for its scalar spellings
+                    // (`IsNonMessageType`, :6307-6316), which is why the
+                    // exemption is asked first.
+                    const std::string full_name =
+                        view_text(declaration.full_name);
+                    if (!declared_full_names.insert(declaration.full_name)
+                             .second) {
+                        return fail_at_code(
+                            file,
+                            "Extension field name \"" + full_name +
+                                "\" is declared multiple times.",
+                            declaration_location(file, range_path), range_path,
+                            DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+                    }
+                    if (full_name.empty() || full_name[0] != '.') {
+                        return fail_at_code(
+                            file,
+                            "\"" + full_name +
+                                "\" must have a leading dot to indicate the "
+                                "fully-qualified scope.",
+                            declaration_location(file, range_path), range_path,
+                            DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+                    }
+                    if (!is_qualified_identifier(full_name)) {
+                        return fail_at_code(
+                            file,
+                            "\"" + full_name + "\" contains invalid "
+                            "identifiers.",
+                            declaration_location(file, range_path), range_path,
+                            DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+                    }
+                    const std::string type = view_text(declaration.type);
+                    if (!is_non_message_type_spelling(type)) {
+                        if (type.empty() || type[0] != '.') {
+                            return fail_at_code(
+                                file,
+                                "\"" + type +
+                                    "\" must have a leading dot to indicate "
+                                    "the fully-qualified scope.",
+                                declaration_location(file, range_path),
+                                range_path,
+                                DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+                        }
+                        if (!is_qualified_identifier(type)) {
+                            return fail_at_code(
+                                file,
+                                "\"" + type + "\" contains invalid "
+                                "identifiers.",
+                                declaration_location(file, range_path),
+                                range_path,
+                                DIAGNOSTIC_INVALID_EXTENSION_RANGE, error);
+                        }
                     }
                 }
             }
@@ -3515,6 +3631,31 @@ bool validate_field_encoding(SchemaFile& file, const SymbolIndex& symbols,
                              bool unknown, bool external_reference,
                              Diagnostic& error)
 {
+    // V-06: protoc's second value clause of `ValidateMapEntry`
+    // (descriptor.cc:8506-8512): when the map's value type resolved to an enum,
+    // its first value must be zero, because a missing map entry is materialized
+    // as `value{}` and zero is the only enum value guaranteed to exist. The
+    // check is reference-free with respect to the entry's fields (A26's
+    // precedent): the entry is a descriptor declaration, and an unreferenced
+    // one is still malformed. It needs the resolved kind, so it runs here,
+    // after `resolve_field_type`, and only in a linking pass.
+    if (link_types && message.options.has_map_entry &&
+        message.options.map_entry && field.number == 2 &&
+        field.type == FieldDescriptorProto::TYPE_ENUM && field.has_type_name) {
+        const std::map<std::string, SymbolEntry>::const_iterator found =
+            symbols.symbols.find(view_text(field.type_name));
+        if (found != symbols.symbols.end()) {
+            const EnumDescriptorProto* enumeration =
+                find_enum(*found->second.owner, found->second.path);
+            if (enumeration != 0 && !enumeration->value.empty() &&
+                enumeration->value[0].number != 0) {
+                return fail_at(
+                    file,
+                    "Enum value in map must define 0 as the first value.",
+                    field_type_location(file, field_path), field_path, error);
+            }
+        }
+    }
     // Repeatedness is known without resolution: no import can turn an
     // optional field into a repeated one, so reject packed on
     // non-repeated fields immediately. Whether the type itself admits
@@ -4331,6 +4472,223 @@ bool validate_extension_ranges(SchemaFile& file, Diagnostic& error)
     }
     return true;
 }
+
+namespace {
+
+// V-09: the sentence the source door records for an accepted `extend` body.
+// The descriptor door now validates the members and still emits the same
+// accepted-surface warning, so a `.pbs` and a `.proto` of one schema describe
+// the same E6 shape.
+const char kExtensionMemberNotModelledWarning[] =
+    "extend declaration parsed but not stored by the trimmed "
+    "FileDescriptorProto model";
+
+std::string extension_sentence_name(const std::string& absolute)
+{
+    // protoc's sentences name the full name without the leading dot.
+    if (!absolute.empty() && absolute[0] == '.') return absolute.substr(1);
+    return absolute;
+}
+
+const DescriptorProto_ExtensionRange* extension_range_containing(
+    const DescriptorProto& message, std::int32_t number)
+{
+    for (std::size_t i = 0; i < message.extension_range.size(); ++i) {
+        const DescriptorProto_ExtensionRange& range = message.extension_range[i];
+        if (number >= range.start && number < range.end) return &range;
+    }
+    return 0;
+}
+
+// One extension member, after its name/number were read. `scope` is the
+// qualified enclosing scope (the file's package or the message that declares
+// the member). `seen` carries the extension numbers already declared for one
+// extendee across the file, so a duplicate is told from a legal pair.
+bool validate_extension_member(
+    const SchemaFile& file, const SymbolIndex& symbols,
+    const std::set<const SchemaFile*>& visible_files, const std::string& scope,
+    const FieldDescriptorProto& field, const DescriptorPath& field_path,
+    std::map<std::string, std::string>& seen, Diagnostic& error)
+{
+    const std::string full_name = joined_name(scope, field.name);
+    // The number rules the source parser applies to an extension tag
+    // (`extension_field_number`, proto_parser.cpp): an extension may reach
+    // INT32_MAX - 1 for a MessageSet, but not 0 and not the protocol-reserved
+    // 19000..19999 block.
+    if (field.number <= 0 || field.number > kMaxMessageSetNumber) {
+        return fail_at(file,
+                       "extension number must be in range 1..2147483646",
+                       declaration_location(file, field_path), field_path,
+                       error);
+    }
+    if (field.number >= kReservedFieldNumberFirst &&
+        field.number <= kReservedFieldNumberLast) {
+        return fail_at(file,
+                       "field numbers 19000..19999 are reserved by Protocol "
+                       "Buffers",
+                       declaration_location(file, field_path), field_path,
+                       error);
+    }
+    if (!field.has_extendee || field.extendee.empty()) {
+        return fail_at(
+            file,
+            "FieldDescriptorProto.extendee not set for extension field.",
+            declaration_location(file, field_path), field_path, error);
+    }
+    const std::string raw_extendee = view_text(field.extendee);
+    ResolveContext context;
+    context.owner = &file;
+    context.field_path = &field_path;
+    context.field = &field;
+    ResolveOutcome outcome = RESOLVE_MISSING;
+    std::string resolved_name;
+    const SymbolEntry* resolved = resolve_name(
+        raw_extendee, scope, symbols, visible_files, context, &outcome,
+        &resolved_name);
+    if (resolved == 0) {
+        return fail_at(file,
+                       "extension field \"" + full_name +
+                           "\" has unresolved extendee type \"" +
+                           raw_extendee + "\"",
+                       declaration_location(file, field_path), field_path,
+                       error);
+    }
+    if (resolved->kind != FieldDescriptorProto::TYPE_MESSAGE) {
+        return fail_at(file,
+                       "\"" + raw_extendee + "\" is not a message type.",
+                       declaration_location(file, field_path), field_path,
+                       error);
+    }
+    const DescriptorProto* extendee = find_message(*resolved->owner,
+                                                   resolved->path);
+    if (extendee == 0) {
+        // The index agreed on a message but the path does not address one:
+        // an inconsistent index is a programming error, not input, so the
+        // caller still gets a real diagnostic rather than a null dereference.
+        return fail_at(file,
+                       "extension field \"" + full_name +
+                           "\": the resolved extendee \"" + resolved_name +
+                           "\" has no message body",
+                       declaration_location(file, field_path), field_path,
+                       error);
+    }
+    if (extension_range_containing(*extendee, field.number) == 0) {
+        return fail_at(
+            file,
+            "\"" + extension_sentence_name(resolved_name) +
+                "\" does not declare " + number_text(field.number) +
+                " as an extension number.",
+            declaration_location(file, field_path), field_path, error);
+    }
+    // protoc's MessageSet clause (`ValidateOptions`, descriptor.cc:7988-8001):
+    // a MessageSet carries only optional message extensions, because its
+    // extension payload is a message on the wire.
+    if (extendee->options.has_message_set_wire_format &&
+        extendee->options.message_set_wire_format &&
+        ((field.has_label &&
+          field.label != FieldDescriptorProto::LABEL_OPTIONAL) ||
+         !field.has_type ||
+         field.type != FieldDescriptorProto::TYPE_MESSAGE)) {
+        return fail_at(file,
+                       "Extensions of MessageSets must be optional messages.",
+                       declaration_location(file, field_path), field_path,
+                       error);
+    }
+    const std::string key =
+        resolved_name + "#" + number_text(field.number);
+    const std::map<std::string, std::string>::const_iterator earlier =
+        seen.find(key);
+    if (earlier != seen.end()) {
+        return fail_at(file,
+                       "Extension number " + number_text(field.number) +
+                           " has already been used in \"" +
+                           extension_sentence_name(resolved_name) +
+                           "\" by extension \"" + earlier->second + "\".",
+                       declaration_location(file, field_path), field_path,
+                       error);
+    }
+    seen.insert(std::make_pair(key, full_name));
+    return true;
+}
+
+bool validate_message_extension_members(
+    const SchemaFile& file, const DescriptorProto& message,
+    const std::string& qualified_name, const DescriptorPath& message_path,
+    const SymbolIndex& symbols,
+    const std::set<const SchemaFile*>& visible_files,
+    std::map<std::string, std::string>& seen, bool& has_member,
+    Diagnostic& error)
+{
+    for (std::size_t i = 0; i < message.extension.size(); ++i) {
+        has_member = true;
+        if (!validate_extension_member(
+                file, symbols, visible_files, qualified_name,
+                message.extension[i],
+                message_extension_path(message_path, static_cast<int>(i)),
+                seen, error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+        if (!validate_message_extension_members(
+                file, message.nested_type[i],
+                joined_name(qualified_name, message.nested_type[i].name),
+                message_nested_path(message_path, static_cast<int>(i)),
+                symbols, visible_files, seen, has_member, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool validate_extension_fields(
+    SchemaFile& file, const SymbolIndex& symbols,
+    const std::set<const SchemaFile*>& visible_files, Diagnostic& error)
+{
+    // V-09: extension members are decoded only from a descriptor set. The
+    // source parser still validates an `extend` body as text and discards it
+    // with the E6 warning, so there is no source half to walk here; a file
+    // that carries no member has nothing to validate and no warning to add.
+    const std::string prefix = package_prefix(file);
+    std::map<std::string, std::string> seen;
+    bool has_member = false;
+    for (std::size_t i = 0; i < file.file.extension.size(); ++i) {
+        has_member = true;
+        if (!validate_extension_member(
+                file, symbols, visible_files, prefix, file.file.extension[i],
+                file_extension_path(static_cast<int>(i)), seen, error)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < file.file.message_type.size(); ++i) {
+        if (!validate_message_extension_members(
+                file, file.file.message_type[i],
+                joined_name(prefix, file.file.message_type[i].name),
+                file_message_path(static_cast<int>(i)), symbols, visible_files,
+                seen, has_member, error)) {
+            return false;
+        }
+    }
+    if (!has_member) return true;
+    // The accepted-surface warning. Deduplicated by its own sentence, because
+    // one set may be linked more than once and a warning is not an error.
+    for (std::size_t i = 0; i < file.warnings.size(); ++i) {
+        if (file.warnings[i].message == kExtensionMemberNotModelledWarning) {
+            return true;
+        }
+    }
+    Diagnostic warning;
+    warning.file = schema_file_label(file);
+    warning.location = unknown_location();
+    warning.message = kExtensionMemberNotModelledWarning;
+    warning.warning = true;
+    warning.code = DIAGNOSTIC_GENERIC;
+    file.warnings.push_back(warning);
+    return true;
+}
+
 
 bool validate_reserved_declarations(SchemaFile& file, Diagnostic& error)
 {

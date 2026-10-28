@@ -1,0 +1,22 @@
+# V-07: a declaration full_name with an invalid identifier. protoc's
+# ValidateQualifiedName (descriptor.cc:5134-5153) refuses the space with
+# "\".opt ext\" contains invalid identifiers.".
+file {
+  name: "opt-extrange-decl-name-invalid.proto"
+  package: "opt"
+  syntax: "proto2"
+  message_type {
+    name: "ExtensionTarget"
+    extension_range {
+      start: 100
+      end: 200
+      options {
+        declaration {
+          number: 150
+          full_name: ".opt ext"
+          type: ".opt.ExtensionTarget"
+        }
+      }
+    }
+  }
+}

@@ -604,6 +604,27 @@ expect_refusal("The descriptor path must refuse a declaration with one of full_n
     "must set both \"full_name\" and \"type\", or be reserved"
     ${CODEGEN} --descriptor-set "${DATA_DIR}/opt-extrange-decl-partial.pbs")
 
+# V-07: the four declaration clauses U-22 left out. Each shape is refused by
+# protoc's `ValidateExtensionDeclaration` (descriptor.cc:8311-8375); the first
+# keeps one full-name set across every range of one message. The accepted
+# control is `opt-extrange-declaration` in `paired_fixtures` above.
+expect_refusal("The descriptor path must refuse one full_name in two ranges"
+    "Extension field name \".opt.ext\" is declared multiple times."
+    ${CODEGEN} --descriptor-set
+    "${DATA_DIR}/opt-extrange-decl-name-duplicate.pbs")
+expect_refusal("The descriptor path must refuse a full_name without a leading dot"
+    "\"opt.ext\" must have a leading dot to indicate the fully-qualified scope."
+    ${CODEGEN} --descriptor-set
+    "${DATA_DIR}/opt-extrange-decl-name-no-dot.pbs")
+expect_refusal("The descriptor path must refuse a full_name with invalid identifiers"
+    "\".opt ext\" contains invalid identifiers."
+    ${CODEGEN} --descriptor-set
+    "${DATA_DIR}/opt-extrange-decl-name-invalid.pbs")
+expect_refusal("The descriptor path must refuse a named type with invalid identifiers"
+    "\".opt Ext\" contains invalid identifiers."
+    ${CODEGEN} --descriptor-set
+    "${DATA_DIR}/opt-extrange-decl-type-invalid.pbs")
+
 # --- W-68: the import include -------------------------------------------------
 #
 # The thin single-file descriptor names its imports but carries only the

@@ -4903,7 +4903,7 @@ void test_corpus_compatibility_mode(const std::string& fixture_dir)
                                    message.options.map_entry;
                 if (entry) {
                     CHECK(message.extension_range.empty());
-                    CHECK(message.extension_count == 0);
+                    CHECK(message.extension.empty());
                 }
             }
         }
@@ -7114,7 +7114,7 @@ void build_map_entry_shape(easypb_schema::SchemaFile& file,
             // shape carries one range; the sweep refuses its PRESENCE, which is
             // all the map-entry rule asks. The decode-level twin - that the
             // range survives the decoder with its numbers - is
-            // test_map_entry_extension_data_is_counted_and_refused.
+            // test_map_entry_extension_data_is_decoded_and_refused.
             {
                 DescriptorProto_ExtensionRange range;
                 range.start = 10;
@@ -7124,9 +7124,22 @@ void build_map_entry_shape(easypb_schema::SchemaFile& file,
                 entry.extension_range.push_back(range);
             }
             break;
-        case MAP_SHAPE_EXTENSION_MEMBER:
-            entry.extension_count = 1;
+        case MAP_SHAPE_EXTENSION_MEMBER: {
+            // V-09: field 6 is decoded, so the shape sets a real member. The
+            // member itself is deliberately invalid as an extendee edge; the
+            // map-entry sweep refuses its PRESENCE before that rule can run.
+            FieldDescriptorProto member;
+            member.name = file.strings.save("e");
+            member.has_name = true;
+            member.number = 100;
+            member.has_number = true;
+            member.label = FieldDescriptorProto::LABEL_OPTIONAL;
+            member.has_label = true;
+            member.type = FieldDescriptorProto::TYPE_INT32;
+            member.has_type = true;
+            entry.extension.push_back(member);
             break;
+        }
     }
 }
 
@@ -7166,13 +7179,14 @@ void test_malformed_map_entry_shape_is_rejected()
     }
 }
 
-// D-62: a synthetic entry's extension data is COUNTED by the decoder, and the
-// sweep refuses what the count shows. The bytes below are the review round's
-// own crafted counter-example (`map_entry_extension_range`), rebuilt here for
-// the suite: `DescriptorProto` carries no extension member at all before the
-// fix, so a model-level row alone would leave the decoder's half unproven - a
-// counter that never left zero makes the sweep unreachable while every other
-// row still passes.
+// D-62/V-09: a synthetic entry's extension data is DECODED by the model, and
+// the sweep refuses what the decoded collection shows. The bytes below are the
+// review round's own crafted counter-example (`map_entry_extension_range`),
+// rebuilt here for the suite: `DescriptorProto` carries no extension member at
+// all before the fix, so a model-level row alone would leave the decoder's half
+// unproven - a collection that always stayed empty makes the sweep unreachable
+// while every other row still passes. Since V-09 the member is decoded into
+// `DescriptorProto.extension`, not counted.
 //
 // The encoder is hand-written rather than the library's Writer so the bytes are
 // an independent input: a helper shared with the decoder could cancel a wrong
@@ -7264,7 +7278,7 @@ std::string map_entry_extension_set(int shape)
     return wire_message_field(1, file);  // the FileDescriptorSet wrapper
 }
 
-void test_map_entry_extension_data_is_counted_and_refused()
+void test_map_entry_extension_data_is_decoded_and_refused()
 {
     for (int shape = 0; shape <= 2; ++shape) {
         const std::string bytes = map_entry_extension_set(shape);
@@ -7277,9 +7291,13 @@ void test_map_entry_extension_data_is_counted_and_refused()
         const DescriptorProto& entry =
             decoded.file[0].message_type[0].nested_type[0];
         // The decoder's own read of wire fields 5 and 6 - the sweep asks the
-        // range list and the extension count.
+        // range list and the extension collection.
         CHECK(entry.extension_range.size() == (shape == 1 ? 1u : 0u));
-        CHECK(entry.extension_count == (shape == 2 ? 1 : 0));
+        CHECK(entry.extension.size() == (shape == 2 ? 1u : 0u));
+        if (shape == 2 && entry.extension.size() == 1) {
+            CHECK(entry.extension[0].has_extendee);
+            CHECK(text(entry.extension[0].extendee) == ".p.BrokenMap");
+        }
         if (shape == 1 && entry.extension_range.size() == 1) {
             CHECK(entry.extension_range[0].start == 10);
             CHECK(entry.extension_range[0].end == 20);
@@ -7309,11 +7327,11 @@ void test_map_entry_extension_data_is_counted_and_refused()
     }
     // Neighbour: a message that is NOT a map entry may declare both members as
     // far as THIS rule is concerned. The rule rides the `map_entry` marker, so
-    // the counters cannot refuse a plain proto2 message's extension
-    // declarations. (Whether an extension declaration's NUMBER lies in a
-    // declared extension range is a different check protoc makes and this
-    // linker does not - extension metadata stays out of scope, clause 12 - so
-    // the assertion here is about this rule alone.)
+    // the map-entry sweep cannot refuse a plain proto2 message's extension
+    // declarations. The member's number is inside the declared range so the
+    // V-09 extension-member sweep accepts it too; this row proves the
+    // map-entry rule leaves a legal extension alone, not that extension
+    // metadata is unvalidated.
     {
         std::string owner = wire_text_field(1, "Plain");
         owner += wire_message_field(2, wire_field("a", 1, 1, 5, 0));
@@ -7321,7 +7339,7 @@ void test_map_entry_extension_data_is_counted_and_refused()
         range += wire_varint_field(2, 20);
         owner += wire_message_field(5, range);
         owner += wire_message_field(
-            6, wire_field("e", 100, 1, 5, 0, ".p.Plain"));
+            6, wire_field("e", 10, 1, 5, 0, ".p.Plain"));
 
         std::string file = wire_text_field(1, "plain.proto");
         file += wire_text_field(2, "p");
@@ -7852,7 +7870,7 @@ int main(int argc, char** argv)
     test_unsupported_syntax_refusal_names_what_decided();
     test_descriptor_origin_packed_false_is_accepted();
     test_malformed_map_entry_shape_is_rejected();
-    test_map_entry_extension_data_is_counted_and_refused();
+    test_map_entry_extension_data_is_decoded_and_refused();
     test_duplicate_map_entry_name_is_a_name_collision();
     test_descriptor_origin_repeated_default_is_refused();
     test_descriptor_origin_oneof_member_label_is_refused();

@@ -1,0 +1,16 @@
+// V-09: an extension member whose tag is inside the protocol-reserved
+// 19000..19999 block. The source parser refuses the tag as text, and the
+// descriptor twin (ext-member-tag-reserved.txtpb) must answer the same
+// verdict and the same sentence: the descriptor door used to count the member
+// without decoding it, so the tag was never seen.
+syntax = "proto2";
+
+package exttag;
+
+message M {
+  extensions 18999 to 20000;
+}
+
+extend M {
+  optional int32 e = 19000;
+}

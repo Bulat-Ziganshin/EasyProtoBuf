@@ -1,0 +1,34 @@
+# V-07: the same declaration full_name in two ranges of one message. protoc
+# keeps ONE full-name set per message (ValidateExtensionRangeOptions,
+# descriptor.cc:8393-8401), so the second declaration is refused with
+# "Extension field name \".opt.ext\" is declared multiple times.".
+file {
+  name: "opt-extrange-decl-name-duplicate.proto"
+  package: "opt"
+  syntax: "proto2"
+  message_type {
+    name: "ExtensionTarget"
+    extension_range {
+      start: 100
+      end: 200
+      options {
+        declaration {
+          number: 150
+          full_name: ".opt.ext"
+          type: ".opt.ExtensionTarget"
+        }
+      }
+    }
+    extension_range {
+      start: 200
+      end: 300
+      options {
+        declaration {
+          number: 250
+          full_name: ".opt.ext"
+          type: ".opt.ExtensionTarget"
+        }
+      }
+    }
+  }
+}

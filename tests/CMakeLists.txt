@@ -303,6 +303,7 @@ if(BUILD_TESTING)
         oneof-contiguous
         message-set-empty
         message-set-extensions
+        map-enum-zero
         reserved-range-end
         reserved-range-wide
         option-value-defaults)
@@ -356,6 +357,7 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/oneof-contiguous.pb.hpp
             ${codegen_validity_descriptor_dir}/message-set-empty.pb.hpp
             ${codegen_validity_descriptor_dir}/message-set-extensions.pb.hpp
+            ${codegen_validity_descriptor_dir}/map-enum-zero.pb.hpp
             ${codegen_validity_descriptor_dir}/reserved-range-end.pb.hpp
             ${codegen_validity_descriptor_dir}/reserved-range-wide.pb.hpp
             ${codegen_validity_descriptor_dir}/option-value-defaults.pb.hpp)
@@ -799,18 +801,16 @@ if(BUILD_TESTING)
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
             -P ${codegen_parity_dir}/test_parity.cmake)
 
-    # CR-25 is accepted, not fixed: extension declarations are neither
-    # validated nor decoded. This test asserts the current direction (both
-    # doors accept a shape protoc refuses), so it must FAIL when that changes;
-    # the failure message names the decision that has to be re-evaluated. It is
-    # a separate ctest name because the accepted register cites it by name;
-    # `codegen.parity` above stays the property gate.
-    add_test(NAME codegen.parity.extensions_not_validated
+    # CR-25/V-09: extension members decoded from a descriptor are validated.
+    # The source door keeps its accepted E6 decision (a discarded `extend`
+    # body); the descriptor door now answers protoc's rules. This test is
+    # separate because it is the executable record of the half that changed.
+    add_test(NAME codegen.parity.extensions_validated
         COMMAND ${CMAKE_COMMAND}
             -DCODEGEN=$<TARGET_FILE:easypb_codegen>
             -DDATA_DIR=${codegen_parity_data_dir}
             -DFULL_BUILD=$<BOOL:${EASYPB_CODEGEN_WITH_PROTO_PARSER}>
-            -P ${codegen_parity_dir}/test_extensions_not_validated.cmake)
+            -P ${codegen_parity_dir}/test_extensions_validated.cmake)
 
     # Plan 5 follow-up S6 (W-11, W-47, W-48, W-58): the library API. A caller
     # that links easypb_codegen_core must get the CLI's answer: the entry

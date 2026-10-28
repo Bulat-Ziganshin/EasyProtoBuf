@@ -22,7 +22,7 @@ before B13a replaced them; the fixtures themselves did not move or change.
 | `nested` | nested and forward declarations | P2; P3 | - | `codegen.nested.runtime` |
 | `options` | the known-option table (G2) and the custom-option policy | P1; P3; P4 | E13; E14 | `codegen.options` |
 | `packages` | package namespaces, imported enum defaults, keyword packages | P1; P2; P3; P7 | CR-08; CR-09; E5; E11 | `codegen.packages*` |
-| `parity` | reserved, extension and MessageSet rules on both doors; the CR-25 xfail | P1; P2; P3; P7; P9 | CR-06; CR-07; CR-23; CR-24; CR-25; CR-46; E6 | `codegen.parity*` |
+| `parity` | reserved, extension and MessageSet rules on both doors; the CR-25 source-half exception | P1; P2; P3; P7; P9 | CR-06; CR-07; CR-23; CR-24; CR-25; CR-46; E6 | `codegen.parity*` |
 | `parser` | grammar, lexer, modes, print and proto3 optional | P1; P2; P4; P5; P8; P9 | CR-01; CR-05; CR-11; CR-12; CR-13; CR-17; CR-18; CR-19; CR-20; CR-26; CR-27; CR-28; CR-29; CR-30; CR-42; CR-48 | `parser.unit`, `codegen.modes` |
 | `recursive` | self-recursive repeated and map members | P2; P3 | - | `codegen.recursive.*` |
 | `schema` | parser-independent semantics and storage | P1; P2; P9 | CR-01; CR-02; CR-06; CR-07; CR-17; CR-21; CR-23; CR-42; CR-45; CR-46 | `codegen.schema.*` |

@@ -8,7 +8,7 @@
   "input": "tests/codegen/parity/data/ext-unvalidated.proto",
   "kind": "source",
   "mandatory": false,
-  "note": "CR-25 accepted (E6): extension declarations are not validated",
+  "note": "CR-25 accepted (E6): the source parser discards the extend body",
   "p1_expect": "divergent",
   "p2_expect": "n/a",
   "properties": [

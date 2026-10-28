@@ -441,14 +441,14 @@ def parity_tsv_rows() -> list[dict]:
     return rows
 
 
-# CR-25 is accepted (E6): extension declarations are neither validated nor
-# decoded. The three fixtures that pin that direction live in the parity lane
-# and are carried in the corpus with the exception ID, so the harness records
-# the accepted divergence instead of a new root. `codegen.parity.
-# extensions_not_validated` is the executable xfail; these rows are its
-# differential measurement.
-EXTENSION_XFAIL_STEMS = frozenset(
-    {"ext-unvalidated", "ext-member-no-extendee", "ext-member-out-of-range"})
+# CR-25 is accepted (E6) on the SOURCE door only: the parser still validates
+# an `extend` body as text and discards it. `ext-unvalidated` is the source row
+# that pins that direction. The descriptor rows are no longer an exception:
+# since V-09 the decoder reads every member and the link validates its extendee,
+# range, duplicates and MessageSet shape, so `ext-member-*` is ordinary parity.
+# `codegen.parity.extensions_validated` is the executable test for both halves;
+# these rows are its differential measurement.
+EXTENSION_SOURCE_XFAIL_STEMS = frozenset({"ext-unvalidated"})
 
 
 def parity_lane_rows() -> list[dict]:
@@ -457,14 +457,14 @@ def parity_lane_rows() -> list[dict]:
     for path in sorted(data.glob("*.proto")):
         if path.name.startswith("w36-"):
             continue
-        if path.stem in EXTENSION_XFAIL_STEMS:
+        if path.stem in EXTENSION_SOURCE_XFAIL_STEMS:
             rows.append(new_row(
                 "t-lane-parity-source-" + path.stem, "test", "source",
                 property_=["P1"], input_path=rel(path),
                 include_roots=[rel(data)], cr="CR-25", exception="E6",
                 p1_expect="divergent", p2_expect="n/a",
-                note="CR-25 accepted (E6): extension declarations are not "
-                     "validated",
+                note="CR-25 accepted (E6): the source parser discards the "
+                     "extend body",
             ))
             continue
         rows.append(new_row(
@@ -480,15 +480,6 @@ def parity_lane_rows() -> list[dict]:
             rows.append(new_row(
                 "t-lane-parity-descriptor-" + path.stem, "test", "not-comparable",
                 property_=["P1"], reason="descriptor set has no file name",
-            ))
-            continue
-        if path.stem in EXTENSION_XFAIL_STEMS:
-            rows.append(new_row(
-                "t-lane-parity-descriptor-" + path.stem, "test", "descriptor",
-                property_=["P1"], input_path=rel(path), target=target,
-                cr="CR-25", exception="E6", p1_expect="divergent",
-                note="CR-25 accepted (E6): extension declarations are not "
-                     "validated",
             ))
             continue
         rows.append(new_row(
