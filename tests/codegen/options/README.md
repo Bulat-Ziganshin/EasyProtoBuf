@@ -67,6 +67,7 @@ stdout, and the expected sentence in stderr:
 | `reject-cpp-type-ext-range.proto` | the same option at extension range scope |
 | `reject-proto3-extend-user.proto` | a proto3 `extend` of a user message: `extend declarations are allowed only in proto2` (`U-16`) |
 | `reject-map-entry.proto` | `map_entry should not be set explicitly` |
+| `reject-map-entry-kind.proto` | a non-boolean `map_entry` value names the value kind first (`U-62`) |
 | `reject-map-packed.proto` | `map fields cannot have default or packed options` (the non-default `packed = true`) |
 | `reject-ext-range-unverified-declaration.proto` | `UNVERIFIED` with declarations |
 | `reject-file-unknown-option.proto` | `Option "java_packages" unknown` |

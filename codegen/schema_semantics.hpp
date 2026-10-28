@@ -27,6 +27,13 @@ bool packable_type(int type);
 bool effective_packed(const FieldDescriptorProto& field, FileSyntax syntax);
 
 bool valid_map_key_type(int type);
+
+// True when `text` is an IDENTIFIER in the reference compiler's sense:
+// `[A-Za-z_][A-Za-z0-9_]*`, ASCII only (`io::Tokenizer::IsIdentifier`). The
+// source parser asks it for the `reserved "..."` warning (U-50) and the
+// semantic pass asks it for enum defaults, so both fronts answer with one rule.
+bool is_proto_identifier(const std::string& text);
+
 bool parse_unsigned_integer(const std::string& text, std::uint64_t& result);
 bool parse_signed_32(const std::string& text, std::int32_t& result);
 

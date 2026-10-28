@@ -2270,16 +2270,13 @@ private:
                 }
             }
             if (current_.kind == TOKEN_SYMBOL && current_.symbol == '[') {
-                const FieldOptionState ignored =
-                    field_options(OPTION_OWNER_ENUM_VALUE, OptionFieldKind());
-                // CR-27: protoc special-cases `json_name` only in
-                // `ParseFieldOptions` (`parser.cc:1210-1214`); an enum value's
-                // options go through `ParseOption`, where the name is unknown.
-                if (ignored.has_default || ignored.has_packed ||
-                    ignored.has_cpp_type || ignored.has_json_name) {
-                    throw ParseFailure(value_location,
-                        "field-only options are not enum-value options");
-                }
+                // CR-27/R14 (U-49): the call is the whole check. `default`,
+                // `packed` and `json_name` are not fields of
+                // `EnumValueOptions`, so the known-option table refuses each
+                // one as unknown (protoc's `ParseOption` does the same), and
+                // `(easypb.cpp).type` is refused by the field-scope rule
+                // (U-54). The former post-check on the state could never fire.
+                (void)field_options(OPTION_OWNER_ENUM_VALUE, OptionFieldKind());
             }
             expect_symbol(';');
             out_.declaration_locations[easypb_schema::enum_value_path(
@@ -2393,6 +2390,20 @@ private:
             for (;;) {
                 const SourceLocation where = current_.location;
                 const std::string name = string_sequence();
+                // U-50: protoc 30.1 accepts any string literal here but warns
+                // when it is not an identifier ("Reserved name \"%s\" is not a
+                // valid identifier.", parser.cc:1767-1777). The verdict stays
+                // accept; the warning is the whole rule.
+                if (!easypb_schema::is_proto_identifier(name)) {
+                    Diagnostic warning;
+                    warning.file = file_name_;
+                    warning.location = where;
+                    warning.warning = true;
+                    warning.message =
+                        "Reserved name \"" + name +
+                        "\" is not a valid identifier.";
+                    out_.warnings.push_back(std::move(warning));
+                }
                 if (!names.insert(name).second) {
                     throw ParseFailure(where, "duplicate reserved name " + name);
                 }

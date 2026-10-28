@@ -38,6 +38,16 @@ the sentence alone: the source door now carries `file:line:column` (`U-30`) and
 the descriptor door cannot, so the driver asserts the position on the source
 path and its absence on the descriptor path instead of byte-equal stderr.
 
+Step R14 adds the reserved-name warning pair (`U-50`) and the two `map_entry`
+diagnostics (`U-62`), and extends the W-42 rows with the unconditional
+`allow_alias` suffix (`U-51`). The warning fixture is source-only: the rule is
+the parser's, and a descriptor carries no source text; `reserved "ok"` in the
+same file is the silent control, while the header must still be written. The
+two `map_entry` fixtures split the value-kind rule from the row's own refusal:
+an aggregate (message-shaped) value names the kind defect, and a well-typed
+`true` keeps the `map_entry` sentence. The W-42 suffix is asserted on both
+doors and in both `allow_alias` branches.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -136,6 +146,9 @@ path and its absence on the descriptor path instead of byte-equal stderr.
 | the four option default values, with an option-less control (accepted) | `.proto` + `.pbs` | `U-08` |
 | an extension `json_name` that differs from the derived name (refused) | `.proto` only | `U-25` |
 | an extension `json_name` equal to the derived name (accepted) | `.proto` only | `U-25` |
+| a reserved name that is not an identifier (accepted, warning) | `.proto` only | `U-50` |
+| `map_entry` with a message-shaped value (refused: value kind) | `.proto` only | `U-62` |
+| `map_entry` with a well-typed primitive value (refused: `map_entry`) | `.proto` only | `U-62` |
 | the embedded-NUL default under `--no-class` and a custom string type (accepted) | `defaults-nul.proto` / `.pbs` | `U-20` |
 
 The first eight paired fixtures and the accepted controls exist twice as
@@ -308,8 +321,10 @@ source-only fixtures (`bom`, `bom-control`, `empty-syntax`,
 `grammar-repeated-default`, `json-name-map-collision`,
 `lite-runtime-dep`,
 `literals-aggregate-nul`, `literals-nested-comment`, `literals-octal-08`,
-`literals-octal-09`, `literals-octal-enum`, `plus-int-default`,
-`plus-enum-value`, `plus-float-default`, `plus-inf-nan`)
+`literals-octal-09`, `literals-octal-enum`, `map-entry-message-value`,
+`map-entry-primitive-value`, `plus-int-default`,
+`plus-enum-value`, `plus-float-default`, `plus-inf-nan`,
+`reserved-non-identifier`)
 are skipped: protoc refuses most of them,
 and a generated `.pbs` would add an unintended twin. `lite-runtime-dep` is
 skipped because protoc refuses its importer, so the pair is encoded from

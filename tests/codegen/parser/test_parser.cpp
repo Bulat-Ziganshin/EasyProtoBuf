@@ -6,6 +6,7 @@
 #include "proto_parser.hpp"
 
 #include "known_options.hpp"
+#include "schema_semantics.hpp"
 
 namespace {
 
@@ -2663,6 +2664,152 @@ void test_known_option_field_kind_rules()
     CHECK(deferred_error.message.find("submessage fields") != std::string::npos);
 }
 
+// R14 (U-49): an enum value's bracket list is validated by the known-option
+// table alone. `default`, `packed` and `json_name` are not fields of
+// `EnumValueOptions`, so each is refused as unknown; `(easypb.cpp).type` is a
+// field option and refused by the scope rule (U-54). The parser's former
+// post-check could never fire, and this family pins every verdict and its
+// sentence so its removal cannot change acceptance or wording.
+void test_enum_value_bracket_options_are_table_rules()
+{
+    const char* accepted[] = {
+        "enum E { A = 0 [deprecated = true]; }",
+        "enum E { A = 0 [debug_redact = true]; }",
+        "enum E { A = 0 [feature_support = { }]; }",
+    };
+    for (std::size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        const bool ok = easypb_proto::parse_proto(
+            "enum-value-option.proto",
+            std::string("syntax = \"proto2\";\n") + accepted[i], parsed, error);
+        if (!ok) std::cerr << accepted[i] << ": " << error.message << '\n';
+        CHECK(ok);
+    }
+
+    const char* refused[] = {
+        "enum E { A = 0 [default = 1]; }",
+        "enum E { A = 0 [packed = true]; }",
+        "enum E { A = 0 [json_name = \"x\"]; }",
+    };
+    for (std::size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        CHECK(!easypb_proto::parse_proto(
+            "enum-value-option-bad.proto",
+            std::string("syntax = \"proto2\";\n") + refused[i], parsed, error));
+        CHECK(error.message.find("unknown") != std::string::npos);
+    }
+
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto("enum-value-cpp-type.proto",
+        "syntax = \"proto2\";\n"
+        "enum E { A = 0 [(easypb.cpp).type = \"::x\"]; }\n", parsed, error));
+    CHECK(error.message.find("cannot be set at enum value scope") !=
+          std::string::npos);
+}
+
+// R14 (U-50): a reserved name that is not an identifier is accepted with a
+// warning, as protoc 30.1 does (parser.cc:1767-1777). The warning is per name
+// and applies to the message and enum spellings alike; a legal identifier is
+// silent.
+void test_reserved_non_identifier_warns()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("reserved-non-identifier.proto",
+        "syntax = \"proto2\";\n"
+        "message M { reserved \"foo bar\", \"ok\"; }\n"
+        "enum E { reserved \"x y\"; A = 0; }\n", parsed, error));
+    CHECK(parsed.warnings.size() == 2);
+    if (parsed.warnings.size() == 2) {
+        CHECK(parsed.warnings[0].warning);
+        CHECK(parsed.warnings[0].message ==
+              "Reserved name \"foo bar\" is not a valid identifier.");
+        CHECK(parsed.warnings[0].location.line == 2);
+        CHECK(parsed.warnings[0].location.column == 22);
+        CHECK(parsed.warnings[1].message ==
+              "Reserved name \"x y\" is not a valid identifier.");
+        CHECK(parsed.warnings[1].location.line == 3);
+        CHECK(parsed.warnings[1].location.column == 19);
+    }
+
+    // The accept control is the same declaration with identifier names only.
+    easypb_proto::ParsedProto control;
+    easypb_proto::Diagnostic control_error;
+    CHECK(easypb_proto::parse_proto("reserved-identifiers.proto",
+        "syntax = \"proto2\";\n"
+        "message M { reserved \"foo\", \"ok\"; }\n", control, control_error));
+    CHECK(control.warnings.empty());
+}
+
+// R14 (U-51): protoc appends the allow_alias hint to the folded-name sentence
+// whether or not the option is set. The rule lives in the shared enum walk the
+// linker runs, so the test parses (the standalone parser does not run that
+// walk) and asks the walk directly; the second case keeps `allow_alias = true`
+// legal (CR-26 needs a shared number) while two other names still fold.
+void test_folded_enum_name_message_always_has_the_alias_suffix()
+{
+    const std::string suffix =
+        " (If you are using allow_alias, please assign the same number to "
+        "each enum value name.)";
+
+    easypb_proto::ParsedProto folded;
+    easypb_proto::Diagnostic parse_error;
+    CHECK(easypb_proto::parse_proto("folded-name.proto",
+        "syntax = \"proto2\";\n"
+        "enum E { FOO = 0; foo = 1; }\n", folded, parse_error));
+    easypb_schema::Diagnostic enum_error;
+    CHECK(!easypb_schema::validate_enum_value_numbers(folded, enum_error));
+    CHECK(enum_error.message.find("same name as") != std::string::npos);
+    CHECK(enum_error.message.find(suffix) != std::string::npos);
+
+    easypb_proto::ParsedProto aliased;
+    CHECK(easypb_proto::parse_proto("folded-name-alias.proto",
+        "syntax = \"proto2\";\n"
+        "enum AliasDiff { option allow_alias = true;\n"
+        "  ALIAS_DIFF_FOO = 0; ALIAS_DIFF_BAR = 0; FOO = 1; }\n",
+        aliased, parse_error));
+    easypb_schema::Diagnostic aliased_error;
+    CHECK(!easypb_schema::validate_enum_value_numbers(aliased, aliased_error));
+    CHECK(aliased_error.message.find("same name as") != std::string::npos);
+    CHECK(aliased_error.message.find(suffix) != std::string::npos);
+}
+
+// R14 (U-62): the value-kind rule is asked before the row's own refusal, so a
+// message-shaped (aggregate) or integer value names the kind defect; a
+// well-typed `true` still gets the row's `map_entry` sentence.
+void test_map_entry_refusal_names_the_value_kind_first()
+{
+    const char* wrong_kind[] = {
+        "message M { option map_entry = { }; }",
+        "message M { option map_entry = 5; }",
+    };
+    for (std::size_t i = 0; i < sizeof(wrong_kind) / sizeof(wrong_kind[0]); ++i) {
+        easypb_proto::ParsedProto parsed;
+        easypb_proto::Diagnostic error;
+        CHECK(!easypb_proto::parse_proto(
+            "map-entry-kind.proto",
+            std::string("syntax = \"proto3\";\n") + wrong_kind[i], parsed,
+            error));
+        CHECK(error.message.find(
+                  "Value must be identifier for boolean option \"map_entry\"") !=
+              std::string::npos);
+        CHECK(error.message.find("map_entry should not be set explicitly") ==
+              std::string::npos);
+    }
+
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(!easypb_proto::parse_proto("map-entry-well-typed.proto",
+        "syntax = \"proto3\";\nmessage M { option map_entry = true; }\n",
+        parsed, error));
+    CHECK(error.message.find("map_entry should not be set explicitly") !=
+          std::string::npos);
+    CHECK(error.message.find("Value must be identifier") == std::string::npos);
+}
+
 // R08: the option *value* grammar. A value is one identifier (U-23), a leading
 // `-` before an aggregate is ignored (U-24), a number carries at most one
 // decimal point or exponent (U-26), and the aggregate balancer is checked
@@ -2802,6 +2949,10 @@ int main()
     test_known_option_table_covers_47_rows();
     test_known_option_measured_cases();
     test_known_option_field_kind_rules();
+    test_enum_value_bracket_options_are_table_rules();
+    test_reserved_non_identifier_warns();
+    test_folded_enum_name_message_always_has_the_alias_suffix();
+    test_map_entry_refusal_names_the_value_kind_first();
     test_option_value_grammar();
 
     if (failures != 0) {

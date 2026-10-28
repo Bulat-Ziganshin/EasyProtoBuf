@@ -205,22 +205,20 @@ std::string known_option_value_error(const KnownOption& option,
                                      const std::string& text,
                                      const OptionFieldKind& field)
 {
-    if (option.refuse_reason != 0) return std::string(option.refuse_reason);
-
     switch (option.value_kind) {
         case OPTION_CONSTANT_STRING:
             if (value_kind != OPTION_CONSTANT_STRING) {
                 return "Value must be quoted string for string option \"" +
                        std::string(option.name) + "\"";
             }
-            return std::string();
+            break;
 
         case OPTION_CONSTANT_BOOL:
             if (value_kind != OPTION_CONSTANT_BOOL) {
                 return "Value must be identifier for boolean option \"" +
                        std::string(option.name) + "\"";
             }
-            return std::string();
+            break;
 
         case OPTION_CONSTANT_IDENTIFIER:
             if (value_kind != OPTION_CONSTANT_IDENTIFIER) {
@@ -239,11 +237,18 @@ std::string known_option_value_error(const KnownOption& option,
                        "\" is a message; set it with an aggregate value "
                        "{ <proto text format> }";
             }
-            return std::string();
+            break;
 
         default:
-            return std::string();
+            break;
     }
+
+    // U-62: the row's own refusal (currently only `map_entry` has one) is
+    // asked AFTER the value-kind rule. A value that is not the kind the
+    // option's field declares is a value-kind defect first; naming the row's
+    // refusal for it hid that rule. A well-typed value still gets the row's
+    // sentence, so the verdict is unchanged in both cases.
+    if (option.refuse_reason != 0) return std::string(option.refuse_reason);
 
     // The value-dependent rules. They only apply to a field-scoped option.
     if (option.owner != OPTION_OWNER_FIELD) return std::string();

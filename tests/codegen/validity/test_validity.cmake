@@ -806,12 +806,25 @@ run_fail(enum_diff_desc_out enum_diff_desc_err
 require_empty(enum_diff_desc_out "The enum-diff descriptor stdout")
 require_contains(enum_diff_desc_err "same name as" "The enum-diff descriptor refusal")
 
+# U-51: protoc appends the allow_alias hint whether or not the option is set.
+# `enum-name-collision-case` carries no option and `enum-alias-diff-number`
+# carries `allow_alias = true`, so the two fixtures pin both branches of the
+# message.
+set(fold_alias_suffix
+    " (If you are using allow_alias, please assign the same number to each enum value name.)")
+require_contains(enum_case_desc_err "${fold_alias_suffix}"
+    "U-51: the folded-name suffix without allow_alias")
+require_contains(enum_diff_desc_err "${fold_alias_suffix}"
+    "U-51: the folded-name suffix with allow_alias")
+
 if(FULL_BUILD)
     foreach(name enum-name-collision-case enum-name-collision-prefix)
         run_fail(enum_src_out enum_src_err
             ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${name}.proto")
         require_empty(enum_src_out "The ${name} source stdout")
         require_contains(enum_src_err "same name as" "The ${name} source refusal")
+        require_contains(enum_src_err "${fold_alias_suffix}"
+            "U-51: the ${name} source suffix")
     endforeach()
     # `enum-alias-diff-number` writes `allow_alias = true` without a shared
     # number, so B7's CR-26 rule refuses the source before the folded-name
@@ -1160,3 +1173,54 @@ run_fail(no_class_number_out no_class_number_err
 require_empty(no_class_number_out "The --no-class field-number stdout")
 require_contains(no_class_number_err "outside the valid range 1..536870911"
     "U-20: --no-class keeps schema-level refusals")
+
+# --- R14: reserved-name warnings and the two map_entry diagnostics (U-50, U-62)
+#
+# U-50: protoc accepts a reserved name that is not an identifier and prints a
+# warning, once per name and on both the message and the enum spelling. The
+# verdict stays exit 0 and the header must still be written; the warning names
+# the offending text. `reserved "ok"` in the same fixture is the control: a
+# legal identifier must not produce a warning.
+if(FULL_BUILD)
+    run_ok(reserved_warn_out reserved_warn_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/reserved-non-identifier.proto")
+    require_contains(reserved_warn_out "struct M"
+        "U-50: the header is written beside the warning")
+    require_contains(reserved_warn_out "enum E"
+        "U-50: the enum declaration is written beside the warning")
+    require_contains(reserved_warn_err
+        "warning: Reserved name \"foo bar\" is not a valid identifier."
+        "U-50: the message reserved-name warning")
+    require_contains(reserved_warn_err
+        "warning: Reserved name \"x y\" is not a valid identifier."
+        "U-50: the enum reserved-name warning")
+    require_absent(reserved_warn_err "Reserved name \"ok\""
+        "U-50: a legal identifier must not warn")
+endif()
+
+# U-62: the two diagnostics are distinct. A message-shaped (aggregate) value is
+# a value-kind defect first, while a well-typed primitive value still gets the
+# row's own refusal sentence.
+if(FULL_BUILD)
+    run_fail(map_entry_message_out map_entry_message_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/map-entry-message-value.proto")
+    require_empty(map_entry_message_out "The map_entry message-value stdout")
+    require_contains(map_entry_message_err
+        "Value must be identifier for boolean option \"map_entry\""
+        "U-62: the message-value diagnostic names the value kind")
+    require_absent(map_entry_message_err "map_entry should not be set explicitly"
+        "U-62: the message value must not name the row's refusal")
+
+    run_fail(map_entry_primitive_out map_entry_primitive_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/map-entry-primitive-value.proto")
+    require_empty(map_entry_primitive_out "The map_entry primitive-value stdout")
+    require_contains(map_entry_primitive_err
+        "map_entry should not be set explicitly"
+        "U-62: the primitive value gets the row's refusal")
+    require_absent(map_entry_primitive_err
+        "Value must be identifier for boolean option"
+        "U-62: the primitive value must not name the value-kind rule")
+endif()

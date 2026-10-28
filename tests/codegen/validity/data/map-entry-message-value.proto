@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+// U-62: an aggregate (message-shaped) value is not the boolean kind the
+// `map_entry` row declares, so the value-kind rule names the defect before the
+// row's own refusal sentence.
+message M
+{
+    option map_entry = { };
+}

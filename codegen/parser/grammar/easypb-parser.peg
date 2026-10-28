@@ -117,8 +117,7 @@ OctalEscape           <- "\\" [0-7] [0-7]? [0-7]?
 UnicodeEscape         <- "\\u" [0-9A-Fa-f] [0-9A-Fa-f]
                                [0-9A-Fa-f] [0-9A-Fa-f]
 UnicodeLongEscape     <- "\\U" "00" [01] [0-9A-Fa-f] [0-9A-Fa-f]
-                               [0-9A-Fa-f] [0-9A-Fa-f]
-                               [0-9A-Fa-f] [0-9A-Fa-f]
+                               [0-9A-Fa-f] [0-9A-Fa-f] [0-9A-Fa-f]
 
 EmptyStatement        <- ";"
 

@@ -1933,18 +1933,17 @@ bool validate_enum_value_numbers_in_enum(const SchemaFile& file,
         if (earlier.name == value_name || earlier.number == enumeration.value[i].number) {
             continue;
         }
-        const bool allow_alias =
-            enumeration.options.has_allow_alias &&
-            enumeration.options.allow_alias;
         std::string message =
             "Enum name " + view_text(value_name) + " has the same name as " +
             view_text(earlier.name) +
             " if you ignore case and strip out the enum name prefix (if any).";
-        if (allow_alias) {
-            message +=
-                " (If you are using allow_alias, please assign the same "
-                "number to each enum value name.)";
-        }
+        // U-51: the reference compiler appends this hint whether or not the
+        // option is set (`descriptor.cc:6996-7003`; measured on both proto2
+        // and proto3, with and without `allow_alias`), so it is part of the
+        // sentence, not a branch.
+        message +=
+            " (If you are using allow_alias, please assign the same "
+            "number to each enum value name.)";
         const DescriptorPath value_path =
             enum_value_path(enum_path, static_cast<int>(i));
         return fail_at_code(
@@ -2661,6 +2660,14 @@ bool valid_bytes_default_escape(const std::string& text)
 }
 
 } // namespace
+
+// The shared spelling of the rule the anonymous namespace owns. The source
+// parser asks the same question for `reserved "..."` names (U-50), so the two
+// fronts cannot drift on what an identifier is.
+bool is_proto_identifier(const std::string& text)
+{
+    return is_identifier(text);
+}
 
 // The decoder that belongs to the grammar above: it turns the C-escaped text
 // a bytes default carries into the bytes it denotes, with exactly the escapes

@@ -1,0 +1,16 @@
+syntax = "proto2";
+
+// U-50: a reserved name is accepted whether or not it is an identifier, but
+// protoc warns about the non-identifier spellings. The rule is the same for a
+// message and an enum, so both declarations carry one.
+message M
+{
+    reserved "foo bar", "ok";
+    optional int32 value = 1;
+}
+
+enum E
+{
+    reserved "x y";
+    ZERO = 0;
+}

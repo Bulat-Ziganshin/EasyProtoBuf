@@ -95,10 +95,13 @@ SOURCE_ONLY_FIXTURES = (
     "literals-octal-08",
     "literals-octal-09",
     "literals-octal-enum",
+    "map-entry-message-value",
+    "map-entry-primitive-value",
     "plus-enum-value",
     "plus-float-default",
     "plus-inf-nan",
     "plus-int-default",
+    "reserved-non-identifier",
 )
 
 # The one fixture whose text protoc will not parse, and the two legal type

@@ -185,6 +185,10 @@ expect_refusal(reject-proto3-extend-user
     "extend declarations are allowed only in proto2")
 expect_refusal(reject-map-entry
     "map_entry should not be set explicitly")
+# U-62: a non-boolean value is a value-kind defect first; the row's own
+# refusal sentence is reserved for a well-typed value.
+expect_refusal(reject-map-entry-kind
+    "Value must be identifier for boolean option \"map_entry\"")
 # U-08: the default `packed = false` is accepted on a map (the accepted
 # fixture above), while the non-default `true` stays refused.
 expect_refusal(reject-map-packed
