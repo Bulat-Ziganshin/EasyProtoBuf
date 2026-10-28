@@ -40,16 +40,34 @@ void validate_cpp_package(const std::string& package);
 
 // The global names the generated header's own preamble puts into the global
 // namespace. FILE_TEMPLATE includes <cstdint> directly and <easypb.hpp>, whose
-// includes name <cstdint> and <cstddef> (include/easypb.hpp:13-14), so the C
-// typedefs of those two headers are visible to every generated header. A
-// declaration or a first package component with one of these names is spelled
-// next to a typedef the header itself uses: `struct int32_t` and `namespace
-// int32_t` are both ill-formed (`using typedef-name 'int32_t' after 'struct'`),
-// so the name is an occupant of the file scope and a refused package
-// component. The list is the family the preamble provides, enumerated by the
-// header that declares it, not the handful of names a bug report happened to
-// try.
+// includes name <cstdint>, <cstddef> and <cstring> (include/easypb.hpp:11-14),
+// so the C typedefs of those headers, the C library functions of <cstring> and
+// the libstdc++ namespace <cstdint> pulls in are visible to every generated
+// header. A declaration or a first package component with one of these names is
+// spelled next to a declaration the header itself uses: `struct int32_t`,
+// `namespace int32_t`, `struct memcpy` and `namespace memcpy` are all
+// ill-formed next to the typedef or the function the preamble already declares.
+// The list is the family the preamble provides, enumerated by the header that
+// declares it, not the handful of names a bug report happened to try.
 const std::set<std::string>& cpp_global_names();
+
+// The kind of declaration the global occupant `name` is - "global typedef",
+// "C library function" or "C++ library namespace" - for a diagnostic. Null
+// when the name is not one of cpp_global_names().
+const char* cpp_global_name_kind(const std::string& name);
+
+// Refuse a declaration name whose spelling [lex.name] reserves for the
+// implementation: a double underscore, or an underscore followed by an
+// uppercase letter, in every scope, and a leading underscore in the global
+// namespace. Such a name is not escaped - no suffix repairs it and the escape
+// vocabulary belongs to keywords - so the declaration is refused instead. The
+// rule is a file-scope rule: the emitter applies it to the top-level messages
+// and enums, the declarations the generated namespace opens directly. `kind`
+// is what the declaration is ("message", "enum"), so the diagnostic names it
+// the way the collision diagnostics do.
+void validate_cpp_declaration_name(const std::string& kind,
+                                   const std::string& name,
+                                   bool global_namespace);
 
 } // namespace easypb_codegen
 

@@ -1,0 +1,16 @@
+//
+// V-02: a top-level declaration whose spelling [lex.name] reserves for the
+// implementation.
+//
+// `_Foo` begins with an underscore followed by an uppercase letter, which is
+// reserved in every scope; the declaration is refused with the rule in the
+// diagnostic instead of emitted. A merely case-different name (`Foo`, `_foo`
+// in a package) and an already escaped name (`class_`) are not reserved forms
+// and stay accepted.
+
+syntax = "proto3";
+
+message _Foo
+{
+    int32 x = 1;
+}

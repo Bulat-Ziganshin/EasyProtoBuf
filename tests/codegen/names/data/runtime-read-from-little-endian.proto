@@ -1,0 +1,18 @@
+//
+// V-01: `package easypb;` and a declaration named like a runtime function
+// template.
+//
+// include/easypb.hpp:137-143 declares `read_from_little_endian` in
+// `namespace easypb` (the two endian helpers beside it have the same shape).
+// A struct of that name redeclares the function template as a different kind
+// of entity, so the header does not compile even though no type definition is
+// involved.
+
+syntax = "proto2";
+
+package easypb;
+
+message read_from_little_endian
+{
+    optional int32 x = 1;
+}

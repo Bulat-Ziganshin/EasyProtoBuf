@@ -1,0 +1,17 @@
+//
+// V-02 accepted control: a top-level `_foo` inside a package.
+//
+// [lex.name] reserves a leading underscore only in the global namespace. This
+// declaration is spelled in `namespace app`, so `_foo` is legal C++ (and
+// therefore must not be refused); the global-namespace half of the rule is the
+// `_upper`/`__` part plus the preamble occupants, not every leading
+// underscore.
+
+syntax = "proto3";
+
+package app;
+
+message _foo
+{
+    int32 x = 1;
+}

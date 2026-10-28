@@ -142,6 +142,7 @@ set(paired_fixtures
     literals-lexemes
     grammar-table
     scope-easypb
+    scope-nested-reserved
     p3opt-ok
     oneof-contiguous
     message-set-empty
@@ -939,6 +940,59 @@ if(FULL_BUILD)
             "The descriptor refusal fabricated a source position: ${scope_desc_err}")
     endif()
 endif()
+
+# --- V-01/V-02: the complete file-scope name rules through both doors --------
+#
+# The names lane owns the rules; this block proves the two input paths reach the
+# SAME verdict and the same sentence for the rules the extended occupant list
+# adds: the complete runtime declaration list under `package easypb;` (V-01),
+# the preamble's C library and implementation names in the global namespace
+# (V-02), and the reserved [lex.name] spelling of a top-level declaration
+# (V-02). The accepted twin (`scope-nested-reserved`) is in the paired loop
+# above: both doors accept it and emit the same header, which the build
+# compiles.
+set(scope_name_refusals
+    "scope-runtime|message 'exception'|runtime type 'exception'"
+    "scope-implementation-name|message '__gnu_cxx'|C++ library namespace '__gnu_cxx'"
+    "scope-global-name|message 'memcpy'|C library function 'memcpy'"
+    "scope-reserved-form|message '_Foo'|reserved C++ identifier form")
+
+foreach(entry ${scope_name_refusals})
+    string(REPLACE "|" ";" parts "${entry}")
+    list(GET parts 0 scope_name)
+    list(GET parts 1 scope_needle_a)
+    list(GET parts 2 scope_needle_b)
+
+    run_fail(${scope_name}_desc_out ${scope_name}_desc_err
+        ${CODEGEN} --descriptor-set "${DATA_DIR}/${scope_name}.pbs")
+    require_empty(${scope_name}_desc_out
+        "The ${scope_name} descriptor stdout")
+    require_contains(${scope_name}_desc_err "${scope_needle_a}"
+        "The ${scope_name} descriptor refusal names the declaration")
+    require_contains(${scope_name}_desc_err "${scope_needle_b}"
+        "The ${scope_name} descriptor refusal names the occupant or rule")
+
+    if(FULL_BUILD)
+        run_fail(${scope_name}_src_out ${scope_name}_src_err
+            ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/${scope_name}.proto")
+        require_empty(${scope_name}_src_out
+            "The ${scope_name} source stdout")
+        require_contains(${scope_name}_src_err "${scope_needle_a}"
+            "The ${scope_name} source refusal names the declaration")
+        require_contains(${scope_name}_src_err "${scope_needle_b}"
+            "The ${scope_name} source refusal names the occupant or rule")
+        # U-30: the source door positions the refused declaration; a `.pbs`
+        # carries no source text, so its sentence has no coordinates.
+        if(NOT "${${scope_name}_src_err}" MATCHES "${scope_name}[.]proto:[0-9]+:[0-9]+: ")
+            message(FATAL_ERROR
+                "The ${scope_name} source refusal carries no file:line:column: ${${scope_name}_src_err}")
+        endif()
+        if("${${scope_name}_desc_err}" MATCHES "${scope_name}[.]proto:[0-9]+:[0-9]+: ")
+            message(FATAL_ERROR
+                "The ${scope_name} descriptor refusal fabricated a source position: ${${scope_name}_desc_err}")
+        endif()
+    endif()
+endforeach()
 
 # --- R05: the accepted twins of the proto3_optional and MessageSet rules ------
 #

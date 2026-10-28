@@ -1,0 +1,19 @@
+//
+// V-01: `package easypb;` and a declaration named like the runtime's
+// type-to-codec dispatcher.
+//
+// include/easypb.hpp:840-861 declares the `pb_type_codec` class template and
+// its specializations in `namespace easypb`. A struct of that name redeclares
+// the template: `class template` and `struct` cannot share a namespace name.
+// The bounded templates around it (`scalar_pb_codec`, `bytearray_pb_codec`,
+// `message_pb_codec`, `is_valid_map_key_type`, ...) are the same occupant
+// kind.
+
+syntax = "proto2";
+
+package easypb;
+
+message pb_type_codec
+{
+    optional int32 x = 1;
+}

@@ -1,0 +1,15 @@
+//
+// V-02: a top-level declaration that contains a double underscore.
+//
+// [lex.name] reserves every identifier that contains `__` for the
+// implementation, in every scope, whether or not it happens to collide with
+// anything the header includes. The declaration is refused with the rule in
+// the diagnostic; the name is not escaped, because no suffix repairs a
+// reserved spelling.
+
+syntax = "proto3";
+
+message foo__bar
+{
+    int32 x = 1;
+}

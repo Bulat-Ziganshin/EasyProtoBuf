@@ -46,6 +46,7 @@
 #include "plus-descriptor-controls.pb.hpp"
 #include "reserved-range-end.pb.hpp"
 #include "scope-easypb.pb.hpp"
+#include "scope-nested-reserved.pb.hpp"
 #include "p3opt-ok.pb.hpp"
 #include "oneof-contiguous.pb.hpp"
 #include "message-set-empty.pb.hpp"
@@ -316,6 +317,13 @@ int main()
         const easypb::ValidityConfig copy =
             easypb::decode<easypb::ValidityConfig>(easypb::encode(value));
         report("easypb package", copy.value == 17 && copy.has_value);
+    }
+    // V-02: the reserved-form rule is a file-scope rule, so the nested `_Foo`
+    // keeps its spelling and is nameable from outside the generated struct.
+    {
+        app::Outer::_Foo nested;
+        nested.x = 5;
+        report("nested _Foo", nested.x == 5);
     }
 
     // The special floating-point defaults.

@@ -1,0 +1,18 @@
+//
+// V-01: `package easypb;` and a declaration named like an enumerator of a
+// typed unscoped enum.
+//
+// include/easypb.hpp:44-53 declares `enum WireType`, whose enumerators
+// (WIRETYPE_* here) are members of `namespace easypb` itself, not of the enum.
+// The same shape covers the PB_* values of `enum PBType`
+// (include/easypb.hpp:56-75): a struct that carries one of those names
+// redeclares the enumerator.
+
+syntax = "proto2";
+
+package easypb;
+
+message WIRETYPE_VARINT
+{
+    optional int32 x = 1;
+}

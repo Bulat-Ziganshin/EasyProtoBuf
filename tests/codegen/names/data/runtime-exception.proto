@@ -1,0 +1,18 @@
+//
+// V-01: `package easypb;` and a declaration that carries one of the runtime
+// header's exception names.
+//
+// include/easypb.hpp:87-94 declares the eight exception types in
+// `namespace easypb`; `exception` is the base of the other seven. The package
+// itself is allowed (owner decision #1), so the generated `struct exception`
+// redefines `easypb::exception` and the header does not compile. The occupant
+// list this row extends held seven types and none of the exceptions.
+
+syntax = "proto2";
+
+package easypb;
+
+message exception
+{
+    optional int32 x = 1;
+}

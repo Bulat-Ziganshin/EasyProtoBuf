@@ -1,0 +1,22 @@
+//
+// V-02 accepted through both doors: a package-local `_Foo` nested inside a
+// message.
+//
+// The reserved-form rule is a file-scope rule (see GENERATED_CODE.md): the
+// top-level declarations the generated namespace opens directly are checked,
+// and a nested declaration owns its parent's scope instead. Both frontends
+// must accept the schema and emit the SAME header, which the build compiles.
+
+syntax = "proto3";
+
+package app;
+
+message Outer
+{
+    message _Foo
+    {
+        int32 x = 1;
+    }
+
+    _Foo child = 1;
+}

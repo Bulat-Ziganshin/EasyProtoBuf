@@ -194,6 +194,25 @@ std::string cpp_identifier_at(const std::string& name,
 }
 
 
+// Refuse a file-scope declaration name whose spelling C++ reserves for the
+// implementation (V-02), positioned at the declaration. `kind` is "message" or
+// "enum" for the diagnostic, and `global_namespace` is true when the
+// declaration is spelled in the global namespace, where a leading underscore is
+// reserved as well.
+void check_declaration_name_at(const std::string& kind,
+                               const std::string& name,
+                               bool global_namespace,
+                               const easypb_schema::DescriptorPath& path)
+{
+    try {
+        easypb_codegen::validate_cpp_declaration_name(kind, name,
+                                                      global_namespace);
+    } catch (const std::exception& problem) {
+        throw EmitterError(path, problem.what());
+    }
+}
+
+
 // The member and presence-flag names of one field, positioned at that field.
 std::string field_member_name_at(const FieldDescriptorProto& field,
                                  const easypb_schema::DescriptorPath& path)
@@ -1636,16 +1655,104 @@ std::vector<ScopeMember> message_scope_members(const MessageInfo& info,
 }
 
 
-// The runtime types `include/easypb.hpp` declares in `namespace easypb`.
+// The names `include/easypb.hpp` declares in `namespace easypb`.
 //
 // Owner decision #1 (DECISIONS.md) allows `package easypb;` and treats these
 // names as occupants of the file scope: with that package the generated
 // namespace IS the runtime namespace, so `message Encoder` redefines
-// `easypb::Encoder` and the header does not compile. The list is the seven
-// types the decision names, in declaration order of the runtime header.
-const char* const EASYPB_RUNTIME_TYPES[] = {
-    "Encoder", "Decoder", "Writer", "Reader", "WireType", "PBType",
-    "string_view"
+// `easypb::Encoder` and the header does not compile. The list is the COMPLETE
+// set of top-level declarations the runtime header puts into the namespace, in
+// declaration order, and every entry carries the header line that justifies
+// it. The previous list held the seven types the owner decision happened to
+// name; the other declarations were emitted into the same namespace
+// unchecked (V-01) - `message exception`, `message detail` and
+// `message MAX_VARINT_SIZE` used to exit 0 and produce a header no compiler
+// accepts.
+//
+// A name is an occupant because the namespace DECLARES it, not because it is a
+// type: a constant, an enumerator, a function template and a nested namespace
+// all collide with a struct of the same name. `encode` and `decode` are listed
+// even though the generated codec owns them under the default options: with
+// `--no-encoder`/`--no-decoder` the codec is not emitted, and the runtime
+// overload is still there.
+struct RuntimeName
+{
+    const char* name;
+    const char* kind;   // what to call it in the diagnostic
+};
+
+const RuntimeName EASYPB_RUNTIME_NAMES[] = {
+    // include/easypb.hpp:37-42 - the unnamed utility enum.
+    { "MAX_VARINT_SIZE", "runtime constant" },
+    { "MAX_LENGTH_CODE_SIZE", "runtime constant" },
+    { "FIELDNUM_SCALE", "runtime constant" },
+    // include/easypb.hpp:44-53 - WireType and its enumerators.
+    { "WireType", "runtime type" },
+    { "WIRETYPE_UNDEFINED", "runtime constant" },
+    { "WIRETYPE_VARINT", "runtime constant" },
+    { "WIRETYPE_FIXED64", "runtime constant" },
+    { "WIRETYPE_LENGTH_DELIMITED", "runtime constant" },
+    { "WIRETYPE_START_GROUP", "runtime constant" },
+    { "WIRETYPE_END_GROUP", "runtime constant" },
+    { "WIRETYPE_FIXED32", "runtime constant" },
+    // include/easypb.hpp:56-75 - PBType and its enumerators.
+    { "PBType", "runtime type" },
+    { "PB_INT32", "runtime constant" },
+    { "PB_INT64", "runtime constant" },
+    { "PB_UINT32", "runtime constant" },
+    { "PB_UINT64", "runtime constant" },
+    { "PB_SFIXED32", "runtime constant" },
+    { "PB_SFIXED64", "runtime constant" },
+    { "PB_FIXED32", "runtime constant" },
+    { "PB_FIXED64", "runtime constant" },
+    { "PB_SINT32", "runtime constant" },
+    { "PB_SINT64", "runtime constant" },
+    { "PB_BOOL", "runtime constant" },
+    { "PB_ENUM", "runtime constant" },
+    { "PB_FLOAT", "runtime constant" },
+    { "PB_DOUBLE", "runtime constant" },
+    { "PB_STRING", "runtime constant" },
+    { "PB_BYTES", "runtime constant" },
+    { "PB_MESSAGE", "runtime constant" },
+    // include/easypb.hpp:87-94 - the exception hierarchy.
+    { "exception", "runtime type" },
+    { "unexpected_eof", "runtime type" },
+    { "varint_too_long", "runtime type" },
+    { "length_too_long", "runtime type" },
+    { "invalid_fieldnum", "runtime type" },
+    { "wiretype_mismatch", "runtime type" },
+    { "unsupported_wiretype", "runtime type" },
+    { "missing_required_field", "runtime type" },
+    // include/easypb.hpp:105-150 - the endian helpers.
+    { "memcpy_LITTLE_ENDIAN", "runtime function" },
+    { "read_from_little_endian", "runtime function" },
+    { "write_to_little_endian", "runtime function" },
+    // include/easypb.hpp:158-185 - the string conversion helpers.
+    { "detail", "runtime namespace" },
+    // include/easypb.hpp:192-221 - the string_view typedef or fallback struct.
+    { "string_view", "runtime type" },
+    // include/easypb.hpp:228-369 and 374-641 - the wire cursor.
+    { "Writer", "runtime type" },
+    { "Reader", "runtime type" },
+    // include/easypb.hpp:644-697 - the field codecs.
+    { "dependent_false", "runtime type" },
+    { "integer_pb_field", "runtime type" },
+    { "fixed_pb_field", "runtime type" },
+    { "zigzag_pb_field", "runtime type" },
+    { "floating_pb_field", "runtime type" },
+    // include/easypb.hpp:702-837 - the scalar and message codecs.
+    { "scalar_pb_codec", "runtime type" },
+    { "bytearray_pb_codec", "runtime type" },
+    { "message_pb_codec", "runtime type" },
+    // include/easypb.hpp:841-872 - the type-to-codec dispatcher.
+    { "pb_type_codec", "runtime type" },
+    { "is_valid_map_key_type", "runtime type" },
+    // include/easypb.hpp:878-1141 - the high-level API.
+    { "Encoder", "runtime type" },
+    { "Decoder", "runtime type" },
+    // include/easypb.hpp:999-1005 and 1147-1153 - the free entry points.
+    { "encode", "runtime function" },
+    { "decode", "runtime function" }
 };
 
 
@@ -1654,15 +1761,17 @@ const char* const EASYPB_RUNTIME_TYPES[] = {
 // A file's scope holds the top-level messages, the top-level enums, the
 // enumerators of those enums, the two free codec overloads and the names the
 // generated preamble already owns: in an un-packaged schema the two runtime
-// namespaces every header references (CR-09) and the global typedefs of
-// <cstdint> and <cstddef> (U-03), and with `package easypb;` the runtime types
-// themselves (U-02). A nested declaration belongs to the scope of its own
-// parent.
+// namespaces every header references (CR-09) and the global names of
+// <cstdint>, <cstddef> and <cstring> (U-03, V-02), and with `package easypb;`
+// the complete set of declarations `namespace easypb` holds (U-02, V-01). A
+// nested declaration belongs to the scope of its own parent.
 //
 // The codec functions are emitted only when their option is on (CR-04), and
 // the runtime namespaces are global names only when the package is empty
 // (CR-09). The check is run with the same options that drive the emitter, so
-// a name is refused exactly when the declaration that owns it is emitted.
+// a name is refused exactly when the declaration that owns it is emitted. The
+// collision pass is followed by the reserved-form pass (V-02): every top-level
+// declaration must be spellable without a name [lex.name] reserves.
 void check_file_scope_names(const FileDescriptorProto& file,
                             const std::vector<MessageInfo>& roots,
                             const GenerationContext& context)
@@ -1731,12 +1840,14 @@ void check_file_scope_names(const FileDescriptorProto& file,
             member_description("standard library namespace", "std");
         std_namespace.kind = SCOPE_MEMBER_GLOBAL_NAME;
         members.push_back(std_namespace);
-        // U-03: the global typedefs the header's own preamble declares. The
+        // U-03/V-02: the global names the header's own preamble declares. The
         // emitter spells every scalar type absolutely (`::int32_t`), so a
         // declaration in the GLOBAL namespace that owns one of these names is
-        // a redefinition of a typedef the header itself uses. Inside a package
-        // the same name is legal and is not shadowed - the qualified spelling
-        // is why `tests/codegen/packages/data/shadow.proto` declares
+        // a redefinition of a typedef the header itself uses; the same is true
+        // of the <cstring> functions the header includes and of the
+        // `__gnu_cxx` namespace <cstdint> pulls in. Inside a package the same
+        // name is legal and is not shadowed - the qualified spelling is why
+        // `tests/codegen/packages/data/shadow.proto` declares
         // `message int32_t` in `package app.std.easypb` and stays accepted -
         // so the occupancy is the same "no package" case as the namespaces
         // above.
@@ -1744,30 +1855,66 @@ void check_file_scope_names(const FileDescriptorProto& file,
             easypb_codegen::cpp_global_names();
         for (std::set<std::string>::const_iterator it = global_names.begin();
              it != global_names.end(); ++it) {
+            const char* kind = easypb_codegen::cpp_global_name_kind(*it);
             ScopeMember member;
             member.cpp_name = *it;
-            member.description = member_description("global typedef", *it);
+            member.description = member_description(
+                kind != 0 ? kind : "global name", *it);
             member.kind = SCOPE_MEMBER_GLOBAL_NAME;
             members.push_back(member);
         }
     }
     if (context.package == "easypb") {
-        // U-02: the file's declarations open `namespace easypb`, the one the
-        // runtime header already declares its types in. The package itself is
-        // allowed (owner decision #1); a type that carries one of those names
-        // is refused, naming both occupants.
+        // U-02/V-01: the file's declarations open `namespace easypb`, the one
+        // the runtime header already declares its types, constants, functions
+        // and the `detail` namespace in. The package itself is allowed (owner
+        // decision #1); a declaration that carries one of those names is
+        // refused, naming both occupants.
         for (std::size_t i = 0;
-             i < sizeof(EASYPB_RUNTIME_TYPES) / sizeof(EASYPB_RUNTIME_TYPES[0]);
+             i < sizeof(EASYPB_RUNTIME_NAMES) / sizeof(EASYPB_RUNTIME_NAMES[0]);
              ++i) {
+            const RuntimeName& runtime = EASYPB_RUNTIME_NAMES[i];
+            // A generated codec already occupies `encode` and `decode`; one
+            // name is one occupant, and with the codec off the runtime
+            // function still owns the name.
+            bool codec_owns_name = false;
+            for (std::size_t j = 0; j < members.size(); ++j) {
+                if (members[j].cpp_name == runtime.name &&
+                    members[j].kind == SCOPE_MEMBER_CODEC) {
+                    codec_owns_name = true;
+                    break;
+                }
+            }
+            if (codec_owns_name) continue;
             ScopeMember member;
-            member.cpp_name = EASYPB_RUNTIME_TYPES[i];
-            member.description = member_description("runtime type",
-                                                    EASYPB_RUNTIME_TYPES[i]);
+            member.cpp_name = runtime.name;
+            member.description = member_description(runtime.kind,
+                                                    runtime.name);
             member.kind = SCOPE_MEMBER_GLOBAL_NAME;
             members.push_back(member);
         }
     }
     refuse_duplicate_cpp_names(members, "the file scope");
+
+    // V-02: [lex.name] reserves the `__` and `_Upper` forms in every scope and
+    // the `_lower` form in the global namespace, so the header never spells
+    // one of them: a library or a compiler is free to own such a name, and
+    // `struct __gnu_cxx` is already ill-formed next to <cstdint>. The check is
+    // a file-scope rule - the declarations the generated namespace opens
+    // directly - and runs after the collision pass, so a declaration that
+    // ALSO collides with a preamble occupant reports the occupant (the
+    // diagnosed hazard) rather than the form.
+    const bool global_namespace = context.package.empty();
+    for (std::size_t i = 0; i < file.enum_type.size(); ++i) {
+        const easypb_schema::DescriptorPath enum_path =
+            easypb_schema::file_enum_path(static_cast<int>(i));
+        check_declaration_name_at("enum", view_text(file.enum_type[i].name),
+                                  global_namespace, enum_path);
+    }
+    for (std::size_t i = 0; i < roots.size(); ++i) {
+        check_declaration_name_at("message", roots[i].simple_name,
+                                  global_namespace, roots[i].path);
+    }
 }
 
 

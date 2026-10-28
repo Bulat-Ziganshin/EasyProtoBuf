@@ -1,0 +1,18 @@
+//
+// V-02: a global declaration named like the implementation namespace
+// <cstdint> pulls in on libstdc++.
+//
+// include/easypb.hpp:13 includes <cstdint>, whose <bits/c++config.h> opens
+// `namespace __gnu_cxx` in the global namespace. The generated header is
+// included into the same translation unit, so `struct __gnu_cxx` is ill-formed
+// next to it ("'struct __gnu_cxx' redeclared as different kind of entity").
+// The name is an occupant of the file scope for an un-packaged file; the
+// reserved-form rule refuses it as well, but the collision is the concrete
+// hazard and is reported first.
+
+syntax = "proto3";
+
+message __gnu_cxx
+{
+    int32 x = 1;
+}

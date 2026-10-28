@@ -46,15 +46,30 @@ bool rejects_absolute_name(const std::string& name)
     }
 }
 
+// V-02: a name whose spelling [lex.name] reserves is refused as a
+// declaration, not escaped.
+bool rejects_declaration(const std::string& name, bool global_namespace)
+{
+    try {
+        easypb_codegen::validate_cpp_declaration_name("message", name,
+                                                      global_namespace);
+        return false;
+    } catch (const std::runtime_error&) {
+        return true;
+    }
+}
+
 } // namespace
 
 int main()
 {
     using easypb_codegen::cpp_absolute_name;
+    using easypb_codegen::cpp_global_name_kind;
     using easypb_codegen::cpp_global_names;
     using easypb_codegen::cpp_identifier;
     using easypb_codegen::cpp_local_name;
     using easypb_codegen::insertion_macro_stem;
+    using easypb_codegen::validate_cpp_declaration_name;
     using easypb_codegen::validate_cpp_package;
 
     CHECK(cpp_absolute_name(".foo.bar.Outer.Inner") ==
@@ -167,6 +182,39 @@ int main()
     CHECK(cpp_global_names().count("wxWidget") == 0);
     CHECK(cpp_global_names().count("Encoder") == 0);
     CHECK(cpp_global_names().count("std") == 0);
+
+    // V-02: the preamble also puts the <cstring> functions and the
+    // implementation namespace <cstdint> pulls in into the global namespace,
+    // so they are occupants of an un-packaged file scope and refused package
+    // components as well.
+    CHECK(cpp_global_names().count("memcpy") == 1);
+    CHECK(cpp_global_names().count("memset") == 1);
+    CHECK(cpp_global_names().count("strlen") == 1);
+    CHECK(cpp_global_names().count("__gnu_cxx") == 1);
+    CHECK(std::string(cpp_global_name_kind("int32_t")) == "global typedef");
+    CHECK(std::string(cpp_global_name_kind("memcpy")) ==
+          "C library function");
+    CHECK(std::string(cpp_global_name_kind("__gnu_cxx")) ==
+          "C++ library namespace");
+    CHECK(cpp_global_name_kind("wxWidget") == 0);
+    CHECK(rejects_package("memcpy"));
+    CHECK(rejects_package("strlen"));
+
+    // V-02: declarations. [lex.name] reserves `__` and `_Upper` in every
+    // scope and a leading `_` in the global namespace; a keyword is escaped,
+    // not refused, and a case difference or an already escaped name is not a
+    // reserved form.
+    CHECK(rejects_declaration("_Foo", false));
+    CHECK(rejects_declaration("_Foo", true));
+    CHECK(rejects_declaration("foo__bar", false));
+    CHECK(rejects_declaration("foo__bar", true));
+    CHECK(rejects_declaration("_foo", true));
+    CHECK(!rejects_declaration("_foo", false));
+    CHECK(!rejects_declaration("foo_bar", false));
+    CHECK(!rejects_declaration("class", false));
+    CHECK(!rejects_declaration("class_", false));
+    CHECK(!rejects_declaration("Foo", false));
+    CHECK(!rejects_declaration("encoder", false));
 
     return EXIT_SUCCESS;
 }

@@ -1,0 +1,16 @@
+//
+// V-02: a global declaration named like a C library function the generated
+// header's preamble makes visible.
+//
+// include/easypb.hpp:12 includes <cstring>, so `::memcpy` (and the rest of the
+// <string.h> family) is declared in the global namespace next to the generated
+// declarations: `struct memcpy` is ill-formed. The runtime itself calls
+// `std::memcpy` (include/easypb.hpp:132, 340), which is why the function is
+// part of the names the header uses, not an accidental include.
+
+syntax = "proto3";
+
+message memcpy
+{
+    int32 x = 1;
+}

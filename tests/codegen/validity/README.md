@@ -8,7 +8,12 @@ and the lane proves the fix in the three ways the session briefs name.
 
 The review of 2026-10-27 added two rows of the file-scope name rules
 (`U-02`/`U-03`): the names lane owns the rule, and this lane proves the two
-input paths reach the same verdict and the same diagnostic for it.
+input paths reach the same verdict and the same diagnostic for it. The review
+of 2026-10-28 extends that proof to the completed rules: the complete runtime
+declaration list under `package easypb;` (`V-01`), the preamble's C library and
+implementation names in the global namespace and the reserved [lex.name]
+spelling of a top-level declaration (`V-02`), plus the accepted nested `_Foo`
+that keeps its name.
 
 Step R05 adds the accepted twins of the descriptor invariants the parity lane
 refuses: an explicit proto3 `optional` field (one synthetic one-field oneof,
@@ -132,6 +137,10 @@ doors and in both `allow_alias` branches.
 | a leading `+` on ordinary options (refused) | `.proto` only | `CR-28` |
 | `package easypb;` with a non-colliding type (accepted) | `.proto` + `.pbs` | `U-02` |
 | a global-namespace `message int32_t` (refused on both paths) | `.proto` + `.pbs` | `U-03` |
+| `package easypb;` with a declaration named `exception` (refused on both paths) | `.proto` + `.pbs` | `V-01` |
+| a global-namespace `__gnu_cxx` / `memcpy` message (refused on both paths) | `.proto` + `.pbs` | `V-02` |
+| a top-level `_Foo` message (refused on both paths) | `.proto` + `.pbs` | `V-02` |
+| a package-local `_Foo` nested in a message (accepted) | `.proto` + `.pbs` | `V-02` |
 | an explicit proto3 `optional` field (accepted) | `.proto` + `.pbs` | `U-11` |
 | adjacent members of one oneof (accepted) | `.proto` + `.pbs` | `U-21` |
 | a proto2 MessageSet with no fields (accepted) | `.proto` + `.pbs` | `U-10`/`U-12` |

@@ -1,0 +1,19 @@
+//
+// V-01: `package easypb;` and a declaration named like one of the runtime's
+// utility constants.
+//
+// include/easypb.hpp:37-42 declares the unnamed utility enum, so
+// MAX_VARINT_SIZE, MAX_LENGTH_CODE_SIZE and FIELDNUM_SCALE are enumerators of
+// `namespace easypb`. `struct MAX_VARINT_SIZE` is a redeclaration of the
+// enumerator under a different kind, which C++ refuses. A constant is an
+// occupant of the namespace exactly like a type; the previous list checked
+// types only.
+
+syntax = "proto2";
+
+package easypb;
+
+message MAX_VARINT_SIZE
+{
+    optional int32 x = 1;
+}

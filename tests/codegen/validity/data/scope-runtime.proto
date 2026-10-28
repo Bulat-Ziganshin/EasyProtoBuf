@@ -1,0 +1,19 @@
+//
+// V-01 through both doors: `package easypb;` and a declaration that carries a
+// runtime declaration's name.
+//
+// The names lane owns the rule; this lane proves the source path and the
+// descriptor path reach the SAME verdict and the same diagnostic, so neither
+// frontend can lose or rename the declaration on its way to the emitter.
+// `exception` is one of the 51 declarations the previous seven-name list did
+// not cover: include/easypb.hpp:87 declares the exception type in
+// `namespace easypb`, so the generated `struct exception` redefines it.
+
+syntax = "proto2";
+
+package easypb;
+
+message exception
+{
+    optional int32 x = 1;
+}

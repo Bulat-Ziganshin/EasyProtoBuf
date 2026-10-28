@@ -1,0 +1,15 @@
+//
+// V-02 through both doors: a global declaration named like a C library
+// function the generated header makes visible.
+//
+// The names lane owns the rule; this lane proves both frontends keep the name
+// and the emitter refuses it with the same sentence. include/easypb.hpp:12
+// includes <cstring>, so `::memcpy` is declared next to the generated
+// declarations and `struct memcpy` is ill-formed.
+
+syntax = "proto3";
+
+message memcpy
+{
+    int32 x = 1;
+}

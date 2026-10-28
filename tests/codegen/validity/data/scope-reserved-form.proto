@@ -1,0 +1,15 @@
+//
+// V-02 through both doors: a top-level declaration whose spelling [lex.name]
+// reserves for the implementation.
+//
+// The names lane owns the rule; this lane proves both frontends keep the name
+// and the emitter refuses it with the same sentence. `_Foo` begins with an
+// underscore followed by an uppercase letter, which is reserved in every
+// scope, so no suffix and no namespace makes the spelling legal.
+
+syntax = "proto3";
+
+message _Foo
+{
+    int32 x = 1;
+}

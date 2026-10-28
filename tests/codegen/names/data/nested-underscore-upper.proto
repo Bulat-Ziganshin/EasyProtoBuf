@@ -1,0 +1,24 @@
+//
+// V-02 accepted control: a package-local `_Foo` nested inside a message.
+//
+// The reserved-form rule is a FILE-SCOPE rule: it refuses the top-level
+// declarations the generated namespace opens directly and the first package
+// component, because those are the names spelled next to the runtime and the
+// preamble. A nested declaration owns its parent's scope instead; `_Foo` is
+// still reserved by [lex.name] but the emitter has no collision to prevent and
+// keeps the name, which is the documented choice (GENERATED_CODE.md). The
+// header must compile, so the build compiles this descriptor-path header.
+
+syntax = "proto3";
+
+package app;
+
+message Outer
+{
+    message _Foo
+    {
+        int32 x = 1;
+    }
+
+    _Foo child = 1;
+}

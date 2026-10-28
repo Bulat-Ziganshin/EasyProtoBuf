@@ -1,0 +1,15 @@
+//
+// V-02 through both doors: a global declaration named like the implementation
+// namespace <cstdint> pulls in on libstdc++.
+//
+// The names lane owns the rule; this lane proves both frontends keep the name
+// and the emitter refuses it with the same sentence. include/easypb.hpp:13
+// includes <cstdint>, whose <bits/c++config.h> opens `namespace __gnu_cxx` in
+// the global namespace, so `struct __gnu_cxx` is ill-formed next to it.
+
+syntax = "proto3";
+
+message __gnu_cxx
+{
+    int32 x = 1;
+}

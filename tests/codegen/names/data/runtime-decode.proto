@@ -1,0 +1,17 @@
+//
+// V-01: `package easypb;` and a declaration named `decode`.
+//
+// The decoder half of the `encode` row: the generated decoder overload (CR-04)
+// owns the default option set, and the runtime entry point at
+// include/easypb.hpp:1147-1153 owns the name when `--no-decoder` removes the
+// generated one. Both verdicts are refusals, but only the gated row proves the
+// runtime declaration is in the occupant list.
+
+syntax = "proto3";
+
+package easypb;
+
+message decode
+{
+    int32 value = 1;
+}

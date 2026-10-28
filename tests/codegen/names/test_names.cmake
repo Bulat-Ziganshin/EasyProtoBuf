@@ -273,11 +273,11 @@ if(position_desc_err MATCHES "escape-field[.]proto:[0-9]+:[0-9]+: ")
         "The descriptor refusal fabricated a source position: ${position_desc_err}")
 endif()
 
-# --- U-02: the repository's own `package easypb;` schema ---------------------
+# --- U-02/V-01: the repository's own `package easypb;` schema -----------------
 #
 # Owner decision #1 allows `package easypb;` and refuses only a declaration
-# that carries a runtime type's name. The control is the repository's own
-# `codegen/easypb/options.proto`: it declares `package easypb;` and
+# that carries a runtime declaration's name. The control is the repository's
+# own `codegen/easypb/options.proto`: it declares `package easypb;` and
 # `CppFieldOptions`, so it must keep compiling. Its imports are the roots the
 # custom-types lane already uses (the `easypb` package directory and the
 # test-only `google/protobuf/descriptor.proto`).

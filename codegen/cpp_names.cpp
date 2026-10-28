@@ -113,19 +113,28 @@ std::vector<std::string> cpp_name_components(const std::string& path)
     return result;
 }
 
-bool has_reserved_identifier_form(const std::string& component,
-                                  bool global_component)
+// The [lex.name] rule `component` breaks, or null when it breaks none.
+//
+// [lex.name] reserves for the implementation every identifier that contains a
+// double underscore and every identifier that begins with an underscore
+// followed by an uppercase letter, in any scope; an identifier that begins
+// with an underscore is additionally reserved in the global namespace. The
+// return value is the clause of the rule, so the diagnostic can say why the
+// name is refused instead of only that it is.
+const char* reserved_identifier_form(const std::string& component,
+                                     bool global_component)
 {
-    if (component.find("__") != std::string::npos) return true;
+    if (component.find("__") != std::string::npos) {
+        return "it contains a double underscore";
+    }
     if (component.size() >= 2 && component[0] == '_' &&
         std::isupper(static_cast<unsigned char>(component[1])) != 0) {
-        return true;
+        return "it begins with an underscore followed by an uppercase letter";
     }
-    // Names beginning with an underscore are reserved in the global namespace.
     if (global_component && !component.empty() && component[0] == '_') {
-        return true;
+        return "it begins with an underscore in the global namespace";
     }
-    return false;
+    return 0;
 }
 
 } // namespace
@@ -258,35 +267,124 @@ std::string insertion_macro_stem(const std::string& absolute_proto_name,
     return result;
 }
 
-// The global typedefs the generated header's preamble makes visible.
+// The global names the generated header's preamble makes visible.
 //
-// The list is grouped by the header that declares each group, and both headers
+// The list is grouped by the header that declares each group, and all of them
 // reach every generated file: FILE_TEMPLATE includes <cstdint>, and it includes
-// <easypb.hpp>, which includes <cstdint> and <cstddef> itself
-// (include/easypb.hpp:13-14). The names are the C names, not std:: ones,
-// because the emitter spells its scalar types absolutely (`::int32_t`), which
-// is also why a generated `int32_t` cannot coexist with them. Only the C names
-// are occupants: the `std::`-only spellings (`std::nullptr_t`, `std::byte`)
-// are not in the global namespace and stay legal.
+// <easypb.hpp>, which includes <cstdint>, <cstddef> and <cstring> itself
+// (include/easypb.hpp:11-14). The typedef names are the C names, not std::
+// ones, because the emitter spells its scalar types absolutely (`::int32_t`),
+// which is also why a generated `int32_t` cannot coexist with them. Only the C
+// names are occupants: the `std::`-only spellings (`std::nullptr_t`,
+// `std::byte`) are not in the global namespace and stay legal.
+//
+// The <cstring> names are the same kind of occupant as the typedefs:
+// `void* memcpy(void*, const void*, size_t)` is declared in the global
+// namespace next to `std::memcpy`, and `struct memcpy` or `namespace memcpy`
+// is ill-formed next to it. The runtime calls `std::memcpy`
+// (include/easypb.hpp:132, 340), so the function is part of the preamble's own
+// set of names, not an accidental include.
+//
+// `__gnu_cxx` is the implementation namespace <cstdint> pulls in through
+// <bits/c++config.h> on libstdc++; a global `struct __gnu_cxx` is ill-formed
+// next to `namespace __gnu_cxx`. The name is also refused as a reserved form
+// (`__`), but the two rules have to agree: a declaration that would collide
+// with the library's namespace is an occupant of the file scope.
+namespace {
+
+struct GlobalNameGroup
+{
+    const char* kind;
+    const char* const* names;
+    std::size_t count;
+};
+
+// <cstdint>: exact-width, least-width, fast-width, pointer-width and
+// maximum-width integer typedefs; <cstddef>: size, offset and alignment.
+const char* const GLOBAL_TYPEDEF_NAMES[] = {
+    "int8_t", "int16_t", "int32_t", "int64_t",
+    "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    "int_least8_t", "int_least16_t", "int_least32_t", "int_least64_t",
+    "uint_least8_t", "uint_least16_t", "uint_least32_t", "uint_least64_t",
+    "int_fast8_t", "int_fast16_t", "int_fast32_t", "int_fast64_t",
+    "uint_fast8_t", "uint_fast16_t", "uint_fast32_t", "uint_fast64_t",
+    "intptr_t", "uintptr_t", "intmax_t", "uintmax_t",
+    "size_t", "ptrdiff_t", "max_align_t"
+};
+
+// <cstring>: the C library names the header makes visible in the global
+// namespace. The list is the whole <string.h> family, not only the one
+// function the implementation calls, because every one of them is declared
+// next to the generated declarations.
+const char* const GLOBAL_C_FUNCTION_NAMES[] = {
+    "memchr", "memcmp", "memcpy", "memmove", "memset",
+    "strcat", "strchr", "strcmp", "strcoll", "strcpy", "strcspn",
+    "strerror", "strlen", "strncat", "strncmp", "strncpy",
+    "strpbrk", "strrchr", "strspn", "strstr", "strtok", "strxfrm"
+};
+
+// The implementation namespaces the standard library headers open in the
+// global namespace.
+const char* const GLOBAL_LIBRARY_NAMESPACE_NAMES[] = {
+    "__gnu_cxx"
+};
+
+#define EASYPB_COUNT_OF(array) (sizeof(array) / sizeof((array)[0]))
+
+const GlobalNameGroup GLOBAL_NAME_GROUPS[] = {
+    { "global typedef", GLOBAL_TYPEDEF_NAMES,
+      EASYPB_COUNT_OF(GLOBAL_TYPEDEF_NAMES) },
+    { "C library function", GLOBAL_C_FUNCTION_NAMES,
+      EASYPB_COUNT_OF(GLOBAL_C_FUNCTION_NAMES) },
+    { "C++ library namespace", GLOBAL_LIBRARY_NAMESPACE_NAMES,
+      EASYPB_COUNT_OF(GLOBAL_LIBRARY_NAMESPACE_NAMES) }
+};
+
+const std::size_t GLOBAL_NAME_GROUP_COUNT =
+    EASYPB_COUNT_OF(GLOBAL_NAME_GROUPS);
+
+#undef EASYPB_COUNT_OF
+
+std::set<std::string> build_global_names()
+{
+    std::set<std::string> result;
+    for (std::size_t group = 0; group < GLOBAL_NAME_GROUP_COUNT; ++group) {
+        const GlobalNameGroup& entry = GLOBAL_NAME_GROUPS[group];
+        for (std::size_t i = 0; i < entry.count; ++i) {
+            result.insert(entry.names[i]);
+        }
+    }
+    return result;
+}
+
+} // namespace
+
 const std::set<std::string>& cpp_global_names()
 {
-    static const char* const values[] = {
-        // <cstdint>: exact-width integer typedefs.
-        "int8_t", "int16_t", "int32_t", "int64_t",
-        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
-        // <cstdint>: least-width and fast-width integer typedefs.
-        "int_least8_t", "int_least16_t", "int_least32_t", "int_least64_t",
-        "uint_least8_t", "uint_least16_t", "uint_least32_t", "uint_least64_t",
-        "int_fast8_t", "int_fast16_t", "int_fast32_t", "int_fast64_t",
-        "uint_fast8_t", "uint_fast16_t", "uint_fast32_t", "uint_fast64_t",
-        // <cstdint>: pointer-width and maximum-width integer typedefs.
-        "intptr_t", "uintptr_t", "intmax_t", "uintmax_t",
-        // <cstddef>: the size, offset and alignment typedefs.
-        "size_t", "ptrdiff_t", "max_align_t"
-    };
-    static const std::set<std::string> result(
-        values, values + sizeof(values) / sizeof(values[0]));
+    static const std::set<std::string> result = build_global_names();
     return result;
+}
+
+const char* cpp_global_name_kind(const std::string& name)
+{
+    for (std::size_t group = 0; group < GLOBAL_NAME_GROUP_COUNT; ++group) {
+        const GlobalNameGroup& entry = GLOBAL_NAME_GROUPS[group];
+        for (std::size_t i = 0; i < entry.count; ++i) {
+            if (name == entry.names[i]) return entry.kind;
+        }
+    }
+    return 0;
+}
+
+void validate_cpp_declaration_name(const std::string& kind,
+                                   const std::string& name,
+                                   bool global_namespace)
+{
+    const char* rule = reserved_identifier_form(name, global_namespace);
+    if (rule == 0) return;
+    throw std::runtime_error(
+        "The " + kind + " '" + name +
+        "' uses a reserved C++ identifier form: " + rule);
 }
 
 void validate_cpp_package(const std::string& package)
@@ -314,10 +412,12 @@ void validate_cpp_package(const std::string& package)
                 "Protobuf package component '" + component +
                 "' is a C++ keyword and cannot be used as a namespace");
         }
-        if (has_reserved_identifier_form(component, i == 0)) {
+        const char* reserved_rule =
+            reserved_identifier_form(component, i == 0);
+        if (reserved_rule != 0) {
             throw std::runtime_error(
                 "Protobuf package component '" + component +
-                "' uses a reserved C++ identifier form");
+                "' uses a reserved C++ identifier form: " + reserved_rule);
         }
         if (i == 0 && component == "std") {
             throw std::runtime_error(
@@ -325,13 +425,14 @@ void validate_cpp_package(const std::string& package)
         }
         // The first component is the namespace the file's declarations open,
         // so it is spelled in the global namespace - where the preamble's own
-        // typedefs live. A later component is nested and may shadow them
-        // without a redefinition (`namespace foo { namespace int32_t { ... } }`
-        // is legal), so only the first one is refused.
+        // typedefs and C library functions live. A later component is nested
+        // and may shadow them without a redefinition
+        // (`namespace foo { namespace int32_t { ... } }` is legal), so only
+        // the first one is refused.
         if (i == 0 && cpp_global_names().count(component) != 0) {
             throw std::runtime_error(
                 "Protobuf package component '" + component +
-                "' is a global C++ typedef the generated header uses");
+                "' is a global name the generated header's own preamble declares");
         }
     }
 }

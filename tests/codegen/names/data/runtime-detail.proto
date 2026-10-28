@@ -1,0 +1,18 @@
+//
+// V-01: `package easypb;` and a declaration named like the runtime's helper
+// namespace.
+//
+// include/easypb.hpp:158-185 opens `namespace detail` inside
+// `namespace easypb`. A namespace is a declaration of its scope just like a
+// type: `struct detail` in the same namespace is ill-formed next to it, while
+// `namespace easypb { namespace detail { ... } }` would have been accepted -
+// the same package is open, only the declaration collides.
+
+syntax = "proto2";
+
+package easypb;
+
+message detail
+{
+    optional int32 x = 1;
+}

@@ -297,6 +297,7 @@ if(BUILD_TESTING)
         literals-descriptor-octal
         grammar-table
         scope-easypb
+        scope-nested-reserved
         p3opt-ok
         oneof-contiguous
         message-set-empty
@@ -346,6 +347,7 @@ if(BUILD_TESTING)
             ${codegen_validity_descriptor_dir}/literals-descriptor-octal.pb.hpp
             ${codegen_validity_descriptor_dir}/grammar-table.pb.hpp
             ${codegen_validity_descriptor_dir}/scope-easypb.pb.hpp
+            ${codegen_validity_descriptor_dir}/scope-nested-reserved.pb.hpp
             ${codegen_validity_descriptor_dir}/p3opt-ok.pb.hpp
             ${codegen_validity_descriptor_dir}/oneof-contiguous.pb.hpp
             ${codegen_validity_descriptor_dir}/message-set-empty.pb.hpp

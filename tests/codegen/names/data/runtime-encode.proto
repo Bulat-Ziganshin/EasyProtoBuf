@@ -1,0 +1,19 @@
+//
+// V-01: `package easypb;` and a declaration named `encode`.
+//
+// `encode` has two occupants in the same namespace: the generated encoder
+// overload (CR-04) and the runtime entry point at include/easypb.hpp:999-1005.
+// Under the default options the generated function is the collision the
+// existing codec rows (`codec-message-encode`) already report; with
+// `--no-encoder` the generated function is gone and the runtime template is
+// still there, so the declaration stays refused. The gated row proves the
+// runtime half of the list is not shadowed by the codec entry.
+
+syntax = "proto3";
+
+package easypb;
+
+message encode
+{
+    int32 value = 1;
+}

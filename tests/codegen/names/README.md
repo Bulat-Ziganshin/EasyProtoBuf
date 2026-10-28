@@ -11,7 +11,13 @@ runtime namespaces, `CR-10` non-identifier names, `CR-43` the local-name
 helper; `CR-44` stays accepted), and for the review of 2026-10-27, which added
 the occupants that were still missing: the class's own name (`U-01`), the
 runtime types under `package easypb;` (`U-02`) and the global typedefs of the
-generated preamble (`U-03`).
+generated preamble (`U-03`). The review of 2026-10-28 completed both lists:
+`V-01` replaces the seven-name runtime sample with every top-level declaration
+`include/easypb.hpp` puts into `namespace easypb` (types, exceptions,
+constants, enumerators, functions and the `detail` namespace), and `V-02` adds
+the preamble's `<cstring>` functions and the `__gnu_cxx` namespace to the global
+occupants and refuses the reserved [lex.name] spellings of a top-level
+declaration.
 
 Every row is a counter-example against `protoc` 30.1, and the lane proves the
 fix in the three ways the session's brief names.
@@ -55,9 +61,22 @@ C++ name.
 `family_cases.cmake` is the family as data, shared by the build and the
 driver. It crosses the occupant kinds of a C++ scope — field, presence flag,
 nested type, enumerator, generated codec, runtime namespace, the enclosing
-class's own name, runtime type, global typedef — with the collision pairs that
-can exist between them, both syntaxes and the three options that remove an
+class's own name, runtime declaration, global name — with the collision pairs
+that can exist between them, both syntaxes and the three options that remove an
 occupant (`--no-has-fields`, `--no-encoder`, `--no-decoder`).
+
+The runtime and global occupant lists are complete, not sampled: every
+top-level declaration of `namespace easypb` is in `EASYPB_RUNTIME_NAMES`
+(`codegen/codegen.cpp`, with the `include/easypb.hpp` line that justifies each
+entry), and the global list is the `<cstdint>`/`<cstddef>` typedefs, the
+`<cstring>` functions and the `__gnu_cxx` namespace the preamble makes visible
+(`codegen/cpp_names.cpp`). The rows below drive one declaration kind per
+fixture; the unit test `codegen.packages.naming` pins the members of both
+lists, and `codegen.names` proves the emitter refuses each kind. A top-level
+declaration must also avoid the spellings [lex.name] reserves: `__` or `_`
+followed by an uppercase letter anywhere, and a leading underscore in the
+global namespace; the rule is a file-scope rule, so a nested `_Foo` is
+accepted and compiled (see the two accepted controls below).
 
 - An **accepted** case must exit 0, leave stderr empty, emit a header, and
   produce the same bytes from the `.proto` and the `.pbs`. The build
@@ -106,6 +125,11 @@ says which decision to re-evaluate.
 | a descriptor-origin field / enumerator / message / enum name that starts with a digit | `data/digit-{field,value,message,enum}.txtpb` / `.pbs` | `CR-10` |
 | a nested message / nested enum / enumerator named like its message | `data/same-name-message.proto`, `same-name-enum.proto`, `same-name-enum-value.proto` / `.pbs` | `U-01` |
 | `package easypb;` with a type named after each runtime type (`Encoder`, `Decoder`, `Writer`, `Reader`, `WireType`, `PBType`, `string_view`) | `data/runtime-{encoder,decoder,writer,reader,wiretype,pbtype,stringview}.proto` / `.pbs` | `U-02` |
+| `package easypb;` with a declaration named after each runtime declaration kind the seven types missed (`exception`, `detail`, `MAX_VARINT_SIZE`, `WIRETYPE_VARINT`, `read_from_little_endian`, `pb_type_codec`) | `data/runtime-{exception,detail,max-varint-size,wiretype-varint,read-from-little-endian,pb-type-codec}.proto` / `.pbs` | `V-01` |
+| `package easypb;` with `encode` / `decode`, refused by the runtime function when the generated codec is removed | `data/runtime-encode.proto`, `runtime-decode.proto` / `.pbs` | `V-01` |
+| a top-level `__gnu_cxx` / `memcpy` message | `data/global-gnu-cxx.proto`, `global-memcpy.proto` / `.pbs` | `V-02` |
+| a top-level `_Foo` / `foo__bar` message | `data/reserved-underscore-upper.proto`, `reserved-double-underscore.proto` / `.pbs` | `V-02` |
+| a package-local `_Foo` nested in a message, and a top-level `_foo` in a package (accepted controls) | `data/nested-underscore-upper.proto`, `leading-underscore-package.proto` / `.pbs` | `V-02` |
 | `package easypb;` with a non-colliding type, and one whose name differs by case (accepted controls) | `data/package-easypb.proto`, `package-easypb-case.proto` / `.pbs` | `U-02` |
 | a top-level `int32_t` / `uint64_t` / `size_t` / `max_align_t` message | `data/global-{int32,uint64,size-t,max-align-t}.proto` / `.pbs` | `U-03` |
 | `A_B` next to `A::B` (accepted) | `data/insertion-stem-collision.proto` / `.pbs` | `CR-44` |

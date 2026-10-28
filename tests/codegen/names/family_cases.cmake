@@ -4,8 +4,8 @@
 # occupants a generated scope will hold, not the instances the Protobuf names
 # happen to spell. The lists below are the family: every occupant kind (field,
 # presence flag, nested type, enumerator, generated codec, runtime namespace,
-# the enclosing class's own name, runtime type, global typedef) crossed with the
-# collision pairs that can exist between them, both syntaxes and the options
+# the enclosing class's own name, runtime declaration, global name) crossed with
+# the collision pairs that can exist between them, both syntaxes and the options
 # that remove an occupant.
 #
 # THIS FILE IS SHARED. `tests/CMakeLists.txt` includes it at configure time to
@@ -59,7 +59,14 @@ set(codegen_names_accept_variants
     # CR-44 is accepted: both messages are generated and share one insertion
     # stem. The artifact is asserted by
     # `codegen.names.insertion_stem_collision`; this entry only compiles it.
-    "insertion-stem-collision|default|-")
+    "insertion-stem-collision|default|-"
+    # V-02 controls: the reserved-form rule is a file-scope rule, so a
+    # package-local `_Foo` nested inside a message keeps its name and must
+    # compile; a top-level `_foo` inside a package does not carry a reserved
+    # form either (a leading underscore is reserved only in the global
+    # namespace, and `_foo` is not `_` + uppercase).
+    "nested-underscore-upper|default|-"
+    "leading-underscore-package|default|-")
 
 # Refused under every option set: both occupants are always declared, so no
 # option can unlock the fixture.
@@ -99,6 +106,25 @@ set(codegen_names_always_refused
     "runtime-wiretype|message 'WireType'>runtime type 'WireType'"
     "runtime-pbtype|message 'PBType'>runtime type 'PBType'"
     "runtime-stringview|message 'string_view'>runtime type 'string_view'"
+    # V-01: the list is the COMPLETE set of declarations `namespace easypb`
+    # holds, one fixture per declaration kind the previous seven types missed:
+    # an exception type, the `detail` namespace, an anonymous-enum constant, a
+    # typed-enum enumerator, a function template and a class template. No
+    # generation option removes a runtime declaration.
+    "runtime-exception|message 'exception'>runtime type 'exception'"
+    "runtime-detail|message 'detail'>runtime namespace 'detail'"
+    "runtime-max-varint-size|message 'MAX_VARINT_SIZE'>runtime constant 'MAX_VARINT_SIZE'"
+    "runtime-wiretype-varint|message 'WIRETYPE_VARINT'>runtime constant 'WIRETYPE_VARINT'"
+    "runtime-read-from-little-endian|message 'read_from_little_endian'>runtime function 'read_from_little_endian'"
+    "runtime-pb-type-codec|message 'pb_type_codec'>runtime type 'pb_type_codec'"
+    # V-02: the preamble's C library names and the libstdc++ namespace are
+    # occupants of an un-packaged file scope, like the R01 typedefs.
+    "global-gnu-cxx|message '__gnu_cxx'>C++ library namespace '__gnu_cxx'"
+    "global-memcpy|message 'memcpy'>C library function 'memcpy'"
+    # V-02: [lex.name] reserves `__` and `_Upper` in every scope; a top-level
+    # declaration that carries one is refused with the name and the rule.
+    "reserved-underscore-upper|message '_Foo'>reserved C++ identifier form>begins with an underscore followed by an uppercase letter"
+    "reserved-double-underscore|message 'foo__bar'>reserved C++ identifier form>contains a double underscore"
     # U-03: the global typedefs the preamble declares are occupants of the
     # global namespace: the header spells every scalar type absolutely, so
     # `struct int32_t` redefines a typedef it uses.
@@ -134,7 +160,13 @@ set(codegen_names_gated_refused
     "codec-enum-value-encode|-|enum value 'encode'>generated encoder function 'encode'"
     "codec-enum-value-encode|--no-decoder|enum value 'encode'>generated encoder function 'encode'"
     "codec-enum-value-decode|-|enum value 'decode'>generated decoder function 'decode'"
-    "codec-enum-value-decode|--no-encoder|enum value 'decode'>generated decoder function 'decode'")
+    "codec-enum-value-decode|--no-encoder|enum value 'decode'>generated decoder function 'decode'"
+    # V-01: `encode`/`decode` are also runtime functions. Removing the codec
+    # removes one of the two occupants, not the name: the runtime entry point
+    # still owns it, so the declaration stays refused with that second
+    # occupant named.
+    "runtime-encode|--no-encoder|message 'encode'>runtime function 'encode'"
+    "runtime-decode|--no-decoder|message 'decode'>runtime function 'decode'")
 
 # The option set every "always refused" row is run with. The gated rows above
 # say their option explicitly, and the accepted variants say theirs.
