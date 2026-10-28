@@ -12,7 +12,7 @@ text-format encoder, the writer and the `--check` gate - live in
 `tests/codegen/common/descriptor_fixtures.py`; this script is the lane's table
 of generated fixtures.
 
-Four shapes are produced:
+Six shapes are produced:
 
 - `nesting-31.proto` / `nesting-31.pbs` - 31 levels of nested messages, the
   deepest schema the reference compiler accepts. The `.pbs` is protoc's own
@@ -43,6 +43,14 @@ Four shapes are produced:
   files the lane writes when it runs. The sets are crafted, not compiled, for
   the same reason - but each is a well-formed `FileDescriptorSet` that protoc
   itself accepts as input.
+
+- `wide-optional.proto` / `wide-optional.pbs` - one proto3 message with
+  4 096 explicit `optional` scalar fields. Each field makes protoc (and this
+  parser) synthesize a one-field oneof, so the schema is the high-cardinality
+  shape behind review 1028's quadratic oneof rules (V-22) and the per-field
+  source lookup (V-21). The `.pbs` is protoc's own encoding of the `.proto`
+  beside it, so the lane can require one header byte for byte from both doors.
+  The fixture is a correctness control, never a timing threshold.
 
 Usage:
 
@@ -89,6 +97,12 @@ CHAIN_LENGTH = 12000
 # used ~3 GB at 8 000; 20 000 is the length the review measured the crash at.
 PUBLIC_CHAIN_ACCEPTED = 1000
 PUBLIC_CHAIN_REFUSED = 20000
+
+# V-21/V-22: a message wide enough that the old per-field source scan and the
+# old per-oneof rescans were quadratic. Each explicit `optional` field owns a
+# synthetic oneof, so this is also the shape protoc emits for `optional` in
+# proto3. The lane uses it as a correctness control, not a timing gate.
+WIDE_OPTIONAL_FIELDS = 4096
 
 
 def source_text(depth):
@@ -163,6 +177,19 @@ def public_chain_textproto(length):
     return "\n".join(lines) + "\n"
 
 
+def wide_optional_source_text(length):
+    """The `.proto` source of one proto3 message with `length` optional fields.
+
+    Every explicit `optional` field becomes a one-field synthetic oneof, which
+    is the high-cardinality shape of the V-21/V-22 rules.
+    """
+    lines = ['syntax = "proto3";', "", "message Wide {"]
+    for index in range(length):
+        lines.append("  optional int32 f%d = %d;" % (index, index + 1))
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
 FIXTURES = (
     # The accepted shape: protoc builds the descriptor itself.
     Fixture.compile("nesting-31",
@@ -188,6 +215,12 @@ FIXTURES = (
     Fixture.craft("public-chain-20000",
                   text=public_chain_textproto(PUBLIC_CHAIN_REFUSED)
                   .encode("utf-8")),
+    # V-21/V-22: a proto3 message with thousands of explicit `optional`
+    # fields. protoc builds the descriptor, so both doors carry the same
+    # synthetic oneofs and the lane can compare their headers byte for byte.
+    Fixture.compile("wide-optional",
+                    source_text=wide_optional_source_text(WIDE_OPTIONAL_FIELDS)
+                    .encode("utf-8")),
 )
 
 

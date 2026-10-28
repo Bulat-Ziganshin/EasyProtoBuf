@@ -123,6 +123,12 @@ The two modes share those stages and differ in their preconditions and in what t
 
 Ownership: `SchemaSet` owns the files, their descriptors and every retained string; `LinkedSchema` owns only its name keys and sets and borrows everything else, so the set must outlive the view and every generator call that reads it. The caller must not clear a member of a linked set while a view into it still exists.
 
+## Source provenance and oneof validation
+
+`find_field_source` answers with a field's `FieldSource` record for a descriptor path. A source file carries one record per field in `SchemaFile::field_sources`; the first lookup fills `field_source_index` (path → position) in a single pass, and every later lookup is one map query (`V-21`). The recorded size is the invalidation marker because the parser only appends records and never rewrites a stored path, and `SchemaFile::clear()` resets both the vector and the cache. A descriptor-origin file has no records, so the lookup returns null and its callers keep falling back to declaration locations or to the field's own descriptor text; no diagnostic changes. One index serves every message in the file, nested ones included, which is what keeps validation linear in a wide message's field count instead of quadratic.
+
+`validate_message_oneofs` runs four rules over one message in a fixed order: (a) the members of each oneof are a contiguous run (`DIAGNOSTIC_ONEOF_NOT_CONTIGUOUS`, reported at the field before the break); (b) every oneof declaration is claimed by a field (`DIAGNOSTIC_EMPTY_ONEOF`); (c) a `proto3_optional` field is legal only in a proto3 file and only as the sole member of its oneof (`DIAGNOSTIC_INVALID_PROTO3_OPTIONAL`); and (d) every synthetic oneof comes after all real oneofs (same code, reported at the first real declaration that follows a synthetic one). A single pass before the rules records each oneof's member count and its first and last member position, so all four rules read those arrays instead of walking the field list again; an N-field message with N synthetic oneofs therefore stays linear while the diagnostic order above is unchanged. The contiguity scan ignores a field whose `oneof_index` is out of range: the index-range rule in the field encoding pass owns that shape and runs first.
+
 ## File I/O error contract
 
 `file_paths.cpp` is the only module that calls the filesystem, and every failure it can observe is reported — never dropped, and never turned into data that looks complete:

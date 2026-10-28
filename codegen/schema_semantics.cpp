@@ -3784,7 +3784,18 @@ bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
     // the rule calls out. Only a descriptor can carry the shape: a source oneof
     // body is parsed as one block, so the source door never reaches this scan
     // with a violation.
+    // V-22: one pass over the fields records every fact the four rules below
+    // need - the first and last member position of each oneof and how many
+    // members it has. The rules used to walk the whole field list once per
+    // declaration (three such walks for the proto3-optional and
+    // synthetic-oneof checks), which made a proto3 message whose N explicit
+    // `optional` fields own N synthetic oneofs O(N^2). protoc fills the same
+    // member arrays in one pass of CrossLinkMessage (descriptor.cc:7280-7301),
+    // and every rule below reads the arrays instead of rescanning.
     std::vector<std::int32_t> last_member(message.oneof_decl.size(), -1);
+    std::vector<std::size_t> first_member(message.oneof_decl.size(),
+                                          message.field.size());
+    std::vector<std::size_t> member_count(message.oneof_decl.size(), 0);
     for (std::size_t i = 0; i < message.field.size(); ++i) {
         const FieldDescriptorProto& field = message.field[i];
         if (!field.has_oneof_index || field.oneof_index < 0 ||
@@ -3795,6 +3806,8 @@ bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
             continue;
         }
         const std::size_t index = static_cast<std::size_t>(field.oneof_index);
+        if (member_count[index] == 0) first_member[index] = i;
+        ++member_count[index];
         if (last_member[index] != -1 &&
             static_cast<std::size_t>(last_member[index]) + 1 != i) {
             const DescriptorPath boundary_path =
@@ -3825,13 +3838,7 @@ bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
     // SOURCE half is covered, since the parser accepts an empty oneof body as
     // text while protoc does not.
     for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
-        bool claimed = false;
-        for (std::size_t j = 0; j < message.field.size() && !claimed; ++j) {
-            claimed = message.field[j].has_oneof_index &&
-                      message.field[j].oneof_index ==
-                          static_cast<std::int32_t>(i);
-        }
-        if (!claimed) {
+        if (member_count[i] == 0) {
             const DescriptorPath oneof_path =
                 message_oneof_path(message_path, static_cast<int>(i));
             return fail_at_code(
@@ -3872,23 +3879,17 @@ bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
                 declaration_location(file, field_path), field_path,
                 DIAGNOSTIC_INVALID_PROTO3_OPTIONAL, error);
         }
-        std::size_t members = 0;
-        std::size_t member_index = 0;
         const bool claims_oneof =
             field.has_oneof_index && field.oneof_index >= 0 &&
             static_cast<std::size_t>(field.oneof_index) <
                 message.oneof_decl.size();
+        bool sole_member = false;
         if (claims_oneof) {
-            for (std::size_t j = 0; j < message.field.size(); ++j) {
-                if (!message.field[j].has_oneof_index ||
-                    message.field[j].oneof_index != field.oneof_index) {
-                    continue;
-                }
-                ++members;
-                member_index = j;
-            }
+            const std::size_t index =
+                static_cast<std::size_t>(field.oneof_index);
+            sole_member = member_count[index] == 1 && first_member[index] == i;
         }
-        if (!claims_oneof || members != 1 || member_index != i) {
+        if (!sole_member) {
             return fail_at_code(
                 file,
                 "field \"" + joined_name(scope, field.name) +
@@ -3909,18 +3910,9 @@ bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
     // oneofs, which is why a source file can only satisfy this rule.
     std::size_t first_synthetic = message.oneof_decl.size();
     for (std::size_t i = 0; i < message.oneof_decl.size(); ++i) {
-        std::size_t members = 0;
-        std::size_t member_index = 0;
-        for (std::size_t j = 0; j < message.field.size(); ++j) {
-            if (!message.field[j].has_oneof_index ||
-                message.field[j].oneof_index != static_cast<std::int32_t>(i)) {
-                continue;
-            }
-            ++members;
-            member_index = j;
-        }
         const bool synthetic =
-            members == 1 && message.field[member_index].proto3_optional;
+            member_count[i] == 1 &&
+            message.field[first_member[i]].proto3_optional;
         if (!synthetic) {
             if (first_synthetic != message.oneof_decl.size()) {
                 const DescriptorPath oneof_path =

@@ -447,6 +447,19 @@ public:
     std::string physical_name;
     bool from_descriptor_set;
 
+    // V-21: the lookup side of `field_sources`. A validation pass asks for a
+    // field's provenance once per field, and the linear scan used to answer
+    // each ask by walking every source in the file - O(fields^2) for one
+    // large message. `find_field_source` fills this map in a single pass on
+    // first use and consults it afterwards. The key is the descriptor path,
+    // so one map per source file also serves every nested message without a
+    // per-message rescan; the recorded size is the invalidation marker,
+    // because the parser only appends and never rewrites a recorded path.
+    // `clear()` resets both. The map stores positions, not pointers, so a
+    // later vector growth cannot leave it pointing at freed storage.
+    mutable std::map<DescriptorPath, std::size_t> field_source_index;
+    mutable std::size_t field_source_index_size;
+
     SchemaFile();
     void clear();
 

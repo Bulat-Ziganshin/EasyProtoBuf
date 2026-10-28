@@ -84,6 +84,7 @@ compares the **bytes** on the wire and reads them back.
 | 12 000 messages in a by-value dependency chain (accepted) | `data/dependency-chain.proto` / `.pbs` | `CR-35` |
 | 1 000 files in one `import public` chain (accepted) | `data/public-chain-1000.pbs` | `U-05`, `U-06` |
 | 20 000 files in one `import public` chain (refused) | `data/public-chain-20000.pbs` | `U-05`, `U-06` |
+| 4 096 explicit proto3 `optional` fields (accepted) | `data/wide-optional.proto` / `.pbs` | `V-21`, `V-22` |
 
 The two nesting depths are the reference compiler's own boundary: its
 `MaxMessageDeclarationNestingDepth()` is 32 (`descriptor.h:3045`) and it
@@ -199,6 +200,26 @@ per-file visibility set is the cost, and the bound is what keeps it bounded
 (the same shape at 8 000 files used ~3 GB before the bound existed). What the
 fix removes is the crash, the 10 s spent reading 5 000 files before dying, and
 the recursion depth.
+
+## The wide optional message (`V-21`, `V-22`)
+
+The review's two scaling findings share one shape: a proto3 message with
+thousands of explicit `optional` fields. Each field carries a synthetic
+one-field oneof, so the message has as many oneof declarations as fields.
+`find_field_source` used to walk the whole provenance table once per field
+(`V-21`), and `validate_message_oneofs` walked the whole field list once per
+oneof in three separate rules (`V-22`); both are quadratic on this shape.
+
+`wide-optional.proto` / `.pbs` is one such message with 4 096 fields and
+4 096 synthetic oneofs after the real oneofs, written by `protoc` from the
+source beside it. The lane requires both doors to accept it, both headers to
+be identical byte for byte, and both ends of the field list (`f0` and
+`f4095`) to be present. The header is not compiled: the claim is that the
+semantic pass is linear in the field count and produces the same model from
+both frontends, while the compile gate is already covered by the nesting
+fixture and the other lanes. The fixture is a correctness control - no
+assertion in the lane depends on elapsed time; the review's timings are
+recorded in the step log as evidence, not as a gate.
 
 ## The long-path prefix (`W-46`)
 

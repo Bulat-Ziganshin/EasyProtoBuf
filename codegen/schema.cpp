@@ -120,7 +120,8 @@ str_view StringPool::save(const char* data, std::size_t size)
     return str_view(destination, size);
 }
 
-SchemaFile::SchemaFile() : from_descriptor_set(false) {}
+SchemaFile::SchemaFile() : from_descriptor_set(false),
+                           field_source_index_size(0) {}
 
 void SchemaFile::clear()
 {
@@ -128,6 +129,8 @@ void SchemaFile::clear()
     imports.clear();
     warnings.clear();
     field_sources.clear();
+    field_source_index.clear();
+    field_source_index_size = 0;
     declaration_locations.clear();
     edges.clear();
     physical_name.clear();
@@ -281,13 +284,26 @@ const FieldDescriptorProto* find_field(const SchemaFile& file,
 const FieldSource* find_field_source(const SchemaFile& file,
                                      const DescriptorPath& path)
 {
-    // Linear scan by design: EasyProtoBuf targets small schemas, so the
-    // per-field O(n) lookup keeps the code simple. Revisit with a
-    // path-to-index map only if large-file profiles regress.
-    for (std::size_t i = 0; i < file.field_sources.size(); ++i) {
-        if (file.field_sources[i].path == path) return &file.field_sources[i];
+    // V-21: one path-keyed index per source file, filled in a single pass
+    // and reused by every field of every message in that file. The linear
+    // scan answered one lookup by walking the whole table, which made
+    // validation of an N-field message O(N^2); a map lookup is O(log N)
+    // after the one-time build. `insert` keeps the FIRST record for a path,
+    // exactly like the scan it replaces. A changed vector size means the
+    // parser appended new provenance, so the index is rebuilt; the parser
+    // never rewrites a path, and `SchemaFile::clear()` resets the cache.
+    if (file.field_source_index_size != file.field_sources.size()) {
+        file.field_source_index.clear();
+        for (std::size_t i = 0; i < file.field_sources.size(); ++i) {
+            file.field_source_index.insert(
+                std::make_pair(file.field_sources[i].path, i));
+        }
+        file.field_source_index_size = file.field_sources.size();
     }
-    return 0;
+    const std::map<DescriptorPath, std::size_t>::const_iterator found =
+        file.field_source_index.find(path);
+    if (found == file.field_source_index.end()) return 0;
+    return &file.field_sources[found->second];
 }
 
 FileSyntax classify_file_syntax(const FileDescriptorProto& file)

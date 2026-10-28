@@ -2989,6 +2989,134 @@ void test_rule_proto3_optional_and_oneof_layout_directly()
     }
 }
 
+// V-21/V-22: a message wide enough that the old per-field scan and the old
+// per-oneof rescans were quadratic. Every field must resolve to its own
+// provenance record, and the single-pass member arrays must keep the accepted
+// layout accepted and report the boundary violation at the field that carries
+// it. The cardinality is correctness, not a timing gate: no assertion below
+// depends on how long the pass takes.
+void test_wide_message_sources_and_oneofs()
+{
+    const std::size_t field_count = 2048;
+    const easypb_schema::DescriptorPath message_path =
+        easypb_schema::file_message_path(0);
+
+    easypb_schema::SchemaFile file;
+    file.file.syntax = file.strings.save("proto3");
+    file.file.has_syntax = true;
+    DescriptorProto message;
+    message.name = file.strings.save("Wide");
+    message.has_name = true;
+
+    // Fields 0 and 1 form the one real oneof; every later field is an explicit
+    // proto3 `optional` with its own synthetic oneof, so the synthetic ones
+    // follow the real one exactly as protoc writes them.
+    OneofDescriptorProto real_oneof;
+    real_oneof.name = file.strings.save("choice");
+    real_oneof.has_name = true;
+    message.oneof_decl.push_back(real_oneof);
+
+    for (std::size_t i = 0; i < field_count; ++i) {
+        const std::string name = "f" + std::to_string(i);
+        FieldDescriptorProto field = make_scalar_field(
+            file, name.c_str(), static_cast<int>(i) + 1,
+            FieldDescriptorProto::TYPE_INT32);
+        if (i < 2) {
+            field.oneof_index = 0;
+            field.has_oneof_index = true;
+        } else {
+            field.proto3_optional = true;
+            field.has_proto3_optional = true;
+            field.oneof_index = static_cast<std::int32_t>(i) - 1;
+            field.has_oneof_index = true;
+            OneofDescriptorProto synthetic;
+            const std::string oneof_name = "_" + name;
+            synthetic.name = file.strings.save(oneof_name);
+            synthetic.has_name = true;
+            message.oneof_decl.push_back(synthetic);
+        }
+        message.field.push_back(field);
+
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(message_path,
+                                              static_cast<int>(i));
+        declare(file, field_path, static_cast<int>(1000 + i));
+        record_source(file, field_path, 0, static_cast<int>(2000 + i), false,
+                      0, false, 0);
+    }
+    file.file.message_type.push_back(message);
+
+    // Every field's descriptor path answers with its own record. A rebuilt or
+    // mis-keyed index shows up as a wrong line here, not as a crash.
+    for (std::size_t i = 0; i < field_count; ++i) {
+        const easypb_schema::DescriptorPath field_path =
+            easypb_schema::message_field_path(message_path,
+                                              static_cast<int>(i));
+        const easypb_schema::FieldSource* source =
+            easypb_schema::find_field_source(file, field_path);
+        CHECK(source != 0);
+        if (source != 0) {
+            CHECK(source->path == field_path);
+            CHECK(source->type_location.line == 2000 + i);
+        }
+    }
+    CHECK(easypb_schema::find_field_source(
+              file, easypb_schema::message_field_path(
+                        message_path, static_cast<int>(field_count))) == 0);
+
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_schema::internal::validate_message_oneofs(
+        file, message, ".Wide", message_path, true, error));
+
+    // The same wide message through the full validation pass: the scalar
+    // fields are final, so this proves the index serves the real callers.
+    {
+        easypb_schema::SymbolIndex symbols;
+        CHECK(easypb_schema::index_file(file, symbols, error));
+        std::set<const easypb_schema::SchemaFile*> visible;
+        visible.insert(&file);
+        CHECK(easypb_schema::resolve_file(file, symbols, visible, true, error));
+    }
+
+    // Boundary: give the last explicit-optional field a second member in its
+    // own synthetic oneof. The run stays contiguous and every declaration is
+    // still claimed, so the proto3-optional rule is the one that must answer -
+    // at the LAST field's declaration line, which only that array entry can
+    // get wrong.
+    const std::size_t last = field_count - 1;
+    FieldDescriptorProto tail = make_scalar_field(
+        file, "tail", static_cast<int>(field_count) + 1,
+        FieldDescriptorProto::TYPE_INT32);
+    tail.oneof_index = message.field[last].oneof_index;
+    tail.has_oneof_index = true;
+    message.field.push_back(tail);
+    CHECK(!easypb_schema::internal::validate_message_oneofs(
+        file, message, ".Wide", message_path, true, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVALID_PROTO3_OPTIONAL);
+    CHECK(error.location.line == 1000 + last);
+    CHECK(error.message.find("f" + std::to_string(last)) != std::string::npos);
+
+    // The cache is filled lazily, so a lookup made before the table has all of
+    // its records must not hide a later one: the parser appends provenance
+    // while it parses and validates only afterwards, and the size marker is
+    // what makes the later append visible.
+    {
+        easypb_schema::SchemaFile growing;
+        const easypb_schema::DescriptorPath early =
+            easypb_schema::message_field_path(message_path, 0);
+        const easypb_schema::DescriptorPath late =
+            easypb_schema::message_field_path(message_path, 1);
+        record_source(growing, early, 0, 11, false, 0, false, 0);
+        CHECK(easypb_schema::find_field_source(growing, early) != 0);
+        CHECK(easypb_schema::find_field_source(growing, late) == 0);
+        record_source(growing, late, 0, 12, false, 0, false, 0);
+        const easypb_schema::FieldSource* appended =
+            easypb_schema::find_field_source(growing, late);
+        CHECK(appended != 0);
+        if (appended != 0) CHECK(appended->type_location.line == 12);
+    }
+}
+
 // CR-45: copy_descriptor assigns the package presence bit instead of only
 // setting it, so a present-but-empty package normalizes to "no package" and a
 // non-empty package stays present whatever bit the caller carried.
@@ -3569,6 +3697,7 @@ int main(int argc, char** argv)
     test_rule_message_set_wire_format_directly();
     test_rule_message_set_proto3_directly();
     test_rule_proto3_optional_and_oneof_layout_directly();
+    test_wide_message_sources_and_oneofs();
     test_adapter_normalizes_the_package_presence_bit();
     test_descriptor_decode_rejects_a_wrong_wire_type(fixture_dir);
     test_descriptor_field_options_are_decoded(fixture_dir);

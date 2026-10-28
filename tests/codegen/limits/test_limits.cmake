@@ -410,6 +410,51 @@ require_contains(public_chain_long_err
 require_contains(public_chain_long_err "c0.proto"
     "The 20 000-file public-chain refusal names the offending file")
 
+# --- the wide proto3 optional message (V-21, V-22) ---------------------------
+#
+# One message with 4 096 explicit `optional` scalar fields. Every field owns a
+# synthetic one-field oneof, so the message is as wide in oneof declarations as
+# in fields: the shape on which a per-field linear source scan and a per-oneof
+# field scan are quadratic. The lane asks for the same verdict the reference
+# compiler gives - accepted - and for one header from both doors; it never
+# asserts a duration, because the finding is about the shape's cost, not about
+# a threshold a slow machine could flake on.
+set(wide_optional wide-optional)
+run_ok(wide_desc_out wide_desc_err
+    ${CODEGEN} --descriptor-set
+    --out-dir "${WORK_DIR}/wide-optional/descriptor"
+    "${DATA_DIR}/${wide_optional}.pbs")
+require_empty(wide_desc_out "The wide-optional descriptor stdout")
+require_empty(wide_desc_err "The wide-optional descriptor stderr")
+file(READ "${WORK_DIR}/wide-optional/descriptor/${wide_optional}.pb.hpp"
+    wide_desc_header)
+if(wide_desc_header STREQUAL "")
+    message(FATAL_ERROR "The wide-optional descriptor path wrote an empty header")
+endif()
+# Both ends of the field list are emitted: a truncated walk cannot pass.
+string(FIND "${wide_desc_header}" "::int32_t f0 = 0;" wide_first_pos)
+string(FIND "${wide_desc_header}" "::int32_t f4095 = 0;" wide_last_pos)
+if(wide_first_pos EQUAL -1 OR wide_last_pos EQUAL -1)
+    message(FATAL_ERROR
+        "The wide-optional header lacks a field at one end of the message")
+endif()
+
+if(FULL_BUILD)
+    run_ok(wide_src_out wide_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        --out-dir "${WORK_DIR}/wide-optional/source"
+        "${DATA_DIR}/${wide_optional}.proto")
+    require_empty(wide_src_out "The wide-optional source stdout")
+    require_empty(wide_src_err "The wide-optional source stderr")
+    file(READ "${WORK_DIR}/wide-optional/source/${wide_optional}.pb.hpp"
+        wide_src_header)
+    if(NOT wide_src_header STREQUAL wide_desc_header)
+        message(FATAL_ERROR
+            "The source path and the descriptor path disagree on the wide "
+            "proto3 optional message")
+    endif()
+endif()
+
 # --- the bounded output tree -------------------------------------------------
 #
 # A logical name with more components than the limit is refused at the
