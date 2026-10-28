@@ -184,6 +184,16 @@ otherwise it is retained for the whole walk while the import depth is not known 
 same time `physical_name` is needed afterwards for diagnostics, and `file.name` must hold the logical
 path: generated include names come from it, and it is the key that matches files against each other.
 
+### Frame lifetime (`load_chain`)
+
+The worklist pushes one `LoadFrame` per file and pops it after its last dependency. A frame holds the
+reserved `SchemaFile` slot and the index of the next dependency to follow; `follow_import` may push a
+new frame and reallocate the `std::vector`, so `load_chain` reads the slot pointer and the index into
+locals before the call and never touches the frame reference afterwards (`V-32`). The slot pointer
+itself stays valid across set growth: `SchemaSet` owns every `SchemaFile` through a `unique_ptr`, so
+the file objects never move even when the owning vector does. Frames are popped only after their last
+dependency, so discovery stays depth first in declaration order however the vector grows.
+
 ### Reading one file (`read_disk_file`)
 
 On POSIX the file is opened once and read through the descriptor: `open`, then `fstat` to classify
@@ -191,10 +201,12 @@ the entry that was actually opened, then `read` in a loop that retries `EINTR` a
 count as progress rather than as the end. The iterator-based read this replaces could not report a
 failure at all — `istreambuf_iterator` never sets the stream state, so the post-read `fail()` guard
 was dead code and a short read returned truncated bytes with success — and the stat probe ran before
-the open, leaving a window in which the entry could change (review 1027, U-27). A failing read now
-clears the buffer and reports the errno value and text (`cannot read file (errno N: text)`), the
-platform detail `OPTIONS.md` promises (U-37). The Windows branch already reads in a `ReadFile` loop
-and is unchanged: it reports `Win32 error N`.
+the open, leaving a window in which the entry could change (review 1027, U-27). A signal-interrupted
+`open` is retried the same way (`V-13`), and a failing `close` after the last byte is reported
+instead of dropped: a delayed write error would otherwise publish a truncated file as a success
+(`V-48`). A failing read clears the buffer and reports the errno value and text
+(`cannot read file (errno N: text)`), the platform detail `OPTIONS.md` promises (U-37). The Windows
+branch already reads in a `ReadFile` loop and is unchanged: it reports `Win32 error N`.
 
 ### Imports (`follow_import`)
 

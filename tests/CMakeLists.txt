@@ -1361,6 +1361,24 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     endif()
 
+    # S09/V-34's Windows counterpart: the test includes file_paths.cpp with
+    # WriteFile wrapped to return a short success and CloseHandle wrapped to
+    # clear the last error, so a writer that reads the code after the close
+    # reports 0 instead of the write failure. The POSIX writer/reader pair
+    # above cannot stage this branch.
+    if(WIN32)
+        add_executable(codegen_imports_output_windows_writer_test
+            codegen/imports/test_windows_writer.cpp)
+        target_include_directories(codegen_imports_output_windows_writer_test
+            PRIVATE ${PROJECT_SOURCE_DIR}/codegen)
+        target_link_libraries(codegen_imports_output_windows_writer_test
+            PRIVATE easypb_schema)
+        add_test(NAME codegen.imports.output.windows-writer
+            COMMAND codegen_imports_output_windows_writer_test)
+        set_tests_properties(codegen.imports.output.windows-writer PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endif()
+
     # Plan 5's in-memory lane: the owned adapter and the linked generator
     # through easypb_codegen_core alone (T4: no descriptor-file wrapper, no
     # native helper, no publisher). The driver prepares the strict `.pbs`

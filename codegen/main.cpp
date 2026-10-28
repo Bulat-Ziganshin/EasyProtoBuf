@@ -305,11 +305,21 @@ bool flush_stdout()
 // agree byte for byte; the switch is made once, before anything is written.
 // An interactive console keeps its text mode, where the translation is the
 // console's own line discipline.
-void use_lf_stdout()
+//
+// V-31: _setmode reports -1 when the descriptor cannot be switched, and the
+// failure used to be dropped: stdout stayed in text mode and a redirected
+// header silently carried CRLF. Nothing has been written yet, so the run is
+// failed with a diagnostic instead of publishing the wrong bytes.
+bool use_lf_stdout()
 {
     if (_isatty(_fileno(stdout)) == 0) {
-        _setmode(_fileno(stdout), _O_BINARY);
+        if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+            report_schema_diagnostic(make_schema_diagnostic(
+                std::string(), "cannot switch stdout to binary mode"));
+            return false;
+        }
     }
+    return true;
 }
 #endif
 
@@ -994,7 +1004,7 @@ int main(int argc, char** argv)
 {
 #ifdef _WIN32
     const ConsoleUtf8Output console_utf8;
-    use_lf_stdout();
+    if (!use_lf_stdout()) return 1;
 #else
     // A write to a closed pipe raises SIGPIPE, whose default action kills the
     // process before the stream state can report the failure. The contract is a

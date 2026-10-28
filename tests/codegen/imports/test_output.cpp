@@ -565,11 +565,53 @@ void test_server_only_network_root_is_refused(const std::string& work)
     CHECK(!easypb_file::make_directories("//" + server + "/", error));
     CHECK(!path_exists(stray));
 
+    // V-33: the long-path spelling of a share-less network path is the same
+    // condition. The translator has no plain spelling for an empty share, so
+    // it must not fold it into "//server/"; the refusal names the cause.
+    error.clear();
+    CHECK(!easypb_file::make_directories(
+        "\\\\?\\UNC\\" + server + "\\", error));
+    CHECK(error ==
+          "cannot create directory (a network path names a server but no share)");
+    CHECK(!path_exists(stray));
+    error.clear();
+    CHECK(!easypb_file::make_directories(
+        "//?/UNC/" + server + "/", error));
+    CHECK(error ==
+          "cannot create directory (a network path names a server but no share)");
+    CHECK(!path_exists(stray));
+
+    // A separator where the share component should begin is the same empty
+    // share: before the pre-resolution check the spelling fell through to
+    // lexical_absolute as "//?/UNC/server/nested" and named a directory
+    // called "?" under the current root.
+    error.clear();
+    CHECK(!easypb_file::make_directories(
+        "\\\\?\\UNC\\" + server + "\\\\nested", error));
+    CHECK(error ==
+          "cannot create directory (a network path names a server but no share)");
+    CHECK(!path_exists(stray));
+
+    // A server at the very end of the spelling names no share either.
+    error.clear();
+    CHECK(!easypb_file::make_directories(
+        "\\\\?\\UNC\\" + server, error));
+    CHECK(error ==
+          "cannot create directory (a network path names a server but no share)");
+    CHECK(!path_exists(stray));
+
     // A share root is a directory the network owns: the caller may name it,
     // nothing below the server is created here, and the write is where a
     // missing share fails.
     error.clear();
     CHECK(easypb_file::make_directories("//" + server + "/share", error));
+    CHECK(!path_exists(stray));
+
+    // The long-path spelling of a named share keeps working (V-33).
+    error.clear();
+    CHECK(easypb_file::make_directories(
+        "\\\\?\\UNC\\" + server + "\\share", error));
+    CHECK(error.empty());
     CHECK(!path_exists(stray));
 }
 #endif

@@ -403,6 +403,47 @@ void test_diamond_caching()
     }
 }
 
+// V-32: the loader's frame stack grows by push_back while a frame reference
+// is live. A chain longer than every earlier block of the vector (1, 2, 4,
+// ...) forces repeated reallocation; the files must still be discovered depth
+// first in import order, each exactly once.
+void test_long_import_chain_survives_frame_growth()
+{
+    require_work_root();
+    const std::string dir = work_path("frame-growth");
+    const int depth = 48;
+    for (int i = 0; i < depth; ++i) {
+        std::ostringstream source;
+        source << "syntax = \"proto2\";\n";
+        source << "package frame_growth;\n";
+        if (i + 1 < depth) {
+            source << "import \"chain-" << (i + 1) << ".proto\";\n";
+        }
+        source << "message M" << i << " { optional int32 value = 1; }\n";
+        std::ostringstream name;
+        name << "chain-" << i << ".proto";
+        CHECK(write_file(join_arg(dir, name.str()), source.str()));
+    }
+
+    easypb_proto::SourceLoaderOptions options;
+    options.proto_paths.push_back(dir);
+    std::vector<std::string> roots(1, "chain-0.proto");
+    easypb_schema::SchemaSet files;
+    easypb_schema::Diagnostic error;
+    CHECK(easypb_proto::load_source_files(options, roots, files, error));
+    CHECK(error.message.empty());
+    CHECK(files.targets().size() == 1);
+    CHECK(files.files().size() == static_cast<std::size_t>(depth));
+    for (int i = 0; i < depth; ++i) {
+        const std::size_t index = static_cast<std::size_t>(i);
+        if (index >= files.files().size()) break;
+        std::ostringstream name;
+        name << "chain-" << i << ".proto";
+        CHECK(text(files.files()[index]->file.name) == name.str());
+        CHECK(files.files()[index]->file.message_type.size() == 1);
+    }
+}
+
 void test_search_precedence_first_wins()
 {
     easypb_proto::SourceLoaderOptions options;
@@ -2505,6 +2546,7 @@ int main(int argc, char** argv)
     require_work_root();
 
     test_diamond_caching();
+    test_long_import_chain_survives_frame_growth();
     test_search_precedence_first_wins();
 #ifndef _WIN32
     test_denied_access_stops_search();

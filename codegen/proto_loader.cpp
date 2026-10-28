@@ -480,8 +480,14 @@ bool load_chain(const std::string& logical,
             stack.pop_back();
             continue;
         }
+        // follow_import may push a frame and reallocate `stack`, so the
+        // frame's slot pointer and its next dependency are read before the
+        // call; the reference itself is not used afterwards (V-32). The
+        // schema slot stays valid across result growth: add_file reserves a
+        // stable block.
+        easypb_schema::SchemaFile* const importer = frame.file;
         const std::size_t index = frame.next_dependency++;
-        if (!follow_import(*frame.file, index, state, stack, error)) {
+        if (!follow_import(*importer, index, state, stack, error)) {
             state.chain.resize(chain_base);
             return false;
         }

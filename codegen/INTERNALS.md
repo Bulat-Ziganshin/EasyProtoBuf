@@ -123,6 +123,18 @@ The two modes share those stages and differ in their preconditions and in what t
 
 Ownership: `SchemaSet` owns the files, their descriptors and every retained string; `LinkedSchema` owns only its name keys and sets and borrows everything else, so the set must outlive the view and every generator call that reads it. The caller must not clear a member of a linked set while a view into it still exists.
 
+## File I/O error contract
+
+`file_paths.cpp` is the only module that calls the filesystem, and every failure it can observe is reported — never dropped, and never turned into data that looks complete:
+
+- **Reads.** `read_disk_file` retries an interrupted `open()` and an interrupted `read()` (`V-13`), classifies the opened entry with `fstat`, retries every short count as progress, and checks `close()` after the last byte (`V-48`): a delayed device or quota error reported only by the close fails the read instead of publishing the buffer. On Windows a failed `ReadFile` reports its `Win32 error N`. A failed read returns false with the reason text, and the POSIX branch clears the buffer, so a partial read is never left looking like a complete result.
+- **Writes.** `write_disk_file` opens with create-and-truncate, retries `EINTR` on POSIX, treats a zero-length write as "no progress" rather than looping, and checks the final close. On Windows the write's Win32 code is captured **before** `CloseHandle` (`V-34`), because the close overwrites the thread's last-error value; the close of a failed or short write cannot replace the write's code with zero.
+- **Directories.** `make_directories` refuses a NUL spelling, an unresolvable relative spelling and a network path that names a server but no share, before creating anything. The share rule covers both the plain spelling (`//server/`) and the long-path spelling (`\\?\UNC\server\`, `//?/UNC/server/`) (`V-33`); a named share (`\\?\UNC\server\share`) keeps working. One clear sentence is used for both spellings.
+- **stdout.** A redirected stdout is switched to binary mode once, before anything is written, so its LF bytes match `--out-dir`. A `_setmode` that returns `-1` fails the run with a diagnostic (`V-31`) instead of silently publishing CRLF bytes. A lost flush is a reported failure too, and there is no file to name in that diagnostic.
+- **Path spellings.** A path containing a NUL byte is refused before any native call, on both platforms. A `\\?\`/`//?/` prefix is a transport spelling: the drive and network forms the module can name are translated to the plain spelling, and any other body (a device path, or a network body with an empty share) is left alone rather than re-spelled into something the caller did not write.
+
+The common schema core performs no filesystem call at all; callers see these rules only through the loader (`read_disk_file`), the publisher (`make_directories`, `write_disk_file`) and the CLI's stdout.
+
 ## Source loader and logical names
 
 Filesystem discovery lives in the source-only loader ([`proto_loader.cpp`](proto_loader.cpp) on top of `file_paths.cpp` and the deferred parser), while the common schema module owns the validated import graph (`bind_import_edges` plus [`logical_paths.cpp`](logical_paths.cpp)), so descriptor-set input and the future plugin reuse those checks without file I/O.

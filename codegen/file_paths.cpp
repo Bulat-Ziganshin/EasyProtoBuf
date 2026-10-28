@@ -115,17 +115,11 @@ bool has_long_path_prefix(const std::string& path)
            path.compare(0, length, kLongPathPrefix) == 0;
 }
 
-// Recognizes "\\?\" and "//?/" and translates the two bodies this module can
-// name into the plain spelling the rest of the path layer uses:
-//   \\?\C:\a\b            -> C:/a/b
-//   \\?\UNC\host\share\x  -> //host/share/x
+// The body of a recognized long-path spelling, with '\' rewritten to '/'.
 // The forward-slash form is the same prefix spelled with '/' (a user may type
-// either); "UNC" is case-insensitive, as it is on Windows. Any other body is
-// left alone and returns false: a device path is not a file path this module
-// can normalize, and the caller keeps its verbatim passthrough.
-bool translate_long_path_prefix(const std::string& path, std::string& plain)
+// either). Returns false for a spelling without either prefix.
+bool long_path_body(const std::string& path, std::string& body)
 {
-    plain.clear();
     std::size_t prefix_length = 0;
     const std::size_t backslash_length = sizeof(kLongPathPrefix) - 1;
     if (path.size() >= backslash_length &&
@@ -137,10 +131,60 @@ bool translate_long_path_prefix(const std::string& path, std::string& plain)
         return false;
     }
 
-    std::string body = path.substr(prefix_length);
+    body.assign(path, prefix_length, std::string::npos);
     for (std::size_t i = 0; i < body.size(); ++i) {
         if (body[i] == '\\') body[i] = '/';
     }
+    return true;
+}
+
+// True for the network body of a long-path spelling: "UNC\..." -> "UNC/...".
+// "UNC" is case-insensitive, as it is on Windows.
+bool has_unc_body_prefix(const std::string& body)
+{
+    return body.size() > 4 && (body[0] == 'U' || body[0] == 'u') &&
+           (body[1] == 'N' || body[1] == 'n') &&
+           (body[2] == 'C' || body[2] == 'c') && body[3] == '/';
+}
+
+// Splits the network body of a long-path spelling: "UNC\server[\share...]".
+// Returns false when the body is not a network spelling or names no server.
+// `host_end` receives the offset of the separator that ends the server, or
+// the body's size when the server runs to the end.
+bool split_unc_body(const std::string& body, std::size_t& host_end)
+{
+    host_end = std::string::npos;
+    if (!has_unc_body_prefix(body)) return false;
+    const std::size_t host_start = 4;
+    host_end = body.find('/', host_start);
+    if (host_end == std::string::npos) host_end = body.size();
+    return host_end > host_start;
+}
+
+// True for a network body that names a server but no share: "UNC\server",
+// "UNC\server\", "UNC\server\\x" and separator-only variants. Such a body is
+// not a network path this module can name; folding it into "//server/" would
+// claim a share-less network root and bury the cause (V-33).
+bool unc_body_has_no_share(const std::string& body)
+{
+    std::size_t host_end = std::string::npos;
+    if (!split_unc_body(body, host_end)) return false;
+    return host_end + 1 >= body.size() || body[host_end + 1] == '/';
+}
+
+// Recognizes "\\?\" and "//?/" and translates the two bodies this module can
+// name into the plain spelling the rest of the path layer uses:
+//   \\?\C:\a\b            -> C:/a/b
+//   \\?\UNC\host\share\x  -> //host/share/x
+// Any other body is left alone and returns false: a device path is not a file
+// path this module can normalize, and the caller keeps its verbatim
+// passthrough. A network body with an empty share is one of those refusals: it
+// names no share, so there is no plain spelling to translate it into.
+bool translate_long_path_prefix(const std::string& path, std::string& plain)
+{
+    plain.clear();
+    std::string body;
+    if (!long_path_body(path, body)) return false;
 
     // A drive-absolute body: the object manager's "C:" form.
     if (body.size() >= 3 && is_alpha(body[0]) && body[1] == ':' &&
@@ -151,21 +195,14 @@ bool translate_long_path_prefix(const std::string& path, std::string& plain)
 
     // A network body: "UNC\server\share[\...]". Both the server and the share
     // must be named; a trailing component is optional.
-    if (body.size() > 4 && (body[0] == 'U' || body[0] == 'u') &&
-        (body[1] == 'N' || body[1] == 'n') &&
-        (body[2] == 'C' || body[2] == 'c') && body[3] == '/') {
-        const std::size_t host_start = 4;
-        const std::size_t host_end = body.find('/', host_start);
-        if (host_end != std::string::npos && host_end > host_start) {
-            const std::size_t share_end = body.find('/', host_end + 1);
-            if (share_end != host_end + 1) {
-                plain = "//";
-                plain.append(body, host_start, body.size() - host_start);
-                return true;
-            }
-        }
+    std::size_t host_end = std::string::npos;
+    if (!split_unc_body(body, host_end) || host_end + 1 >= body.size() ||
+        body[host_end + 1] == '/') {
+        return false;
     }
-    return false;
+    plain = "//";
+    plain.append(body, 4, body.size() - 4);
+    return true;
 }
 #endif
 
@@ -490,8 +527,14 @@ bool read_disk_file(const std::string& path, std::string& contents,
     // which the entry could be replaced (review 1027, U-27). fstat answers
     // for the entry that was actually opened, and the loop treats every
     // short count as progress rather than as the end.
+    // A signal-interrupted open is retried, exactly as the writer and the
+    // read loop below retry their own call (V-13); one EINTR must not be
+    // reported as an unreadable file.
     errno = 0;
-    const int descriptor = ::open(path.c_str(), O_RDONLY);
+    int descriptor = -1;
+    do {
+        descriptor = ::open(path.c_str(), O_RDONLY);
+    } while (descriptor < 0 && errno == EINTR);
     if (descriptor < 0) {
         const int code = errno;
         error = read_failure_reason(
@@ -538,7 +581,19 @@ bool read_disk_file(const std::string& path, std::string& contents,
         if (chunk == 0) break;
         contents.append(buffer, static_cast<std::size_t>(chunk));
     }
-    ::close(descriptor);
+    // A delayed error (a quota or device failure) is reported by close, not
+    // by read; dropping its result published a short file as a success
+    // (V-48). The read errors above keep their own code: close is called
+    // there only to release the descriptor, and its result would mask the
+    // failure that is being reported.
+    if (::close(descriptor) != 0) {
+        const int code = errno;
+        contents.clear();
+        error = read_failure_reason(
+            path, read_error_text(static_cast<unsigned long>(code),
+                                  code == EACCES));
+        return false;
+    }
     return true;
 #endif
 }
@@ -919,6 +974,18 @@ bool is_server_only_unc(const std::string& absolute)
     }
     return true;
 }
+
+// True for the long-path spelling of the same condition: "\\?\UNC\server\"
+// and "//?/UNC/server/". The translator refuses an empty share because it has
+// no plain spelling, so lexical_absolute keeps the transport spelling and the
+// server-only check above would not see it; the caller asks this before
+// resolving (V-33).
+bool is_long_unc_without_share(const std::string& path)
+{
+    std::string body;
+    if (!long_path_body(path, body)) return false;
+    return unc_body_has_no_share(body);
+}
 #endif
 
 // W-52: file-local by use. create_directory_plain's only caller is
@@ -1037,6 +1104,17 @@ bool make_directories(const std::string& directory, std::string& error,
         error = "path contains NUL character";
         return false;
     }
+#ifdef _WIN32
+    // The long-path spelling of a share-less network path is refused before
+    // resolution: translating it would invent the plain "//server/" spelling
+    // the caller did not write (V-33). The plain spelling and its
+    // separator-only variants are refused below, after resolution.
+    if (is_long_unc_without_share(directory)) {
+        error = "cannot create directory (a network path names a server but "
+                "no share)";
+        return false;
+    }
+#endif
     const std::string absolute = lexical_absolute(directory);
     if (absolute.empty()) {
         error = "cannot resolve directory (the current working directory "
@@ -1122,6 +1200,9 @@ bool write_disk_file(const std::string& target, const std::string& contents,
         if (!WriteFile(handle, contents.data() + done,
                        static_cast<DWORD>(chunk), &written, 0) ||
             written != chunk) {
+            // The write's code is captured before CloseHandle: the close sets
+            // the thread's last-error value, so reading it afterwards can
+            // report a zero instead of the write failure (V-34).
             const DWORD code = GetLastError();
             CloseHandle(handle);
             error = write_error_text(code);
