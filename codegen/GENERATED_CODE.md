@@ -162,7 +162,7 @@ The C++ type of each field is generated from its Protobuf type using a type temp
 </tr>
 <tr>
 <td>map</td>
-<td><code>::std::map&lt;{0}, {1}&gt;</code></td>
+<td><code>::std::map&lt;{0},{1}&gt;</code></td>
 <td><code>--map-type</code></td>
 </tr>
 </tbody>
@@ -205,7 +205,7 @@ With the default settings, Codegen generates:
     ::Example::Item item;
     ::std::vector< ::std::string> aliases;
     ::std::vector< ::Example::Item> items;
-    ::std::map< ::std::string, ::Example::Item> items_by_name;
+    ::std::map< ::std::string,::Example::Item> items_by_name;
 ```
 
 Using command-line type templates:
@@ -225,7 +225,7 @@ produces:
     ::Example::Item item;
     SmallVector<MyString> aliases;
     SmallVector< ::Example::Item> items;
-    FlatMap<MyString, ::Example::Item> items_by_name;
+    FlatMap<MyString,::Example::Item> items_by_name;
 ```
 
 Individual fields can override these templates:

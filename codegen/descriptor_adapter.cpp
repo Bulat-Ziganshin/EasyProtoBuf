@@ -117,10 +117,12 @@ void intern_message(StringPool& strings, DescriptorProto& message)
         // glibc and leaves errno clear on the MSVC CRT), so the descriptor
         // path kept the raw spelling while the source path stored the
         // canonical one, and the two generated headers stopped matching for
-        // `defaults-float-overflow`. The canonical output is idempotent: the
-        // text a protoc-written descriptor already carries comes back
-        // unchanged, so `--print-descriptor` bytes do not move for any
-        // accepted row.
+        // `defaults-float-overflow`. The canonical text is stable: one that
+        // already matches `SimpleFtoa`/`SimpleDtoa` (the spelling protoc
+        // stores, including the nine-digit subnormal form of U-18) comes back
+        // unchanged, so `--print-descriptor` bytes do not move for a row protoc
+        // wrote. A hand-written spelling still moves once, which is the point
+        // of normalizing it.
         //
         // CR-17's descriptor half: protoc re-renders an integral default
         // from its parsed value (`descriptor.cc:2835`), so the adapter must do

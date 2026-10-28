@@ -1248,6 +1248,8 @@ if(FULL_BUILD)
     require_contains(b10_print_missing_err
         "${b10}/missing.proto: cannot read file"
         "CR-37 the missing-file reason is the read layer's")
+    require_not_contains(b10_print_missing_err "Exception: "
+        "U-53 the print refusal has no generic Exception prefix")
     string(REGEX MATCHALL "\n" b10_print_missing_lines
         "${b10_print_missing_err}")
     list(LENGTH b10_print_missing_lines b10_print_missing_count)

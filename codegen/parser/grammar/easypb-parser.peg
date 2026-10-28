@@ -112,7 +112,7 @@ DoubleChar            <- Escape / [^"\\\n\x00]
 Escape                <- CharEscape / HexEscape / OctalEscape /
                          UnicodeEscape / UnicodeLongEscape
 CharEscape            <- "\\" [abfnrtv\\'"?]
-HexEscape             <- "\\x" [0-9A-Fa-f] [0-9A-Fa-f]?
+HexEscape             <- "\\" [xX] [0-9A-Fa-f] [0-9A-Fa-f]?
 OctalEscape           <- "\\" [0-7] [0-7]? [0-7]?
 UnicodeEscape         <- "\\u" [0-9A-Fa-f] [0-9A-Fa-f]
                                [0-9A-Fa-f] [0-9A-Fa-f]

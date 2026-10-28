@@ -237,8 +237,7 @@ bool write_as_packed(const FieldDescriptorProto& field,
     // The proto3 packed default comes from the classification made once per
     // invocation; no part of the generator compares `file.syntax` itself
     // (plan 5 A25), and an unsupported file never receives proto3 semantics.
-    // The linker refuses FILE_SYNTAX_UNSUPPORTED before generation once the
-    // standalone CLI runs it.
+    // The linker refuses FILE_SYNTAX_UNSUPPORTED before generation.
     //
     // U-04: the schema default is answered by `effective_packed`, the same
     // helper the descriptor merge compares, so the wire format cannot depend
@@ -1207,9 +1206,8 @@ void collect_message_infos(MessageInfo& info, std::vector<MessageInfo*>& output)
 // by value, no declaration order can make the C++ type complete, so this is a
 // recursive value dependency even before general graph-cycle detection.
 // True when `name` lies strictly under the lexical scope `prefix`, that is when
-// `prefix` is its own head followed by the component separator. The
-// `prefix + PB_TYPE_DELIMITER` this replaces built a fresh string on every
-// call, and `containing_unit` asks the question once per lexical unit per
+// `prefix` is its own head followed by the component separator. The comparison
+// is allocation-free, and the dependency walk asks it once per lexical unit per
 // dependency - the widest loop in the graph pass.
 bool is_under_proto_scope(const std::string& name, const std::string& prefix)
 {

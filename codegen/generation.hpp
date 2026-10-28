@@ -27,9 +27,12 @@ struct GeneratedFile
 // instead, because that file has no logical name), the fixed runtime includes,
 // the direct-dependency includes the include planner keeps, and the target's
 // declarations and codecs. Imported definitions are made complete by their
-// dependency headers, not by emitting them here; imported enums are named by
-// initializers through the linked visible definitions, never inferred from
-// zero or from a name.
+// dependency headers, not by emitting them here. An imported enum's default
+// initializer names the declared first value through the linked visible
+// definition; when that value is zero - or the definition is not visible in
+// compatibility mode - it falls back to the definition-independent
+// `static_cast<EnumType>(0)` spelling (GENERATED_CODE.md records the one shape
+// the two modes spell differently).
 //
 // `schema.visible_files` decides which imported definitions are in scope.
 // `schema.local_only` is not consulted here: the include planner emits every

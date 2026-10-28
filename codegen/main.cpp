@@ -471,8 +471,8 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
     // mode was selected but no input file named (1884-1888). Keying help on
     // the positional list alone hid an empty file list behind a successful
     // run, so a build script whose list expanded to nothing reported success
-    // and generated nothing. The sentence is the reference one; the
-    // "Exception: " prefix comes from the shared refusal path in main.
+    // and generated nothing. The sentence is the reference one; the shared
+    // refusal path in main prints it verbatim, without a generic prefix.
     if (parser.non_option_args().empty()) {
         throw std::runtime_error("Missing input file.");
     }
@@ -870,7 +870,7 @@ int main(int argc, char** argv)
         std::vector<std::string> arguments;
         if (!collect_arguments(argc, argv, arguments)) {
             std::fprintf(stderr,
-                         "Exception: command line is not valid UTF-8\n");
+                         "command line is not valid UTF-8\n");
             return 1;
         }
         const CommandLine command = parse_cmdline(arguments);
@@ -895,11 +895,11 @@ int main(int argc, char** argv)
         return flush_stdout() ? 0 : 1;
     }
     catch (const std::exception& error) {
-        std::fprintf(stderr, "Exception: %s\n", error.what());
+        std::fprintf(stderr, "%s\n", error.what());
         return 1;
     }
     catch (...) {
-        std::fprintf(stderr, "Exception: unknown error\n");
+        std::fprintf(stderr, "unknown error\n");
         return 1;
     }
 

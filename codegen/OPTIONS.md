@@ -228,17 +228,22 @@ the owner decision D2-A (2026-10-25), recorded as P1 exception E13 in
 **field** option (`U-54`). A field accepts the plain `(easypb.cpp).type`, the
 fully-qualified `(.easypb.cpp).type` and the spaced `( easypb.cpp ).type`
 spelling - all normalize to one option name and the emitter reads the same
-value, so the generated header is unchanged. Every other declaration scope
-refuses it - file, message, oneof, enum, enum value, extension range, service
-and method - with `Option "(easypb.cpp).type" is a field option and cannot be
-set at <scope> scope`; the reference compiler refuses the same text with
-`Option field "(easypb.cpp)" is not a field or extension of message
-"<Owner>Options"`. The statement form `option (easypb.cpp) = { ... };` is not a
-field option either: a non-field scope refuses it by the same scope rule, and
-inside a field bracket list the parser asks for `(easypb.cpp).type` instead.
-Other `(easypb.cpp).*` spellings are refused. The descriptor door models the
-option in `FieldOptions` only, so the other scopes have no descriptor
-representation: placement is a source-text rule, as it is for `protoc`.
+value, so the generated header is unchanged. The whole `(easypb.cpp)` family is
+field-only: a statement at file, message, oneof, enum, enum value, extension
+range, service or method scope is refused, including the aggregate
+`option (easypb.cpp) = { ... };` form and an unknown sub-field, with `Option
+"(easypb.cpp)" is a field option and cannot be set at <scope> scope` (the
+sentence repeats the exact sub-field, for example `(easypb.cpp).foo`, when one
+is written); the reference compiler refuses the same text with `Option field
+"(easypb.cpp)" is not a field or extension of message "<Owner>Options"`. In a
+field bracket list only `(easypb.cpp).type` is meaningful: the bare
+`(easypb.cpp)` is refused with a message that asks for `.type`, and any other
+sub-field is refused as `unknown EasyProtoBuf C++ field option`. Other
+parenthesized custom options, statement or bracket form, are not part of this
+family: they stay opaque and are accepted under E13. The descriptor door
+models the option in `FieldOptions` only, so the other scopes have no
+descriptor representation: placement is a source-text rule, as it is for
+`protoc`.
 
 A dotted sub-field assignment on a singular message-typed option
 (`[feature_support.edition_introduced = ...]`) is also outside the
@@ -371,7 +376,15 @@ codegen --benchmark-parser [--benchmark-ms 500] a.proto b.proto
 
 For a reproducible real-world workload, pass schemas from the [`tests/codegen/parser/differential/corpus/`](../tests/codegen/parser/differential/corpus/) directory. Tests on a 4 GHz Zen3 CPU showed 100–200 MB/s parsing throughput.
 
-Descriptor printing and benchmarking report unresolved imported types as warnings. Code generation reports the warnings its load and link stored — a dropped `extend` declaration (the E6 warning), a compatibility reference into a missing dependency — on stderr before it writes the header, with the exit code still 0; stdout stays the header only. The generation run stops only when an import cannot be found or a reference stays unresolved, instead of guessing whether the type is a message or enum.
+Descriptor printing and benchmarking report unresolved imported types as
+warnings and still exit 0: both utility modes work per file and never link, so
+an unresolved reference is not a refusal there. Code generation is the door
+that links, so it reports the warnings its load and link stored — a dropped
+`extend` declaration (the E6 warning), a compatibility reference into a missing
+dependency — on stderr before it writes the header, with the exit code still 0;
+stdout stays the header only. The generation run stops only when an import
+cannot be found or a reference stays unresolved, instead of guessing whether
+the type is a message or enum.
 
 `--print-descriptor` and `--benchmark-parser` cannot be used together. `--benchmark-parser` accepts `.proto` source files, not descriptor-set input: a `.pbs` positional is classified as a descriptor set before the action runs, and both that spelling and an explicit `--descriptor-set` are refused with `--benchmark-parser accepts .proto source files, not descriptor-set input` instead of parsing the bytes as source. Structural, packed-field, and C++ type generation options cannot be combined with either utility mode. `-I/--proto_path` is a search root for `.proto` generation, not a code-generation option: the utility modes parse each file on its own and do not resolve imports, so `-I` with either mode is refused with its own sentence (`-I/--proto_path is a search-root option for .proto generation; descriptor print and parser benchmark modes do not resolve imports`) rather than being called a code-generation option.
 
