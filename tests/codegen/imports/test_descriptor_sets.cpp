@@ -1172,8 +1172,9 @@ void test_adapter_rejects_an_unknown_label()
 
     // The control: an explicit LABEL_OPTIONAL and a protoc-shaped absent label
     // are accepted, and two identical copies still merge as one file.
+    const std::string optional_bytes = label_set(1, true);
     const FileDescriptorSet explicit_optional =
-        easypb::decode<FileDescriptorSet>(label_set(1, true));
+        easypb::decode<FileDescriptorSet>(optional_bytes);
     CHECK(easypb_schema::append_descriptor_files(explicit_optional.file,
                                                  "label-ok.pbs", set, error));
     CHECK(set.files().size() == 1);
@@ -1182,8 +1183,9 @@ void test_adapter_rejects_an_unknown_label()
     std::vector<std::string> twice(2, same);
     CHECK(easypb_schema::load_descriptor_sets(twice, set, error));
     CHECK(set.files().size() == 1);
+    const std::string absent_bytes = label_set(0, false);
     const FileDescriptorSet absent =
-        easypb::decode<FileDescriptorSet>(label_set(0, false));
+        easypb::decode<FileDescriptorSet>(absent_bytes);
     easypb_schema::SchemaSet absent_set;
     CHECK(easypb_schema::append_descriptor_files(absent.file, "label-absent.pbs",
                                                  absent_set, error));
