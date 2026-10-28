@@ -138,6 +138,14 @@ the four accepted spellings (`accept-value-defaults.proto`, both halves of
 `U-08`), and `codegen.validity` proves that the option-carrying schema emits
 exactly the header of its option-less control on both doors.
 
+An accepted spelling is also **retained** where the descriptor model keeps it
+(`V-16`): `packed = false` on a map sets `FieldOptions.has_packed` with the
+value `false`, exactly as the descriptor door decodes protoc's `.pbs`, so
+`--print-descriptor` writes `[packed=false]` on both doors. `packed` is the
+retained option the print renders; the other three default-valued options are
+validated and their value decides the verdict, but the print has no marker for
+them.
+
 This is validation, not feature support: no Java/C#/Go option changes the
 generated C++. Only `default`, `json_name`, `packed` and `(easypb.cpp).type`
 keep generated-code behavior. The descriptor door decodes the options whose
@@ -448,7 +456,7 @@ codegen --descriptor-set --print-descriptor tutorial.pbs
 codegen --benchmark-parser [--benchmark-ms 500] a.proto b.proto
 ```
 
-`--print-descriptor` prints the parsed or decoded descriptor tree instead of generating C++. Messages, enums, services and their methods are printed; a method shows its endpoint types and, for a streaming method, its `client_streaming`/`server_streaming` markers. The print also carries the declarations the model retains - imports with their `public`/`weak` modifier, message and enum `reserved` ranges and names, extension ranges, `message_set_wire_format` and `allow_alias` - so a `.pbs` dump names the declarations the linker refuses on instead of looking like a dump of an empty file. A descriptor set is printed whole: every file the container holds is shown, because inspection does not select a generation target. The dump is all-or-nothing: it reaches stdout only after every input has been read, decoded and parsed, so a later failing input leaves stdout empty like every other refusal. When an input cannot be read, the refusal appends the read layer's reason (`read access is denied`, `is a directory, not a schema file`, or the platform error: `Win32 error N` on Windows, `errno N: text` on POSIX) instead of a generic "cannot read file".
+`--print-descriptor` prints the parsed or decoded descriptor tree instead of generating C++. Messages, enums, services and their methods are printed; a method shows its endpoint types and, for a streaming method, its `client_streaming`/`server_streaming` markers. The print also carries the declarations the model retains - imports with their `public`/`weak` modifier, message and enum `reserved` ranges and names, extension ranges, `message_set_wire_format` and `allow_alias` - so a `.pbs` dump names the declarations the linker refuses on instead of looking like a dump of an empty file. Both doors fill that model: the source parser stores the `reserved` ranges and names and the extension ranges it validated, with a message range's end converted to the exclusive descriptor form, so the dump of a `.proto` file and the dump of the `.pbs` `protoc` writes for the same file are byte-identical (`V-15`; `codegen.parity` compares the two trees). A descriptor set is printed whole: every file the container holds is shown, because inspection does not select a generation target. The dump is all-or-nothing: it reaches stdout only after every input has been read, decoded and parsed, so a later failing input leaves stdout empty like every other refusal. When an input cannot be read, the refusal appends the read layer's reason (`read access is denied`, `is a directory, not a schema file`, or the platform error: `Win32 error N` on Windows, `errno N: text` on POSIX) instead of a generic "cannot read file".
 
 `--benchmark-parser` reads all input files before timing, runs one unmeasured warm-up round, and then parses complete corpus rounds for at least 100 ms by default. `--benchmark-ms N` changes the minimum measured parser time; `N` must be at least 100 and the option is valid only with `--benchmark-parser`. A read failure prints the file and the same read reason and exits 1, like every other CLI failure; the benchmark mode has no special exit code.
 

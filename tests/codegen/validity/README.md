@@ -77,6 +77,13 @@ and the source-door pair must agree on the sentence and the declaration
 position. The accepted control is the paired `message-set-empty` fixture, which
 still prints with exit 0.
 
+Step S06 adds the retained half of the map `packed = false` rule (`V-16`): the
+print path writes `[packed=false]` only when `FieldOptions.has_packed` is set,
+so the `option-value-defaults` fixture now also proves that the source model
+keeps the explicit `false` and that the two doors print the same tree. The
+generated headers already had to be equal (the R08 row above); this row pins
+the model fact the header cannot show.
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -188,7 +195,7 @@ still prints with exit 0.
 | a field number of 536870912 (refused) | `.proto` only | `U-56` |
 | a custom `json_name` with an embedded NUL | `.proto` + crafted `.pbs` | `U-57` |
 | a non-lite file importing a `LITE_RUNTIME` file (accepted) | `.proto` + crafted `.pbs` | `U-15` |
-| the four option default values, with an option-less control (accepted) | `.proto` + `.pbs` | `U-08` |
+| the four option default values, with an option-less control (accepted) | `.proto` + `.pbs` | `U-08`, `V-16` |
 | an extension `json_name` that differs from the derived name (refused) | `.proto` only | `U-25` |
 | an extension `json_name` equal to the derived name (accepted) | `.proto` only | `U-25` |
 | a reserved name that is not an identifier (accepted, warning) | `.proto` only | `U-50` |

@@ -120,7 +120,9 @@ file(MAKE_DIRECTORY "${WORK_DIR}/w68")
 #   ext-max      the accepted extension-range boundary: exclusive end 536870912,
 #                one past the last extension number (CR-07);
 #   message-set-empty  a MessageSet with no ordinary fields, which protoc
-#                accepts and whose option has no header effect (CR-23).
+#                accepts and whose option has no header effect (CR-23);
+#   retained-ranges  `reserved` ranges/names and an extension range, the
+#                declarations the source print used to drop (V-15).
 set(paired_fixtures
     methods-ok
     map-ok
@@ -128,6 +130,7 @@ set(paired_fixtures
     ext-ok
     ext-max
     message-set-empty
+    retained-ranges
     opt-jstype-int64
     opt-lazy-message
     opt-extrange-declaration)
@@ -156,6 +159,54 @@ foreach(name ${paired_fixtures})
     endif()
 
 endforeach()
+
+# --- V-15: the source print carries the retained declarations ---------------
+#
+# `--print-descriptor` reads one model on both doors. The source parser used to
+# validate `reserved` and `extensions` in locals and drop them, so a `.proto`
+# dump lost declarations the `.pbs` dump of the same file carried. The two dumps
+# of `retained-ranges` must now be the same bytes; both commands run from the
+# fixture directory so the logical file name is the same on both doors (the
+# source door reports the spelling it was given). The explicit markers keep a
+# backend that printed nothing from passing the equality test.
+execute_process(
+    COMMAND ${CODEGEN} --descriptor-set --print-descriptor retained-ranges.pbs
+    WORKING_DIRECTORY "${DATA_DIR}"
+    RESULT_VARIABLE retained_desc_result
+    OUTPUT_VARIABLE retained_desc_out
+    ERROR_VARIABLE retained_desc_err)
+if(NOT retained_desc_result EQUAL 0)
+    message(FATAL_ERROR
+        "The retained-ranges descriptor print failed (${retained_desc_result}): ${retained_desc_err}")
+endif()
+require_empty(retained_desc_err "The retained-ranges descriptor print stderr")
+require_contains(retained_desc_out "reserved 5 to 10;"
+    "V-15: the descriptor print of the message reserved range")
+require_contains(retained_desc_out "reserved \"old\";"
+    "V-15: the descriptor print of the message reserved name")
+require_contains(retained_desc_out "extensions 100 to 199;"
+    "V-15: the descriptor print of the extension range")
+require_contains(retained_desc_out "reserved 2 to 3;"
+    "V-15: the descriptor print of the enum reserved range")
+require_contains(retained_desc_out "reserved \"B\";"
+    "V-15: the descriptor print of the enum reserved name")
+if(FULL_BUILD)
+    execute_process(
+        COMMAND ${CODEGEN} --print-descriptor retained-ranges.proto
+        WORKING_DIRECTORY "${DATA_DIR}"
+        RESULT_VARIABLE retained_src_result
+        OUTPUT_VARIABLE retained_src_out
+        ERROR_VARIABLE retained_src_err)
+    if(NOT retained_src_result EQUAL 0)
+        message(FATAL_ERROR
+            "The retained-ranges source print failed (${retained_src_result}): ${retained_src_err}")
+    endif()
+    require_empty(retained_src_err "The retained-ranges source print stderr")
+    if(NOT retained_src_out STREQUAL retained_desc_out)
+        message(FATAL_ERROR
+            "V-15: the source and descriptor prints of retained-ranges differ\nsource:\n${retained_src_out}\ndescriptor:\n${retained_desc_out}")
+    endif()
+endif()
 
 # --- W-16: method endpoints and duplicate names ------------------------------
 #

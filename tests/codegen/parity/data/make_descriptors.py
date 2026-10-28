@@ -68,6 +68,9 @@ FIXTURES = (
     Fixture.compile("ext-ok"),
     Fixture.compile("ext-max"),
     Fixture.compile("message-set-empty"),
+    # V-15: an accepted schema whose reserved names/ranges and extension range
+    # must appear in the source print exactly as in protoc's `.pbs` print.
+    Fixture.compile("retained-ranges"),
     Fixture.compile("w68-dep"),
     Fixture.compile("w68-root"),
     # R04 accepted controls: a legal `jstype`, a legal `lazy`, and an extension

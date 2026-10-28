@@ -710,6 +710,16 @@ struct NumberRange
     NumberRange() : first(0), last(0), max_end(false) {}
 };
 
+// V-15: one reserved name in source order, with the position of its string
+// literal. `parse_reserved` de-duplicates through a set, but the descriptor
+// model keeps the declaration order, exactly as the `.pbs` door decodes it, so
+// the order and the location travel beside the set.
+struct ReservedNameEntry
+{
+    std::string text;
+    SourceLocation location;
+};
+
 // V-05: the largest inclusive extension number a MessageSet may declare.
 // protoc's parser refuses an explicit INT32_MAX endpoint ("Field number out of
 // bounds.", parser.cc:1636-1640) and expands `to max` to INT32_MAX as the
@@ -2032,6 +2042,15 @@ private:
             field.json_name = out_.strings.save(options.json_name);
             field.has_json_name = true;
         }
+        // V-16: `packed = true` is refused above because a map is a repeated
+        // message, but an explicit `packed = false` is the option default
+        // protoc keeps in the model. Store it exactly as `parse_field` does,
+        // so the source and `.pbs` prints of one file agree.
+        if (options.has_packed) {
+            field.options.packed = options.packed;
+            field.options.has_packed = true;
+            field.has_options = true;
+        }
 
         message.nested_type.push_back(std::move(entry));
         out_.declaration_locations[entry_path] = map_location;
@@ -2070,7 +2089,8 @@ private:
             field_source.raw_type_name = entry_name;
             field_source.type_location = map_location;
             field_source.default_location = easypb_schema::unknown_location();
-            field_source.packed_location = easypb_schema::unknown_location();
+            field_source.packed_location = options.has_packed
+                ? options.packed_location : easypb_schema::unknown_location();
             out_.declaration_locations[field_source.path] = field_name_location;
             out_.field_sources.push_back(std::move(field_source));
         }
@@ -2176,6 +2196,7 @@ private:
 
         std::vector<NumberRange> reserved_ranges;
         std::set<std::string> reserved_names;
+        std::vector<ReservedNameEntry> reserved_name_order;
         std::vector<NumberRange> extension_ranges;
         std::set<std::string> option_names;
         expect_symbol('{');
@@ -2210,7 +2231,7 @@ private:
             }
             else if (accept_keyword("option"))
                 parse_message_option(message, message_path, option_names);                  // OptionStatement
-            else if (accept_keyword("reserved")) parse_reserved(false, reserved_ranges, reserved_names); // ReservedMessage
+            else if (accept_keyword("reserved")) parse_reserved(false, reserved_ranges, reserved_names, reserved_name_order); // ReservedMessage
             else if (accept_keyword("extensions")) parse_extensions(extension_ranges);            // Extensions
             else if (accept_keyword("extend")) parse_extend();                               // Extend
             else if (is_keyword("service")) fail("service declarations are not allowed inside messages");
@@ -2219,7 +2240,7 @@ private:
         synthesize_proto3_oneofs(message, message_path);
         validate_message_constraints(message, message_path, name_location,
                                     reserved_ranges, reserved_names,
-                                    extension_ranges);
+                                    reserved_name_order, extension_ranges);
         return message;
     }
 
@@ -2296,6 +2317,7 @@ private:
         std::vector<SourceLocation> value_locations;
         std::vector<NumberRange> reserved_ranges;
         std::set<std::string> reserved_names;
+        std::vector<ReservedNameEntry> reserved_name_order;
         std::set<std::string> option_names;
 
         expect_symbol('{');
@@ -2335,7 +2357,8 @@ private:
                 continue;
             }
             if (accept_keyword("reserved")) {                       // ReservedEnum
-                parse_reserved(true, reserved_ranges, reserved_names);
+                parse_reserved(true, reserved_ranges, reserved_names,
+                               reserved_name_order);
                 continue;
             }
 
@@ -2454,6 +2477,27 @@ private:
                 "duplicate enum number requires option allow_alias = true",
                 easypb_schema::DIAGNOSTIC_DUPLICATE_ENUM_NUMBER);
         }
+        // V-15, the enum half: the checks above own the verdict, and the
+        // declarations they accepted are part of the descriptor model now,
+        // exactly as the `.pbs` door decodes them. An enum reserved range is
+        // inclusive at both ends, so the pair is stored as written.
+        for (std::size_t i = 0; i < reserved_ranges.size(); ++i) {
+            EnumDescriptorProto_EnumReservedRange stored;
+            stored.start = static_cast<std::int32_t>(reserved_ranges[i].first);
+            stored.end = static_cast<std::int32_t>(reserved_ranges[i].last);
+            stored.has_start = true;
+            stored.has_end = true;
+            result.reserved_range.push_back(stored);
+            out_.declaration_locations[easypb_schema::enum_reserved_range_path(
+                enum_path, static_cast<int>(i))] = reserved_ranges[i].location;
+        }
+        for (std::size_t i = 0; i < reserved_name_order.size(); ++i) {
+            result.reserved_name.push_back(
+                out_.strings.save(reserved_name_order[i].text));
+            out_.declaration_locations[easypb_schema::enum_reserved_name_path(
+                enum_path, static_cast<int>(i))] =
+                reserved_name_order[i].location;
+        }
         return result;
     }
 
@@ -2476,9 +2520,13 @@ private:
     // ReservedMessage <- "reserved" (MessageRanges / ReservedNames) ";"
     // ReservedEnum    <- "reserved" (EnumRanges / ReservedNames) ";"
     // The caller has consumed "reserved"; enum_context selects the range form.
+    // V-15: the names are also appended to `ordered_names` with their
+    // positions, so the caller can store them in the descriptor in source
+    // order while the set above stays the duplicate check.
     void parse_reserved(bool enum_context,
                         std::vector<NumberRange>& ranges,
-                        std::set<std::string>& names)
+                        std::set<std::string>& names,
+                        std::vector<ReservedNameEntry>& ordered_names)
     {
         if (current_.kind == TOKEN_STRING) {
             for (;;) {
@@ -2501,6 +2549,10 @@ private:
                 if (!names.insert(name).second) {
                     throw ParseFailure(where, "duplicate reserved name " + name);
                 }
+                ReservedNameEntry entry;
+                entry.text = name;
+                entry.location = where;
+                ordered_names.push_back(std::move(entry));
                 if (!accept_symbol(',')) break;
             }
             expect_symbol(';');
@@ -2527,8 +2579,11 @@ private:
     }
 
     // Extensions <- "extensions" MessageRanges FieldOptions? ";"
-    // The caller has consumed "extensions".  Ranges are retained temporarily
-    // for conflict checks because the trimmed descriptor has no range field.
+    // The caller has consumed "extensions". V-15: the ranges are retained in
+    // `DescriptorProto::extension_range` after the message body, because a
+    // `to max` endpoint depends on `message_set_wire_format`, which may be
+    // declared later. The option body is validated here but not stored: it
+    // stays opaque on the source door (E13).
     // V-05: `N to max` keeps the widest inclusive endpoint until the message
     // body ends, because a MessageSet's `to max` is 2147483646 while an
     // ordinary message's is 536870911 (protoc's
@@ -2575,11 +2630,12 @@ private:
     // inside the message. `message_location` is the message name, the fallback
     // for a field whose entry is somehow missing - still inside the
     // declaration, never the token after the brace.
-    void validate_message_constraints(const DescriptorProto& message,
+    void validate_message_constraints(DescriptorProto& message,
                                       const DescriptorPath& message_path,
                                       const SourceLocation& message_location,
                                       const std::vector<NumberRange>& reserved_ranges,
                                       const std::set<std::string>& reserved_names,
+                                      const std::vector<ReservedNameEntry>& reserved_name_order,
                                       const std::vector<NumberRange>& extension_ranges)
     {
         if (reserved_names.empty() && reserved_ranges.empty() &&
@@ -2652,6 +2708,40 @@ private:
                         "field number lies inside an extension range");
                 }
             }
+        }
+
+        // V-15, the message half: the checks above own the verdict, and the
+        // declarations they accepted are part of the descriptor model now,
+        // exactly as the `.pbs` door decodes them. A message range stores an
+        // inclusive source start and an exclusive descriptor end, so one is
+        // added; `max_end` is already resolved. The internal bookkeeping does
+        // not travel: the model carries only the numbers and the names.
+        for (std::size_t i = 0; i < reserved_ranges.size(); ++i) {
+            DescriptorProto_ReservedRange stored;
+            stored.start = static_cast<std::int32_t>(reserved_ranges[i].first);
+            stored.end = static_cast<std::int32_t>(reserved_ranges[i].last + 1);
+            stored.has_start = true;
+            stored.has_end = true;
+            message.reserved_range.push_back(stored);
+            out_.declaration_locations[easypb_schema::message_reserved_range_path(
+                message_path, static_cast<int>(i))] = reserved_ranges[i].location;
+        }
+        for (std::size_t i = 0; i < reserved_name_order.size(); ++i) {
+            message.reserved_name.push_back(
+                out_.strings.save(reserved_name_order[i].text));
+            out_.declaration_locations[easypb_schema::message_reserved_name_path(
+                message_path, static_cast<int>(i))] =
+                reserved_name_order[i].location;
+        }
+        for (std::size_t i = 0; i < resolved_ranges.size(); ++i) {
+            DescriptorProto_ExtensionRange stored;
+            stored.start = static_cast<std::int32_t>(resolved_ranges[i].first);
+            stored.end = static_cast<std::int32_t>(resolved_ranges[i].last + 1);
+            stored.has_start = true;
+            stored.has_end = true;
+            message.extension_range.push_back(stored);
+            out_.declaration_locations[easypb_schema::message_extension_range_path(
+                message_path, static_cast<int>(i))] = resolved_ranges[i].location;
         }
     }
 

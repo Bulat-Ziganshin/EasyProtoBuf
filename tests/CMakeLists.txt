@@ -792,6 +792,7 @@ if(BUILD_TESTING)
         ext-ok
         ext-max
         message-set-empty
+        retained-ranges
         w36-same
         w36-packed-default
         w36-packed-string-default

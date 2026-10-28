@@ -120,7 +120,9 @@ The EasyPB parser therefore:
 - parses proto2 and descriptor-option proto3 `extend` bodies (each body needs at
   least one field) and emits a warning instead of storing extension
   declarations;
-- validates reserved and extension ranges without serializing them.
+- stores reserved ranges and names and extension ranges in the descriptor model
+  after validating them, so the source print carries the same declarations as
+  the `.pbs` door (V-15).
 
 ## Additional syntax in the complete grammar
 

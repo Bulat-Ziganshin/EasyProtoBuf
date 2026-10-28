@@ -1345,6 +1345,45 @@ if(FULL_BUILD)
         "U-08: the default-valued options changed the source header")
 endif()
 
+# V-16: an explicit `packed = false` on a map is accepted *and* kept. The
+# print path writes `[packed=false]` only when `FieldOptions.has_packed` is
+# set, so the marker proves presence and the value proves `packed` is false;
+# the two doors must print the same tree. `option-value-defaults` carries the
+# map spelling beside the other three default-valued options.
+execute_process(
+    COMMAND ${CODEGEN} --descriptor-set --print-descriptor
+        option-value-defaults.pbs
+    WORKING_DIRECTORY "${DATA_DIR}"
+    RESULT_VARIABLE option_print_desc_result
+    OUTPUT_VARIABLE option_print_desc_out
+    ERROR_VARIABLE option_print_desc_err)
+if(NOT option_print_desc_result EQUAL 0)
+    message(FATAL_ERROR
+        "The option-value-defaults descriptor print failed (${option_print_desc_result}): ${option_print_desc_err}")
+endif()
+require_empty(option_print_desc_err "The V-16 descriptor print stderr")
+require_contains(option_print_desc_out "unpacked_map = 4 [packed=false]"
+    "V-16: the descriptor print of the map's explicit packed=false")
+if(FULL_BUILD)
+    execute_process(
+        COMMAND ${CODEGEN} --print-descriptor option-value-defaults.proto
+        WORKING_DIRECTORY "${DATA_DIR}"
+        RESULT_VARIABLE option_print_src_result
+        OUTPUT_VARIABLE option_print_src_out
+        ERROR_VARIABLE option_print_src_err)
+    if(NOT option_print_src_result EQUAL 0)
+        message(FATAL_ERROR
+            "The option-value-defaults source print failed (${option_print_src_result}): ${option_print_src_err}")
+    endif()
+    require_empty(option_print_src_err "The V-16 source print stderr")
+    require_contains(option_print_src_out "unpacked_map = 4 [packed=false]"
+        "V-16: the source print of the map's explicit packed=false")
+    if(NOT option_print_src_out STREQUAL option_print_desc_out)
+        message(FATAL_ERROR
+            "V-16: the source and descriptor prints of option-value-defaults differ\nsource:\n${option_print_src_out}\ndescriptor:\n${option_print_desc_out}")
+    endif()
+endif()
+
 # --- R11: the emitter validates what it emits (U-20) -------------------------
 #
 # `--no-class` suppresses every struct, so a member default value has no

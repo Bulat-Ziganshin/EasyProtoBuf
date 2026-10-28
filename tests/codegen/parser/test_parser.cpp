@@ -208,6 +208,18 @@ void test_map_option_rejections_point_at_the_option()
     CHECK(easypb_proto::parse_proto("map-packed-false.proto",
         "message M { map<string, int32> x = 1 [packed = false]; }",
         parsed, error));
+    // V-16: accepted is not enough - protoc keeps the explicit spelling in
+    // `FieldOptions`, so the source model must carry it too. The print path
+    // writes the marker only when `has_packed` is set.
+    CHECK(parsed.file.message_type.size() == 1);
+    if (parsed.file.message_type.size() == 1) {
+        const FieldDescriptorProto* map_field =
+            find_field(parsed.file.message_type[0], "x");
+        CHECK(map_field != 0);
+        CHECK(map_field && map_field->has_options);
+        CHECK(map_field && map_field->options.has_packed);
+        CHECK(map_field && !map_field->options.packed);
+    }
     CHECK(!easypb_proto::parse_proto("bad-map-packed.proto",
         "message M { map<string, int32> x = 1 [packed = true]; }",
         parsed, error));
@@ -693,6 +705,81 @@ void test_rejects_extension_range_conflicts()
     CHECK(!easypb_proto::parse_proto("extension-reserved.proto",
         "message M { extensions 100 to 199; reserved 150 to 250; }", parsed, error));
     CHECK(error.message.find("overlap") != std::string::npos);
+}
+
+// V-15: `reserved` and `extensions` are descriptor content, not parser-local
+// text. The source print reads the same tree as the `.pbs` print, so the model
+// keeps the source order, the inclusive enum end and the exclusive message end
+// (one past the last source number). A `to max` endpoint is resolved before it
+// is stored, because its value depends on `message_set_wire_format`.
+void test_reserved_and_extension_ranges_are_retained()
+{
+    easypb_proto::ParsedProto parsed;
+    easypb_proto::Diagnostic error;
+    CHECK(easypb_proto::parse_proto("ranges.proto",
+        "syntax=\"proto2\";\n"
+        "message M {\n"
+        "  optional int32 a = 1;\n"
+        "  reserved 5 to 10;\n"
+        "  reserved \"zeta\", \"alpha\";\n"
+        "  extensions 100 to 199;\n"
+        "  enum E { ZERO = 0; reserved 2 to 3; reserved \"B\"; }\n"
+        "}\n",
+        parsed, error));
+    CHECK(parsed.file.message_type.size() == 1);
+    if (parsed.file.message_type.size() != 1) return;
+    const DescriptorProto& message = parsed.file.message_type[0];
+
+    CHECK(message.reserved_range.size() == 1);
+    if (message.reserved_range.size() == 1) {
+        CHECK(message.reserved_range[0].has_start);
+        CHECK(message.reserved_range[0].has_end);
+        CHECK(message.reserved_range[0].start == 5);
+        CHECK(message.reserved_range[0].end == 11); // inclusive 10 -> exclusive 11
+    }
+    // The de-duplicating set sorts; the model must keep the declaration order.
+    CHECK(message.reserved_name.size() == 2);
+    if (message.reserved_name.size() == 2) {
+        CHECK(text(message.reserved_name[0]) == "zeta");
+        CHECK(text(message.reserved_name[1]) == "alpha");
+    }
+    CHECK(message.extension_range.size() == 1);
+    if (message.extension_range.size() == 1) {
+        CHECK(message.extension_range[0].has_start);
+        CHECK(message.extension_range[0].has_end);
+        CHECK(message.extension_range[0].start == 100);
+        CHECK(message.extension_range[0].end == 200);
+    }
+
+    CHECK(message.enum_type.size() == 1);
+    if (message.enum_type.size() == 1) {
+        const EnumDescriptorProto& enumeration = message.enum_type[0];
+        CHECK(enumeration.reserved_range.size() == 1);
+        if (enumeration.reserved_range.size() == 1) {
+            CHECK(enumeration.reserved_range[0].start == 2);
+            CHECK(enumeration.reserved_range[0].end == 3); // enum end is inclusive
+        }
+        CHECK(enumeration.reserved_name.size() == 1);
+        if (enumeration.reserved_name.size() == 1) {
+            CHECK(text(enumeration.reserved_name[0]) == "B");
+        }
+    }
+
+    CHECK(easypb_proto::parse_proto("range-max.proto",
+        "syntax=\"proto2\"; message M { extensions 1 to max; }", parsed, error));
+    CHECK(parsed.file.message_type.size() == 1);
+    if (parsed.file.message_type.size() == 1 &&
+        parsed.file.message_type[0].extension_range.size() == 1) {
+        CHECK(parsed.file.message_type[0].extension_range[0].end == 536870912);
+    }
+    CHECK(easypb_proto::parse_proto("range-max-set.proto",
+        "syntax=\"proto2\"; message M { option message_set_wire_format = true;"
+        " extensions 1 to max; }", parsed, error));
+    CHECK(parsed.file.message_type.size() == 1);
+    if (parsed.file.message_type.size() == 1 &&
+        parsed.file.message_type[0].extension_range.size() == 1) {
+        CHECK(parsed.file.message_type[0].extension_range[0].end == 2147483647);
+    }
 }
 
 // V-03: a reserved declaration's endpoints may reach INT32_MAX - 1. protoc
@@ -3135,6 +3222,7 @@ int main()
     test_map_keyword_can_be_a_type_name();
     test_rejects_invalid_map_key();
     test_map_option_rejections_point_at_the_option();
+    test_reserved_and_extension_ranges_are_retained();
     test_rejects_wrong_default_token_kind();
     test_64_bit_default_ranges();
     test_numeric_literal_forms();

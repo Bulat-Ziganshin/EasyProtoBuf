@@ -1,0 +1,18 @@
+syntax = "proto2";
+
+package parity;
+
+// V-15: every declaration `--print-descriptor` retains must travel in the
+// source model, not only in the descriptor door's decoded tree.
+message Retained {
+  optional int32 a = 1;
+  reserved 5 to 10;
+  reserved "old";
+  extensions 100 to 199;
+
+  enum Kind {
+    KIND_ZERO = 0;
+    reserved 2 to 3;
+    reserved "B";
+  }
+}

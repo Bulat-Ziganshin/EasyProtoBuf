@@ -53,9 +53,9 @@ struct EnumOptions
 // `EnumDescriptorProto.EnumReservedRange`, field 4 of `EnumDescriptorProto`).
 // Both ends are INCLUSIVE here, unlike the message twin: descriptor.proto says
 // so explicitly, because the inclusive form can represent the whole int32
-// domain (descriptor.proto:356-365). The source parser validates a reserved
-// range as text and does not retain it, so the descriptor model keeps the
-// range for the reference-free sweep that asks whether a value uses a reserved
+// domain (descriptor.proto:356-365). Both frontends retain the range: the
+// source parser stores what it validated (V-15) and the descriptor door
+// decodes it, so the reference-free sweep asks whether a value uses a reserved
 // number and whether two ranges overlap (CR-06).
 struct EnumDescriptorProto_EnumReservedRange
 {
