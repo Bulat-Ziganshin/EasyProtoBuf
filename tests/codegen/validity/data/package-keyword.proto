@@ -1,0 +1,13 @@
+// V-45: a C++ keyword cannot be a namespace, and the package is opened as one
+// in every generated header. protoc escapes the word to `namespace class_`;
+// EasyProtoBuf refuses the package instead of renaming the namespace the
+// schema asked for.
+
+syntax = "proto2";
+
+package class;
+
+message Payload
+{
+    optional int32 value = 1;
+}

@@ -1,0 +1,13 @@
+// V-45: [lex.name] reserves every identifier that begins with an underscore
+// followed by an uppercase letter, in every scope, so the package component
+// `_Bar` cannot be a C++ namespace. protoc accepts it and emits the reserved
+// name verbatim; EasyProtoBuf refuses the package.
+
+syntax = "proto2";
+
+package _Bar;
+
+message Payload
+{
+    optional int32 value = 1;
+}

@@ -1,0 +1,27 @@
+# V-20 (owner decision D-04): FileOptions is not modeled, so its `features`
+# field (FeatureSet, field 50) is skipped as opaque bytes together with the
+# whole FileOptions message. The values below would matter to an editions
+# frontend; this generator must accept them and emit the control's header.
+file {
+  name: "feature-set-opaque.proto"
+  package: "opaque"
+  syntax: "proto2"
+  options {
+    features {
+      field_presence: LEGACY_REQUIRED
+      enum_type: CLOSED
+      repeated_field_encoding: EXPANDED
+      utf8_validation: NONE
+      message_encoding: DELIMITED
+    }
+  }
+  message_type {
+    name: "Payload"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+}

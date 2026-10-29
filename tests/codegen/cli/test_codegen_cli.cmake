@@ -1954,3 +1954,51 @@ if(FULL_BUILD)
         "V-23 --bash alone still emits the completion script")
     require_empty(s05_bash_err "V-23 --bash stderr")
 endif()
+
+# --- S13 (V-47, D-05): `@file` response files are not supported --------------
+#
+# A positional spelling that begins with `@` must not fall through to the
+# loader as an input name: the refusal names `@file` and the spelling, and it
+# carries no missing-root or missing-import sentence. `--` makes the token
+# positional by definition, so it gets the same refusal. The rule is in the CLI
+# parser, so the block runs in the lite profile too.
+set(s13_at_file "@args.txt")
+run_fail(s13_at_out s13_at_err ${CODEGEN} "${s13_at_file}")
+require_empty(s13_at_out "V-47 stdout")
+require_contains(s13_at_err
+    "${s13_at_file}: @file response files are not supported"
+    "V-47: the refusal names @file and the spelling")
+require_not_contains(s13_at_err "not found"
+    "V-47: the refusal is not a loader miss")
+
+run_fail(s13_at_dashdash_out s13_at_dashdash_err
+    ${CODEGEN} -- "${s13_at_file}")
+require_empty(s13_at_dashdash_out "V-47 -- stdout")
+require_contains(s13_at_dashdash_err
+    "${s13_at_file}: @file response files are not supported"
+    "V-47: -- does not turn the token into an input")
+
+# An option value is a value, not a response-file reference: `-I @root` names
+# the directory `@root` and the run generates the header normally. `-I` is a
+# source-input option, so this half needs the parser profile.
+if(FULL_BUILD)
+    set(s13_at_value_dir "${WORK_DIR}/s13-at-value")
+    file(MAKE_DIRECTORY "${s13_at_value_dir}/@root")
+    file(WRITE "${s13_at_value_dir}/@root/at-value.proto"
+        "syntax = \"proto2\";\nmessage AtValue { optional int32 a = 1; }\n")
+    run_ok_in("${s13_at_value_dir}" s13_at_value_out s13_at_value_err
+        ${CODEGEN} -I @root at-value.proto)
+    require_contains(s13_at_value_out "struct AtValue"
+        "V-47: an option value keeps the ordinary value rule")
+    require_empty(s13_at_value_err "V-47: the @root option value stderr")
+endif()
+
+# An existing response file is not read either: its content is `--help`, which
+# would exit 0 if the token were expanded.
+file(WRITE "${WORK_DIR}/@args.txt" "--help\n")
+run_fail_in("${WORK_DIR}" s13_at_exists_out s13_at_exists_err
+    ${CODEGEN} "@args.txt")
+require_empty(s13_at_exists_out "V-47 existing-file stdout")
+require_contains(s13_at_exists_err
+    "@args.txt: @file response files are not supported"
+    "V-47: an existing response file is not read")

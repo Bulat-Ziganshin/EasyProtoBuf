@@ -259,6 +259,10 @@ Thus, the buffer should neither be freed nor moved until decoding is complete.
 ## Code generator
 
 The code generator is described in the separate [documentation](codegen/README.md).
+Its command line does not expand `@file` response files: an input token that
+begins with `@` is refused, and long argument lists are passed through the build
+system or the shell instead. [Command-line options](codegen/OPTIONS.md#file-response-files-are-not-supported-v-47-d-05)
+records the non-goal together with the other deliberate strictness rules.
 
 
 ## Boring details

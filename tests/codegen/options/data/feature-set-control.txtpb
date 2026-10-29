@@ -1,0 +1,18 @@
+# V-20: the option-less half of the `feature-set-opaque` pair. It declares the
+# same logical file, package and message, so the generated header must be
+# byte-identical to the header of the fixture that carries the opaque
+# `FeatureSet` payload.
+file {
+  name: "feature-set-opaque.proto"
+  package: "opaque"
+  syntax: "proto2"
+  message_type {
+    name: "Payload"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+}

@@ -100,6 +100,11 @@ SOURCE_ONLY_FIXTURES = (
     "grammar-option-plus",
     "grammar-option-plus-known",
     "grammar-repeated-default",
+    # Step S13: the dependency half of the V-19 pair. protoc refuses a field
+    # number in 19000..19999 when the file is named on its command line, so
+    # this file can only be compiled as part of the root's `--include_imports`
+    # set; the root's descriptor is crafted from `imported-reserved-number.txtpb`.
+    "imported-reserved-number-dep",
     "json-name-map-collision",
     "lite-runtime-dep",
     "literals-aggregate-nul",

@@ -1,0 +1,13 @@
+// V-19: the imported file carries a field number inside the protocol-reserved
+// block. The source parser refuses the tag while it loads this file, and the
+// linker refuses the decoded descriptor of the same file; the root is clean,
+// so only the graph-wide rule can explain either verdict.
+
+syntax = "proto2";
+
+package importedreserved;
+
+message Dep
+{
+    optional int32 bad = 19000;
+}

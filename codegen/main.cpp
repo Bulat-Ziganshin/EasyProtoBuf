@@ -618,6 +618,18 @@ CommandLine parse_cmdline(const std::vector<std::string>& arguments)
         }
         if (!seen) command.filenames.push_back(filename);
     }
+    // V-47 (owner decision D-05): a response file is a `protoc` feature this
+    // CLI does not implement. Without this check the token falls through to
+    // the loader as an input spelling, and the caller reads a missing-root or
+    // missing-import sentence that never names the real problem. Refuse every
+    // positional spelling that begins with `@`; an option value (`-I @root`)
+    // is a value, not a positional, and keeps the ordinary rule.
+    for (std::size_t i = 0; i < command.filenames.size(); ++i) {
+        if (!command.filenames[i].empty() && command.filenames[i][0] == '@') {
+            throw std::runtime_error(command.filenames[i] +
+                ": @file response files are not supported");
+        }
+    }
     // A trailing separator is never part of a file name the OS resolves as
     // that file: `simple.proto/` names a directory entry that does not exist.
     // `lexical_absolute` used to trim the separator, so the status query found

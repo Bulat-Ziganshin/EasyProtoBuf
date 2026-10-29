@@ -119,6 +119,16 @@ All five declare the same logical file, so the accepted three must generate one
 header and print one tree, while the 101-level nest and the zero tag are
 refused on both the generation and the print door.
 
+Step S13 pins the strictness documented in `OPTIONS.md` ("Deliberate strictness
+and non-goals"). `imported-reserved-number` puts a 19000 tag in an imported
+file while the root stays clean: protoc accepts the pair, both doors refuse the
+graph (`V-19`). `uint-default-overflow` reaches the unsigned 32-bit default
+sentence the signed fixture cannot reach (`V-27`). `group-field` is protoc's
+own encoding of a proto2 group, refused by the source parser and by the
+descriptor sweep (`V-43`). Four package fixtures (`package-keyword`,
+`package-double-underscore`, `package-underscore-upper`, `package-std`) pin
+namespace spellings C++ cannot carry; protoc accepts all four (`V-45`).
+
 ## The three things every row needs
 
 1. **Both input paths.** The source path (`.proto`) and the descriptor path
@@ -240,6 +250,13 @@ refused on both the generation and the print door.
 | `map_entry` with a message-shaped value (refused: `map_entry`) | `.proto` only | `V-30` |
 | `map_entry` with a well-typed primitive value (refused: `map_entry`) | `.proto` only | `V-30` |
 | the embedded-NUL default under `--no-class` and a custom string type (accepted) | `defaults-nul.proto` / `.pbs` | `U-20` |
+| an imported field number of 19000 (refused, root clean) | `.proto` pair + crafted `.pbs` | `V-19` |
+| an out-of-range `uint32` default (refused) | `.proto` + crafted `.pbs` | `V-27` |
+| a proto2 group field (refused) | `.proto` + `.pbs` | `V-43` |
+| `package class;` (refused) | `.proto` + `.pbs` | `V-45` |
+| `package __foo;` (refused) | `.proto` + `.pbs` | `V-45` |
+| `package _Bar;` (refused) | `.proto` + `.pbs` | `V-45` |
+| `package std;` (refused) | `.proto` + `.pbs` | `V-45` |
 
 The first eight paired fixtures and the accepted controls exist twice as
 `.proto` source text and as their descriptor. The raw fixtures are crafted
@@ -417,7 +434,8 @@ source-only fixtures (`bom`, `bom-control`, `empty-syntax`,
 `grammar-allow-alias-useless`, `grammar-enum-json-name`,
 `grammar-field-option-plus`, `grammar-leading-semicolon`,
 `grammar-option-plus`, `grammar-option-plus-known`,
-`grammar-repeated-default`, `json-name-map-collision`,
+`grammar-repeated-default`, `imported-reserved-number-dep`,
+`json-name-map-collision`,
 `lite-runtime-dep`,
 `literals-aggregate-nul`, `literals-nested-comment`, `literals-octal-08`,
 `literals-octal-09`, `literals-octal-enum`, `map-entry-message-value`,
@@ -429,6 +447,10 @@ are skipped: protoc refuses most of them,
 and a generated `.pbs` would add an unintended twin. `lite-runtime-dep` is
 skipped because protoc refuses its importer, so the pair is encoded from
 `nonlite-imports-lite.txtpb` and the dependency has no standalone descriptor.
+`imported-reserved-number-dep` is skipped for the V-19 reason: protoc refuses
+its 19000 tag when the file is a command-line input, so the dependency has no
+standalone descriptor and the root's `.pbs` is crafted from
+`imported-reserved-number.txtpb` as the `--include_imports` set.
 `package-extend-options` is the stand-in extendee `proto3-package-extend`
 imports; both are source-only because neither shape travels in a descriptor.
 `ext-json-name*` are skipped for the opposite reason: the descriptor model

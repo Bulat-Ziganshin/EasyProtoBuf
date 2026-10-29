@@ -1,0 +1,20 @@
+// V-43 (decision W-10): protoc accepts a proto2 group and generates a nested
+// message `Legacy` plus a field `legacy`. EasyProtoBuf has no group kind, so
+// the source parser refuses the keyword and the descriptor door refuses the
+// compiled `.pbs` this same file produces.
+//
+// The `.pbs` beside this fixture is protoc's own encoding of the refused
+// source: the source door and the descriptor door must reach their own
+// sentence for one logical schema.
+
+syntax = "proto2";
+
+package grouprefused;
+
+message Grouped
+{
+    optional group Legacy = 1
+    {
+        optional int32 a = 2;
+    }
+}

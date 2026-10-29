@@ -1,0 +1,13 @@
+// V-45: `std` is the standard library's namespace, and a generated header
+// that opens it declares names inside the standard library. protoc accepts
+// `package std;` and writes `namespace std { ... }`; EasyProtoBuf refuses the
+// package because the header would not be a well-formed program.
+
+syntax = "proto2";
+
+package std;
+
+message Payload
+{
+    optional int32 value = 1;
+}

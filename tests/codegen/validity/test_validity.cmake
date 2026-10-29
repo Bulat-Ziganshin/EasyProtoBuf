@@ -1872,3 +1872,113 @@ if(v50_desc_err MATCHES "message-cycle-closing-edge[.]proto:[0-9]+:[0-9]+:")
     message(FATAL_ERROR
         "V-50: the descriptor refusal fabricated a source position: ${v50_desc_err}")
 endif()
+
+# --- S13 (V-19, V-27, V-43, V-45): the documented strictness, pinned ---------
+#
+# `OPTIONS.md` documents these refusals in `Deliberate strictness and
+# non-goals`. Each assertion below is the whole sentence the documentation
+# quotes, on the door that produces it, so the text and the executable boundary
+# cannot drift apart.
+
+# V-19 (owner decision D-03): the protocol-reserved field-number block is
+# refused in an IMPORTED file, not only in a positional root. The root carries
+# no reserved number; protoc accepts the pair (the descriptor is the
+# `--include_imports` set of the same two files) and checks only its command
+# line inputs, while both EasyProtoBuf doors refuse the graph. `--target` names
+# the clean root, so the refusal must come from the linked dependency.
+run_fail(v19_desc_out v19_desc_err
+    ${CODEGEN} --descriptor-set --target imported-reserved-number.proto
+    "${DATA_DIR}/imported-reserved-number.pbs")
+require_empty(v19_desc_out "V-19 descriptor stdout")
+require_contains(v19_desc_err
+    "imported-reserved-number-dep.proto: field \"bad\" number 19000 is inside the reserved range 19000..19999"
+    "V-19: the descriptor door names the imported file and the field")
+if(FULL_BUILD)
+    run_fail(v19_src_out v19_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/imported-reserved-number.proto")
+    require_empty(v19_src_out "V-19 source stdout")
+    require_contains(v19_src_err "imported-reserved-number-dep.proto:"
+        "V-19: the source door names the imported file")
+    require_contains(v19_src_err
+        "chain \"imported-reserved-number.proto\" -> \"imported-reserved-number-dep.proto\""
+        "V-19: the source refusal carries the import chain")
+    require_contains(v19_src_err
+        "field numbers 19000..19999 are reserved by Protocol Buffers"
+        "V-19: the source door carries the reserved-block sentence")
+endif()
+
+# V-27 (owner decision D-02): an out-of-range integral default is refused, not
+# clamped, and the sentence names the declared kind. The signed fixture stops at
+# its first field, so the unsigned half has its own one-field fixture.
+foreach(s13_default_case
+        "int-default-overflow|default does not fit signed 32-bit field"
+        "uint-default-overflow|default does not fit unsigned 32-bit field")
+    string(REPLACE "|" ";" s13_default_parts "${s13_default_case}")
+    list(GET s13_default_parts 0 s13_default_fixture)
+    list(GET s13_default_parts 1 s13_default_sentence)
+    run_fail(s13_default_desc_out s13_default_desc_err
+        ${CODEGEN} --descriptor-set
+        "${DATA_DIR}/${s13_default_fixture}.pbs")
+    require_empty(s13_default_desc_out
+        "The ${s13_default_fixture} descriptor stdout")
+    require_contains(s13_default_desc_err "${s13_default_sentence}"
+        "V-27: the descriptor refusal (${s13_default_fixture})")
+    if(FULL_BUILD)
+        run_fail(s13_default_src_out s13_default_src_err
+            ${CODEGEN} -I "${DATA_DIR}"
+            "${DATA_DIR}/${s13_default_fixture}.proto")
+        require_empty(s13_default_src_out
+            "The ${s13_default_fixture} source stdout")
+        require_contains(s13_default_src_err "${s13_default_sentence}"
+            "V-27: the source refusal (${s13_default_fixture})")
+    endif()
+endforeach()
+
+# V-43 (decision W-10): a group is refused on both doors. The compiled `.pbs`
+# is protoc's own encoding of the refused source text: protoc supports proto2
+# groups, this generator has no group kind.
+if(FULL_BUILD)
+    run_fail(v43_src_out v43_src_err
+        ${CODEGEN} -I "${DATA_DIR}" "${DATA_DIR}/group-field.proto")
+    require_empty(v43_src_out "V-43 source stdout")
+    require_contains(v43_src_err "group fields are not supported"
+        "V-43: the source refusal names the group keyword")
+endif()
+run_fail(v43_desc_out v43_desc_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/group-field.pbs")
+require_empty(v43_desc_out "V-43 descriptor stdout")
+require_contains(v43_desc_err
+    "field \"legacy\" is a group, and this generator does not support group types"
+    "V-43: the descriptor refusal names the field and the kind")
+
+# V-45: a package component becomes a C++ namespace, so the four documented
+# spellings are refused on both doors with the component named. The compiled
+# `.pbs` beside each `.proto` is protoc's own encoding: protoc accepts all four
+# (it escapes a keyword and writes `namespace std`), which is the divergence.
+set(s13_package_cases
+    "package-keyword|Protobuf package component 'class' is a C++ keyword and cannot be used as a namespace"
+    "package-double-underscore|Protobuf package component '__foo' uses a reserved C++ identifier form: it contains a double underscore"
+    "package-underscore-upper|Protobuf package component '_Bar' uses a reserved C++ identifier form: it begins with an underscore followed by an uppercase letter"
+    "package-std|Protobuf package cannot generate the global C++ namespace 'std'")
+foreach(s13_package_case ${s13_package_cases})
+    string(REPLACE "|" ";" s13_package_parts "${s13_package_case}")
+    list(GET s13_package_parts 0 s13_package_fixture)
+    list(GET s13_package_parts 1 s13_package_sentence)
+    run_fail(s13_package_desc_out s13_package_desc_err
+        ${CODEGEN} --descriptor-set
+        "${DATA_DIR}/${s13_package_fixture}.pbs")
+    require_empty(s13_package_desc_out
+        "The ${s13_package_fixture} descriptor stdout")
+    require_contains(s13_package_desc_err "${s13_package_sentence}"
+        "V-45: the descriptor refusal (${s13_package_fixture})")
+    if(FULL_BUILD)
+        run_fail(s13_package_src_out s13_package_src_err
+            ${CODEGEN} -I "${DATA_DIR}"
+            "${DATA_DIR}/${s13_package_fixture}.proto")
+        require_empty(s13_package_src_out
+            "The ${s13_package_fixture} source stdout")
+        require_contains(s13_package_src_err "${s13_package_sentence}"
+            "V-45: the source refusal (${s13_package_fixture})")
+    endif()
+endforeach()

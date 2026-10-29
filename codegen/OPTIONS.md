@@ -160,7 +160,8 @@ rules change a verdict - `packed`, `jstype`, `lazy`/`unverified_lazy`,
 range's `verification`/`declaration` - and asks the same rules over the
 decoded values (`U-13`, `U-22`). Every other standard option is read as an
 unknown field on the `.pbs` door, which is what protoc does with an option it
-does not model here.
+does not model here; [Unmodeled option messages are opaque](#unmodeled-option-messages-and-featureset-are-opaque-v-20-d-04)
+states the exact boundary.
 
 ### The `message_set_wire_format` rule on both doors
 
@@ -433,6 +434,136 @@ validation table:
   (`bool default must be true or false`). The emitter checks the stored text
   again where it writes the initializer, naming the field and the value, so a
   crafted `.pbs` cannot produce `bool f = yes;` (`V-24`).
+
+## Deliberate strictness and non-goals
+
+The six boundaries below are owner decisions, not gaps. Each keeps the model or
+the command line free of a shape a later stage could not answer, and each is
+pinned by an executable test. `protoc` 30.1 behaves differently in every case;
+the difference is deliberate.
+
+### Field numbers 19000..19999 are refused in every loaded file (V-19, D-03)
+
+The protocol-reserved field-number block `19000..19999` is refused in every
+file of the generated schema: the positional roots and every transitive import.
+The source door reports `field numbers 19000..19999 are reserved by Protocol
+Buffers` while loading the imported file; the descriptor door names the
+imported file and the field (`field "bad" number 19000 is inside the reserved
+range 19000..19999`) when the set links.
+
+`protoc` applies its `HasReservedFieldNumber` check only to the files named on
+its own command line (`parsed_files`), so an imported library file may carry a
+tag in that block and still be accepted. EasyProtoBuf validates the whole import
+graph because the schema, not the command line, decides which declarations a
+generated header can reach: a reserved number anywhere in the graph would enter
+the model without a diagnostic. The corpus-wide rule is owner decision D-03. A
+descriptor set keeps it even when `--target` selects a file other than the one
+that carries the reserved number: naming a target links the loaded set
+strictly, so every available file is validated.
+
+Pinned by `codegen.validity` (`imported-reserved-number`).
+
+### Unmodeled option messages and `FeatureSet` are opaque (V-20, D-04)
+
+Only the option fields whose rules change a verdict are decoded. On the
+descriptor door every other option surface is skipped at the wire level:
+`FileOptions` (`FileDescriptorProto.options`, field 8), `ServiceOptions`,
+`MethodOptions`, `OneofOptions`, `EnumValueOptions` and the `features` field of
+`ExtensionRangeOptions` are read as unknown fields, and so is every unmodeled
+field of a partly modeled message (`FieldOptions`, `MessageOptions`,
+`EnumOptions`). The decoder consumes the outer length-delimited frame and never
+parses those bytes as the message they name. A `FeatureSet` payload -
+`field_presence`, `enum_type`, `repeated_field_encoding` and the other edition
+features - therefore has no effect on the generated C++, and its inner
+structure is not validated: the fixture whose `features` bytes are not a
+decodable `FeatureSet` is accepted exactly like the one that carries a
+well-formed payload.
+
+`protoc` decodes every known option message and validates a `FeatureSet`
+against the edition rules. EasyProtoBuf models only what code generation reads:
+`packed`, `jstype`, `lazy`/`unverified_lazy`, `(easypb.cpp).type`,
+`message_set_wire_format`, `map_entry`, `allow_alias`, and the extension
+range's `declaration`/`verification`. The boundary is deliberate (owner
+decision D-04): the model must not carry metadata the emitter ignores, and a
+skipped payload cannot silently change a generated declaration.
+
+Pinned by `codegen.options` (`feature-set-opaque`, `feature-set-control` and
+`feature-set-opaque-malformed`): all three produce the same header.
+
+### An out-of-range integral default is refused on both doors (V-27, D-02)
+
+A `default_value` string that does not fit the declared integral type is an
+error, never a clamped value. `2147483648` for an `int32` field is refused with
+`default does not fit signed 32-bit field`, `4294967296` for a `uint32` field
+with `default does not fit unsigned 32-bit field`, and the 64-bit kinds have
+their own sentences. The source door refuses the same text; the descriptor door
+reads the string a `.pbs` carries and refuses it after decoding.
+
+`protoc`'s descriptor builder clamps an out-of-range default to the type's
+maximum (`2147483647` for `int32`, `4294967295` for `uint32`), so
+`protoc --descriptor_set_in` accepts the descriptor with a silently rewritten
+value. EasyProtoBuf keeps the refusal (owner decision D-02): a clamped default
+would compile into a constant the schema never named, and the two doors would
+disagree on the value. A descriptor protoc wrote from valid source text never
+carries the shape.
+
+Pinned by `codegen.validity` (`int-default-overflow` and
+`uint-default-overflow`) on both doors; the in-range control is `plus-controls`.
+
+### Proto2 `group` fields are refused (V-43)
+
+A `group` field is refused on both doors. The source door refuses the keyword
+while it parses the field type (`group fields are not supported`); the
+descriptor door decodes `TYPE_GROUP` and refuses it in the field-shape sweep
+(`field "legacy" is a group, and this generator does not support group types`).
+
+A group declares a message and a field in one statement, and the generated
+model has no group kind: the emitter writes no group class. `protoc` supports a
+proto2 group (it generates a nested message `Legacy` and a field `legacy`) and
+refuses one in proto3. EasyProtoBuf refuses both instead of inventing a
+mapping, which is the recorded decision W-10.
+
+Pinned by `codegen.validity`: `group-field` on both doors, and the crafted
+`field-type-group` descriptor.
+
+### Package names that cannot be C++ namespaces are refused (V-45)
+
+A package component becomes a C++ namespace in every generated header, so the
+component must be spellable as one. Four shapes are refused with the offending
+component named:
+
+- a C++ keyword: `package class;` gives `Protobuf package component 'class' is
+  a C++ keyword and cannot be used as a namespace`;
+- a reserved [lex.name] form: `package __foo;` gives `... uses a reserved C++
+  identifier form: it contains a double underscore`, and `package _Bar;` gives
+  `... it begins with an underscore followed by an uppercase letter`;
+- the global standard namespace: `package std;` gives `Protobuf package cannot
+  generate the global C++ namespace 'std'`.
+
+`protoc` escapes a keyword package component by appending `_` (`package class;`
+becomes `namespace class_`) and accepts `package std;`, which leaves the
+generated header to declare names inside `std`. EasyProtoBuf refuses the
+package instead of silently renaming the namespace the schema asked for.
+
+Pinned by `codegen.validity`: `package-keyword`, `package-double-underscore`,
+`package-underscore-upper` and `package-std`, each driven through the source
+and descriptor doors.
+
+### `@file` response files are not supported (V-47, D-05)
+
+`protoc` expands a positional token that begins with `@` from the named file
+(`@args.txt`). EasyProtoBuf Codegen does not implement response files and does
+not read the file: a positional spelling that begins with `@` is refused with
+`@args.txt: @file response files are not supported`, whether or not the file
+exists. The `--` separator does not change the rule, because the token is a
+positional input by then; an option value (`-I @root`) is a value, not a
+positional, and keeps the ordinary value rules.
+
+The absence is a non-goal (owner decision D-05), not a missing parser detail:
+the CLI stays one argument per token. A caller with a long file list uses the
+build system's own argument expansion, a shell, or `xargs`.
+
+Pinned by `codegen.imports.cli`.
 
 ## C++ type options
 

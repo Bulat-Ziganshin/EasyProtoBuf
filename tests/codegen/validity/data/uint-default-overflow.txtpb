@@ -1,0 +1,17 @@
+# V-27: the .pbs spelling of `uint-default-overflow.proto`; protoc clamps
+# "4294967296" to UINT32_MAX when it builds a descriptor set, so the raw text
+# is the shape this door must refuse.
+file {
+  name: "uint-default-overflow.proto"
+  syntax: "proto2"
+  message_type {
+    name: "UintDefaultOverflow"
+    field {
+      name: "u"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      default_value: "4294967296"
+    }
+  }
+}

@@ -57,6 +57,35 @@ function(require_empty variable_name description)
     endif()
 endfunction()
 
+# --- S13 (V-20, D-04): unmodeled option messages are opaque ------------------
+#
+# The lane was source-only before step S13; a `.pbs` needs no parser, so this
+# block runs in every build profile. `feature-set-control` is the option-less
+# schema. `feature-set-opaque` carries a well-formed `FeatureSet` in
+# `FileOptions` (which this decoder does not model), and
+# `feature-set-opaque-malformed` carries a `features` payload whose inner bytes
+# are not a decodable `FeatureSet`; protoc decodes both and refuses the second.
+# All three declare one logical file, so all three must emit one header.
+set(s13_feature_set_control "")
+foreach(s13_feature_set_name
+        feature-set-control
+        feature-set-opaque
+        feature-set-opaque-malformed)
+    run_ok(s13_feature_set_out s13_feature_set_err
+        ${CODEGEN} --descriptor-set
+        "${DATA_DIR}/${s13_feature_set_name}.pbs")
+    require_empty(s13_feature_set_err
+        "The ${s13_feature_set_name} stderr")
+    require_contains(s13_feature_set_out "struct Payload"
+        "The ${s13_feature_set_name} generated header")
+    if(s13_feature_set_name STREQUAL "feature-set-control")
+        set(s13_feature_set_control "${s13_feature_set_out}")
+    elseif(NOT s13_feature_set_out STREQUAL s13_feature_set_control)
+        message(FATAL_ERROR
+            "${s13_feature_set_name}: the opaque option changed the generated header")
+    endif()
+endforeach()
+
 if(NOT FULL_BUILD)
     message(STATUS "codegen.options: skipped (the build has no .proto parser)")
     return()

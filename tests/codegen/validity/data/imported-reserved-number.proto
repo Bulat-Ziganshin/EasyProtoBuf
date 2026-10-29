@@ -1,0 +1,20 @@
+// V-19 (owner decision D-03): the root has no reserved field number, but the
+// file it imports does. protoc checks 19000..19999 only in the files named on
+// its command line, so it accepts this pair; EasyProtoBuf validates the whole
+// import graph and refuses the imported tag on both doors.
+//
+// The descriptor half is crafted from `imported-reserved-number.txtpb` because
+// this lane's generator compiles one source file per fixture: the dependency
+// can never be a protoc input of its own, and the root's descriptor needs
+// `--include_imports`.
+
+syntax = "proto2";
+
+package importedreserved;
+
+import "imported-reserved-number-dep.proto";
+
+message Root
+{
+    optional Dep dep = 1;
+}

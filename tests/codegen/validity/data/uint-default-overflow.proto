@@ -1,0 +1,11 @@
+// V-27 (owner decision D-02): the unsigned half of the out-of-range default
+// rule. `int-default-overflow` stops at its signed field first, so this fixture
+// reaches the `unsigned 32-bit` sentence on both doors and pins the second
+// documented spelling.
+
+syntax = "proto2";
+
+message UintDefaultOverflow
+{
+    optional uint32 u = 1 [default = 4294967296];
+}

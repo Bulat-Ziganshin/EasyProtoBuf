@@ -22,6 +22,7 @@ The generated data types do not inherit from runtime classes and do not require 
 - The whole result of a successful run goes to stdout, and a failure leaves stdout empty. A redirected stdout uses LF line endings on every platform, so it is byte-identical to the same header written with `--out-dir`.
 - `--print-descriptor` is inspection, not generation: it prints every file of a descriptor set, including imports, `reserved` declarations, extension ranges and the modeled message/enum options, and it never links or generates C++. The one semantic check it runs is the reference-free MessageSet rule: a message that declares `message_set_wire_format` and ordinary fields (or the option in a proto3 file) is refused with the generation path's sentence and exit 1 instead of being printed with exit 0.
 - `--benchmark-parser` benchmarks `.proto` source only; descriptor-set input is refused.
+- `@file` response files are not supported: a positional input that begins with `@` is refused with a message naming `@file` instead of being expanded. Pass the arguments directly, or let the build system expand them. This is a documented non-goal (owner decision D-05); see [Deliberate strictness and non-goals](OPTIONS.md#deliberate-strictness-and-non-goals).
 
 See [Command-line options](OPTIONS.md) for the full rules.
 

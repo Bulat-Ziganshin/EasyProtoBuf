@@ -1,0 +1,34 @@
+# V-19: the two-file set protoc writes for `imported-reserved-number.proto`
+# with `--include_imports`. The imported file carries field number 19000, in
+# the protocol-reserved block; the root does not. Both doors must refuse the
+# graph, and the descriptor door must name the imported file.
+file {
+  name: "imported-reserved-number-dep.proto"
+  package: "importedreserved"
+  syntax: "proto2"
+  message_type {
+    name: "Dep"
+    field {
+      name: "bad"
+      number: 19000
+      label: LABEL_OPTIONAL
+      type: TYPE_INT32
+    }
+  }
+}
+file {
+  name: "imported-reserved-number.proto"
+  package: "importedreserved"
+  syntax: "proto2"
+  dependency: "imported-reserved-number-dep.proto"
+  message_type {
+    name: "Root"
+    field {
+      name: "dep"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_MESSAGE
+      type_name: ".importedreserved.Dep"
+    }
+  }
+}

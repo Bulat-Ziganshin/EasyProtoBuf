@@ -7,9 +7,11 @@ covers all 47 rows in three directions (accepted kind, wrong kind, wrong
 owner); this lane proves the same verdicts through the executable, including
 the five measured `G2` cases and the parser-vs-semantic split for `lazy`.
 
-The lane is source-only and is skipped when the build has no `.proto` parser
-(`FULL_BUILD=0`). It never calls `protoc`: every fixture is committed and the
-CI contract is the recorded verdict.
+The lane is source-driven and the source half is skipped when the build has no
+`.proto` parser (`FULL_BUILD=0`). It never calls `protoc`: every fixture is
+committed and the CI contract is the recorded verdict. The one descriptor half
+(`feature-set-*`, step S13) runs in every profile because a `.pbs` needs no
+parser.
 
 ## Accepted fixtures
 
@@ -31,6 +33,24 @@ The driver also reads the generated header of `accept-field-options.proto` and
 checks that `packed = true` and `packed = false` still select the packed and
 unpacked codecs. An option that is accepted but silently changes the emitter
 would otherwise pass this lane.
+
+## The V-20 opaque-option pin (S13)
+
+`FileOptions` is one of the option messages the descriptor decoder does not
+model: `FileDescriptorProto.options` is skipped as a length-delimited field, so
+neither its own fields nor a nested `FeatureSet` are decoded. Three descriptor
+fixtures pin the boundary (owner decision D-04):
+
+| Fixture | What it pins |
+| --- | --- |
+| `feature-set-control.pbs` | the option-less schema: one file, one message, one `int32` field |
+| `feature-set-opaque.pbs` | the same file with a well-formed `FeatureSet` in `FileOptions` (`field_presence: LEGACY_REQUIRED`, `enum_type: CLOSED`, `repeated_field_encoding: EXPANDED`, `utf8_validation: NONE`, `message_encoding: DELIMITED`) |
+| `feature-set-opaque-malformed.pbs` | the same file whose `features` payload is not a decodable `FeatureSet` (an invalid inner tag); protoc refuses it, this decoder skips the whole `FileOptions` frame |
+
+All three declare `feature-set-opaque.proto`, so all three must generate the
+same header byte for byte. `data/make_descriptors.py` builds the two textual
+halves from `.txtpb` and the malformed half from raw bytes; `--check` is the
+byte-identity gate.
 
 ## Policy: the value decides
 
