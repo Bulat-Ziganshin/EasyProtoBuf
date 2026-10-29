@@ -154,9 +154,11 @@ bool validate_default(SchemaFile& file, const SymbolIndex& symbols,
 // validate_enum_value_numbers, validate_map_entry_shapes). They stay anonymous
 // in schema_semantics.cpp - they are packed among the helpers that must stay
 // anonymous - so they are reached through one-line forwarders near the END of
-// that file, after the anonymous rule block closes at schema_semantics.cpp:2151
-// (the forwarders themselves sit around :3296-3323). A test can then drive one
-// message subtree without a whole-file walk.
+// that file: the definitions of `validate_message_symbol_names`,
+// `validate_message_enum_value_numbers` and `validate_message_map_entries` in
+// `namespace internal` each call the anonymous rule of the same name, after
+// the anonymous rule block closes. A test can then drive one message subtree
+// without a whole-file walk.
 bool validate_message_symbol_names(const SchemaFile& file,
                                    const DescriptorProto& message,
                                    const DescriptorPath& message_path,

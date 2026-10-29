@@ -81,7 +81,13 @@ The grammar uses the intended lexical and syntactic forms directly:
   messages, nested enums, oneofs, and enum values;
 - duplicate field names and numbers are rejected;
 - duplicate type and oneof names are rejected in their scopes;
-- reserved and extension ranges must be ordered, disjoint, and conflict-free;
+- reserved and extension ranges need not be ordered, but must be disjoint:
+  message reserved and extension ranges stay within the bounds above, two
+  overlapping entries in one `reserved` or `extensions` list are refused as
+  `reserved ranges overlap` or `extension ranges overlap`, a reserved range
+  overlapping an extension range is refused as `reserved and extension ranges
+  overlap`, and a reversed range is refused as `<kind> range end is smaller
+  than its start`;
 - a field cannot use a reserved name/number or an extension-range number;
 - `packed` is valid only for repeated packable primitive or enum fields;
 - `FieldOptions.packed` is materialized only when the source explicitly
