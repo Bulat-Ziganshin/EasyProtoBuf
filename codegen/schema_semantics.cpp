@@ -3862,8 +3862,12 @@ bool validate_message_oneofs(SchemaFile& file, const DescriptorProto& message,
     // member arrays in one pass of CrossLinkMessage (descriptor.cc:7280-7301),
     // and every rule below reads the arrays instead of rescanning.
     std::vector<std::int32_t> last_member(message.oneof_decl.size(), -1);
-    std::vector<std::size_t> first_member(message.oneof_decl.size(),
-                                          message.field.size());
+    std::vector<std::size_t> first_member(message.oneof_decl.size());
+    // Fill after construction instead of vector<T>(count, value): when both
+    // arguments are size_t, libstdc++ 4.8.5 with Clang 3.1 selects the range
+    // constructor (its _RequireInputIter guard is instantiated eagerly) and
+    // fails on iterator_traits<unsigned long>.
+    std::fill(first_member.begin(), first_member.end(), message.field.size());
     std::vector<std::size_t> member_count(message.oneof_decl.size(), 0);
     for (std::size_t i = 0; i < message.field.size(); ++i) {
         const FieldDescriptorProto& field = message.field[i];
