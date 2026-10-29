@@ -1,0 +1,6 @@
+// V-36 companion: the invisible declarer of `.c.C`.
+syntax = "proto2";
+
+package c;
+
+message C {}

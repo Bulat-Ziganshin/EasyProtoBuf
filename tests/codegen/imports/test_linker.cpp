@@ -870,17 +870,21 @@ void test_index_type_vs_enum_value_across_files()
 
 void test_index_type_vs_service_name_across_files()
 {
-    // A retained service name participates in collisions but can never be
-    // used as a field type; the wording is decided by both sides, because at
-    // least one of them is a type, so the text does not depend on which file
-    // is indexed first.
+    // V-44: a retained service name participates in collisions but is not a
+    // type. The sentence names the category of both declarations and the file
+    // each one lives in, so a reader sees which side is the service no matter
+    // which file the name-sorted walk indexes first.
     easypb_schema::SchemaSet set;
     easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", 0);
     add_service(a, "Svc");
     easypb_schema::SchemaFile& b = make_simple_file(set, "b.proto", 0);
     add_message(b, "Svc");
 
-    check_duplicate_failure(set, "duplicate type name .Svc", "b.proto");
+    check_duplicate_failure(
+        set,
+        "duplicate name .Svc: a message in \"b.proto\" at [4, 0]; already "
+        "defined as a service in \"a.proto\" at [6, 0]",
+        "b.proto");
 }
 
 void test_index_package_vs_type_across_files()
@@ -1120,6 +1124,30 @@ void test_resolution_separates_invisible_from_missing()
         CHECK(text(chain.a->file.message_type[0].field[0].type_name) ==
               ".shared.Other");
     }
+}
+
+// V-36: the reference `c.C` fails on its invisible package head `.c`. The
+// sentence used to name that head ("type \".c\" is defined in c.proto"),
+// calling a package a type and hiding the member the field actually wrote.
+// The refusal names the whole committed path instead.
+void test_invisible_compound_head_names_the_whole_reference()
+{
+    easypb_schema::SchemaSet set;
+    easypb_schema::SchemaFile& a = make_simple_file(set, "a.proto", 0);
+    add_message_with_field(a, "M", "v", 1, "c.C");
+    easypb_schema::SchemaFile& c = make_simple_file(set, "c.proto", "c");
+    add_message(c, "C");
+
+    easypb_schema::LinkedSchema linked;
+    easypb_schema::Diagnostic error;
+    CHECK(!easypb_schema::link_schema(
+        set, easypb_schema::LINK_COMPLETE, linked, error));
+    CHECK(error.code == easypb_schema::DIAGNOSTIC_INVISIBLE_TYPE);
+    CHECK(error.file == "a.proto");
+    CHECK(error.message.find("type \".c.C\"") != std::string::npos);
+    CHECK(error.message.find("type \".c\"") == std::string::npos);
+    CHECK(error.message.find("\"c.proto\"") != std::string::npos);
+    CHECK(error.message.find("import") != std::string::npos);
 }
 
 // The plan's shadowing case with the measured expectation (A19, oracle
@@ -7802,6 +7830,7 @@ int main(int argc, char** argv)
     test_conflicting_declaration_reports_one_code();
     test_link_indexes_every_file_once();
     test_resolution_separates_invisible_from_missing();
+    test_invisible_compound_head_names_the_whole_reference();
     test_shadowing_commits_the_matched_aggregate();
     test_non_type_heads_do_not_shadow();
     test_service_and_package_heads_follow_the_two_filters();

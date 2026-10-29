@@ -1,0 +1,7 @@
+// V-44: the service half of the cross-file collision. The sentence must say
+// "a service" and name both declarations instead of "duplicate type name".
+syntax = "proto2";
+
+package p;
+
+service Svc {}

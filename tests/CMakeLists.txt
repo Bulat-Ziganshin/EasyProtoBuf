@@ -1236,6 +1236,16 @@ if(BUILD_TESTING)
     add_test(NAME codegen.schema.semantics
         COMMAND codegen_schema_semantics_test ${CMAKE_CURRENT_SOURCE_DIR})
 
+    # V-44/V-50: the diagnostics the schema layer owns. The by-value cycle is
+    # an emitter refusal, so this target also links the parser-free generation
+    # core; the service collision case stays a hand-built link_schema call.
+    add_executable(codegen_schema_diagnostics_test
+        codegen/schema/test_diagnostics.cpp)
+    target_link_libraries(codegen_schema_diagnostics_test
+        PRIVATE easypb_codegen_core)
+    add_test(NAME codegen.schema.diagnostics
+        COMMAND codegen_schema_diagnostics_test)
+
     add_executable(codegen_imports_graph_test codegen/imports/test_graph.cpp)
     target_link_libraries(codegen_imports_graph_test PRIVATE easypb_schema)
     add_test(NAME codegen.imports.graph COMMAND codegen_imports_graph_test)

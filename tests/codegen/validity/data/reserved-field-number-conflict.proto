@@ -1,0 +1,5 @@
+// V-39: the field uses a reserved NUMBER, so the refusal points at the
+// number token (`3`), not at the field name (`a`).
+syntax = "proto2";
+
+message M { optional int32 a = 3; reserved 1 to 5; }

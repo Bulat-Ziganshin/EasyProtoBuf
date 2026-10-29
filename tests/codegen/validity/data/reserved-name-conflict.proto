@@ -1,0 +1,5 @@
+// V-39 control: a NAME conflict still points at the name token, because the
+// sentence is about the name the field reuses.
+syntax = "proto2";
+
+message M { optional int32 used = 9; reserved "used"; }

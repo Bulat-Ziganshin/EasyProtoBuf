@@ -1,0 +1,7 @@
+// V-44: the message half of the cross-file collision. The file sorts before
+// its service twin, so the service is the redeclaration the sentence blames.
+syntax = "proto2";
+
+package p;
+
+message Svc {}

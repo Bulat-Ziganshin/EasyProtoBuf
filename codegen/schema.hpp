@@ -405,6 +405,10 @@ struct FieldSource
     DescriptorPath path;
     std::string raw_type_name;
     SourceLocation type_location;
+    // V-39: the field's number token. A conflict whose subject is the number
+    // (a reserved number or an extension range) is positioned here, while a
+    // conflict whose subject is the name stays on the declaration location.
+    SourceLocation number_location;
     SourceLocation default_location;
     SourceLocation packed_location;
     // D2-A: the source carried `lazy = true` or `unverified_lazy = true` in

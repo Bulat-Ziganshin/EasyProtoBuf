@@ -97,6 +97,18 @@ and the row is driven through generation and print. The accepted control is
 the `bool-default` pair used twice: two identical copies still merge into one
 header, so the label rule rejects only the out-of-range value.
 
+Step S12 adds the diagnostic text and token-position family (`V-36`, `V-38`,
+`V-39`, `V-44`, `V-49`, `V-50`). Every refusal is asserted as the whole
+sentence: the invisible compound reference names `.c.C` instead of its package
+head, both RPC endpoint types carry their own `line:column`, a reserved-number
+conflict points at the number token (the name control keeps the name token), a
+message/service collision says service and names both declarations, an imported
+enum's invalid enumerator is blamed on the enum file rather than the field that
+uses it, and the by-value cycle points at the field that closes it. The
+descriptor twins carry the same sentence without a fabricated position; `V-49`
+and the descriptor halves of `V-36`/`V-44`/`V-50` exist because the shape needs
+a hand-built container or a value protoc's source grammar refuses.
+
 Step S08 adds the decoder's wire-level contract (`V-26`, `V-28`, `V-41`). The
 five `descriptor-wire-*` fixtures are RAW: `common/descriptor_wire.py` writes
 the bytes, because the text format validates a closed enum and has no unknown

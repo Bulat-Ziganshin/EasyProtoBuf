@@ -1715,3 +1715,160 @@ run_fail(wire_tag_print_out wire_tag_print_err
 require_empty(wire_tag_print_out "The tag-zero print stdout")
 require_contains(wire_tag_print_err "Invalid field number."
     "The tag-zero print refusal")
+
+# --- S12 (V-36, V-38, V-39, V-44, V-49, V-50): diagnostic text and positions
+#
+# Every row asserts the whole sentence, not a fragment both the old and the
+# new text contain. The source rows carry the token the sentence is about:
+# the field's type token (V-36), the RPC endpoint type token (V-38), the
+# reserved NUMBER token (V-39), the redeclared service name (V-44) and the
+# field that closes the by-value cycle (V-50). The descriptor rows carry the
+# same sentence without a fabricated position, because a `.pbs` has no source
+# text.
+
+# V-36: `c.C` is declared in the second root, which is not imported. The old
+# sentence named the package head `.c`; the full reference is `.c.C`.
+if(FULL_BUILD)
+    run_fail(v36_src_out v36_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/visibility-invisible-compound.proto"
+        "${DATA_DIR}/visibility-invisible-compound-dep.proto")
+    require_empty(v36_src_out "The V-36 source stdout")
+    require_contains(v36_src_err
+        "visibility-invisible-compound.proto:6:27: type \".c.C\" is defined in \"visibility-invisible-compound-dep.proto\", which is not visible from \"visibility-invisible-compound.proto\"; add the import of that file"
+        "V-36: the full compound reference and its type token")
+    require_absent(v36_src_err "type \".c\" is defined"
+        "V-36: the package head is not called a type")
+endif()
+
+run_fail(v36_desc_out v36_desc_err
+    ${CODEGEN} --descriptor-set --target visibility-invisible-compound.proto
+    "${DATA_DIR}/visibility-invisible-compound-descriptor.pbs")
+require_empty(v36_desc_out "The V-36 descriptor stdout")
+require_contains(v36_desc_err
+    "visibility-invisible-compound.proto: type \".c.C\" is defined in \"visibility-invisible-compound-dep.proto\", which is not visible from \"visibility-invisible-compound.proto\"; add the import of that file"
+    "V-36: the descriptor door answers the same sentence")
+if(v36_desc_err MATCHES
+        "visibility-invisible-compound[.]proto:[0-9]+:[0-9]+:")
+    message(FATAL_ERROR
+        "V-36: the descriptor refusal fabricated a source position: ${v36_desc_err}")
+endif()
+
+# V-38: both endpoint types are references of one method, and each carries its
+# own type-token position.
+if(FULL_BUILD)
+    run_fail(v38_in_out v38_in_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/rpc-unresolved-endpoint.proto")
+    require_empty(v38_in_out "The V-38 request stdout")
+    require_contains(v38_in_err
+        "rpc-unresolved-endpoint.proto:5:29: method \".Greeter.Call\" input type: unresolved type MissingRequest in .Greeter.Call"
+        "V-38: the request endpoint carries its type token")
+
+    run_fail(v38_out_out v38_out_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/rpc-unresolved-response.proto")
+    require_empty(v38_out_out "The V-38 response stdout")
+    require_contains(v38_out_err
+        "rpc-unresolved-response.proto:7:47: method \".Greeter.Call\" output type: unresolved type MissingReply in .Greeter.Call"
+        "V-38: the response endpoint carries its own type token")
+endif()
+
+# V-39: a number conflict points at the number token, a name conflict at the
+# name token.
+if(FULL_BUILD)
+    run_fail(v39_field_out v39_field_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/reserved-field-number-conflict.proto")
+    require_empty(v39_field_out "The V-39 field stdout")
+    require_contains(v39_field_err
+        "reserved-field-number-conflict.proto:5:32: while loading \"reserved-field-number-conflict.proto\": field number is reserved"
+        "V-39: the field number token")
+    require_absent(v39_field_err
+        "reserved-field-number-conflict.proto:5:28:"
+        "V-39: the field name token is not the number conflict")
+
+    run_fail(v39_enum_out v39_enum_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/reserved-enum-number-conflict.proto")
+    require_empty(v39_enum_out "The V-39 enum stdout")
+    require_contains(v39_enum_err
+        "reserved-enum-number-conflict.proto:5:14: while loading \"reserved-enum-number-conflict.proto\": enum value number is reserved"
+        "V-39: the enum value number token")
+    require_absent(v39_enum_err
+        "reserved-enum-number-conflict.proto:5:10:"
+        "V-39: the enum value name token is not the number conflict")
+
+    run_fail(v39_name_out v39_name_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/reserved-name-conflict.proto")
+    require_empty(v39_name_out "The V-39 name stdout")
+    require_contains(v39_name_err
+        "reserved-name-conflict.proto:5:28: while loading \"reserved-name-conflict.proto\": field name is reserved: used"
+        "V-39: the name conflict keeps the name token")
+endif()
+
+# V-44: a message/service collision says service and names both declarations.
+if(FULL_BUILD)
+    run_fail(v44_src_out v44_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/service-message-collision-msg.proto"
+        "${DATA_DIR}/service-message-collision.proto")
+    require_empty(v44_src_out "The V-44 source stdout")
+    require_contains(v44_src_err
+        "service-message-collision.proto:7:9: duplicate name .p.Svc: a service in \"service-message-collision.proto\"; already defined as a message in \"service-message-collision-msg.proto\""
+        "V-44: the service is named and both declarations are spelled")
+    require_absent(v44_src_err "duplicate type name .p.Svc"
+        "V-44: a service is not called a duplicate type")
+endif()
+
+run_fail(v44_desc_out v44_desc_err
+    ${CODEGEN} --descriptor-set --target service-message-collision.proto
+    "${DATA_DIR}/service-message-collision-descriptor.pbs")
+require_empty(v44_desc_out "The V-44 descriptor stdout")
+require_contains(v44_desc_err
+    "service-message-collision.proto: duplicate name .p.Svc: a service in \"service-message-collision.proto\" at [6, 0]; already defined as a message in \"service-message-collision-msg.proto\" at [4, 0]"
+    "V-44: the descriptor door answers the same sentence")
+if(v44_desc_err MATCHES "service-message-collision[.]proto:[0-9]+:[0-9]+:")
+    message(FATAL_ERROR
+        "V-44: the descriptor refusal fabricated a source position: ${v44_desc_err}")
+endif()
+
+# V-49: an invalid enumerator of an IMPORTED enum is blamed on its declaration
+# file, not on the field that triggered the spelling. The name is illegal in
+# C++ but legal to protoc's symbol rule, so only a descriptor can carry it; a
+# descriptor has no source text, hence no line:column.
+run_fail(v49_out v49_err
+    ${CODEGEN} --descriptor-set --target imported-enum-bad-value-user.proto
+    "${DATA_DIR}/imported-enum-bad-value.pbs")
+require_empty(v49_out "The V-49 stdout")
+require_contains(v49_err
+    "imported-enum-bad-value.proto: Protobuf name '0bad' is not a valid C++ identifier"
+    "V-49: the enum value declaration is blamed")
+require_absent(v49_err "imported-enum-bad-value-user.proto:"
+    "V-49: the using field is not blamed")
+
+# V-50: the cycle refusal points at the field that closes the walk (B's `a`),
+# not at a node of the cycle (A's declaration).
+if(FULL_BUILD)
+    run_fail(v50_src_out v50_src_err
+        ${CODEGEN} -I "${DATA_DIR}"
+        "${DATA_DIR}/message-cycle-closing-edge.proto")
+    require_empty(v50_src_out "The V-50 source stdout")
+    require_contains(v50_src_err
+        "message-cycle-closing-edge.proto:6:24: recursive message value dependency: ::A -> ::B -> ::A"
+        "V-50: the closing field carries the refusal")
+    require_absent(v50_src_err "message-cycle-closing-edge.proto:5:9:"
+        "V-50: the cycle node is not blamed")
+endif()
+
+run_fail(v50_desc_out v50_desc_err
+    ${CODEGEN} --descriptor-set "${DATA_DIR}/message-cycle-closing-edge.pbs")
+require_empty(v50_desc_out "The V-50 descriptor stdout")
+require_contains(v50_desc_err
+    "message-cycle-closing-edge.proto: recursive message value dependency: ::A -> ::B -> ::A"
+    "V-50: the descriptor door answers the same sentence")
+if(v50_desc_err MATCHES "message-cycle-closing-edge[.]proto:[0-9]+:[0-9]+:")
+    message(FATAL_ERROR
+        "V-50: the descriptor refusal fabricated a source position: ${v50_desc_err}")
+endif()

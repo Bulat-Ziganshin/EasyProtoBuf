@@ -1,0 +1,25 @@
+# V-36 descriptor door: the same two files the source fixture uses, with the
+# reference written but no dependency. The refusal keeps the sentence; a
+# descriptor carries no source text, so it must not fabricate a position.
+file {
+  name: "visibility-invisible-compound.proto"
+  syntax: "proto2"
+  message_type {
+    name: "Holder"
+    field {
+      name: "value"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_MESSAGE
+      type_name: ".c.C"
+    }
+  }
+}
+file {
+  name: "visibility-invisible-compound-dep.proto"
+  syntax: "proto2"
+  package: "c"
+  message_type {
+    name: "C"
+  }
+}

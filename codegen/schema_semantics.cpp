@@ -658,6 +658,20 @@ bool index_package_scopes(SchemaFile& file, SymbolIndex& symbols,
     return true;
 }
 
+// V-44: the declaration category an index kind names, so a collision that
+// involves a service says "a service" instead of calling it a type. Field,
+// oneof and enum-value collisions keep the generic word: their descriptors
+// live in a message scope, which the file-scope index only reaches through
+// the owning type.
+const char* symbol_kind_label(int kind)
+{
+    if (kind == SYMBOL_PACKAGE) return "a package";
+    if (kind == SYMBOL_SERVICE) return "a service";
+    if (kind == FieldDescriptorProto::TYPE_MESSAGE) return "a message";
+    if (kind == FieldDescriptorProto::TYPE_ENUM) return "an enum";
+    return "a declaration";
+}
+
 bool add_symbol(const SchemaFile& file, SymbolIndex& symbols,
                 const std::string& name, int kind, const DescriptorPath& path,
                 Diagnostic& error)
@@ -723,15 +737,50 @@ bool add_symbol(const SchemaFile& file, SymbolIndex& symbols,
         // file has no recorded position, so its path stands in for one.
         const SchemaFile* previous = inserted.first->second.owner;
         SourceLocation location = declaration_location(file, path);
-        std::string text = message + " in \"" + schema_file_label(file) + "\"";
-        if (location.line == 0 && !path.empty()) {
-            text += " at " + format_path(path);
-        }
-        text += "; already defined in \"" + schema_file_label(*previous) + "\"";
         const SourceLocation previous_location =
             declaration_location(*previous, inserted.first->second.path);
-        if (previous_location.line == 0 && !inserted.first->second.path.empty()) {
-            text += " at " + format_path(inserted.first->second.path);
+        std::string text;
+        const bool type_vs_service =
+            (kind == SYMBOL_SERVICE &&
+             (existing_kind == FieldDescriptorProto::TYPE_MESSAGE ||
+              existing_kind == FieldDescriptorProto::TYPE_ENUM)) ||
+            (existing_kind == SYMBOL_SERVICE &&
+             (kind == FieldDescriptorProto::TYPE_MESSAGE ||
+              kind == FieldDescriptorProto::TYPE_ENUM));
+        if (type_vs_service) {
+            // V-44: a service is a declaration, not a type. A cross-file
+            // message/service collision used to read "duplicate type name";
+            // this sentence names the category of BOTH declarations and the
+            // file each one lives in, so the reader sees which side is the
+            // service wherever the name-sorted walk puts it. A service/service
+            // collision keeps the generic "duplicate symbol name" wording: no
+            // type is involved, so there is nothing to correct.
+            text = "duplicate name " + name + ": " +
+                   symbol_kind_label(kind) + " in \"" +
+                   schema_file_label(file) + "\"";
+            if (location.line == 0 && !path.empty()) {
+                text += " at " + format_path(path);
+            }
+            text += "; already defined as ";
+            text += symbol_kind_label(existing_kind);
+            text += " in \"";
+            text += schema_file_label(*previous);
+            text += "\"";
+            if (previous_location.line == 0 &&
+                !inserted.first->second.path.empty()) {
+                text += " at " + format_path(inserted.first->second.path);
+            }
+        } else {
+            text = message + " in \"" + schema_file_label(file) + "\"";
+            if (location.line == 0 && !path.empty()) {
+                text += " at " + format_path(path);
+            }
+            text += "; already defined in \"" + schema_file_label(*previous) +
+                    "\"";
+            if (previous_location.line == 0 &&
+                !inserted.first->second.path.empty()) {
+                text += " at " + format_path(inserted.first->second.path);
+            }
         }
         error.file = schema_file_label(file);
         error.location = location;
@@ -1104,6 +1153,8 @@ bool is_foreign_map_entry(const ResolveContext& context, const SymbolEntry& entr
 // is absent (that is what makes the shadowing diagnostic name
 // ".pkg.Encloser.Choice.Item" instead of the raw text), or the candidate the
 // failure walk stopped at. It stays empty when there is no candidate at all.
+// V-36: a compound reference that fails on an invisible head names the whole
+// committed path (".c.C"), not the head (".c") the walk happened to find.
 const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope,
                                 const SymbolIndex& symbols,
                                 const std::set<const SchemaFile*>& visible_files,
@@ -1265,7 +1316,11 @@ const SymbolEntry* resolve_name(const std::string& raw, const std::string& scope
             const bool visible = candidate_is_visible(found->second,
                                                       visible_files, head);
             *outcome = visible ? RESOLVE_NOT_A_TYPE : RESOLVE_INVISIBLE;
-            *matched_name = head;
+            // V-36: a compound reference fails on its HEAD, but the sentence
+            // must name the whole reference the user wrote (`.c.C`, not the
+            // package head `.c`). The committed head has no outward fallback,
+            // so the full path is the head plus the remainder.
+            *matched_name = compound_reference ? head + "." + rest : head;
             return 0;
         }
         std::string outer;
@@ -2628,7 +2683,21 @@ std::string reference_failure_message(const SchemaFile& file,
                "map<KeyType, ValueType> instead";
     }
     if (outcome == RESOLVE_INVISIBLE) {
-        const std::string defining = defining_file_name(symbols, resolved);
+        std::string defining = defining_file_name(symbols, resolved);
+        if (defining.empty() && !resolved.empty() && resolved[0] == '.') {
+            // V-36: the reference may name a member the index does not carry;
+            // the walk stopped at an invisible head (`.foo` in `.foo.T`). Fall
+            // back to the longest indexed component prefix, so the sentence
+            // still names the file the import would make visible.
+            std::string prefix = resolved;
+            while (prefix.size() > 1) {
+                const std::size_t dot = prefix.rfind('.');
+                if (dot == std::string::npos || dot == 0) break;
+                prefix.erase(dot);
+                defining = defining_file_name(symbols, prefix);
+                if (!defining.empty()) break;
+            }
+        }
         std::string message = "type \"" + resolved + "\"";
         if (defining.empty()) {
             message += " is not visible from \"" + schema_file_label(file) + "\"";

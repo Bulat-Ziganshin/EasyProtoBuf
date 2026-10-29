@@ -674,6 +674,9 @@ struct FieldProvenance
     std::string raw_type_name;
     SourceLocation type_location;
     SourceLocation name_location;
+    // V-39: the field number token, so a reserved-number or extension-range
+    // conflict points at the number rather than at the field name.
+    SourceLocation number_location;
     bool has_default;
     SourceLocation default_location;
     bool has_packed;
@@ -1347,7 +1350,8 @@ private:
     // non-message (`CrossLinkMethod`, descriptor.cc:7714-7757), and because a
     // diagnostics mode must be able to describe the method it prints. Method
     // options are still discarded.
-    MethodDescriptorProto parse_rpc(SourceLocation* name_location)
+    MethodDescriptorProto parse_rpc(const DescriptorPath& method_path,
+                                    SourceLocation* name_location)
     {
         *name_location = current_.location;
         MethodDescriptorProto method;
@@ -1360,17 +1364,29 @@ private:
         // unary method leaves both fields absent, so the model must too.
         method.client_streaming = accept_keyword("stream");
         method.has_client_streaming = method.client_streaming;
+        // V-38: both endpoint types are references, so the path is the type
+        // field of MethodDescriptorProto (input_type is 2, output_type is 3).
+        // The position is the first token of the type name, the same token a
+        // field's declaration would blame.
+        const SourceLocation input_location = current_.location;
         const std::string input_type = full_identifier(true);
         method.input_type = out_.strings.save(input_type);
         method.has_input_type = true;
+        out_.declaration_locations[
+            easypb_schema::service_method_type_path(method_path, 2)] =
+            input_location;
         expect_symbol(')');
         if (!accept_keyword("returns")) fail("expected 'returns' in rpc declaration");
         expect_symbol('(');
         method.server_streaming = accept_keyword("stream");
         method.has_server_streaming = method.server_streaming;
+        const SourceLocation output_location = current_.location;
         const std::string output_type = full_identifier(true);
         method.output_type = out_.strings.save(output_type);
         method.has_output_type = true;
+        out_.declaration_locations[
+            easypb_schema::service_method_type_path(method_path, 3)] =
+            output_location;
         expect_symbol(')');
         if (accept_symbol(';')) return method;
         if (current_.kind == TOKEN_SYMBOL && current_.symbol == '{') {
@@ -1412,9 +1428,12 @@ private:
                 SourceLocation method_location;
                 ServiceDescriptorProto& service_slot = out_.file.service.back();
                 const std::size_t method_index = service_slot.method.size();
-                service_slot.method.push_back(parse_rpc(&method_location));
-                out_.declaration_locations[easypb_schema::service_method_path(
-                    path, static_cast<int>(method_index))] = method_location;
+                const DescriptorPath method_path =
+                    easypb_schema::service_method_path(
+                        path, static_cast<int>(method_index));
+                service_slot.method.push_back(
+                    parse_rpc(method_path, &method_location));
+                out_.declaration_locations[method_path] = method_location;
                 continue;
             }
             fail("expected rpc, option, or ';' in service body");
@@ -1790,6 +1809,7 @@ private:
             message_path, static_cast<int>(field_index));
         source.raw_type_name = provenance.raw_type_name;
         source.type_location = provenance.type_location;
+        source.number_location = provenance.number_location;
         if (provenance.has_default) source.default_location = provenance.default_location;
         else source.default_location = easypb_schema::unknown_location();
         if (provenance.has_packed) source.packed_location = provenance.packed_location;
@@ -1879,6 +1899,9 @@ private:
         field.name = out_.strings.save(name);
         field.has_name = true;
         expect_symbol('=');
+        // V-39: the number token is the position of a conflict whose subject
+        // is the number, not the field name.
+        const SourceLocation number_location = current_.location;
         field.number = extension_field ? extension_field_number()
                                        : positive_field_number();
         field.has_number = true;
@@ -1926,6 +1949,7 @@ private:
             provenance->raw_type_name = type_name;
             provenance->type_location = type_location;
             provenance->name_location = name_location;
+            provenance->number_location = number_location;
             provenance->has_default = options.has_default;
             if (options.has_default) {
                 provenance->default_location = options.default_value.location;
@@ -1966,6 +1990,8 @@ private:
         const SourceLocation field_name_location = current_.location;
         const std::string field_name = identifier();
         expect_symbol('=');
+        // V-39: a reserved-number conflict on a map field points here.
+        const SourceLocation number_location = current_.location;
         const std::int32_t number = positive_field_number();
         // A map field is a repeated synthetic-entry message: a message kind,
         // so `jstype` is refused while `lazy = true` stays legal for the
@@ -2084,6 +2110,7 @@ private:
             key_source.path = key_path;
             key_source.raw_type_name = key_type_name;
             key_source.type_location = key_location;
+            key_source.number_location = easypb_schema::unknown_location();
             key_source.default_location = easypb_schema::unknown_location();
             key_source.packed_location = easypb_schema::unknown_location();
             out_.field_sources.push_back(std::move(key_source));
@@ -2093,6 +2120,7 @@ private:
             value_source.path = value_path;
             value_source.raw_type_name = value_type_name;
             value_source.type_location = value_location;
+            value_source.number_location = easypb_schema::unknown_location();
             value_source.default_location = easypb_schema::unknown_location();
             value_source.packed_location = easypb_schema::unknown_location();
             out_.field_sources.push_back(std::move(value_source));
@@ -2104,6 +2132,7 @@ private:
                 message_path, static_cast<int>(message.field.size() - 1));
             field_source.raw_type_name = entry_name;
             field_source.type_location = map_location;
+            field_source.number_location = number_location;
             field_source.default_location = easypb_schema::unknown_location();
             field_source.packed_location = options.has_packed
                 ? options.packed_location : easypb_schema::unknown_location();
@@ -2399,7 +2428,8 @@ private:
             }
             for (std::size_t r = 0; r < reserved_ranges.size(); ++r) {
                 if (range_contains(reserved_ranges[r], value.number)) {
-                    throw ParseFailure(value_location, "enum value number is reserved");
+                    // V-39: the number conflict points at the number token.
+                    throw ParseFailure(number_location, "enum value number is reserved");
                 }
             }
             if (current_.kind == TOKEN_SYMBOL && current_.symbol == '[') {
@@ -2475,7 +2505,8 @@ private:
                 }
                 for (std::size_t r = 0; r < reserved_ranges.size(); ++r) {
                     if (range_contains(reserved_ranges[r], result.value[i].number)) {
-                        throw ParseFailure(value_locations[i],
+                        // V-39: the number conflict points at the number token.
+                        throw ParseFailure(number_locations[i],
                             "enum value number is reserved");
                     }
                 }
@@ -2695,16 +2726,25 @@ private:
 
         for (std::size_t i = 0; i < message.field.size(); ++i) {
             const FieldDescriptorProto& field = message.field[i];
+            const DescriptorPath field_path = easypb_schema::message_field_path(
+                message_path, static_cast<int>(i));
             const std::map<DescriptorPath, SourceLocation>::const_iterator
-                located = out_.declaration_locations.find(
-                    easypb_schema::message_field_path(
-                        message_path, static_cast<int>(i)));
+                located = out_.declaration_locations.find(field_path);
             // Every field path is recorded while the field is parsed; the
             // fallback keeps an incomplete table from producing an unlocated
             // diagnostic and still names a position inside the message.
             const SourceLocation field_location =
                 located == out_.declaration_locations.end()
                     ? message_location : located->second;
+            // V-39: the name conflict points at the name token and the number
+            // conflict at the number token, so an editor jumps to the token
+            // the sentence is about. The number falls back to the declaration
+            // when the provenance record is somehow absent.
+            const FieldSource* source =
+                easypb_schema::find_field_source(out_, field_path);
+            const SourceLocation number_location =
+                source != 0 && source->number_location.line != 0
+                    ? source->number_location : field_location;
             if (!reserved_names.empty()) {
                 const std::string name = view_text(field.name);
                 if (reserved_names.find(name) != reserved_names.end()) {
@@ -2714,13 +2754,13 @@ private:
             }
             for (std::size_t j = 0; j < reserved_ranges.size(); ++j) {
                 if (range_contains(reserved_ranges[j], field.number)) {
-                    throw ParseFailure(field_location,
+                    throw ParseFailure(number_location,
                         "field number is reserved");
                 }
             }
             for (std::size_t j = 0; j < resolved_ranges.size(); ++j) {
                 if (range_contains(resolved_ranges[j], field.number)) {
-                    throw ParseFailure(field_location,
+                    throw ParseFailure(number_location,
                         "field number lies inside an extension range");
                 }
             }

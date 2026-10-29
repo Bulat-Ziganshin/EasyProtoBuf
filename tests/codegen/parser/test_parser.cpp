@@ -1134,13 +1134,15 @@ void test_post_body_refusals_point_inside_the_declaration()
          "  enum E { A = 0; B = 0; }\n"
          "}\n",
          3, 23, "duplicate enum number"},
+        // V-39: the number conflict points at the number token (`5`, column
+        // 22), not at the field name (`x`, column 18).
         {"reserved-field-number-position.proto",
          "syntax=\"proto2\";\n"
          "message M {\n"
          "  reserved 5;\n"
          "  optional int32 x = 5;\n"
          "}\n",
-         4, 18, "field number is reserved"},
+         4, 22, "field number is reserved"},
         {"reserved-field-name-position.proto",
          "syntax=\"proto2\";\n"
          "message M {\n"
@@ -1148,13 +1150,23 @@ void test_post_body_refusals_point_inside_the_declaration()
          "  optional int32 x = 7;\n"
          "}\n",
          4, 18, "field name is reserved"},
+        // V-39 family: a map field is a synthetic-entry message field, but its
+        // number conflict still points at the source number token.
+        {"reserved-map-number-position.proto",
+         "syntax=\"proto2\";\n"
+         "message M {\n"
+         "  reserved 5;\n"
+         "  map<string,int32> x = 5;\n"
+         "}\n",
+         4, 25, "field number is reserved"},
+        // V-39: the extension-range conflict is a number conflict too.
         {"extension-range-field-position.proto",
          "syntax=\"proto2\";\n"
          "message M {\n"
          "  extensions 100 to 200;\n"
          "  optional int32 x = 150;\n"
          "}\n",
-         4, 18, "inside an extension range"},
+         4, 22, "inside an extension range"},
         {"reserved-extension-overlap-position.proto",
          "syntax=\"proto2\";\n"
          "message M {\n"
@@ -1163,12 +1175,13 @@ void test_post_body_refusals_point_inside_the_declaration()
          "}\n",
          3, 14, "overlap"},
         // U-32: the reserved declaration follows the value that reuses it, so
-        // the post-body re-check is the one that fires. It must point at the
-        // value (2:17), not at the token after the closing brace.
+        // the post-body re-check is the one that fires. V-39 moved the number
+        // conflict to the value's number token (`2`, column 21); the name
+        // conflict below keeps the value name.
         {"reserved-enum-number-after-position.proto",
          "syntax=\"proto2\";\n"
          "enum E { A = 0; B = 2; reserved 2; }\n",
-         2, 17, "enum value number is reserved"},
+         2, 21, "enum value number is reserved"},
         {"reserved-enum-name-after-position.proto",
          "syntax=\"proto2\";\n"
          "enum E { A = 0; OLD = 1; reserved \"OLD\"; }\n",

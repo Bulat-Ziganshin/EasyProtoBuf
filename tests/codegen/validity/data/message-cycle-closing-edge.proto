@@ -1,0 +1,6 @@
+// V-50: A's field b starts the walk and B's field a closes the cycle. The
+// refusal must point at B's field (`a`), the edge that closes it, not at A.
+syntax = "proto2";
+
+message A { optional B b = 1; }
+message B { optional A a = 1; }

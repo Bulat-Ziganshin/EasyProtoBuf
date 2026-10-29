@@ -942,12 +942,16 @@ int run_generation(const CommandLine& command)
             header = easypb_codegen::generate_header(*targets[0], linked,
                                                      command.generation_options);
         } catch (const easypb_codegen::EmitterError& problem) {
+            // V-49: the blamed declaration is not always in the target; an
+            // imported enum's enumerator carries its own file.
+            const easypb_schema::SchemaFile& blamed =
+                problem.declaration_file() != 0
+                    ? *problem.declaration_file() : *targets[0];
             easypb_schema::Diagnostic diagnostic = make_schema_diagnostic(
-                easypb_schema::schema_file_label(*targets[0]),
-                problem.what());
+                easypb_schema::schema_file_label(blamed), problem.what());
             diagnostic.location =
                 easypb_codegen::emitter_declaration_location(
-                    *targets[0], problem.declaration_path());
+                    blamed, problem.declaration_path());
             report_schema_diagnostic(diagnostic);
             return 1;
         } catch (const std::exception& problem) {

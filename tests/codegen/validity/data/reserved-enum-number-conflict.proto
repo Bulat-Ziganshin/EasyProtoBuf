@@ -1,0 +1,5 @@
+// V-39: the same rule on the enum half. The value number (`1`) is the token
+// the sentence is about, not the value name (`A`).
+syntax = "proto2";
+
+enum E { A = 1; reserved 1 to 3; }

@@ -1,0 +1,19 @@
+# V-44 descriptor door: the message file sorts before the service file, so the
+# service is the redeclaration. The sentence is the same on both doors; only
+# the source position is unavailable here.
+file {
+  name: "service-message-collision-msg.proto"
+  syntax: "proto2"
+  package: "p"
+  message_type {
+    name: "Svc"
+  }
+}
+file {
+  name: "service-message-collision.proto"
+  syntax: "proto2"
+  package: "p"
+  service {
+    name: "Svc"
+  }
+}

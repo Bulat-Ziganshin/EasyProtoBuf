@@ -1,0 +1,7 @@
+// V-38 family: the response endpoint is the second reference of one method,
+// so its own token position must be recorded independently.
+syntax = "proto3";
+
+message Request {}
+
+service Greeter { rpc Call (Request) returns (MissingReply); }

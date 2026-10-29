@@ -117,6 +117,19 @@ SOURCE_ONLY_FIXTURES = (
     "plus-int-default",
     "proto3-package-extend",
     "reserved-non-identifier",
+    # Step S12: the diagnostic fixtures. protoc refuses the reference, the
+    # reserved conflict and the unresolved RPC endpoint, so they have no
+    # descriptor twin of their own; the two cross-file diagnostics carry a
+    # dedicated multi-file .txtpb instead.
+    "reserved-field-number-conflict",
+    "reserved-enum-number-conflict",
+    "reserved-name-conflict",
+    "rpc-unresolved-endpoint",
+    "rpc-unresolved-response",
+    "service-message-collision",
+    "service-message-collision-msg",
+    "visibility-invisible-compound",
+    "visibility-invisible-compound-dep",
 )
 
 # The one fixture whose text protoc will not parse, and the two legal type

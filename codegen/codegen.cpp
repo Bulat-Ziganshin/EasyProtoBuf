@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -72,7 +73,17 @@ struct GenerationContext
 
 // The descriptor supplies the first declared value used by implicit protobuf
 // defaults. Descriptor storage remains stable for the whole generator call.
-using EnumByProtoName = std::map<std::string, const EnumDescriptorProto*>;
+// V-49: an enum found by absolute name carries the file and the declaration
+// path that own it. A name-layer refusal on a value of an IMPORTED enum must
+// name that declaration's file and position, not the field that uses it.
+struct EnumDefinition
+{
+    const EnumDescriptorProto* descriptor;
+    const easypb_schema::SchemaFile* owner;
+    easypb_schema::DescriptorPath path;
+};
+
+using EnumByProtoName = std::map<std::string, EnumDefinition>;
 
 
 const char* FILE_TEMPLATE =
@@ -190,6 +201,21 @@ std::string cpp_identifier_at(const std::string& name,
         return easypb_codegen::cpp_identifier(name);
     } catch (const std::exception& problem) {
         throw EmitterError(path, problem.what());
+    }
+}
+
+
+// The same spelling rule for a declaration that lives in an imported file
+// (V-49): the refusal names the declaring file, so an invalid enumerator of a
+// visible enum is not blamed on the field that happens to use it.
+std::string cpp_identifier_at(const std::string& name,
+                              const easypb_schema::SchemaFile& owner,
+                              const easypb_schema::DescriptorPath& path)
+{
+    try {
+        return easypb_codegen::cpp_identifier(name);
+    } catch (const std::exception& problem) {
+        throw EmitterError(owner, path, problem.what());
     }
 }
 
@@ -948,7 +974,8 @@ std::string default_value_str(const FieldDescriptorProto& field,
                 : zero_enum_default(field);
         }
 
-        const EnumDescriptorProto& enum_type = *found->second;
+        const EnumDefinition& definition = found->second;
+        const EnumDescriptorProto& enum_type = *definition.descriptor;
         if (enum_type.value.empty()) {
             throw std::runtime_error(
                 myformat("Enum type '{0}' must contain at least one value", proto_name));
@@ -959,6 +986,24 @@ std::string default_value_str(const FieldDescriptorProto& field,
             // type. This prevents an enumerator in a nearer scope from shadowing
             // the intended value. The enumerator is spelled the way the emitter
             // declares it, so a value named after a keyword is escaped here too.
+            //
+            // V-49: the spelling is the VALUE's declaration, so blame the value
+            // when it cannot be spelled. The default text is the value name; a
+            // text that matches no declared value keeps the field's own path
+            // (the linker owns the membership rule).
+            for (std::size_t i = 0; i < enum_type.value.size(); ++i) {
+                if (view_text(enum_type.value[i].name) ==
+                    view_text(field.default_value)) {
+                    return myformat(
+                        " = {0}{1}{2}",
+                        cpp_qualified_type_str(field.type_name),
+                        CPP_TYPE_DELIMITER,
+                        cpp_identifier_at(
+                            view_text(field.default_value), *definition.owner,
+                            easypb_schema::enum_value_path(
+                                definition.path, static_cast<int>(i))));
+                }
+            }
             return myformat(" = {0}{1}{2}",
                             cpp_qualified_type_str(field.type_name),
                             CPP_TYPE_DELIMITER,
@@ -971,11 +1016,16 @@ std::string default_value_str(const FieldDescriptorProto& field,
             return zero_enum_default(field);
         }
 
-        return myformat(" = {0}{1}{2}",
-                        cpp_qualified_type_str(field.type_name),
-                        CPP_TYPE_DELIMITER,
-                        easypb_codegen::cpp_identifier(
-                            view_text(enum_type.value.front().name)));
+        // V-49: an imported enum's first value is spelled at its declaration;
+        // blaming the field made the reported position point at a reference
+        // that is not where the invalid name lives.
+        return myformat(
+            " = {0}{1}{2}",
+            cpp_qualified_type_str(field.type_name),
+            CPP_TYPE_DELIMITER,
+            cpp_identifier_at(
+                view_text(enum_type.value.front().name), *definition.owner,
+                easypb_schema::enum_value_path(definition.path, 0)));
     }
 
     if (field.has_default_value  &&  ! context.options.no_default_values) {
@@ -1133,6 +1183,18 @@ const MapType* find_map_type(const FieldDescriptorProto& field,
 }
 
 
+struct MessageInfo;
+
+// V-50: one C++ definition-dependency edge. The field that produced the edge
+// travels with the target: when the DFS finds a back edge, that field is the
+// declaration to blame - the edge, not either node of the cycle.
+struct DefinitionDependency
+{
+    MessageInfo* target;
+    easypb_schema::DescriptorPath field_path;
+};
+
+
 // Codegen-side description of one real Protobuf message.  It complements the
 // descriptor with the names needed for C++ output and with resolved dependencies.
 // `children` contains lexical nested messages but deliberately excludes synthetic
@@ -1154,7 +1216,7 @@ struct MessageInfo
     easypb_schema::DescriptorPath path;
     MapTypeByName map_types;
     std::vector<MessageInfo> children;
-    std::vector<MessageInfo*> dependencies;
+    std::vector<DefinitionDependency> dependencies;
 };
 
 
@@ -1254,14 +1316,20 @@ bool is_ancestor_message(const MessageInfo& ancestor, const MessageInfo& message
 }
 
 
-// Keep dependency lists unique; one message may mention the same type in many fields.
-void add_dependency(MessageInfo& source, MessageInfo* target)
+// Keep dependency lists unique; one message may mention the same type in many
+// fields. V-50: the first field that created the edge is kept beside it, so a
+// cycle report can blame the field that closes the walk.
+void add_dependency(MessageInfo& source, MessageInfo* target,
+                    const easypb_schema::DescriptorPath& field_path)
 {
     if (! target) return;
-    for (auto* dependency: source.dependencies) {
-        if (dependency == target) return;
+    for (std::size_t i = 0; i < source.dependencies.size(); ++i) {
+        if (source.dependencies[i].target == target) return;
     }
-    source.dependencies.push_back(target);
+    DefinitionDependency dependency;
+    dependency.target = target;
+    dependency.field_path = field_path;
+    source.dependencies.push_back(dependency);
 }
 
 
@@ -1363,7 +1431,7 @@ void resolve_message_dependencies(MessageInfo& info,
             continue;
         }
         if (needs_definition) {
-            add_dependency(info, target);
+            add_dependency(info, target, field_path);
         }
     }
 
@@ -1411,7 +1479,9 @@ void detect_dependency_cycles(std::vector<MessageInfo>& roots)
                 continue;
             }
 
-            MessageInfo* dependency = frame.message->dependencies[frame.next++];
+            const DefinitionDependency& edge =
+                frame.message->dependencies[frame.next++];
+            MessageInfo* dependency = edge.target;
             if (color[dependency] == GraphColor::Unvisited) {
                 color[dependency] = GraphColor::OnStack;
                 stack.push_back(Frame{dependency, 0});
@@ -1428,8 +1498,11 @@ void detect_dependency_cycles(std::vector<MessageInfo>& roots)
                 }
                 if (! path.empty()) path += " -> ";
                 path += dependency->cpp_absolute_name;
+                // V-50: the field that produced this back edge is the
+                // declaration a caller has to break; the node it points at is
+                // one end of the cycle and may be nowhere near that field.
                 throw EmitterError(
-                    dependency->path,
+                    edge.field_path,
                     "recursive message value dependency: " + path);
             }
         }
@@ -1460,21 +1533,26 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
         for (auto* message: subtrees[i]) owner[message] = i;
     }
 
-    std::vector<std::vector<std::size_t> > dependencies(units.size());
+    // V-50: each collapsed edge keeps the field path that produced it, so the
+    // defensive cycle branch below can blame the edge too.
+    std::vector<std::map<std::size_t, easypb_schema::DescriptorPath> >
+        dependencies(units.size());
     for (std::size_t i = 0; i < units.size(); ++i) {
-        std::vector<std::size_t>& unit_deps = dependencies[i];
+        std::map<std::size_t, easypb_schema::DescriptorPath>& unit_deps =
+            dependencies[i];
         for (auto* source: subtrees[i]) {
-            for (auto* dependency: source->dependencies) {
+            for (std::size_t edge_index = 0;
+                 edge_index < source->dependencies.size(); ++edge_index) {
+                const DefinitionDependency& edge =
+                    source->dependencies[edge_index];
                 const std::map<MessageInfo*, std::size_t>::const_iterator found =
-                    owner.find(dependency);
+                    owner.find(edge.target);
                 if (found != owner.end() && found->second != i) {
-                    unit_deps.push_back(found->second);
+                    unit_deps.insert(std::make_pair(found->second,
+                                                    edge.field_path));
                 }
             }
         }
-        std::sort(unit_deps.begin(), unit_deps.end());
-        unit_deps.erase(std::unique(unit_deps.begin(), unit_deps.end()),
-                        unit_deps.end());
     }
 
     std::vector<GraphColor> color(units.size(), GraphColor::Unvisited);
@@ -1500,8 +1578,8 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
         stack.push_back(Frame{root, 0});
         while (! stack.empty()) {
             Frame& frame = stack.back();
-            const std::vector<std::size_t>& unit_deps =
-                dependencies[frame.unit];
+            const std::map<std::size_t, easypb_schema::DescriptorPath>&
+                unit_deps = dependencies[frame.unit];
             if (frame.next >= unit_deps.size()) {
                 color[frame.unit] = GraphColor::Finished;
                 result.push_back(units[frame.unit]);  // dependencies first
@@ -1509,13 +1587,19 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
                 continue;
             }
 
-            const std::size_t candidate = unit_deps[frame.next++];
+            std::map<std::size_t, easypb_schema::DescriptorPath>::const_iterator
+                candidate_entry = unit_deps.begin();
+            std::advance(candidate_entry, frame.next);
+            ++frame.next;
+            const std::size_t candidate = candidate_entry->first;
             if (color[candidate] == GraphColor::Unvisited) {
                 color[candidate] = GraphColor::OnStack;
                 stack.push_back(Frame{candidate, 0});
             } else if (color[candidate] == GraphColor::OnStack) {
                 // This is a cycle between lexical units (for example, two
                 // root structs whose nested messages depend on each other).
+                // The message walk runs first, so this branch is defensive;
+                // it still blames the edge rather than a node (V-50).
                 std::string path;
                 std::size_t start = 0;
                 while (start < stack.size() &&
@@ -1529,7 +1613,7 @@ std::vector<MessageInfo*> stable_topological_order(const std::vector<MessageInfo
                 if (! path.empty()) path += " -> ";
                 path += units[candidate]->cpp_absolute_name;
                 throw EmitterError(
-                    units[candidate]->path,
+                    candidate_entry->second,
                     "recursive message value dependency: " + path);
             }
         }
@@ -2200,14 +2284,22 @@ std::string dependency_includes(const easypb_schema::SchemaFile& target,
 
 void index_message_enums_of(const DescriptorProto& message,
                             const std::string& proto_name,
+                            const easypb_schema::SchemaFile& owner,
+                            const easypb_schema::DescriptorPath& message_path,
                             EnumByProtoName& index)
 {
     for (std::size_t i = 0; i < message.enum_type.size(); ++i) {
+        EnumDefinition definition;
+        definition.descriptor = &message.enum_type[i];
+        definition.owner = &owner;
+        definition.path = easypb_schema::message_enum_path(
+            message_path, static_cast<int>(i));
         index.insert(std::make_pair(
             proto_name + "." + view_text(message.enum_type[i].name),
-            &message.enum_type[i]));
+            definition));
     }
     for (std::size_t i = 0; i < message.nested_type.size(); ++i) {
+
         const DescriptorProto& nested = message.nested_type[i];
         if (nested.enum_type.empty() && nested.nested_type.empty()) {
             continue;
@@ -2215,6 +2307,9 @@ void index_message_enums_of(const DescriptorProto& message,
         index_message_enums_of(
             nested,
             proto_name + "." + view_text(nested.name),
+            owner,
+            easypb_schema::message_nested_path(message_path,
+                                               static_cast<int>(i)),
             index);
     }
 }
@@ -2225,16 +2320,21 @@ void index_message_enums_of(const DescriptorProto& message,
 // it finds local ones. Imported definitions are complete by construction, and
 // the emitter still spells a zero first value as the definition-independent
 // `static_cast<Type>(0)` so the thin and complete inputs agree (P7).
-void index_file_enums(const FileDescriptorProto& file, EnumByProtoName& index)
+void index_file_enums(const easypb_schema::SchemaFile& owner,
+                      EnumByProtoName& index)
 {
+    const FileDescriptorProto& file = owner.file;
     const std::string prefix =
         file.package.empty()
             ? std::string(".")
             : "." + view_text(file.package) + ".";
     for (std::size_t i = 0; i < file.enum_type.size(); ++i) {
+        EnumDefinition definition;
+        definition.descriptor = &file.enum_type[i];
+        definition.owner = &owner;
+        definition.path = easypb_schema::file_enum_path(static_cast<int>(i));
         index.insert(std::make_pair(
-            prefix + view_text(file.enum_type[i].name),
-            &file.enum_type[i]));
+            prefix + view_text(file.enum_type[i].name), definition));
     }
     for (std::size_t i = 0; i < file.message_type.size(); ++i) {
         const DescriptorProto& message = file.message_type[i];
@@ -2243,7 +2343,8 @@ void index_file_enums(const FileDescriptorProto& file, EnumByProtoName& index)
         }
         index_message_enums_of(
             message,
-            prefix + view_text(message.name), index);
+            prefix + view_text(message.name), owner,
+            easypb_schema::file_message_path(static_cast<int>(i)), index);
     }
 }
 
@@ -2310,7 +2411,7 @@ std::string easypb_codegen::generate_header(
     // one does. Duplicate absolute names cannot reach here: conflicting
     // declarations were refused by the linker before publish.
     EnumByProtoName local_enum_index;
-    index_file_enums(file, local_enum_index);
+    index_file_enums(target, local_enum_index);
     EnumByProtoName enum_index = local_enum_index;
     const std::map<const easypb_schema::SchemaFile*,
                    std::set<const easypb_schema::SchemaFile*> >::const_iterator
@@ -2319,7 +2420,7 @@ std::string easypb_codegen::generate_header(
         for (std::set<const easypb_schema::SchemaFile*>::const_iterator it =
                  visible->second.begin();
              it != visible->second.end(); ++it) {
-            if (*it != &target) index_file_enums((*it)->file, enum_index);
+            if (*it != &target) index_file_enums(**it, enum_index);
         }
     }
 
@@ -2465,9 +2566,14 @@ bool easypb_codegen::generate_files(
         try {
             entry.content = generate_header(target, schema, normalized);
         } catch (const EmitterError& problem) {
-            error.file = logical;
+            // V-49: the blamed declaration is not always in the target; an
+            // imported enum's enumerator carries its own file.
+            const easypb_schema::SchemaFile& blamed =
+                problem.declaration_file() != 0
+                    ? *problem.declaration_file() : target;
+            error.file = easypb_schema::schema_file_label(blamed);
             error.location = emitter_declaration_location(
-                target, problem.declaration_path());
+                blamed, problem.declaration_path());
             error.message = problem.what();
             return false;
         } catch (const std::exception& problem) {

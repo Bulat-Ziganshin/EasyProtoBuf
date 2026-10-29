@@ -1,0 +1,5 @@
+// V-38: an unresolved method request type. The refusal used to print no
+// line:column because the endpoint type token had no recorded position.
+syntax = "proto3";
+
+service Greeter { rpc Call (MissingRequest) returns (MissingReply); }

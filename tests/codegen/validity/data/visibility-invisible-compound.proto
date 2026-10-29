@@ -1,0 +1,6 @@
+// V-36: `c.C` is declared in a file that is loaded as a second root but not
+// imported, so the reference fails at the invisible package head `.c`. The
+// refusal must name the whole reference, not the package.
+syntax = "proto2";
+
+message Holder { optional c.C value = 1; }

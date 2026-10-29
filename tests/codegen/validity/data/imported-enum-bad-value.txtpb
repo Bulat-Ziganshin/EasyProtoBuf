@@ -1,0 +1,29 @@
+# V-49: the imported enum's first value is not a C++ identifier. The linker
+# accepts it (protoc's ValidateSymbolName allows a leading digit) and the
+# emitter refuses when it spells the enumerator; the refusal must name the
+# enum value's declaring file, not the user field that triggered the spelling.
+file {
+  name: "imported-enum-bad-value.proto"
+  syntax: "proto2"
+  package: "e"
+  enum_type {
+    name: "Bad"
+    value { name: "0bad" number: 1 }
+  }
+}
+file {
+  name: "imported-enum-bad-value-user.proto"
+  syntax: "proto2"
+  package: "u"
+  dependency: "imported-enum-bad-value.proto"
+  message_type {
+    name: "M"
+    field {
+      name: "e"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_ENUM
+      type_name: ".e.Bad"
+    }
+  }
+}

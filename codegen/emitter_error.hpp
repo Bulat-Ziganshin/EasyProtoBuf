@@ -9,7 +9,8 @@
 
 namespace easypb_codegen {
 
-// One emitter refusal, tied to the declaration of the target file it blames.
+// One emitter refusal, tied to the declaration (and, for an imported
+// declaration, the file) it blames.
 //
 // The emitter reads a linked descriptor, not source text, so a refusal used to
 // reach the caller as a bare `std::runtime_error`: the diagnostic named the
@@ -20,14 +21,29 @@ namespace easypb_codegen {
 // source text, so the lookup stays unknown there and the diagnostic is the
 // same one it printed before; a synthesized declaration (a generated codec, a
 // runtime namespace, a global typedef) has no path and is never blamed for a
-// collision it loses.
+// collision it loses. An imported declaration adds its owning file (V-49), so
+// the diagnostic names the file that declares the offending name rather than
+// the target that happened to ask for it.
 class EmitterError : public std::runtime_error
 {
 public:
     EmitterError(const easypb_schema::DescriptorPath& declaration_path,
                  const std::string& message)
         : std::runtime_error(message),
-          declaration_path_(declaration_path)
+          declaration_path_(declaration_path),
+          declaration_file_(0)
+    {
+    }
+
+    // V-49: a refusal about a declaration the target imports (an enumerator of
+    // a visible enum) belongs to the file that declares it, not to the target.
+    // The pointer stays valid because the schema outlives generation.
+    EmitterError(const easypb_schema::SchemaFile& declaring_file,
+                 const easypb_schema::DescriptorPath& declaration_path,
+                 const std::string& message)
+        : std::runtime_error(message),
+          declaration_path_(declaration_path),
+          declaration_file_(&declaring_file)
     {
     }
 
@@ -36,8 +52,15 @@ public:
         return declaration_path_;
     }
 
+    // Null when the declaration belongs to the target file.
+    const easypb_schema::SchemaFile* declaration_file() const
+    {
+        return declaration_file_;
+    }
+
 private:
     easypb_schema::DescriptorPath declaration_path_;
+    const easypb_schema::SchemaFile* declaration_file_;
 };
 
 
